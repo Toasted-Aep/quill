@@ -1,0 +1,55 @@
+<Application
+    x:Class="LectureInk.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="SurfaceBrush" Color="#FAF9F5"/>
+                    <AcrylicBrush x:Key="CardBrush" TintColor="#FAF9F5" TintOpacity="0.65"
+                                  TintLuminosityOpacity="0.78" FallbackColor="#F5FAF9F5"/>
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#E8E6DC"/>
+                    <SolidColorBrush x:Key="InkBrush" Color="#141413"/>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="SurfaceBrush" Color="#141413"/>
+                    <AcrylicBrush x:Key="CardBrush" TintColor="#211F1C" TintOpacity="0.6"
+                                  TintLuminosityOpacity="0.7" FallbackColor="#F2211F1C"/>
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#3A3833"/>
+                    <SolidColorBrush x:Key="InkBrush" Color="#FAF9F5"/>
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
+            <!-- Anthropic brand accents (theme-independent) -->
+            <Color x:Key="SystemAccentColor">#D97757</Color>
+            <Color x:Key="SystemAccentColorLight1">#E08B6D</Color>
+            <Color x:Key="SystemAccentColorLight2">#E89F85</Color>
+            <Color x:Key="SystemAccentColorLight3">#F0B49D</Color>
+            <Color x:Key="SystemAccentColorDark1">#C76747</Color>
+            <Color x:Key="SystemAccentColorDark2">#B05A3C</Color>
+            <Color x:Key="SystemAccentColorDark3">#9A4E33</Color>
+
+            <LinearGradientBrush x:Key="GlowBrush" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#E6D97757" Offset="0"/>
+                <GradientStop Color="#59D97757" Offset="0.35"/>
+                <GradientStop Color="#26D97757" Offset="0.5"/>
+                <GradientStop Color="#59D97757" Offset="0.65"/>
+                <GradientStop Color="#E6D97757" Offset="1"/>
+            </LinearGradientBrush>
+
+            <SolidColorBrush x:Key="BrandOrangeBrush" Color="#D97757"/>
+            <SolidColorBrush x:Key="BrandBlueBrush" Color="#6A9BCC"/>
+            <SolidColorBrush x:Key="BrandGreenBrush" Color="#788C5D"/>
+
+            <FontFamily x:Key="HeadingFont">Poppins, Segoe UI</FontFamily>
+            <FontFamily x:Key="BodyFont">Lora, Georgia</FontFamily>
+
+            <CornerRadius x:Key="CardCorner">14</CornerRadius>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+graphify-out/
+*.log
+*.suo
+*.user
+*.lnk
+decomp_*.cs

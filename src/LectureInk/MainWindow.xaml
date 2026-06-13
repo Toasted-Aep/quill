@@ -1,0 +1,524 @@
+<Window
+    x:Class="LectureInk.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ctrl="using:LectureInk.Controls"
+    xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml">
+
+    <Grid x:Name="RootGrid" Background="{ThemeResource SurfaceBrush}">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Z" Modifiers="Control" Invoked="UndoAccel_Invoked"/>
+            <KeyboardAccelerator Key="Y" Modifiers="Control" Invoked="RedoAccel_Invoked"/>
+            <KeyboardAccelerator Key="Delete" Invoked="DeleteAccel_Invoked"/>
+            <KeyboardAccelerator Key="V" Modifiers="Control" Invoked="PasteAccel_Invoked"/>
+        </Grid.KeyboardAccelerators>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===================== TOP BAR ===================== -->
+        <Border x:Name="TopBar" Grid.Row="0" Padding="8,5"
+                Background="{ThemeResource SurfaceBrush}"
+                BorderBrush="{ThemeResource HairlineBrush}"
+                BorderThickness="0,0,0,1">
+            <ScrollViewer x:Name="TopBarScroll" HorizontalScrollBarVisibility="Hidden" HorizontalScrollMode="Enabled"
+                          VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Disabled"
+                          PointerWheelChanged="BarScroll_Wheel">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <ToggleButton x:Name="BtnSidebar" IsChecked="True" Click="Sidebar_Toggle"
+                                  ToolTipService.ToolTip="Show or hide the notebook panel">
+                        <FontIcon Glyph="&#xE700;" FontSize="14"/>
+                    </ToggleButton>
+                    <TextBlock x:Name="CrumbText" VerticalAlignment="Center" Margin="6,0,10,0"
+                               FontSize="13" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
+                               Foreground="{ThemeResource InkBrush}"
+                               MaxWidth="320" TextTrimming="CharacterEllipsis"/>
+
+                    <AppBarSeparator/>
+
+                    <ToggleButton x:Name="ToolPen" Tag="Pen" Click="ToolButton_Click" ToolTipService.ToolTip="Pen (draw)">
+                        <FontIcon Glyph="&#xE70F;" FontSize="14"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="ToolText" Tag="Text" Click="ToolButton_Click" ToolTipService.ToolTip="Text (tap the page to add a text box)">
+                        <FontIcon Glyph="&#xE8D2;" FontSize="14"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="ToolEraser" Tag="Eraser" Click="ToolButton_Click" ToolTipService.ToolTip="Eraser (or use the pen's first button)">
+                        <FontIcon Glyph="&#xE75C;" FontSize="14"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="ToolSelect" Tag="Select" Click="ToolButton_Click" ToolTipService.ToolTip="Lasso select (or hold the pen's second button)">
+                        <FontIcon Glyph="&#xE8B3;" FontSize="14"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="ToolSpace" Tag="FreeSpace" Click="ToolButton_Click" ToolTipService.ToolTip="Insert free space (drag down to push content apart)">
+                        <TextBlock Text="&#x2195;" FontSize="14"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="RulerToggle" Click="Ruler_Click"
+                                  ToolTipService.ToolTip="Ruler: strokes snap to straight 15° lines">
+                        <TextBlock Text="&#x1F4CF;" FontSize="13"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="TouchDrawToggle" Click="TouchDraw_Click"
+                                  ToolTipService.ToolTip="Touch draw: draw with finger or mouse (otherwise touch pans)">
+                        <TextBlock Text="&#x261D;" FontSize="13"/>
+                    </ToggleButton>
+                    <Button x:Name="ShapeBtn" ToolTipService.ToolTip="Insert a perfect shape (or draw one and hold the pen still!)">
+                        <TextBlock Text="&#x25A2;" FontSize="14"/>
+                        <Button.Flyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="Straight line" Tag="Line" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Rectangle" Tag="Rect" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Square" Tag="Square" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Ellipse" Tag="Ellipse" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Circle" Tag="Circle" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Triangle" Tag="Triangle" Click="InsertShape_Click"/>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutItem Text="x-y plane" Tag="AxesXY" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="x-y-z axes" Tag="AxesXYZ" Click="InsertShape_Click"/>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <AppBarSeparator/>
+
+                    <Button x:Name="BtnUndo" Click="Undo_Click" ToolTipService.ToolTip="Undo (Ctrl+Z)">
+                        <FontIcon Glyph="&#xE7A7;" FontSize="14"/>
+                    </Button>
+                    <Button x:Name="BtnRedo" Click="Redo_Click" ToolTipService.ToolTip="Redo (Ctrl+Y)">
+                        <FontIcon Glyph="&#xE7A6;" FontSize="14"/>
+                    </Button>
+                    <Button x:Name="BtnHistory" ToolTipService.ToolTip="Edit history">
+                        <FontIcon Glyph="&#xE81C;" FontSize="14"/>
+                        <Button.Flyout>
+                            <Flyout x:Name="HistoryFlyout" Opening="HistoryFlyout_Opening">
+                                <StackPanel Width="240">
+                                    <TextBlock Text="Edit history" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <ListView x:Name="HistoryList" MaxHeight="320" SelectionMode="None"/>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+                    <ToggleButton x:Name="BtnReplay" Click="Replay_Click" ToolTipService.ToolTip="Replay this page stroke by stroke">
+                        <FontIcon Glyph="&#xE768;" FontSize="14"/>
+                    </ToggleButton>
+
+                    <AppBarSeparator/>
+
+                    <Button x:Name="BtnZoomOut" Click="ZoomOut_Click" ToolTipService.ToolTip="Zoom out">
+                        <FontIcon Glyph="&#xE71F;" FontSize="14"/>
+                    </Button>
+                    <Button x:Name="BtnZoomReset" Click="ZoomReset_Click" ToolTipService.ToolTip="Reset zoom to 100%">
+                        <TextBlock x:Name="ZoomBtnText" Text="100%" FontSize="12" MinWidth="38" TextAlignment="Center"/>
+                    </Button>
+                    <Button x:Name="BtnZoomIn" Click="ZoomIn_Click" ToolTipService.ToolTip="Zoom in">
+                        <FontIcon Glyph="&#xE8A3;" FontSize="14"/>
+                    </Button>
+                    <Button x:Name="BtnHome" Click="HomeView_Click" ToolTipService.ToolTip="Back to origin (the page is infinite!)">
+                        <FontIcon Glyph="&#xE80F;" FontSize="14"/>
+                    </Button>
+
+                    <AppBarSeparator/>
+
+                    <Button x:Name="PageSettingsBtn" ToolTipService.ToolTip="Page background and grid">
+                        <FontIcon Glyph="&#xE790;" FontSize="14"/>
+                        <Button.Flyout>
+                            <Flyout>
+                                <StackPanel Width="280" Spacing="10">
+                                    <TextBlock Text="Background" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <Button Tag="#FAF9F5" Click="BgPreset_Click" ToolTipService.ToolTip="Ivory" Width="40" Height="28" Background="#FAF9F5" BorderBrush="Gray"/>
+                                        <Button Tag="#FFFFFF" Click="BgPreset_Click" ToolTipService.ToolTip="White" Width="40" Height="28" Background="White" BorderBrush="Gray"/>
+                                        <Button Tag="#1E1E1E" Click="BgPreset_Click" ToolTipService.ToolTip="Dark grey" Width="40" Height="28" Background="#1E1E1E" BorderBrush="Gray"/>
+                                        <Button Tag="#000000" Click="BgPreset_Click" ToolTipService.ToolTip="Total black (OLED)" Width="40" Height="28" Background="Black" BorderBrush="Gray"/>
+                                    </StackPanel>
+                                    <Expander Header="Custom colour" HorizontalAlignment="Stretch">
+                                        <ColorPicker x:Name="BgPicker" IsAlphaEnabled="False" IsMoreButtonVisible="False"
+                                                     ColorSpectrumShape="Box" IsColorSliderVisible="True"
+                                                     ColorChanged="BgPicker_ColorChanged"/>
+                                    </Expander>
+                                    <Button Click="SetDefaultBg_Click" FontSize="12" HorizontalAlignment="Stretch"
+                                            Content="Use this page's colour for all new pages"/>
+                                    <RadioButtons x:Name="GridRadios" Header="Gridlines" SelectionChanged="GridRadios_SelectionChanged">
+                                        <x:String>None</x:String>
+                                        <x:String>Dotted</x:String>
+                                        <x:String>Squares</x:String>
+                                        <x:String>Row lines</x:String>
+                                    </RadioButtons>
+                                    <TextBlock Text="Grid spacing" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
+                                    <Slider x:Name="SpacingSlider" Minimum="16" Maximum="96" StepFrequency="4"
+                                            ValueChanged="SpacingSlider_ValueChanged"/>
+                                    <Button Click="SetDefaultGrid_Click" FontSize="12" HorizontalAlignment="Stretch"
+                                            Content="Use this grid for all new pages"/>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button x:Name="ExportBtn" ToolTipService.ToolTip="Export the current view">
+                        <FontIcon Glyph="&#xE74E;" FontSize="14"/>
+                        <Button.Flyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="Export view as PDF" Click="ExportPdf_Click"/>
+                                <MenuFlyoutItem Text="Export view as PNG" Click="ExportPng_Click"/>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <AppBarSeparator/>
+
+                    <ToggleButton x:Name="BtnCalc" Click="Calc_Toggle" ToolTipService.ToolTip="Calculator">
+                        <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
+                    </ToggleButton>
+                    <Button x:Name="BtnTheme" Click="Theme_Click" ToolTipService.ToolTip="Switch light / dark mode">
+                        <FontIcon x:Name="BtnThemeIcon" Glyph="&#xE708;" FontSize="14"/>
+                    </Button>
+                    <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
+                        <FontIcon Glyph="&#xE890;" FontSize="14"/>
+                    </Button>
+                    <Button x:Name="BtnFullscreen" Click="Fullscreen_Click" ToolTipService.ToolTip="Full screen">
+                        <FontIcon Glyph="&#xE740;" FontSize="14"/>
+                    </Button>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- ===================== TEXT FORMAT BAR ===================== -->
+        <Border x:Name="FormatBar" Grid.Row="1" Padding="8,4" Visibility="Collapsed"
+                Background="{ThemeResource SurfaceBrush}"
+                BorderBrush="{ThemeResource HairlineBrush}"
+                BorderThickness="0,0,0,1">
+            <ScrollViewer x:Name="FormatBarScroll" HorizontalScrollBarVisibility="Hidden" HorizontalScrollMode="Enabled"
+                          VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Disabled"
+                          PointerWheelChanged="BarScroll_Wheel">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <ComboBox x:Name="StyleCombo" Width="130" SelectionChanged="StyleCombo_Changed"
+                              PlaceholderText="Styles" ToolTipService.ToolTip="Text styles (brand typography)"/>
+                    <ComboBox x:Name="FontCombo" Width="150" SelectionChanged="FontCombo_Changed"
+                              ToolTipService.ToolTip="Font family"/>
+                    <ComboBox x:Name="SizeCombo" Width="68" SelectionChanged="SizeCombo_Changed"
+                              ToolTipService.ToolTip="Font size"/>
+
+                    <AppBarSeparator/>
+
+                    <Button Click="FormatBold_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Bold (Ctrl+B)">
+                        <TextBlock Text="B" FontWeight="Bold"/>
+                    </Button>
+                    <Button Click="FormatItalic_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Italic (Ctrl+I)">
+                        <TextBlock Text="I" FontStyle="Italic"/>
+                    </Button>
+                    <Button Click="FormatUnderline_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Underline (Ctrl+U)">
+                        <TextBlock Text="U" TextDecorations="Underline"/>
+                    </Button>
+                    <Button Click="FormatStrike_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Strikethrough">
+                        <TextBlock Text="S" TextDecorations="Strikethrough"/>
+                    </Button>
+                    <Button Click="FormatSuper_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Superscript">
+                        <TextBlock Text="x&#xB2;"/>
+                    </Button>
+                    <Button Click="FormatSub_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Subscript">
+                        <TextBlock Text="x&#x2082;"/>
+                    </Button>
+
+                    <AppBarSeparator/>
+
+                    <Button AllowFocusOnInteraction="False" ToolTipService.ToolTip="Text colour">
+                        <TextBlock Text="A" Foreground="{StaticResource BrandOrangeBrush}" FontWeight="SemiBold"/>
+                        <Button.Flyout>
+                            <Flyout>
+                                <ColorPicker x:Name="TextColorPicker" IsAlphaEnabled="False" IsMoreButtonVisible="False"
+                                             ColorSpectrumShape="Box" ColorChanged="TextColorPicker_ColorChanged"/>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+                    <Button AllowFocusOnInteraction="False" ToolTipService.ToolTip="Highlight colour">
+                        <Border Background="Yellow" Padding="4,0"><TextBlock Text="ab" Foreground="Black"/></Border>
+                        <Button.Flyout>
+                            <Flyout>
+                                <StackPanel Spacing="8">
+                                    <ColorPicker x:Name="HighlightPicker" IsAlphaEnabled="False" IsMoreButtonVisible="False"
+                                                 ColorSpectrumShape="Box" ColorChanged="HighlightPicker_ColorChanged"/>
+                                    <Button Content="Remove highlight" Click="ClearHighlight_Click"/>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <AppBarSeparator/>
+
+                    <Button Click="FormatBullets_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Bullet list">
+                        <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
+                    </Button>
+                    <Button Click="FormatOutdent_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Decrease indent">
+                        <FontIcon Glyph="&#xE72B;" FontSize="14"/>
+                    </Button>
+                    <Button Click="FormatIndent_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Increase indent">
+                        <FontIcon Glyph="&#xE72A;" FontSize="14"/>
+                    </Button>
+
+                    <AppBarSeparator/>
+
+                    <Button Click="AlignLeft_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Align left">
+                        <FontIcon Glyph="&#xE8E4;" FontSize="14"/>
+                    </Button>
+                    <Button Click="AlignCenter_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Align centre">
+                        <FontIcon Glyph="&#xE8E3;" FontSize="14"/>
+                    </Button>
+                    <Button Click="AlignRight_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Align right">
+                        <FontIcon Glyph="&#xE8E2;" FontSize="14"/>
+                    </Button>
+                    <Button Click="AlignJustify_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Justify">
+                        <FontIcon Glyph="&#xE8E1;" FontSize="14"/>
+                    </Button>
+
+                    <AppBarSeparator/>
+
+                    <Button AllowFocusOnInteraction="False" ToolTipService.ToolTip="Insert maths symbol">
+                        <TextBlock Text="&#x03A9;" FontSize="14"/>
+                        <Button.Flyout>
+                            <Flyout>
+                                <StackPanel>
+                                    <TextBlock Text="Maths symbols" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                                    <GridView x:Name="SymbolGrid" Width="324" MaxHeight="300"
+                                              IsItemClickEnabled="True" ItemClick="Symbol_Click" SelectionMode="None">
+                                        <GridView.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Width="34" Height="34">
+                                                    <TextBlock Text="{Binding}" FontSize="17"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                </Border>
+                                            </DataTemplate>
+                                        </GridView.ItemTemplate>
+                                    </GridView>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- ===================== CANVAS + FLOATING PANELS ===================== -->
+        <Grid x:Name="CanvasArea" Grid.Row="2">
+            <ctrl:InkSurface x:Name="Surface"/>
+
+            <!-- Floating notebook panel -->
+            <Border x:Name="NotebookPanel" HorizontalAlignment="Left" VerticalAlignment="Top"
+                    Margin="14,14,0,0" Width="300" MaxHeight="940"
+                    Background="{ThemeResource CardBrush}"
+                    BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
+                    CornerRadius="{StaticResource CardCorner}" Padding="10">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="2,0,0,6">
+                        <TextBlock Text="Notebooks" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
+                                   FontSize="14" Foreground="{ThemeResource InkBrush}" VerticalAlignment="Center"/>
+                        <Button Click="Sidebar_Close" HorizontalAlignment="Right" Padding="4,2"
+                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Close panel">
+                            <FontIcon Glyph="&#xE711;" FontSize="11"/>
+                        </Button>
+                    </Grid>
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="4" Margin="0,0,0,6">
+                        <Button Padding="10,4" Style="{StaticResource AccentButtonStyle}"
+                                ToolTipService.ToolTip="Add a page, section or notebook">
+                            <FontIcon Glyph="&#xE710;" FontSize="12"/>
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem Text="New page" Click="AddPage_Click">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7C3;"/></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem Text="New section" Click="AddSection_Click">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B7;"/></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem Text="New notebook" Click="AddNotebook_Click">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8F1;"/></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                        <Button Click="Rename_Click" Padding="6,4" ToolTipService.ToolTip="Rename selected item">
+                            <FontIcon Glyph="&#xE8AC;" FontSize="12"/>
+                        </Button>
+                        <Button Click="DeleteItem_Click" Padding="6,4" ToolTipService.ToolTip="Delete selected item">
+                            <FontIcon Glyph="&#xE74D;" FontSize="12"/>
+                        </Button>
+                        <Button Padding="6,4" ToolTipService.ToolTip="Sort pages by date (drag items to reorder by hand)">
+                            <FontIcon Glyph="&#xE8CB;" FontSize="12"/>
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem Text="Newest pages first" Tag="desc" Click="SortPages_Click"/>
+                                    <MenuFlyoutItem Text="Oldest pages first" Tag="asc" Click="SortPages_Click"/>
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                    </StackPanel>
+                    <TreeView x:Name="NotebookTree" Grid.Row="2"
+                              SelectionMode="Single" ItemInvoked="NotebookTree_ItemInvoked"
+                              CanDragItems="True" CanReorderItems="True" AllowDrop="True"
+                              DragItemsCompleted="NotebookTree_DragItemsCompleted"/>
+                    <Border x:Name="NbGrip" Grid.Row="2" Width="22" Height="22"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                            Margin="0,2,-6,-6" Background="Transparent"
+                            ToolTipService.ToolTip="Drag to resize this panel">
+                        <TextBlock Text="&#x25E2;" FontSize="11" Opacity="0.5"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- Floating pen panel: drag the grip to dock it to any edge -->
+            <Border x:Name="PenRow" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Margin="24,0,24,16" Padding="8,6"
+                    Background="{ThemeResource CardBrush}"
+                    BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
+                    CornerRadius="{StaticResource CardCorner}">
+                <ScrollViewer x:Name="PenScroll" HorizontalScrollBarVisibility="Hidden" HorizontalScrollMode="Enabled"
+                              VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Disabled" MaxWidth="1280">
+                    <StackPanel x:Name="PenStack" Orientation="Horizontal" Spacing="4">
+                        <Border x:Name="PenGrip" Background="Transparent" Padding="2"
+                                ToolTipService.ToolTip="Drag me — dock the pens to any side of the page">
+                            <TextBlock Text="⠿" FontSize="13" Opacity="0.55"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+
+                        <StackPanel x:Name="PresetPanel" Orientation="Horizontal" Spacing="2"/>
+                        <Button x:Name="BtnAddPreset" Click="AddPreset_Click" Padding="6,4"
+                                ToolTipService.ToolTip="Save the current pen as a new pen (right-click any pen to edit it)">
+                            <FontIcon Glyph="&#xE710;" FontSize="12"/>
+                        </Button>
+
+                        <AppBarSeparator/>
+
+                        <Button x:Name="BtnPenRowCollapse" Click="PenRowCollapse_Click"
+                                ToolTipService.ToolTip="Hide the pen panel for this page">
+                            <FontIcon Glyph="&#xE70D;" FontSize="12"/>
+                        </Button>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <!-- Small floating button when the pen panel is hidden -->
+            <Button x:Name="PenRowShowBtn" Click="PenRowShow_Click" Visibility="Collapsed"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16"
+                    Width="44" Height="44" CornerRadius="22"
+                    Background="{ThemeResource CardBrush}"
+                    BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
+                    ToolTipService.ToolTip="Show the pen panel">
+                <TextBlock Text="&#x1F58A;" FontSize="16"/>
+            </Button>
+
+            <!-- Floating calculator -->
+            <Border x:Name="CalcPanel" Visibility="Collapsed"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,14,14,0" Width="332" MaxHeight="760"
+                    Background="{ThemeResource CardBrush}"
+                    BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
+                    CornerRadius="{StaticResource CardCorner}" Padding="10">
+                <StackPanel Spacing="6">
+                    <Grid x:Name="CalcHeader" Background="Transparent"
+                          ToolTipService.ToolTip="Drag to move the calculator">
+                        <TextBlock Text="&#x22EE;&#x22EE;  Calculator" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
+                                   FontSize="14" Foreground="{ThemeResource InkBrush}" VerticalAlignment="Center"/>
+                        <Button Click="Calc_Close" HorizontalAlignment="Right" Padding="4,2"
+                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Close calculator">
+                            <FontIcon Glyph="&#xE711;" FontSize="11"/>
+                        </Button>
+                    </Grid>
+                    <ComboBox x:Name="CalcModeBox" HorizontalAlignment="Stretch" FontSize="12"
+                              SelectionChanged="CalcModeBox_Changed"/>
+
+                    <StackPanel x:Name="ProgHost" Visibility="Collapsed" Spacing="2">
+                        <TextBlock x:Name="ProgHex" FontSize="12" FontFamily="Consolas" IsTextSelectionEnabled="True"/>
+                        <TextBlock x:Name="ProgDec" FontSize="12" FontFamily="Consolas" IsTextSelectionEnabled="True"/>
+                        <TextBlock x:Name="ProgOct" FontSize="12" FontFamily="Consolas" IsTextSelectionEnabled="True"/>
+                        <TextBlock x:Name="ProgBin" FontSize="12" FontFamily="Consolas" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="Input base" FontSize="11" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="ProgBase" FontSize="11" SelectionChanged="ProgBase_Changed"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <ListView x:Name="CalcHistory" MaxHeight="110"
+                              IsItemClickEnabled="True" ItemClick="CalcHistory_Click" SelectionMode="None"
+                              FontSize="12"/>
+                    <TextBox x:Name="CalcInput" FontSize="17" PlaceholderText="2sin(45)+√(9)"
+                             KeyDown="CalcInput_KeyDown" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="CalcToggles" Orientation="Horizontal" Spacing="6">
+                        <ToggleButton x:Name="CalcDeg" Content="DEG" FontSize="11" IsChecked="True"
+                                      ToolTipService.ToolTip="Degrees (off = radians)"/>
+                        <ToggleButton x:Name="Calc2nd" Content="2&#x207F;&#x1D48;" FontSize="11" Click="CalcMode_Click"
+                                      ToolTipService.ToolTip="Inverse functions"/>
+                        <ToggleButton x:Name="CalcHyp" Content="hyp" FontSize="11" Click="CalcMode_Click"
+                                      ToolTipService.ToolTip="Hyperbolic functions"/>
+                        <TextBlock x:Name="CalcError" FontSize="11" Foreground="{StaticResource BrandOrangeBrush}"
+                                   VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="170"/>
+                    </StackPanel>
+                    <StackPanel x:Name="CalcButtons" Spacing="3"/>
+
+                    <StackPanel x:Name="GraphHost" Visibility="Collapsed" Spacing="6">
+                        <TextBox x:Name="GraphInput" FontSize="14" PlaceholderText="sin(x); 0.1x^2"
+                                 TextChanged="GraphInput_Changed"/>
+                        <canvas:CanvasControl x:Name="GraphCanvas" Height="230" Draw="GraphCanvas_Draw"/>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button Content="−" FontSize="13" Click="GraphZoomOut_Click" ToolTipService.ToolTip="Wider x range"/>
+                            <Button Content="+" FontSize="13" Click="GraphZoomIn_Click" ToolTipService.ToolTip="Narrower x range"/>
+                            <Button Content="&#x27F3;" FontSize="13" Click="GraphReset_Click" ToolTipService.ToolTip="Reset range"/>
+                            <TextBlock x:Name="GraphRangeText" FontSize="11" VerticalAlignment="Center" Text="x: −10 … 10"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel x:Name="ConvHost" Visibility="Collapsed" Spacing="6">
+                        <ComboBox x:Name="ConvCat" HorizontalAlignment="Stretch" FontSize="12"
+                                  SelectionChanged="ConvCat_Changed"/>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <ComboBox x:Name="ConvFrom" Width="130" FontSize="12" SelectionChanged="Conv_Changed"/>
+                            <Button Content="&#x21C4;" FontSize="13" Click="ConvSwap_Click" ToolTipService.ToolTip="Swap units"/>
+                            <ComboBox x:Name="ConvTo" Width="130" FontSize="12" SelectionChanged="Conv_Changed"/>
+                        </StackPanel>
+                        <TextBox x:Name="ConvInput" FontSize="16" PlaceholderText="1" TextChanged="Conv_Changed"/>
+                        <TextBlock x:Name="ConvResult" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="{ThemeResource InkBrush}" IsTextSelectionEnabled="True"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Minimal-UI floating buttons -->
+            <StackPanel x:Name="MinimalButtons" Orientation="Horizontal" Spacing="8" Visibility="Collapsed"
+                        HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,14,14,0">
+                <Button x:Name="BtnFloatNotebook" Click="FloatNotebook_Click"
+                        Width="42" Height="42" CornerRadius="21"
+                        Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
+                        ToolTipService.ToolTip="Notebooks">
+                    <TextBlock Text="&#x1F4D2;" FontSize="15"/>
+                </Button>
+                <Button x:Name="BtnFloatPen" Click="FloatPen_Click"
+                        Width="42" Height="42" CornerRadius="21"
+                        Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
+                        ToolTipService.ToolTip="Pens">
+                    <TextBlock Text="&#x1F58A;" FontSize="15"/>
+                </Button>
+                <Button x:Name="BtnRestoreUi" Click="RestoreUi_Click"
+                        Width="42" Height="42" CornerRadius="21"
+                        Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
+                        ToolTipService.ToolTip="Show the interface again">
+                    <FontIcon Glyph="&#xE890;" FontSize="14"/>
+                </Button>
+            </StackPanel>
+
+            <TextBlock x:Name="StatusText" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                       Margin="14,0,0,12" FontSize="12" Foreground="{ThemeResource InkBrush}"
+                       Opacity="0.85" IsHitTestVisible="False"/>
+
+            <Border x:Name="ZoomBorder" Visibility="Collapsed"
+                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,18,12"
+                    Background="{ThemeResource CardBrush}"
+                    BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
+                    CornerRadius="8" Padding="8,3" IsHitTestVisible="False">
+                <TextBlock x:Name="ZoomText" Text="100%" FontSize="12" Foreground="{ThemeResource InkBrush}"/>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>
