@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices.WindowsRuntime;
+using LectureInk.Controls;
 using LectureInk.Helpers;
 using LectureInk.Models;
 using LectureInk.Services;
@@ -44,6 +45,9 @@ public sealed partial class MainWindow : Window
     private bool _syncingUi;
     private bool _uiHidden;
     private bool _floatPen;
+    // true only when the hide-all button is what entered full screen, so restore
+    // won't pull the user out of a full screen they set up themselves.
+    private bool _hideEnteredFullscreen;
 
     private static readonly string[] QuickColors =
         { "#141413", "#FAF9F5", "#D97757", "#D32F2F", "#FBC02D", "#788C5D", "#6A9BCC", "#7B1FA2" };
@@ -121,6 +125,7 @@ public sealed partial class MainWindow : Window
 
         Surface.ContentChanged += ScheduleSave;
         Surface.ActiveTextChanged += _ => UpdateFormatBarVisibility();
+        Surface.ContextMenuRequested += ShowCanvasContextMenu;
         Surface.ReplayEnded += () => BtnReplay.IsChecked = false;
         Surface.UndoManager.Changed += UpdateUndoButtons;
         Surface.ViewChanged += OnViewChanged;
@@ -1266,6 +1271,21 @@ public sealed partial class MainWindow : Window
         BtnCalc.IsChecked = false;
         MinimalButtons.Visibility = Visibility.Visible;
         ApplyPenRowVisibility();
+        // hiding everything also goes full screen — but only take credit for it
+        // if we weren't already full screen, so restore won't yank the user out.
+        try
+        {
+            if (AppWindow.Presenter.Kind != AppWindowPresenterKind.FullScreen)
+            {
+                _hideEnteredFullscreen = true;
+                AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+            }
+            else
+            {
+                _hideEnteredFullscreen = false;
+            }
+        }
+        catch { }
     }
 
     private void RestoreUi_Click(object sender, RoutedEventArgs e)
@@ -1276,6 +1296,15 @@ public sealed partial class MainWindow : Window
         NotebookPanel.Visibility = BtnSidebar.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         UpdateFormatBarVisibility();
         ApplyPenRowVisibility();
+        // only leave full screen if hiding the UI is what entered it; if the user
+        // was already full screen beforehand, stay full screen.
+        try
+        {
+            if (_hideEnteredFullscreen && AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
+                AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+        }
+        catch { }
+        _hideEnteredFullscreen = false;
     }
 
     private void FloatPen_Click(object sender, RoutedEventArgs e)
@@ -1491,6 +1520,152 @@ public sealed partial class MainWindow : Window
             default: Set("Lora", 12, 400, false); break;
         }
         Surface.ActiveTextBox?.Focus(FocusState.Programmatic);
+    }
+
+    // =======================================================================
+    // Canvas context menu (right-click / pen barrel-tap / touch long-press)
+    // =======================================================================
+    private void ShowCanvasContextMenu(Point pos)
+    {
+        var menu = new MenuFlyout();
+        var box = Surface.ActiveTextBox;
+        bool textSel = box != null && box.FocusState != FocusState.Unfocused &&
+                       HasTextSelection(box);
+        var world = Surface.ScreenToWorld(pos);
+
+        var copy = new MenuFlyoutItem { Text = "Copy", Icon = new FontIcon { Glyph = "" } };
+        copy.IsEnabled = textSel || Surface.HasCanvasSelection;
+        copy.Click += (_, _) => ContextCopy();
+        menu.Items.Add(copy);
+
+        var cut = new MenuFlyoutItem { Text = "Cut", Icon = new FontIcon { Glyph = "" } };
+        cut.IsEnabled = textSel || Surface.HasCanvasSelection;
+        cut.Click += (_, _) => ContextCut();
+        menu.Items.Add(cut);
+
+        var paste = new MenuFlyoutItem { Text = "Paste", Icon = new FontIcon { Glyph = "" } };
+        paste.Click += (_, _) => ContextPaste(world);
+        menu.Items.Add(paste);
+
+        if (Surface.HasCanvasSelection)
+        {
+            var del = new MenuFlyoutItem { Text = "Delete", Icon = new FontIcon { Glyph = "" } };
+            del.Click += (_, _) => Surface.DeleteSelection();
+            menu.Items.Add(del);
+        }
+
+        // Word-style formatting when text is selected: style, font, size (punto).
+        if (textSel)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+
+            var style = new MenuFlyoutSubItem { Text = "Style" };
+            AddClick(style, "Bold", FormatBold_Click);
+            AddClick(style, "Italic", FormatItalic_Click);
+            AddClick(style, "Underline", FormatUnderline_Click);
+            AddClick(style, "Strikethrough", FormatStrike_Click);
+            AddClick(style, "Superscript", FormatSuper_Click);
+            AddClick(style, "Subscript", FormatSub_Click);
+            menu.Items.Add(style);
+
+            var font = new MenuFlyoutSubItem { Text = "Font" };
+            foreach (var f in Fonts)
+            {
+                var name = f;
+                var it = new MenuFlyoutItem { Text = f };
+                it.Click += (_, _) => SetSelectionFont(name);
+                font.Items.Add(it);
+            }
+            menu.Items.Add(font);
+
+            var size = new MenuFlyoutSubItem { Text = "Size (punto)" };
+            foreach (var sz in FontSizes)
+            {
+                var s = sz;
+                var it = new MenuFlyoutItem { Text = sz };
+                it.Click += (_, _) => SetSelectionSize(s);
+                size.Items.Add(it);
+            }
+            menu.Items.Add(size);
+        }
+
+        menu.ShowAt(Surface, new FlyoutShowOptions { Position = pos });
+    }
+
+    private static void AddClick(MenuFlyoutSubItem parent, string text, RoutedEventHandler handler)
+    {
+        var it = new MenuFlyoutItem { Text = text };
+        it.Click += handler;
+        parent.Items.Add(it);
+    }
+
+    private static bool HasTextSelection(RichEditBox box)
+    {
+        var sel = box.Document.Selection;
+        return sel.StartPosition != sel.EndPosition;
+    }
+
+    private void ContextCopy()
+    {
+        var box = Surface.ActiveTextBox;
+        if (box != null && box.FocusState != FocusState.Unfocused && HasTextSelection(box))
+            box.Document.Selection.Copy();
+        else if (Surface.HasCanvasSelection)
+        {
+            Surface.CopySelection();
+            ShowStatus("Copied — right-click where you want to paste.");
+        }
+    }
+
+    private void ContextCut()
+    {
+        var box = Surface.ActiveTextBox;
+        if (box != null && box.FocusState != FocusState.Unfocused && HasTextSelection(box))
+        {
+            box.Document.Selection.Cut();
+        }
+        else if (Surface.HasCanvasSelection)
+        {
+            Surface.CopySelection();
+            Surface.DeleteSelection();
+            ShowStatus("Cut — right-click where you want to paste.");
+        }
+    }
+
+    private async void ContextPaste(System.Numerics.Vector2 world)
+    {
+        var box = Surface.ActiveTextBox;
+        if (box != null && box.FocusState != FocusState.Unfocused)
+        {
+            try { box.Document.Selection.Paste(0); } catch { }
+            return;
+        }
+        bool hasBitmap = false;
+        try
+        {
+            hasBitmap = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
+                .Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap);
+        }
+        catch { }
+        if (hasBitmap) { await PasteImageAsync(world); return; }
+        if (InkSurface.HasCanvasClipboard) { Surface.PasteCanvasAt(world); return; }
+        ShowStatus("Nothing to paste.");
+    }
+
+    private void SetSelectionFont(string font)
+    {
+        var s = Surface.ActiveTextBox?.Document.Selection;
+        if (s != null) { s.CharacterFormat.Name = font; Surface.ActiveTextBox?.Focus(FocusState.Programmatic); }
+    }
+
+    private void SetSelectionSize(string sizeStr)
+    {
+        var s = Surface.ActiveTextBox?.Document.Selection;
+        if (s != null && float.TryParse(sizeStr, out float v))
+        {
+            s.CharacterFormat.Size = v;
+            Surface.ActiveTextBox?.Focus(FocusState.Programmatic);
+        }
     }
 
     // =======================================================================
@@ -1979,6 +2154,34 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private bool TextBoxFocused =>
+        Surface.ActiveTextBox != null && Surface.ActiveTextBox.FocusState != FocusState.Unfocused;
+
+    private void CopyAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (TextBoxFocused) { args.Handled = false; return; } // text box keeps its own Ctrl+C
+        if (Surface.HasCanvasSelection)
+        {
+            Surface.CopySelection();
+            ShowStatus("Copied.");
+            args.Handled = true;
+        }
+        else args.Handled = false;
+    }
+
+    private void CutAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (TextBoxFocused) { args.Handled = false; return; }
+        if (Surface.HasCanvasSelection)
+        {
+            Surface.CopySelection();
+            Surface.DeleteSelection();
+            ShowStatus("Cut.");
+            args.Handled = true;
+        }
+        else args.Handled = false;
+    }
+
     private void PasteAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         bool hasBitmap = false;
@@ -1989,17 +2192,29 @@ public sealed partial class MainWindow : Window
         }
         catch { }
 
-        if (!hasBitmap)
+        if (hasBitmap)
         {
-            args.Handled = false; // plain text: let the focused control paste
+            // images always become resizable canvas objects
+            args.Handled = true;
+            _ = PasteImageAsync();
             return;
         }
-        // images always become resizable canvas objects
-        args.Handled = true;
-        _ = PasteImageAsync();
+        if (TextBoxFocused)
+        {
+            args.Handled = false; // plain text: let the focused text box paste
+            return;
+        }
+        if (InkSurface.HasCanvasClipboard)
+        {
+            // paste copied / cut writings or shapes near the centre of the view
+            Surface.PasteCanvasAtViewCenter();
+            args.Handled = true;
+            return;
+        }
+        args.Handled = false;
     }
 
-    private async Task PasteImageAsync()
+    private async Task PasteImageAsync(System.Numerics.Vector2? worldTopLeft = null)
     {
         try
         {
@@ -2026,11 +2241,24 @@ public sealed partial class MainWindow : Window
                 await encoder.FlushAsync();
             }
 
-            // Insert first so the image can consume a pending text caret as its
-            // position, then switch to Select so it can be dragged/resized.
-            Surface.InsertImage(path, decoder.PixelWidth, decoder.PixelHeight);
-            SelectTool("Select");
-            ShowStatus("Image pasted — drag it to move, drag a corner to resize.");
+            if (worldTopLeft is { } tl)
+            {
+                // pasted via the context menu at a specific point
+                Surface.InsertImageAt(path, decoder.PixelWidth, decoder.PixelHeight, tl);
+            }
+            else
+            {
+                // Insert first so the image can consume a pending text caret as its
+                // position, then switch to Pen so pen and touch behave as normal,
+                // but keep the mouse in Auto/Move mode to allow mouse dragging.
+                Surface.InsertImage(path, decoder.PixelWidth, decoder.PixelHeight);
+                SelectTool("Pen");
+                if (Surface.MouseMode == MouseMode.Grab)
+                {
+                    SetMouseMode(MouseMode.Auto);
+                }
+            }
+            ShowStatus("Image pasted — drag it with the mouse to move, drag a corner to resize.");
         }
         catch
         {

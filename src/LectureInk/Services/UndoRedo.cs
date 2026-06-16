@@ -18,6 +18,15 @@ public class AddStrokeAction : IPageAction
     public void Undo(NotePage page) => page.Strokes.Remove(_stroke);
 }
 
+public class AddStrokesAction : IPageAction
+{
+    private readonly List<PenStroke> _strokes;
+    public AddStrokesAction(List<PenStroke> strokes) => _strokes = strokes;
+    public string Description => "Paste";
+    public void Do(NotePage page) => page.Strokes.AddRange(_strokes);
+    public void Undo(NotePage page) { foreach (var s in _strokes) page.Strokes.Remove(s); }
+}
+
 public class RemoveStrokesAction : IPageAction
 {
     private readonly List<(int Index, PenStroke Stroke)> _items;

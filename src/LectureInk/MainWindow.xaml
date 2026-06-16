@@ -5,11 +5,13 @@
     xmlns:ctrl="using:LectureInk.Controls"
     xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml">
 
-    <Grid x:Name="RootGrid" Background="{ThemeResource SurfaceBrush}">
+    <Grid x:Name="RootGrid" Background="{ThemeResource SurfaceBrush}" KeyboardAcceleratorPlacementMode="Hidden">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="Z" Modifiers="Control" Invoked="UndoAccel_Invoked"/>
             <KeyboardAccelerator Key="Y" Modifiers="Control" Invoked="RedoAccel_Invoked"/>
             <KeyboardAccelerator Key="Delete" Invoked="DeleteAccel_Invoked"/>
+            <KeyboardAccelerator Key="C" Modifiers="Control" Invoked="CopyAccel_Invoked"/>
+            <KeyboardAccelerator Key="X" Modifiers="Control" Invoked="CutAccel_Invoked"/>
             <KeyboardAccelerator Key="V" Modifiers="Control" Invoked="PasteAccel_Invoked"/>
         </Grid.KeyboardAccelerators>
 

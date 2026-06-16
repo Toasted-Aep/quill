@@ -51,6 +51,11 @@ public sealed class InkSurface : UserControl
     // true while a pen is hovering with its eraser engaged (button/inverted) so
     // we can show the eraser ring before it touches down.
     private bool _penEraserHover;
+    // pen barrel ("select") button gesture: a tap (no drag) opens the context
+    // menu on release; a drag becomes a lasso selection.
+    private bool _barrelGesture;
+    private bool _barrelMoved;
+    private Vector2 _barrelStartScreen;
 
     public UndoRedoManager UndoManager { get; } = new();
     public NotePage? Page => _page;
@@ -61,6 +66,13 @@ public sealed class InkSurface : UserControl
     public event Action? ReplayEnded;
     public event Action? TitleClicked;
     public event Action? DateClicked;
+    /// <summary>Right-click / pen barrel-tap / touch long-press: position is in
+    /// InkSurface-local coordinates so the menu can be shown there.</summary>
+    public event Action<Point>? ContextMenuRequested;
+
+    // Internal copy/paste clipboard for canvas objects (shared across pages).
+    private static List<PenStroke>? _clipStrokes;
+    private static ShapeElement? _clipShape;
 
     // ---- gesture state ----------------------------------------------------
     private uint? _activePointer;
@@ -174,6 +186,11 @@ public sealed class InkSurface : UserControl
         _canvas.PointerCaptureLost += OnPointerLost;
         _canvas.PointerWheelChanged += OnPointerWheel;
         _canvas.PointerExited += (_, _) => { _hover = null; _penEraserHover = false; _canvas.Invalidate(); };
+
+        // Right mouse button, pen barrel-button tap, and touch press-and-hold all
+        // raise RightTapped — our single context-menu trigger.
+        _canvas.RightTapped += OnRightTapped;
+        _canvas.Tapped += OnCanvasTapped;
 
         // Touch panning / pinch zoom handled by us (no ScrollViewer anywhere,
         // so nothing can steal the pen mid-stroke).
@@ -529,21 +546,72 @@ public sealed class InkSurface : UserControl
         }
         if (isMouse && !props.IsLeftButtonPressed) return;
 
+        // Pen barrel ("select") button opens the context menu. RightTapped is
+        // unreliable for the pen barrel over a Win2D canvas, so raise it here
+        // directly rather than depending on the gesture recogniser.
+        if (isPen && props.IsBarrelButtonPressed && !IsEraserButtons(props, isPen))
+        {
+            // Begin a barrel gesture: tapped (no drag) -> context menu on
+            // release; dragged -> lasso selection.
+            _barrelGesture = true;
+            _barrelMoved = false;
+            _barrelStartScreen = screen;
+            _activePointer = e.Pointer.PointerId;
+            _gestureTool = ToolType.Select;
+            _canvas.CapturePointer(e.Pointer);
+            ClearSelection();
+            _activeShape = null;
+            _lasso = new List<Vector2> { pos };
+            e.Handled = true;
+            _canvas.Invalidate();
+            return;
+        }
+
         var tool = Tool;
-        // Pen hardware buttons: first button (eraser tip / inverted pen /
-        // extra barrel buttons) -> eraser. Second (barrel) button -> lasso.
+        // Pen first button (eraser tip / inverted pen / extra side buttons)
+        // acts as the eraser.
         if (IsEraserButtons(props, isPen))
         {
             tool = ToolType.Eraser;
         }
-        else if (isPen && props.IsBarrelButtonPressed)
-        {
-            tool = ToolType.Select;
-        }
 
         if (tool == ToolType.Pen && !isPen && !HandDrawMode)
         {
-            if (!isMouse) return;            // touch pans
+            if (!isMouse)
+            {
+                if (_activeShape != null)
+                {
+                    float tol = 10f / ViewZoom;
+                    var handle = HitHandle(_activeShape, pos, tol);
+                    bool onBody = ShapeBounds(_activeShape).Contains(new Point(pos.X, pos.Y)) ||
+                                  DistToShapeOutline(_activeShape, pos) < tol;
+                    if (handle != null || onBody)
+                    {
+                        _activePointer = e.Pointer.PointerId;
+                        _gestureTool = ToolType.Select;
+                        _canvas.CapturePointer(e.Pointer);
+                        if (handle != null)
+                        {
+                            _resizingShape = true;
+                            _resizeAnchor = handle.Value;
+                            _shapeOrig = Snapshot(_activeShape);
+                            _adjustConstrain = false;
+                            _resizeAspect = _activeShape.Kind == ShapeKind.Image && Math.Abs(_shapeOrig.H) > 1
+                                ? Math.Abs(_shapeOrig.W) / Math.Abs(_shapeOrig.H)
+                                : 0;
+                        }
+                        else
+                        {
+                            _movingShape = true;
+                            _shapeStart = pos;
+                            _shapeOrig = Snapshot(_activeShape);
+                        }
+                        e.Handled = true;
+                        return;
+                    }
+                }
+                return;            // touch pans
+            }
             HandleMousePress(e, pos, screen); // routed by the selected mouse mode
             return;
         }
@@ -567,7 +635,7 @@ public sealed class InkSurface : UserControl
                 // pressing on the active shape's body or a handle grabs it,
                 // pressing anywhere else draws — so you can still draw over
                 // images that aren't selected.
-                if (_activeShape != null)
+                if (_activeShape != null && _activeShape.Kind != ShapeKind.Image)
                 {
                     float tolP = 10f / ViewZoom;
                     var handleP = HitHandle(_activeShape, pos, tolP);
@@ -776,6 +844,12 @@ public sealed class InkSurface : UserControl
         }
 
         var pos = ToWorld(screen);
+
+        // a barrel gesture that moves past a small threshold is a drag (lasso),
+        // not a tap (which would open the context menu on release).
+        if (_barrelGesture && !_barrelMoved && Vector2.Distance(screen, _barrelStartScreen) > 8f)
+            _barrelMoved = true;
+
         switch (_gestureTool)
         {
             case ToolType.Pen:
@@ -864,6 +938,15 @@ public sealed class InkSurface : UserControl
         CommitGesture();
     }
 
+    private void OnRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        if (_page == null || _replaying) return;
+        ContextMenuRequested?.Invoke(e.GetPosition(this));
+        e.Handled = true;
+    }
+
+    public Vector2 ScreenToWorld(Point screen) => ToWorld(new Vector2((float)screen.X, (float)screen.Y));
+
     private void CommitGesture()
     {
         if (_mousePanning)
@@ -935,6 +1018,13 @@ public sealed class InkSurface : UserControl
             }
             case ToolType.Select:
             {
+                if (_barrelGesture && !_barrelMoved)
+                {
+                    // tapped, not dragged -> open the context menu, no selection
+                    _lasso = null;
+                    ContextMenuRequested?.Invoke(new Point(_barrelStartScreen.X, _barrelStartScreen.Y));
+                    break;
+                }
                 if (_rectSelect)
                 {
                     _rectSelect = false;
@@ -1026,6 +1116,8 @@ public sealed class InkSurface : UserControl
         _adjustShape = null;
         _movingShape = _resizingShape = false;
         _rectSelect = false;
+        _barrelGesture = false;
+        _barrelMoved = false;
         _holdTimer.Stop();
     }
 
@@ -1190,6 +1282,98 @@ public sealed class InkSurface : UserControl
     }
 
     // =======================================================================
+    // Copy / paste (canvas objects)
+    // =======================================================================
+    public bool HasCanvasSelection => _selected.Count > 0 || _activeShape != null;
+    public static bool HasCanvasClipboard => _clipStrokes is { Count: > 0 } || _clipShape != null;
+
+    private static PenStroke CloneStroke(PenStroke s) =>
+        s.CloneWithPoints(s.Points.Select(p => new StrokePoint(p.X, p.Y, p.Pressure)).ToList());
+
+    private static ShapeElement CloneShape(ShapeElement s) => new()
+    {
+        Kind = s.Kind, X = s.X, Y = s.Y, W = s.W, H = s.H,
+        Color = s.Color, Size = s.Size, ImagePath = s.ImagePath
+    };
+
+    /// <summary>Copies the current stroke selection or active shape/image.</summary>
+    public void CopySelection()
+    {
+        if (_selected.Count > 0)
+        {
+            _clipStrokes = _selected.Select(CloneStroke).ToList();
+            _clipShape = null;
+        }
+        else if (_activeShape != null)
+        {
+            _clipShape = CloneShape(_activeShape);
+            _clipStrokes = null;
+        }
+    }
+
+    /// <summary>Pastes the canvas clipboard so its top-left lands at <paramref name="world"/>.</summary>
+    public void PasteCanvasAt(Vector2 world)
+    {
+        if (_page == null) return;
+        if (_clipStrokes is { Count: > 0 })
+        {
+            float minX = float.MaxValue, minY = float.MaxValue;
+            foreach (var s in _clipStrokes)
+                foreach (var p in s.Points) { if (p.X < minX) minX = p.X; if (p.Y < minY) minY = p.Y; }
+            float dx = world.X - minX, dy = world.Y - minY;
+            var pasted = _clipStrokes.Select(s =>
+            {
+                var c = CloneStroke(s);
+                foreach (var p in c.Points) { p.X += dx; p.Y += dy; }
+                return c;
+            }).ToList();
+            UndoManager.Push(new AddStrokesAction(pasted), _page);
+            _selected.Clear(); _selectedSet.Clear();
+            _selected.AddRange(pasted);
+            foreach (var s in pasted) _selectedSet.Add(s);
+            _activeShape = null;
+            RecomputeSelectionBounds();
+        }
+        else if (_clipShape != null)
+        {
+            var s = CloneShape(_clipShape);
+            s.X = world.X; s.Y = world.Y;
+            UndoManager.Push(new AddShapeAction(s), _page);
+            ClearSelection();
+            _activeShape = s;
+        }
+        else return;
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    /// <summary>Pastes the canvas clipboard near the centre of the visible page
+    /// (used by the Ctrl+V keyboard shortcut, which has no click point).</summary>
+    public void PasteCanvasAtViewCenter()
+    {
+        var c = ToWorld(new Vector2((float)ActualWidth / 2 - 40, (float)ActualHeight / 2 - 40));
+        PasteCanvasAt(c);
+    }
+
+    /// <summary>Inserts an image with its top-left at the given world point.</summary>
+    public void InsertImageAt(string path, double pixelW, double pixelH, Vector2 topLeftWorld)
+    {
+        if (_page == null) return;
+        CancelPendingText();
+        double scale = Math.Min(1.0, 520.0 / Math.Max(1, Math.Max(pixelW, pixelH)));
+        double w = Math.Max(48, pixelW * scale), h = Math.Max(48, pixelH * scale);
+        var s = new ShapeElement
+        {
+            Kind = ShapeKind.Image, ImagePath = path,
+            X = topLeftWorld.X, Y = topLeftWorld.Y, W = w, H = h, Size = 0
+        };
+        UndoManager.Push(new AddShapeAction(s), _page);
+        _activeShape = s;
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    // =======================================================================
     // Drawing
     // =======================================================================
     private void OnDraw(CanvasControl sender, CanvasDrawEventArgs args)
@@ -1256,7 +1440,7 @@ public sealed class InkSurface : UserControl
             ds.DrawRectangle(bb, accent, uiScale, _dashStyle);
         }
 
-        if (Tool == ToolType.Select && _activeShape != null && !_replaying)
+        if (_activeShape != null && !_replaying)
         {
             DrawShapeSelection(ds, _activeShape, accent, uiScale);
         }
@@ -1654,12 +1838,16 @@ public sealed class InkSurface : UserControl
                     new Vector2((float)(s.X + s.W), (float)(s.Y + s.H)));
             case ShapeKind.Image:
             {
-                var r = new Rect(Math.Min(s.X, s.X + s.W), Math.Min(s.Y, s.Y + s.H), Math.Abs(s.W), Math.Abs(s.H));
-                if (r.Contains(new Point(p.X, p.Y))) return 0;
-                var i1 = new Vector2((float)r.X, (float)r.Y);
-                var i2 = new Vector2((float)(r.X + r.Width), (float)r.Y);
-                var i3 = new Vector2((float)(r.X + r.Width), (float)(r.Y + r.Height));
-                var i4 = new Vector2((float)r.X, (float)(r.Y + r.Height));
+                float rx = (float)Math.Min(s.X, s.X + s.W);
+                float ry = (float)Math.Min(s.Y, s.Y + s.H);
+                float rw = (float)Math.Abs(s.W);
+                float rh = (float)Math.Abs(s.H);
+                if (p.X >= rx && p.X <= rx + rw && p.Y >= ry && p.Y <= ry + rh)
+                    return 0f;
+                var i1 = new Vector2(rx, ry);
+                var i2 = new Vector2(rx + rw, ry);
+                var i3 = new Vector2(rx + rw, ry + rh);
+                var i4 = new Vector2(rx, ry + rh);
                 return Math.Min(Math.Min(GeometryUtil.DistToSegment(p, i1, i2), GeometryUtil.DistToSegment(p, i2, i3)),
                                 Math.Min(GeometryUtil.DistToSegment(p, i3, i4), GeometryUtil.DistToSegment(p, i4, i1)));
             }
@@ -2141,5 +2329,35 @@ public sealed class InkSurface : UserControl
 
         _textLayer.Children.Add(container);
         _textUi[t.Id] = (container, box);
+    }
+
+    private void OnCanvasTapped(object sender, TappedRoutedEventArgs e)
+    {
+        if (_page == null || _replaying) return;
+
+        if (e.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch && !HandDrawMode)
+        {
+            var pos = ToWorld(e.GetPosition(_canvas));
+            float tol = 10f / ViewZoom;
+            var hitShape = HitShape(pos, tol);
+            if (hitShape != null)
+            {
+                if (_activeShape != hitShape)
+                {
+                    _activeShape = hitShape;
+                    ClearSelection();
+                    _canvas.Invalidate();
+                }
+                e.Handled = true;
+            }
+            else if (hitShape == null)
+            {
+                if (_activeShape != null)
+                {
+                    _activeShape = null;
+                    _canvas.Invalidate();
+                }
+            }
+        }
     }
 }
