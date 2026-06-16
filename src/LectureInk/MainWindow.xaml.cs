@@ -969,12 +969,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void Ruler_Click(object sender, RoutedEventArgs e)
-    {
-        Surface.RulerMode = RulerToggle.IsChecked == true;
-        if (Surface.RulerMode) SelectTool("Pen");
-    }
-
     private void TouchDraw_Click(object sender, RoutedEventArgs e)
     {
         Surface.HandDrawMode = TouchDrawToggle.IsChecked == true;
@@ -985,10 +979,8 @@ public sealed partial class MainWindow : Window
 
     private void MouseMode_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not ToggleButton tb || tb.Tag is not string tag) return;
-        // toggling the active mode off again reverts to Auto
-        var mode = tb.IsChecked == true ? Enum.Parse<MouseMode>(tag) : MouseMode.Auto;
-        SetMouseMode(mode);
+        if (sender is FrameworkElement fe && fe.Tag is string tag)
+            SetMouseMode(Enum.Parse<MouseMode>(tag));
     }
 
     private void SetMouseMode(MouseMode mode)
@@ -998,6 +990,14 @@ public sealed partial class MainWindow : Window
         MouseGrab.IsChecked = mode == MouseMode.Grab;
         MouseSelect.IsChecked = mode == MouseMode.Select;
         MouseMove.IsChecked = mode == MouseMode.Move;
+        MouseModeGlyph.Text = mode switch
+        {
+            MouseMode.Grab => "✋",
+            MouseMode.Select => "⬚",
+            MouseMode.Move => "✥",
+            _ => "↖"
+        };
+        ToolTipService.SetToolTip(MouseModeBtn, "Mouse mode: " + mode);
         ShowStatus(mode switch
         {
             MouseMode.Grab => "Mouse: grab — drag to pan the page.",
@@ -1014,6 +1014,7 @@ public sealed partial class MainWindow : Window
         switch (tag)
         {
             case "Line": Surface.InsertShape(ShapeKind.Line, false); break;
+            case "Arrow": Surface.InsertShape(ShapeKind.Arrow, false); break;
             case "Rect": Surface.InsertShape(ShapeKind.Rect, false); break;
             case "Square": Surface.InsertShape(ShapeKind.Rect, true); break;
             case "Ellipse": Surface.InsertShape(ShapeKind.Ellipse, false); break;
@@ -1090,7 +1091,7 @@ public sealed partial class MainWindow : Window
             args.Handled = false;
             return;
         }
-        if (Surface.HasSelection)
+        if (Surface.HasDeletable)
         {
             Surface.DeleteSelection();
             args.Handled = true;
@@ -1992,8 +1993,10 @@ public sealed partial class MainWindow : Window
                 await encoder.FlushAsync();
             }
 
-            SelectTool("Select");
+            // Insert first so the image can consume a pending text caret as its
+            // position, then switch to Select so it can be dragged/resized.
             Surface.InsertImage(path, decoder.PixelWidth, decoder.PixelHeight);
+            SelectTool("Select");
             ShowStatus("Image pasted — drag it to move, drag a corner to resize.");
         }
         catch

@@ -54,10 +54,6 @@
                     <ToggleButton x:Name="ToolSpace" Tag="FreeSpace" Click="ToolButton_Click" ToolTipService.ToolTip="Insert free space (drag down to push content apart)">
                         <TextBlock Text="&#x2195;" FontSize="14"/>
                     </ToggleButton>
-                    <ToggleButton x:Name="RulerToggle" Click="Ruler_Click"
-                                  ToolTipService.ToolTip="Ruler: strokes snap to straight 15° lines">
-                        <TextBlock Text="&#x1F4CF;" FontSize="13"/>
-                    </ToggleButton>
                     <ToggleButton x:Name="TouchDrawToggle" Click="TouchDraw_Click"
                                   ToolTipService.ToolTip="Touch draw: draw with finger or mouse (otherwise touch pans)">
                         <TextBlock Text="&#x261D;" FontSize="13"/>
@@ -67,6 +63,7 @@
                         <Button.Flyout>
                             <MenuFlyout>
                                 <MenuFlyoutItem Text="Straight line" Tag="Line" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Arrow" Tag="Arrow" Click="InsertShape_Click"/>
                                 <MenuFlyoutItem Text="Rectangle" Tag="Rect" Click="InsertShape_Click"/>
                                 <MenuFlyoutItem Text="Square" Tag="Square" Click="InsertShape_Click"/>
                                 <MenuFlyoutItem Text="Ellipse" Tag="Ellipse" Click="InsertShape_Click"/>
@@ -81,23 +78,24 @@
 
                     <AppBarSeparator/>
 
-                    <TextBlock Text="Mouse" VerticalAlignment="Center" FontSize="11" Opacity="0.7" Margin="2,0,1,0"/>
-                    <ToggleButton x:Name="MouseAuto" Tag="Auto" IsChecked="True" Click="MouseMode_Click"
-                                  ToolTipService.ToolTip="Auto: click to select or edit, drag empty space to select (default)">
-                        <TextBlock Text="&#x2196;" FontSize="14"/>
-                    </ToggleButton>
-                    <ToggleButton x:Name="MouseGrab" Tag="Grab" Click="MouseMode_Click"
-                                  ToolTipService.ToolTip="Grab: drag to pan the page">
-                        <TextBlock Text="&#x270B;" FontSize="13"/>
-                    </ToggleButton>
-                    <ToggleButton x:Name="MouseSelect" Tag="Select" Click="MouseMode_Click"
-                                  ToolTipService.ToolTip="Select: drag a box to select strokes">
-                        <FontIcon Glyph="&#xE8B3;" FontSize="14"/>
-                    </ToggleButton>
-                    <ToggleButton x:Name="MouseMove" Tag="Move" Click="MouseMode_Click"
-                                  ToolTipService.ToolTip="Move: drag images and shapes; drag a corner handle to resize">
-                        <TextBlock Text="&#x2725;" FontSize="14"/>
-                    </ToggleButton>
+                    <DropDownButton x:Name="MouseModeBtn" ToolTipService.ToolTip="Mouse mode — how the mouse behaves while the pen tool is active">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <TextBlock Text="Mouse" FontSize="11" Opacity="0.7" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="MouseModeGlyph" Text="&#x2196;" FontSize="14" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <DropDownButton.Flyout>
+                            <MenuFlyout>
+                                <RadioMenuFlyoutItem x:Name="MouseAuto" Tag="Auto" GroupName="MouseMode" IsChecked="True"
+                                                     Text="Auto — click to select or edit, drag empty space to select" Click="MouseMode_Click"/>
+                                <RadioMenuFlyoutItem x:Name="MouseGrab" Tag="Grab" GroupName="MouseMode"
+                                                     Text="Grab — drag to pan the page" Click="MouseMode_Click"/>
+                                <RadioMenuFlyoutItem x:Name="MouseSelect" Tag="Select" GroupName="MouseMode"
+                                                     Text="Select — drag a box to select strokes" Click="MouseMode_Click"/>
+                                <RadioMenuFlyoutItem x:Name="MouseMove" Tag="Move" GroupName="MouseMode"
+                                                     Text="Move — drag images and shapes; drag a handle to resize" Click="MouseMode_Click"/>
+                            </MenuFlyout>
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
 
                     <AppBarSeparator/>
 
@@ -107,35 +105,54 @@
                     <Button x:Name="BtnRedo" Click="Redo_Click" ToolTipService.ToolTip="Redo (Ctrl+Y)">
                         <FontIcon Glyph="&#xE7A6;" FontSize="14"/>
                     </Button>
-                    <Button x:Name="BtnHistory" ToolTipService.ToolTip="Edit history">
+                    <Button x:Name="BtnHistory" ToolTipService.ToolTip="Edit history &amp; replay">
                         <FontIcon Glyph="&#xE81C;" FontSize="14"/>
                         <Button.Flyout>
                             <Flyout x:Name="HistoryFlyout" Opening="HistoryFlyout_Opening">
                                 <StackPanel Width="240">
-                                    <TextBlock Text="Edit history" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <Grid Margin="0,0,0,8">
+                                        <TextBlock Text="Edit history" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        <ToggleButton x:Name="BtnReplay" Click="Replay_Click" HorizontalAlignment="Right" Padding="7,2"
+                                                      Background="Transparent" BorderThickness="0"
+                                                      ToolTipService.ToolTip="Replay this page stroke by stroke">
+                                            <FontIcon Glyph="&#xE768;" FontSize="14"/>
+                                        </ToggleButton>
+                                    </Grid>
                                     <ListView x:Name="HistoryList" MaxHeight="320" SelectionMode="None"/>
                                 </StackPanel>
                             </Flyout>
                         </Button.Flyout>
                     </Button>
-                    <ToggleButton x:Name="BtnReplay" Click="Replay_Click" ToolTipService.ToolTip="Replay this page stroke by stroke">
-                        <FontIcon Glyph="&#xE768;" FontSize="14"/>
-                    </ToggleButton>
 
                     <AppBarSeparator/>
 
-                    <Button x:Name="BtnZoomOut" Click="ZoomOut_Click" ToolTipService.ToolTip="Zoom out">
-                        <FontIcon Glyph="&#xE71F;" FontSize="14"/>
-                    </Button>
-                    <Button x:Name="BtnZoomReset" Click="ZoomReset_Click" ToolTipService.ToolTip="Reset zoom to 100%">
-                        <TextBlock x:Name="ZoomBtnText" Text="100%" FontSize="12" MinWidth="38" TextAlignment="Center"/>
-                    </Button>
-                    <Button x:Name="BtnZoomIn" Click="ZoomIn_Click" ToolTipService.ToolTip="Zoom in">
-                        <FontIcon Glyph="&#xE8A3;" FontSize="14"/>
-                    </Button>
-                    <Button x:Name="BtnHome" Click="HomeView_Click" ToolTipService.ToolTip="Back to origin (the page is infinite!)">
-                        <FontIcon Glyph="&#xE80F;" FontSize="14"/>
-                    </Button>
+                    <DropDownButton x:Name="ZoomBtn" ToolTipService.ToolTip="Zoom &amp; view">
+                        <TextBlock x:Name="ZoomBtnText" Text="100%" FontSize="12" MinWidth="34" TextAlignment="Center"/>
+                        <DropDownButton.Flyout>
+                            <Flyout>
+                                <StackPanel Spacing="8" Width="190">
+                                    <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+                                        <Button Click="ZoomOut_Click" ToolTipService.ToolTip="Zoom out" Width="46">
+                                            <FontIcon Glyph="&#xE71F;" FontSize="14"/>
+                                        </Button>
+                                        <Button Click="ZoomReset_Click" ToolTipService.ToolTip="Reset zoom to 100%" Width="60">
+                                            <TextBlock Text="100%" FontSize="12"/>
+                                        </Button>
+                                        <Button Click="ZoomIn_Click" ToolTipService.ToolTip="Zoom in" Width="46">
+                                            <FontIcon Glyph="&#xE8A3;" FontSize="14"/>
+                                        </Button>
+                                    </StackPanel>
+                                    <Button Click="HomeView_Click" HorizontalAlignment="Stretch"
+                                            ToolTipService.ToolTip="Back to origin (the page is infinite!)">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <FontIcon Glyph="&#xE80F;" FontSize="14"/>
+                                            <TextBlock Text="Back to origin" FontSize="12"/>
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </Flyout>
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
 
                     <AppBarSeparator/>
 
@@ -144,7 +161,14 @@
                         <Button.Flyout>
                             <Flyout>
                                 <StackPanel Width="280" Spacing="10">
-                                    <TextBlock Text="Background" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
+                                    <Grid>
+                                        <TextBlock Text="Background" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        <Button x:Name="BtnTheme" Click="Theme_Click" HorizontalAlignment="Right" Padding="6,2"
+                                                Background="Transparent" BorderThickness="0"
+                                                ToolTipService.ToolTip="Switch light / dark mode">
+                                            <FontIcon x:Name="BtnThemeIcon" Glyph="&#xE708;" FontSize="14"/>
+                                        </Button>
+                                    </Grid>
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                         <Button Tag="#FAF9F5" Click="BgPreset_Click" ToolTipService.ToolTip="Ivory" Width="40" Height="28" Background="#FAF9F5" BorderBrush="Gray"/>
                                         <Button Tag="#FFFFFF" Click="BgPreset_Click" ToolTipService.ToolTip="White" Width="40" Height="28" Background="White" BorderBrush="Gray"/>
@@ -189,9 +213,6 @@
                     <ToggleButton x:Name="BtnCalc" Click="Calc_Toggle" ToolTipService.ToolTip="Calculator">
                         <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
                     </ToggleButton>
-                    <Button x:Name="BtnTheme" Click="Theme_Click" ToolTipService.ToolTip="Switch light / dark mode">
-                        <FontIcon x:Name="BtnThemeIcon" Glyph="&#xE708;" FontSize="14"/>
-                    </Button>
                     <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
                         <FontIcon Glyph="&#xE890;" FontSize="14"/>
                     </Button>

@@ -9,7 +9,7 @@ public enum ToolType { Pen, Eraser, Select, Text, FreeSpace }
 public enum MouseMode { Auto, Grab, Select, Move }
 public enum EraserMode { Point, Object }
 public enum GridType { None, Dotted, Square, Lines }
-public enum ShapeKind { Line, Rect, Ellipse, Triangle, AxesXY, AxesXYZ, Image }
+public enum ShapeKind { Line, Rect, Ellipse, Triangle, AxesXY, AxesXYZ, Image, Arrow }
 
 public class StrokePoint
 {
@@ -129,7 +129,7 @@ public class Library
     public string DefaultBackground { get; set; } = "#FAF9F5";
     public GridType DefaultGrid { get; set; } = GridType.None;
     public double DefaultGridSpacing { get; set; } = 32;
-    public string Theme { get; set; } = "Light";
+    public string Theme { get; set; } = "Dark";
     public string PenDock { get; set; } = "Bottom";
     public double NotebookPanelW { get; set; } = 300;
     public double NotebookPanelH { get; set; }

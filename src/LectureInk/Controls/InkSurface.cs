@@ -43,7 +43,7 @@ public sealed class InkSurface : UserControl
     public Color PenColor { get; set; } = Color.FromArgb(255, 20, 20, 19);
     public float PenSize { get; set; } = 3.5f;
     public float PenSensitivity { get; set; } = 1f;
-    public EraserMode EraserMode { get; set; } = EraserMode.Point;
+    public EraserMode EraserMode { get; set; } = EraserMode.Object;
     public bool RulerMode { get; set; }
     public bool HandDrawMode { get; set; }
     public MouseMode MouseMode { get; set; } = MouseMode.Auto;
@@ -94,6 +94,13 @@ public sealed class InkSurface : UserControl
     private int _replayStroke, _replayPoint;
     private readonly DispatcherTimer _replayTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
     public bool IsReplaying => _replaying;
+
+    // Pending text caret: a Text-tool tap blinks a caret here; the text box is
+    // only created once the user starts typing. An image pasted while a caret
+    // is pending lands here instead of the screen centre.
+    private Vector2? _pendingTextPos;
+    private bool _caretOn;
+    private readonly DispatcherTimer _caretTimer = new() { Interval = TimeSpan.FromMilliseconds(530) };
 
     // ---- shapes ----
     private ShapeElement? _activeShape;
@@ -179,6 +186,11 @@ public sealed class InkSurface : UserControl
 
         _replayTimer.Tick += ReplayTick;
         _holdTimer.Tick += HoldTick;
+        _caretTimer.Tick += (_, _) => { _caretOn = !_caretOn; _canvas.Invalidate(); };
+
+        // Receive the first typed character so a pending caret can spawn a box.
+        CharacterReceived += OnCharacterReceived;
+        KeyDown += OnKeyDown;
 
         Unloaded += (_, _) => _canvas.RemoveFromVisualTree();
     }
@@ -287,6 +299,7 @@ public sealed class InkSurface : UserControl
     public void LoadPage(NotePage page)
     {
         StopReplay();
+        CancelPendingText();
         NormalizeContent(page);
         _page = page;
         UndoManager.Clear();
@@ -352,6 +365,7 @@ public sealed class InkSurface : UserControl
     public void SetTool(ToolType tool)
     {
         Tool = tool;
+        CancelPendingText();
         if (tool != ToolType.Select)
         {
             ClearSelection();
@@ -414,6 +428,10 @@ public sealed class InkSurface : UserControl
     }
 
     public bool HasSelection => _selected.Count > 0;
+
+    /// <summary>True when Delete should remove something: a stroke selection or
+    /// the active shape/image.</summary>
+    public bool HasDeletable => _selected.Count > 0 || _activeShape != null;
 
     public void DeleteSelection()
     {
@@ -490,6 +508,7 @@ public sealed class InkSurface : UserControl
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
         if (_page == null || _replaying) return;
+        CancelPendingText(); // a fresh press dismisses any blinking caret
         var pp = e.GetCurrentPoint(_canvas);
         var props = pp.Properties;
         var device = e.Pointer.PointerDeviceType;
@@ -531,7 +550,8 @@ public sealed class InkSurface : UserControl
 
         if (tool == ToolType.Text)
         {
-            CreateTextElementAt(new Point(pos.X, pos.Y));
+            // Don't create a box yet — just blink a caret where text will go.
+            SetPendingText(pos);
             e.Handled = true;
             return;
         }
@@ -635,20 +655,10 @@ public sealed class InkSurface : UserControl
 
         _gestureTool = ToolType.Select;
 
-        // Auto / Move: grab a shape, image, or the existing selection first.
-        if (MouseMode != MouseMode.Select && TryBeginShapeOrSelectionDrag(pos, tol))
+        // Grab a shape, image, or the existing selection first — Auto, Select
+        // and Move all let you drag objects.
+        if (TryBeginShapeOrSelectionDrag(pos, tol))
         {
-            e.Handled = true;
-            _canvas.Invalidate();
-            return;
-        }
-        // Select: still allow dragging an existing selection box; otherwise lasso.
-        if (MouseMode == MouseMode.Select && _selected.Count > 0 &&
-            _selBounds.Contains(new Point(pos.X, pos.Y)))
-        {
-            _movingSel = true;
-            _moveStart = pos;
-            _moveDx = _moveDy = 0;
             e.Handled = true;
             _canvas.Invalidate();
             return;
@@ -1283,6 +1293,14 @@ public sealed class InkSurface : UserControl
             ds.FillCircle(_hover.Value, Math.Max(1.5f, 2f / ViewZoom), ring);
         }
 
+        // Blinking text caret: where a Text-tool tap will start a box once typed.
+        if (_pendingTextPos is { } caret && _caretOn && !_replaying)
+        {
+            var caretColor = ColorUtil.IsDark(bg) ? Colors.White : Color.FromArgb(255, 20, 20, 19);
+            ds.DrawLine(new Vector2(caret.X, caret.Y - 13), new Vector2(caret.X, caret.Y + 13),
+                        caretColor, Math.Max(1.4f, 1.6f / ViewZoom));
+        }
+
         if (_spacing)
         {
             var tl = ToWorld(new Vector2(0, 0));
@@ -1550,7 +1568,7 @@ public sealed class InkSurface : UserControl
 
     private static void ResizeShape(ShapeElement s, Vector2 anchor, Vector2 pos, bool constrain, double aspect = 0)
     {
-        if (s.Kind == ShapeKind.Line)
+        if (s.Kind is ShapeKind.Line or ShapeKind.Arrow)
         {
             s.X = anchor.X; s.Y = anchor.Y;
             s.W = pos.X - anchor.X; s.H = pos.Y - anchor.Y;
@@ -1579,7 +1597,7 @@ public sealed class InkSurface : UserControl
 
     private static Vector2 FarthestAnchor(ShapeElement s, Vector2 pos)
     {
-        if (s.Kind == ShapeKind.Line)
+        if (s.Kind is ShapeKind.Line or ShapeKind.Arrow)
         {
             var p1 = new Vector2((float)s.X, (float)s.Y);
             var p2 = new Vector2((float)(s.X + s.W), (float)(s.Y + s.H));
@@ -1600,7 +1618,7 @@ public sealed class InkSurface : UserControl
 
     private static Vector2[] ShapeCorners(ShapeElement s)
     {
-        if (s.Kind == ShapeKind.Line)
+        if (s.Kind is ShapeKind.Line or ShapeKind.Arrow)
         {
             return new[]
             {
@@ -1629,6 +1647,7 @@ public sealed class InkSurface : UserControl
         switch (s.Kind)
         {
             case ShapeKind.Line:
+            case ShapeKind.Arrow:
                 return GeometryUtil.DistToSegment(p,
                     new Vector2((float)s.X, (float)s.Y),
                     new Vector2((float)(s.X + s.W), (float)(s.Y + s.H)));
@@ -1703,7 +1722,7 @@ public sealed class InkSurface : UserControl
     private static Vector2? HitHandle(ShapeElement s, Vector2 pos, float tol)
     {
         var corners = ShapeCorners(s);
-        if (s.Kind == ShapeKind.Line)
+        if (s.Kind is ShapeKind.Line or ShapeKind.Arrow)
         {
             if (Vector2.Distance(corners[0], pos) <= tol) return corners[1];
             if (Vector2.Distance(corners[1], pos) <= tol) return corners[0];
@@ -1725,6 +1744,10 @@ public sealed class InkSurface : UserControl
         {
             case ShapeKind.Line:
                 ds.DrawLine((float)s.X, (float)s.Y, (float)(s.X + s.W), (float)(s.Y + s.H), color, w, _roundStyle);
+                break;
+            case ShapeKind.Arrow:
+                DrawArrow(ds, new Vector2((float)s.X, (float)s.Y),
+                          new Vector2((float)(s.X + s.W), (float)(s.Y + s.H)), color, w);
                 break;
             case ShapeKind.Rect:
                 ds.DrawRectangle(new Rect(s.X, s.Y, Math.Max(1, s.W), Math.Max(1, s.H)), color, w);
@@ -1828,7 +1851,9 @@ public sealed class InkSurface : UserControl
         if (_page == null) return;
         double scale = Math.Min(1.0, 520.0 / Math.Max(1, Math.Max(pixelW, pixelH)));
         double w = Math.Max(48, pixelW * scale), h = Math.Max(48, pixelH * scale);
-        var c = ToWorld(new Vector2((float)ActualWidth / 2, (float)ActualHeight / 2));
+        // Land on the pending text caret if one is blinking, else screen centre.
+        var c = _pendingTextPos ?? ToWorld(new Vector2((float)ActualWidth / 2, (float)ActualHeight / 2));
+        CancelPendingText();
         var s = new ShapeElement
         {
             Kind = ShapeKind.Image,
@@ -1870,6 +1895,7 @@ public sealed class InkSurface : UserControl
         switch (kind)
         {
             case ShapeKind.Line: w = 240; h = 0; break;
+            case ShapeKind.Arrow: w = 240; h = 0; break;
             case ShapeKind.Rect: if (equalDims) { w = h = 170; } break;
             case ShapeKind.Ellipse: if (equalDims) { w = h = 170; } break;
             case ShapeKind.Triangle: w = 210; h = 180; break;
@@ -1882,7 +1908,7 @@ public sealed class InkSurface : UserControl
             Color = ColorUtil.ToHex(PenColor),
             Size = Math.Max(2f, PenSize * 0.9f)
         };
-        if (kind == ShapeKind.Line)
+        if (kind is ShapeKind.Line or ShapeKind.Arrow)
         {
             s.X = c.X - w / 2; s.Y = c.Y; s.W = w; s.H = 0;
         }
@@ -1899,14 +1925,62 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     // Text elements
     // =======================================================================
-    private void CreateTextElementAt(Point pos)
+
+    /// <summary>Tap with the Text tool: blink a caret here; the box is created
+    /// lazily once the user types (or an image is pasted onto it).</summary>
+    private void SetPendingText(Vector2 worldPos)
     {
         if (_page == null) return;
-        var t = new TextElement { X = pos.X - 4, Y = pos.Y - 10 };
+        _pendingTextPos = worldPos;
+        _caretOn = true;
+        _caretTimer.Start();
+        IsTabStop = true;                  // so we receive the first character
+        Focus(FocusState.Programmatic);
+        _canvas.Invalidate();
+    }
+
+    private void CancelPendingText()
+    {
+        if (_pendingTextPos == null) return;
+        _pendingTextPos = null;
+        _caretOn = false;
+        _caretTimer.Stop();
+        IsTabStop = false;
+        _canvas.Invalidate();
+    }
+
+    private void OnKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (_pendingTextPos != null && e.Key == Windows.System.VirtualKey.Escape)
+        {
+            CancelPendingText();
+            e.Handled = true;
+        }
+    }
+
+    private void OnCharacterReceived(UIElement sender, CharacterReceivedRoutedEventArgs args)
+    {
+        if (_pendingTextPos == null || _page == null) return;
+        char c = args.Character;
+        if (char.IsControl(c)) return;     // ignore Enter / Tab / Backspace etc.
+        var at = _pendingTextPos.Value;
+        CancelPendingText();
+        SpawnTextBox(at, c.ToString());
+        args.Handled = true;
+    }
+
+    private void SpawnTextBox(Vector2 worldPos, string? initial)
+    {
+        if (_page == null) return;
+        var t = new TextElement { X = worldPos.X - 4, Y = worldPos.Y - 10 };
         UndoManager.Push(new AddTextAction(t), _page);
         RebuildTextLayer();
         if (_textUi.TryGetValue(t.Id, out var ui))
+        {
             ui.Box.Focus(FocusState.Programmatic);
+            if (!string.IsNullOrEmpty(initial))
+                try { ui.Box.Document.Selection.TypeText(initial); } catch { }
+        }
         ContentChanged?.Invoke();
     }
 

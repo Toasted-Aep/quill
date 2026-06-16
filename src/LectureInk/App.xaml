@@ -10,18 +10,21 @@
 
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
-                    <SolidColorBrush x:Key="SurfaceBrush" Color="#FAF9F5"/>
-                    <AcrylicBrush x:Key="CardBrush" TintColor="#FAF9F5" TintOpacity="0.65"
-                                  TintLuminosityOpacity="0.78" FallbackColor="#F5FAF9F5"/>
-                    <SolidColorBrush x:Key="HairlineBrush" Color="#E8E6DC"/>
-                    <SolidColorBrush x:Key="InkBrush" Color="#141413"/>
+                    <SolidColorBrush x:Key="SurfaceBrush" Color="#F7F6F1"/>
+                    <!-- frosted glass: more translucent so the backdrop reads through -->
+                    <AcrylicBrush x:Key="CardBrush" TintColor="#FBFAF6" TintOpacity="0.38"
+                                  TintLuminosityOpacity="0.55" FallbackColor="#DCFBFAF6"/>
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#E5E2D8"/>
+                    <SolidColorBrush x:Key="InkBrush" Color="#1B1A18"/>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Default">
-                    <SolidColorBrush x:Key="SurfaceBrush" Color="#141413"/>
-                    <AcrylicBrush x:Key="CardBrush" TintColor="#211F1C" TintOpacity="0.6"
-                                  TintLuminosityOpacity="0.7" FallbackColor="#F2211F1C"/>
-                    <SolidColorBrush x:Key="HairlineBrush" Color="#3A3833"/>
-                    <SolidColorBrush x:Key="InkBrush" Color="#FAF9F5"/>
+                    <!-- cinematic near-black base with a hint of cool -->
+                    <SolidColorBrush x:Key="SurfaceBrush" Color="#0F0E10"/>
+                    <!-- frosted dark glass panels — more see-through -->
+                    <AcrylicBrush x:Key="CardBrush" TintColor="#1A191D" TintOpacity="0.28"
+                                  TintLuminosityOpacity="0.38" FallbackColor="#CC15141A"/>
+                    <SolidColorBrush x:Key="HairlineBrush" Color="#2E2D33"/>
+                    <SolidColorBrush x:Key="InkBrush" Color="#F4F2EC"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
@@ -46,10 +49,12 @@
             <SolidColorBrush x:Key="BrandBlueBrush" Color="#6A9BCC"/>
             <SolidColorBrush x:Key="BrandGreenBrush" Color="#788C5D"/>
 
-            <FontFamily x:Key="HeadingFont">Poppins, Segoe UI</FontFamily>
-            <FontFamily x:Key="BodyFont">Lora, Georgia</FontFamily>
+            <!-- Inter/Geist-style modern sans for chrome; falls back to the
+                 Windows 11 variable font, then Poppins, then Segoe UI. -->
+            <FontFamily x:Key="HeadingFont">Inter, Geist, Segoe UI Variable Display, Poppins, Segoe UI</FontFamily>
+            <FontFamily x:Key="BodyFont">Inter, Geist, Segoe UI Variable Text, Segoe UI</FontFamily>
 
-            <CornerRadius x:Key="CardCorner">14</CornerRadius>
+            <CornerRadius x:Key="CardCorner">18</CornerRadius>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
