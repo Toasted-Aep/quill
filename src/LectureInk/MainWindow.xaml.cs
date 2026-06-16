@@ -39,6 +39,7 @@ public sealed partial class MainWindow : Window
     private long _progValue;
     private bool _progHasValue;
     private double _gxMin = -10, _gxMax = 10;
+    private readonly Microsoft.Graphics.Canvas.Text.CanvasTextFormat _graphLabelFormat = new() { FontSize = 10 };
 
     private bool _syncingUi;
     private bool _uiHidden;
@@ -982,6 +983,30 @@ public sealed partial class MainWindow : Window
             : "Finger and mouse drawing disabled; touch pans the page.");
     }
 
+    private void MouseMode_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton tb || tb.Tag is not string tag) return;
+        // toggling the active mode off again reverts to Auto
+        var mode = tb.IsChecked == true ? Enum.Parse<MouseMode>(tag) : MouseMode.Auto;
+        SetMouseMode(mode);
+    }
+
+    private void SetMouseMode(MouseMode mode)
+    {
+        Surface.MouseMode = mode;
+        MouseAuto.IsChecked = mode == MouseMode.Auto;
+        MouseGrab.IsChecked = mode == MouseMode.Grab;
+        MouseSelect.IsChecked = mode == MouseMode.Select;
+        MouseMove.IsChecked = mode == MouseMode.Move;
+        ShowStatus(mode switch
+        {
+            MouseMode.Grab => "Mouse: grab — drag to pan the page.",
+            MouseMode.Select => "Mouse: select — drag a box to lasso strokes.",
+            MouseMode.Move => "Mouse: move — drag images and shapes; drag a handle to resize.",
+            _ => "Mouse: auto — click to select or edit, drag empty space to select."
+        });
+    }
+
     private void InsertShape_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuFlyoutItem item || item.Tag is not string tag) return;
@@ -1625,6 +1650,7 @@ public sealed partial class MainWindow : Window
             ProgBin.Text = "BIN  " + FormatBase(v, 2);
             var items = CalcHistory.ItemsSource as List<string> ?? new List<string>();
             items.Insert(0, $"{expr} = {FormatBase(v, ProgBaseNum)}");
+            if (items.Count > 60) items.RemoveAt(items.Count - 1);
             CalcHistory.ItemsSource = null;
             CalcHistory.ItemsSource = items;
             CalcInput.Text = FormatBase(v, ProgBaseNum);
@@ -1724,8 +1750,7 @@ public sealed partial class MainWindow : Window
             }
         }
         ds.DrawText($"y: {yMin:0.##} … {yMax:0.##}  (radians)",
-            new System.Numerics.Vector2(6, 4), axis,
-            new Microsoft.Graphics.Canvas.Text.CanvasTextFormat { FontSize = 10 });
+            new System.Numerics.Vector2(6, 4), axis, _graphLabelFormat);
     }
 
     // ---- converter ----
@@ -2025,14 +2050,21 @@ public sealed partial class MainWindow : Window
         var file = await PickSaveFileAsync(".png", "PNG image");
         if (file == null) return;
 
-        using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
-        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
-        encoder.SetPixelData(
-            BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
-            (uint)capture.Value.Width, (uint)capture.Value.Height,
-            96, 96, capture.Value.Pixels);
-        await encoder.FlushAsync();
-        ShowStatus($"Exported {file.Name}");
+        try
+        {
+            using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+            encoder.SetPixelData(
+                BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+                (uint)capture.Value.Width, (uint)capture.Value.Height,
+                96, 96, capture.Value.Pixels);
+            await encoder.FlushAsync();
+            ShowStatus($"Exported {file.Name}");
+        }
+        catch
+        {
+            ShowStatus("Could not save the PNG. Check the location and try again.");
+        }
     }
 
     private async void ExportPdf_Click(object sender, RoutedEventArgs e)
@@ -2043,11 +2075,18 @@ public sealed partial class MainWindow : Window
         var file = await PickSaveFileAsync(".pdf", "PDF document");
         if (file == null) return;
 
-        var pdf = PdfExporter.Create(new[]
+        try
         {
-            new PdfPageImage(capture.Value.Width, capture.Value.Height, capture.Value.Pixels)
-        });
-        await FileIO.WriteBytesAsync(file, pdf);
-        ShowStatus($"Exported {file.Name}");
+            var pdf = PdfExporter.Create(new[]
+            {
+                new PdfPageImage(capture.Value.Width, capture.Value.Height, capture.Value.Pixels)
+            });
+            await FileIO.WriteBytesAsync(file, pdf);
+            ShowStatus($"Exported {file.Name}");
+        }
+        catch
+        {
+            ShowStatus("Could not save the PDF. Check the location and try again.");
+        }
     }
 }

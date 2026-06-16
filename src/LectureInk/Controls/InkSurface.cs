@@ -46,6 +46,11 @@ public sealed class InkSurface : UserControl
     public EraserMode EraserMode { get; set; } = EraserMode.Point;
     public bool RulerMode { get; set; }
     public bool HandDrawMode { get; set; }
+    public MouseMode MouseMode { get; set; } = MouseMode.Auto;
+
+    // true while a pen is hovering with its eraser engaged (button/inverted) so
+    // we can show the eraser ring before it touches down.
+    private bool _penEraserHover;
 
     public UndoRedoManager UndoManager { get; } = new();
     public NotePage? Page => _page;
@@ -161,7 +166,7 @@ public sealed class InkSurface : UserControl
         _canvas.PointerCanceled += OnPointerLost;
         _canvas.PointerCaptureLost += OnPointerLost;
         _canvas.PointerWheelChanged += OnPointerWheel;
-        _canvas.PointerExited += (_, _) => { _hover = null; _canvas.Invalidate(); };
+        _canvas.PointerExited += (_, _) => { _hover = null; _penEraserHover = false; _canvas.Invalidate(); };
 
         // Touch panning / pinch zoom handled by us (no ScrollViewer anywhere,
         // so nothing can steal the pen mid-stroke).
@@ -476,6 +481,12 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     private float EraserRadius => Math.Max(8f, PenSize * 2.2f);
 
+    // The pen's eraser tip / inverted end / extra barrel buttons all act as an
+    // eraser. Shared by pointer-down routing and the hover-cursor detection.
+    private static bool IsEraserButtons(Microsoft.UI.Input.PointerPointProperties p, bool isPen) =>
+        p.IsEraser || p.IsInverted ||
+        (isPen && (p.IsXButton1Pressed || p.IsXButton2Pressed || p.IsMiddleButtonPressed));
+
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
         if (_page == null || _replaying) return;
@@ -502,8 +513,7 @@ public sealed class InkSurface : UserControl
         var tool = Tool;
         // Pen hardware buttons: first button (eraser tip / inverted pen /
         // extra barrel buttons) -> eraser. Second (barrel) button -> lasso.
-        if (props.IsEraser || props.IsInverted ||
-            (isPen && (props.IsXButton1Pressed || props.IsXButton2Pressed || props.IsMiddleButtonPressed)))
+        if (IsEraserButtons(props, isPen))
         {
             tool = ToolType.Eraser;
         }
@@ -514,27 +524,8 @@ public sealed class InkSurface : UserControl
 
         if (tool == ToolType.Pen && !isPen && !HandDrawMode)
         {
-            if (!isMouse) return; // touch pans
-            // mouse without the lasso button: rectangle selection
-            _activePointer = e.Pointer.PointerId;
-            _gestureTool = ToolType.Select;
-            _canvas.CapturePointer(e.Pointer);
-            if (_selected.Count > 0 && _selBounds.Contains(new Point(pos.X, pos.Y)))
-            {
-                _movingSel = true;
-                _moveStart = pos;
-                _moveDx = _moveDy = 0;
-            }
-            else
-            {
-                ClearSelection();
-                _activeShape = null;
-                _rectSelect = true;
-                _rectStart = pos;
-                _rectCur = pos;
-            }
-            e.Handled = true;
-            _canvas.Invalidate();
+            if (!isMouse) return;            // touch pans
+            HandleMousePress(e, pos, screen); // routed by the selected mouse mode
             return;
         }
 
@@ -552,6 +543,38 @@ public sealed class InkSurface : UserControl
         switch (tool)
         {
             case ToolType.Pen:
+                // A selected shape/image can be moved or resized with the pen:
+                // pressing on the active shape's body or a handle grabs it,
+                // pressing anywhere else draws — so you can still draw over
+                // images that aren't selected.
+                if (_activeShape != null)
+                {
+                    float tolP = 10f / ViewZoom;
+                    var handleP = HitHandle(_activeShape, pos, tolP);
+                    bool onBody = ShapeBounds(_activeShape).Contains(new Point(pos.X, pos.Y)) ||
+                                  DistToShapeOutline(_activeShape, pos) < tolP;
+                    if (handleP != null || onBody)
+                    {
+                        _gestureTool = ToolType.Select; // reuse the move/resize machinery
+                        if (handleP != null)
+                        {
+                            _resizingShape = true;
+                            _resizeAnchor = handleP.Value;
+                            _shapeOrig = Snapshot(_activeShape);
+                            _adjustConstrain = false;
+                            _resizeAspect = _activeShape.Kind == ShapeKind.Image && Math.Abs(_shapeOrig.H) > 1
+                                ? Math.Abs(_shapeOrig.W) / Math.Abs(_shapeOrig.H)
+                                : 0;
+                        }
+                        else
+                        {
+                            _movingShape = true;
+                            _shapeStart = pos;
+                            _shapeOrig = Snapshot(_activeShape);
+                        }
+                        break;
+                    }
+                }
                 _wet = new List<StrokePoint> { new(pos.X, pos.Y, props.Pressure) };
                 _wetStart = pos;
                 _wetEnd = pos;
@@ -574,51 +597,10 @@ public sealed class InkSurface : UserControl
             case ToolType.Select:
             {
                 float tol = 10f / ViewZoom;
-                if (_activeShape != null)
-                {
-                    var handle = HitHandle(_activeShape, pos, tol);
-                    if (handle != null)
-                    {
-                        _resizingShape = true;
-                        _resizeAnchor = handle.Value;
-                        _shapeOrig = Snapshot(_activeShape);
-                        _adjustConstrain = false;
-                        _resizeAspect = _activeShape.Kind == ShapeKind.Image && Math.Abs(_shapeOrig.H) > 1
-                            ? Math.Abs(_shapeOrig.W) / Math.Abs(_shapeOrig.H)
-                            : 0;
-                        break;
-                    }
-                    if (ShapeBounds(_activeShape).Contains(new Point(pos.X, pos.Y)) ||
-                        DistToShapeOutline(_activeShape, pos) < tol)
-                    {
-                        _movingShape = true;
-                        _shapeStart = pos;
-                        _shapeOrig = Snapshot(_activeShape);
-                        break;
-                    }
-                }
-                var hitShape = HitShape(pos, tol);
-                if (hitShape != null)
-                {
-                    _activeShape = hitShape;
-                    ClearSelection();
-                    _movingShape = true;
-                    _shapeStart = pos;
-                    _shapeOrig = Snapshot(hitShape);
-                    break;
-                }
+                if (TryBeginShapeOrSelectionDrag(pos, tol)) break;
                 _activeShape = null;
-                if (_selected.Count > 0 && _selBounds.Contains(new Point(pos.X, pos.Y)))
-                {
-                    _movingSel = true;
-                    _moveStart = pos;
-                    _moveDx = _moveDy = 0;
-                }
-                else
-                {
-                    ClearSelection();
-                    _lasso = new List<Vector2> { pos };
-                }
+                ClearSelection();
+                _lasso = new List<Vector2> { pos };
                 break;
             }
 
@@ -634,6 +616,127 @@ public sealed class InkSurface : UserControl
         _canvas.Invalidate();
     }
 
+    // Mouse press while the Pen tool is active: behaviour depends on the chosen
+    // mouse mode. Auto = normal mouse, Grab = pan, Select = rubber-band select,
+    // Move = drag images/shapes only.
+    private void HandleMousePress(PointerRoutedEventArgs e, Vector2 pos, Vector2 screen)
+    {
+        _activePointer = e.Pointer.PointerId;
+        _canvas.CapturePointer(e.Pointer);
+        float tol = 10f / ViewZoom;
+
+        if (MouseMode == MouseMode.Grab)
+        {
+            _mousePanning = true;
+            _mousePanLast = screen;
+            e.Handled = true;
+            return;
+        }
+
+        _gestureTool = ToolType.Select;
+
+        // Auto / Move: grab a shape, image, or the existing selection first.
+        if (MouseMode != MouseMode.Select && TryBeginShapeOrSelectionDrag(pos, tol))
+        {
+            e.Handled = true;
+            _canvas.Invalidate();
+            return;
+        }
+        // Select: still allow dragging an existing selection box; otherwise lasso.
+        if (MouseMode == MouseMode.Select && _selected.Count > 0 &&
+            _selBounds.Contains(new Point(pos.X, pos.Y)))
+        {
+            _movingSel = true;
+            _moveStart = pos;
+            _moveDx = _moveDy = 0;
+            e.Handled = true;
+            _canvas.Invalidate();
+            return;
+        }
+
+        // Auto / Move: clicking a text box focuses it for editing (no drag).
+        if (MouseMode != MouseMode.Select && FocusTextAt(pos))
+        {
+            ResetGesture();
+            _canvas.ReleasePointerCaptures();
+            e.Handled = true;
+            return;
+        }
+
+        ClearSelection();
+        _activeShape = null;
+
+        if (MouseMode == MouseMode.Move)
+        {
+            // Move never rubber-bands: an empty press just deselects.
+            ResetGesture();
+            _canvas.ReleasePointerCaptures();
+            e.Handled = true;
+            _canvas.Invalidate();
+            return;
+        }
+
+        // Auto / Select: rubber-band rectangle (also drives title/date/text-box
+        // click handling in CommitGesture).
+        _rectSelect = true;
+        _rectStart = pos;
+        _rectCur = pos;
+        e.Handled = true;
+        _canvas.Invalidate();
+    }
+
+    /// <summary>
+    /// Starts a move/resize on the active shape (handle or body), on a freshly
+    /// hit shape, or on the current stroke selection. Returns false if the press
+    /// landed on empty space. Shared by the Select tool, the mouse modes, and
+    /// the pen's grab-the-selected-shape path.
+    /// </summary>
+    private bool TryBeginShapeOrSelectionDrag(Vector2 pos, float tol)
+    {
+        if (_page == null) return false;
+        if (_activeShape != null)
+        {
+            var handle = HitHandle(_activeShape, pos, tol);
+            if (handle != null)
+            {
+                _resizingShape = true;
+                _resizeAnchor = handle.Value;
+                _shapeOrig = Snapshot(_activeShape);
+                _adjustConstrain = false;
+                _resizeAspect = _activeShape.Kind == ShapeKind.Image && Math.Abs(_shapeOrig.H) > 1
+                    ? Math.Abs(_shapeOrig.W) / Math.Abs(_shapeOrig.H)
+                    : 0;
+                return true;
+            }
+            if (ShapeBounds(_activeShape).Contains(new Point(pos.X, pos.Y)) ||
+                DistToShapeOutline(_activeShape, pos) < tol)
+            {
+                _movingShape = true;
+                _shapeStart = pos;
+                _shapeOrig = Snapshot(_activeShape);
+                return true;
+            }
+        }
+        var hitShape = HitShape(pos, tol);
+        if (hitShape != null)
+        {
+            _activeShape = hitShape;
+            ClearSelection();
+            _movingShape = true;
+            _shapeStart = pos;
+            _shapeOrig = Snapshot(hitShape);
+            return true;
+        }
+        if (_selected.Count > 0 && _selBounds.Contains(new Point(pos.X, pos.Y)))
+        {
+            _movingSel = true;
+            _moveStart = pos;
+            _moveDx = _moveDy = 0;
+            return true;
+        }
+        return false;
+    }
+
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
         if (_page == null) return;
@@ -643,7 +746,14 @@ public sealed class InkSurface : UserControl
 
         if (_activePointer == null || e.Pointer.PointerId != _activePointer)
         {
-            if (Tool == ToolType.Eraser) _canvas.Invalidate();
+            // hovering, not dragging: light up the eraser ring when a pen
+            // hovers with its eraser engaged.
+            bool penEraser = e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Pen &&
+                             IsEraserButtons(pp.Properties, true);
+            bool changed = penEraser != _penEraserHover;
+            _penEraserHover = penEraser;
+            // redraw to move/clear the ring (changed covers the falling edge).
+            if (changed || Tool == ToolType.Eraser || _penEraserHover) _canvas.Invalidate();
             return;
         }
 
@@ -776,7 +886,7 @@ public sealed class InkSurface : UserControl
                     }
                     break;
                 }
-                var pts = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : (_wet ?? new List<StrokePoint>());
+                var pts = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : FinalizeStroke(_wet ?? new List<StrokePoint>());
                 if (pts.Count >= 1)
                 {
                     var stroke = new PenStroke
@@ -829,19 +939,18 @@ public sealed class InkSurface : UserControl
                     }
                     else
                     {
-                        // a plain mouse click: title/date first, then text boxes
+                        // a plain mouse click: title / date, then text boxes;
+                        // empty space just clears the selection (normal mouse —
+                        // use the Text tool to add a text box).
                         var cp = _rectStart;
                         if (cp.X >= 38 && cp.X <= 470 && cp.Y >= 12 && cp.Y <= 58)
-                        {
                             TitleClicked?.Invoke();
-                        }
                         else if (cp.X >= 38 && cp.X <= 470 && cp.Y > 58 && cp.Y <= 92)
-                        {
                             DateClicked?.Invoke();
-                        }
                         else if (!FocusTextAt(cp))
                         {
-                            CreateTextElementAt(new Point(cp.X, cp.Y));
+                            ClearSelection();
+                            _activeShape = null;
                         }
                     }
                     break;
@@ -928,16 +1037,39 @@ public sealed class InkSurface : UserControl
         return pts;
     }
 
+    /// <summary>
+    /// Cleans a freshly drawn stroke so it doesn't leave a stray dot at either
+    /// end: trims points that sit on top of their neighbour (a near-zero-length
+    /// end segment paints a full round cap), and replaces the very first/last
+    /// pressure with its neighbour's so a hard tap-down or lift doesn't blob.
+    /// </summary>
+    private static List<StrokePoint> FinalizeStroke(List<StrokePoint> pts)
+    {
+        while (pts.Count >= 2 && Coincident(pts[^1], pts[^2])) pts.RemoveAt(pts.Count - 1);
+        while (pts.Count >= 2 && Coincident(pts[0], pts[1])) pts.RemoveAt(0);
+        if (pts.Count >= 3)
+        {
+            pts[0].Pressure = pts[1].Pressure;
+            pts[^1].Pressure = pts[^2].Pressure;
+        }
+        return pts;
+    }
+
+    private static bool Coincident(StrokePoint a, StrokePoint b)
+        => Math.Abs(a.X - b.X) < 0.6f && Math.Abs(a.Y - b.Y) < 0.6f;
+
     // =======================================================================
     // Erasing
     // =======================================================================
     private void EraseAt(Vector2 from, Vector2 to)
     {
         if (_page == null) return;
-        // shapes are erased whole in either mode
+        // shapes are erased whole in either mode — but images are never erased
+        // (move/delete them with the selection tools instead)
         for (int i = _page.Shapes.Count - 1; i >= 0; i--)
         {
             var sh = _page.Shapes[i];
+            if (sh.Kind == ShapeKind.Image) continue;
             float tolS = sh.Size + 8f;
             if (DistToShapeOutline(sh, from) <= tolS || DistToShapeOutline(sh, to) <= tolS)
             {
@@ -964,15 +1096,17 @@ public sealed class InkSurface : UserControl
         else
         {
             float r = EraserRadius;
-            var snapshot = _page.Strokes.ToList();
-            foreach (var s in snapshot)
+            // Walk the live list backwards so the index is the stroke's real
+            // position (no IndexOf) and freshly inserted fragments — placed at
+            // i and above — are never re-examined this pass.
+            for (int i = _page.Strokes.Count - 1; i >= 0; i--)
             {
-                bool any = s.Points.Any(p =>
-                    GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) <= r);
-                if (!any) continue;
+                var s = _page.Strokes[i];
 
-                int index = _page.Strokes.IndexOf(s);
-                if (index < 0) continue;
+                bool any = false;
+                foreach (var p in s.Points)
+                    if (GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) <= r) { any = true; break; }
+                if (!any) continue;
 
                 var runs = new List<List<StrokePoint>>();
                 var cur = new List<StrokePoint>();
@@ -988,11 +1122,12 @@ public sealed class InkSurface : UserControl
                 }
                 if (cur.Count > 1) runs.Add(cur);
 
-                _page.Strokes.RemoveAt(index);
-                if (_gestureFragments.Contains(s)) _gestureFragments.Remove(s);
-                else _eraseRemoved.Add((index, s));
+                _page.Strokes.RemoveAt(i);
+                // A fragment from earlier in this gesture: its original was
+                // already recorded, so only record genuinely original strokes.
+                if (!_gestureFragments.Remove(s)) _eraseRemoved.Add((i, s));
 
-                int insertAt = index;
+                int insertAt = i;
                 foreach (var run in runs)
                 {
                     var frag = s.CloneWithPoints(run);
@@ -1137,10 +1272,15 @@ public sealed class InkSurface : UserControl
             ds.DrawRectangle(r, accent, uiScale, _dashStyle);
         }
 
-        if (Tool == ToolType.Eraser && _hover.HasValue && !_replaying)
+        // Eraser cursor: shown for the Eraser tool, while a pen hovers with its
+        // eraser button held, and during an active erase gesture.
+        bool eraserCursor = Tool == ToolType.Eraser || _penEraserHover || _gestureTool == ToolType.Eraser;
+        if (eraserCursor && _hover.HasValue && !_replaying)
         {
             var ring = ColorUtil.IsDark(bg) ? Colors.White : Color.FromArgb(255, 70, 70, 70);
             ds.DrawCircle(_hover.Value, EraserRadius, ring, uiScale, _dashStyle);
+            // a small centre dot so the cursor clearly reads as "erase"
+            ds.FillCircle(_hover.Value, Math.Max(1.5f, 2f / ViewZoom), ring);
         }
 
         if (_spacing)
@@ -1850,6 +1990,9 @@ public sealed class InkSurface : UserControl
             if (string.IsNullOrWhiteSpace(plain))
             {
                 _page.Texts.Remove(t);
+                // If creating this box is still the latest action, retire it so
+                // the discarded empty box leaves no dead undo step.
+                UndoManager.TryDiscardTop(a => a is AddTextAction ata && ReferenceEquals(ata.Text, t));
                 if (ActiveTextBox == box)
                 {
                     ActiveTextBox = null;
@@ -1862,12 +2005,12 @@ public sealed class InkSurface : UserControl
 
         var rGrip = new Border
         {
-            Width = 7,
+            Width = 11,
             Background = new SolidColorBrush(Color.FromArgb(80, 217, 119, 87)),
             CornerRadius = new CornerRadius(3),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Stretch,
-            Margin = new Thickness(0, 4, -9, 4)
+            Margin = new Thickness(0, 4, -13, 4)
         };
         Grid.SetRow(rGrip, 1);
         ToolTipService.SetToolTip(rGrip, "Drag to change the text box width");

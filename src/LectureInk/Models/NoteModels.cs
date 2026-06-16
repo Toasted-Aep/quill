@@ -4,6 +4,9 @@ namespace LectureInk.Models;
 
 public enum PenType { Standard, Brush, Fountain, Highlighter, Pencil, Marker, Calligraphy }
 public enum ToolType { Pen, Eraser, Select, Text, FreeSpace }
+// How the mouse behaves while the Pen tool is active. Auto = "normal mouse"
+// (click to select/focus, drag empty space to rubber-band select).
+public enum MouseMode { Auto, Grab, Select, Move }
 public enum EraserMode { Point, Object }
 public enum GridType { None, Dotted, Square, Lines }
 public enum ShapeKind { Line, Rect, Ellipse, Triangle, AxesXY, AxesXYZ, Image }

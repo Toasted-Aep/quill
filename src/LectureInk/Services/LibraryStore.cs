@@ -14,32 +14,59 @@ public static class LibraryStore
 
     public static Library Load()
     {
+        // Try the primary file, then the last known-good backup. Each read is
+        // isolated so a CORRUPT primary (parse throws) still falls through to
+        // the ".bak" recovery instead of short-circuiting to a fresh seed.
+        return TryRead(FilePath, preserveCorrupt: true)
+            ?? TryRead(FilePath + ".bak", preserveCorrupt: false)
+            ?? Seed();
+    }
+
+    private static Library? TryRead(string path, bool preserveCorrupt)
+    {
         try
         {
-            if (File.Exists(FilePath))
-            {
-                var lib = JsonSerializer.Deserialize<Library>(File.ReadAllText(FilePath), Opts);
-                if (lib != null && lib.Notebooks.Count > 0) return lib;
-            }
+            if (!File.Exists(path)) return null;
+            var lib = JsonSerializer.Deserialize<Library>(File.ReadAllText(path), Opts);
+            return lib != null && lib.Notebooks.Count > 0 ? lib : null;
         }
         catch
         {
-            // corrupted file: keep a backup, start fresh
-            try { File.Copy(FilePath, FilePath + ".bak", true); } catch { }
+            // corrupted file: preserve it for inspection without clobbering the
+            // good ".bak" that Save keeps, then let the caller fall back.
+            if (preserveCorrupt)
+                try { File.Copy(path, path + ".corrupt", true); } catch { }
+            return null;
         }
-        return Seed();
     }
 
     public static void Save(Library lib)
     {
+        string json;
+        try { json = JsonSerializer.Serialize(lib, Opts); }
+        catch { return; } // unserializable model: never crash the app on save
+
         try
         {
             Directory.CreateDirectory(Dir);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(lib, Opts));
+            // Write to a temp file first, then swap it in atomically so an
+            // interrupted write (crash / power loss) can never truncate the
+            // live library. File.Replace also rotates the previous good copy
+            // into ".bak" for recovery.
+            var tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp, json);
+            if (File.Exists(FilePath))
+                File.Replace(tmp, FilePath, FilePath + ".bak");
+            else
+                File.Move(tmp, FilePath);
         }
         catch
         {
-            // never crash the app on save
+            // atomic path failed (e.g. locked file): fall back to a direct
+            // write so we still persist; still never crash the app on save.
+            try { File.WriteAllText(FilePath, json); } catch { }
+            // don't leave a stale ".tmp" (containing note data) behind.
+            try { if (File.Exists(FilePath + ".tmp")) File.Delete(FilePath + ".tmp"); } catch { }
         }
     }
 

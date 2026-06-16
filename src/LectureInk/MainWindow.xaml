@@ -81,6 +81,26 @@
 
                     <AppBarSeparator/>
 
+                    <TextBlock Text="Mouse" VerticalAlignment="Center" FontSize="11" Opacity="0.7" Margin="2,0,1,0"/>
+                    <ToggleButton x:Name="MouseAuto" Tag="Auto" IsChecked="True" Click="MouseMode_Click"
+                                  ToolTipService.ToolTip="Auto: click to select or edit, drag empty space to select (default)">
+                        <TextBlock Text="&#x2196;" FontSize="14"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="MouseGrab" Tag="Grab" Click="MouseMode_Click"
+                                  ToolTipService.ToolTip="Grab: drag to pan the page">
+                        <TextBlock Text="&#x270B;" FontSize="13"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="MouseSelect" Tag="Select" Click="MouseMode_Click"
+                                  ToolTipService.ToolTip="Select: drag a box to select strokes">
+                        <FontIcon Glyph="&#xE8B3;" FontSize="14"/>
+                    </ToggleButton>
+                    <ToggleButton x:Name="MouseMove" Tag="Move" Click="MouseMode_Click"
+                                  ToolTipService.ToolTip="Move: drag images and shapes; drag a corner handle to resize">
+                        <TextBlock Text="&#x2725;" FontSize="14"/>
+                    </ToggleButton>
+
+                    <AppBarSeparator/>
+
                     <Button x:Name="BtnUndo" Click="Undo_Click" ToolTipService.ToolTip="Undo (Ctrl+Z)">
                         <FontIcon Glyph="&#xE7A7;" FontSize="14"/>
                     </Button>

@@ -150,6 +150,7 @@ public class MoveResizeShapeAction : IPageAction
 public class AddTextAction : IPageAction
 {
     private readonly TextElement _text;
+    public TextElement Text => _text;
     public AddTextAction(TextElement text) => _text = text;
     public string Description => "Add text box";
     public void Do(NotePage page) => page.Texts.Add(_text);
@@ -226,6 +227,22 @@ public class UndoRedoManager
         _undo.Clear();
         _redo.Clear();
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// If the most recent action matches, drop it from the history without
+    /// undoing it. Used to retire the Add action of a text box that was
+    /// created then immediately discarded empty, so it leaves no dead step.
+    /// </summary>
+    public bool TryDiscardTop(Func<IPageAction, bool> match)
+    {
+        if (_undo.Count > 0 && match(_undo.Peek()))
+        {
+            _undo.Pop();
+            Changed?.Invoke();
+            return true;
+        }
+        return false;
     }
 
     public IReadOnlyList<string> History => _undo.Select(a => a.Description).ToList();
