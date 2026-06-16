@@ -949,9 +949,9 @@ public sealed class InkSurface : UserControl
                     }
                     else
                     {
-                        // a plain mouse click: title / date, then text boxes;
-                        // empty space just clears the selection (normal mouse —
-                        // use the Text tool to add a text box).
+                        // a plain mouse click (no drag): title / date, then text
+                        // boxes; otherwise empty space drops a blinking caret so
+                        // you can start typing (or paste an image) right there.
                         var cp = _rectStart;
                         if (cp.X >= 38 && cp.X <= 470 && cp.Y >= 12 && cp.Y <= 58)
                             TitleClicked?.Invoke();
@@ -961,6 +961,7 @@ public sealed class InkSurface : UserControl
                         {
                             ClearSelection();
                             _activeShape = null;
+                            SetPendingText(cp);
                         }
                     }
                     break;
@@ -1851,15 +1852,17 @@ public sealed class InkSurface : UserControl
         if (_page == null) return;
         double scale = Math.Min(1.0, 520.0 / Math.Max(1, Math.Max(pixelW, pixelH)));
         double w = Math.Max(48, pixelW * scale), h = Math.Max(48, pixelH * scale);
-        // Land on the pending text caret if one is blinking, else screen centre.
+        // With a blinking caret: the image's TOP-LEFT sits on the caret.
+        // Otherwise it lands centred on the screen.
+        bool atCaret = _pendingTextPos.HasValue;
         var c = _pendingTextPos ?? ToWorld(new Vector2((float)ActualWidth / 2, (float)ActualHeight / 2));
         CancelPendingText();
         var s = new ShapeElement
         {
             Kind = ShapeKind.Image,
             ImagePath = path,
-            X = c.X - w / 2,
-            Y = c.Y - h / 2,
+            X = atCaret ? c.X : c.X - w / 2,
+            Y = atCaret ? c.Y : c.Y - h / 2,
             W = w,
             H = h,
             Size = 0

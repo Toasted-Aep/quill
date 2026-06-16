@@ -70,6 +70,12 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         Title = "LectureInk";
+        try
+        {
+            var icon = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
+            if (System.IO.File.Exists(icon)) AppWindow.SetIcon(icon);
+        }
+        catch { /* icon is best-effort */ }
 
         _library = LibraryStore.Load();
         SeedPens();
@@ -227,6 +233,33 @@ public sealed partial class MainWindow : Window
         bool dark = _library.Theme == "Dark";
         RootGrid.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
         BtnThemeIcon.Glyph = dark ? "\uE706" : "\uE708";
+        ApplyTitleBarColors(dark);
+    }
+
+    private void ApplyTitleBarColors(bool dark)
+    {
+        try
+        {
+            if (!Microsoft.UI.Windowing.AppWindowTitleBar.IsCustomizationSupported()) return;
+            var tb = AppWindow.TitleBar;
+            var bg = dark ? Color.FromArgb(255, 0x0F, 0x0E, 0x10) : Color.FromArgb(255, 0xF7, 0xF6, 0xF1);
+            var fg = dark ? Color.FromArgb(255, 0xF4, 0xF2, 0xEC) : Color.FromArgb(255, 0x1B, 0x1A, 0x18);
+            var hover = dark ? Color.FromArgb(40, 255, 255, 255) : Color.FromArgb(28, 0, 0, 0);
+            var press = dark ? Color.FromArgb(70, 255, 255, 255) : Color.FromArgb(48, 0, 0, 0);
+            tb.BackgroundColor = bg;
+            tb.InactiveBackgroundColor = bg;
+            tb.ForegroundColor = fg;
+            tb.InactiveForegroundColor = fg;
+            tb.ButtonBackgroundColor = bg;
+            tb.ButtonInactiveBackgroundColor = bg;
+            tb.ButtonForegroundColor = fg;
+            tb.ButtonInactiveForegroundColor = fg;
+            tb.ButtonHoverBackgroundColor = hover;
+            tb.ButtonHoverForegroundColor = fg;
+            tb.ButtonPressedBackgroundColor = press;
+            tb.ButtonPressedForegroundColor = fg;
+        }
+        catch { /* title-bar theming is best-effort */ }
     }
 
     private void Theme_Click(object sender, RoutedEventArgs e)

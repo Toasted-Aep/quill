@@ -15,12 +15,19 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <EnableMsixTooling>true</EnableMsixTooling>
     <AssemblyName>LectureInk</AssemblyName>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <!-- Work around WinUI XAML compiler MSVC discovery failing when the VS C++
          workload is not installed. vcmeta.dll is only used for C++ XAML apps,
          so dummy values are safe for a C# project. -->
     <VCInstallPath32>unused</VCInstallPath32>
     <VCInstallPath64>unused</VCInstallPath64>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260529003" />

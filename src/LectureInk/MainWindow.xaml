@@ -112,7 +112,8 @@
                                 <StackPanel Width="240">
                                     <Grid Margin="0,0,0,8">
                                         <TextBlock Text="Edit history" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                                        <ToggleButton x:Name="BtnReplay" Click="Replay_Click" HorizontalAlignment="Right" Padding="7,2"
+                                        <ToggleButton x:Name="BtnReplay" Click="Replay_Click" HorizontalAlignment="Right"
+                                                      Width="34" Height="34" Padding="0"
                                                       Background="Transparent" BorderThickness="0"
                                                       ToolTipService.ToolTip="Replay this page stroke by stroke">
                                             <FontIcon Glyph="&#xE768;" FontSize="14"/>
@@ -163,7 +164,8 @@
                                 <StackPanel Width="280" Spacing="10">
                                     <Grid>
                                         <TextBlock Text="Background" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                                        <Button x:Name="BtnTheme" Click="Theme_Click" HorizontalAlignment="Right" Padding="6,2"
+                                        <Button x:Name="BtnTheme" Click="Theme_Click" HorizontalAlignment="Right"
+                                                Width="34" Height="34" Padding="0"
                                                 Background="Transparent" BorderThickness="0"
                                                 ToolTipService.ToolTip="Switch light / dark mode">
                                             <FontIcon x:Name="BtnThemeIcon" Glyph="&#xE708;" FontSize="14"/>
