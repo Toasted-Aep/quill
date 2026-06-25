@@ -30,6 +30,8 @@ public sealed partial class MainWindow : Window
     private NotePage? _curPage;
     private TreeViewNode? _selNode;
     private Guid? _activePresetId;
+    // Notebooks unlocked for this session (#23).
+    private readonly HashSet<Guid> _unlockedNotebooks = new();
 
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromSeconds(1.5) };
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(3) };
@@ -43,6 +45,7 @@ public sealed partial class MainWindow : Window
     private readonly Microsoft.Graphics.Canvas.Text.CanvasTextFormat _graphLabelFormat = new() { FontSize = 10 };
 
     private bool _syncingUi;
+    private bool _syncingSize;
     private bool _uiHidden;
     private bool _floatPen;
     // true only when the hide-all button is what entered full screen, so restore
@@ -54,8 +57,11 @@ public sealed partial class MainWindow : Window
 
     private static readonly string[] Fonts =
     {
-        "Lora", "Poppins", "Segoe UI", "Calibri", "Cambria", "Cambria Math",
-        "Georgia", "Times New Roman", "Arial", "Verdana", "Consolas", "Comic Sans MS"
+        "Lora", "Poppins", "Segoe UI", "Segoe Print", "Segoe Script", "Ink Free",
+        "Calibri", "Cambria", "Cambria Math", "Georgia", "Times New Roman", "Garamond",
+        "Arial", "Verdana", "Tahoma", "Trebuchet MS", "Comic Sans MS",
+        "Consolas", "Cascadia Code", "Cascadia Mono", "Courier New", "JetBrains Mono",
+        "Space Mono", "Google Sans Mono", "Maple Mono", "Maple Mono NF CN", "Amsterdam"
     };
 
     private static readonly string[] FontSizes =
@@ -83,11 +89,13 @@ public sealed partial class MainWindow : Window
 
         _library = LibraryStore.Load();
         SeedPens();
+        Surface.PendingFontFamily = _library.DefaultFont;
+        Surface.PendingFontSize = (float)_library.DefaultFontSize;
 
-        FontCombo.ItemsSource = Fonts;
+        BuildFontItems();
         SizeCombo.ItemsSource = FontSizes;
         SymbolGrid.ItemsSource = MathSymbols;
-        StyleCombo.ItemsSource = StyleNames;
+        BuildStyleItems();
         CalcModeBox.ItemsSource = new[] { "Standard", "Scientific", "Graphing", "Programmer", "Converter" };
         ProgBase.ItemsSource = new[] { "HEX", "DEC", "OCT", "BIN" };
         ConvCat.ItemsSource = ConvCategories;
@@ -124,11 +132,12 @@ public sealed partial class MainWindow : Window
         StartGlowPulse();
 
         Surface.ContentChanged += ScheduleSave;
-        Surface.ActiveTextChanged += _ => UpdateFormatBarVisibility();
+        Surface.ActiveTextChanged += box => { UpdateFormatBarVisibility(); SyncSizeComboFromSelection(box); };
         Surface.ContextMenuRequested += ShowCanvasContextMenu;
         Surface.ReplayEnded += () => BtnReplay.IsChecked = false;
         Surface.UndoManager.Changed += UpdateUndoButtons;
         Surface.ViewChanged += OnViewChanged;
+        Surface.RulerAngleChanged += OnRulerAngleChanged;
 
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusText.Text = ""; };
@@ -148,6 +157,20 @@ public sealed partial class MainWindow : Window
             tt.Y += e.Delta.Translation.Y;
         };
         PenGrip.ManipulationCompleted += (_, _) => DockPenRowFromPosition();
+
+        // minimal-UI floating buttons: drag the cluster itself; snap to nearest corner (#30)
+        MinimalButtons.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        MinimalButtons.ManipulationDelta += (_, e) =>
+        {
+            if (MinimalButtons.RenderTransform is not TranslateTransform mt)
+            {
+                mt = new TranslateTransform();
+                MinimalButtons.RenderTransform = mt;
+            }
+            mt.X += e.Delta.Translation.X;
+            mt.Y += e.Delta.Translation.Y;
+        };
+        MinimalButtons.ManipulationCompleted += (_, _) => SnapMinimalButtons();
 
         // calculator window dragging
         CalcHeader.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
@@ -371,6 +394,8 @@ public sealed partial class MainWindow : Window
         PenType.Pencil => "✏",
         PenType.Marker => "❚",
         PenType.Calligraphy => "\U0001FAB6",
+        PenType.Crayon => "\U0001F58D",
+        PenType.Watercolor => "\U0001F58C",
         _ => "\U0001F58A"
     };
 
@@ -492,7 +517,8 @@ public sealed partial class MainWindow : Window
             var typeCombo = new ComboBox
             {
                 Header = "Pen type",
-                ItemsSource = new[] { "Standard pen", "Brush pen", "Fountain pen", "Highlighter", "Pencil", "Marker (chisel)", "Calligraphy" },
+                ItemsSource = new[] { "Standard pen", "Brush pen", "Fountain pen", "Highlighter", "Pencil", "Marker (chisel)", "Calligraphy",
+                                      "Crayon", "Watercolour", "Monoline", "Rollerball", "Gel pen", "Ballpoint", "Felt-tip" },
                 SelectedIndex = (int)p.Pen,
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
@@ -660,13 +686,26 @@ public sealed partial class MainWindow : Window
 
     private void BuildTree()
     {
+        // Remember which notebooks/sections the user had collapsed so a rebuild
+        // (after add / rename / reorder / move) doesn't re-expand everything (#29).
+        var collapsed = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        void Scan(IList<TreeViewNode> nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (!n.IsExpanded && n.Content != null) collapsed.Add(n.Content);
+                Scan(n.Children);
+            }
+        }
+        Scan(NotebookTree.RootNodes);
+
         NotebookTree.RootNodes.Clear();
         foreach (var nb in _library.Notebooks)
         {
-            var nbNode = new TreeViewNode { Content = nb, IsExpanded = true };
+            var nbNode = new TreeViewNode { Content = nb, IsExpanded = !collapsed.Contains(nb) };
             foreach (var sec in nb.Sections)
             {
-                var secNode = new TreeViewNode { Content = sec, IsExpanded = true };
+                var secNode = new TreeViewNode { Content = sec, IsExpanded = !collapsed.Contains(sec) };
                 foreach (var pg in sec.Pages)
                     secNode.Children.Add(new TreeViewNode { Content = pg });
                 nbNode.Children.Add(secNode);
@@ -690,7 +729,7 @@ public sealed partial class MainWindow : Window
         return Walk(NotebookTree.RootNodes);
     }
 
-    private void NotebookTree_ItemInvoked(TreeView sender, TreeViewItemInvokedEventArgs args)
+    private async void NotebookTree_ItemInvoked(TreeView sender, TreeViewItemInvokedEventArgs args)
     {
         object? item = args.InvokedItem;
         if (item is TreeViewNode node) item = node.Content;
@@ -700,7 +739,70 @@ public sealed partial class MainWindow : Window
         if (item is NotePage page)
         {
             var (nb, sec) = FindContext(page);
-            if (nb != null && sec != null) SwitchToPage(nb, sec, page);
+            if (nb != null && sec != null)
+            {
+                if (!await EnsureUnlockedAsync(nb)) return; // password gate (#23)
+                SwitchToPage(nb, sec, page);
+            }
+        }
+    }
+
+    // ---- password locking (#23) ----
+    private static string HashPw(string pw)
+    {
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        return Convert.ToHexString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(pw)));
+    }
+
+    private async Task<string?> PromptPasswordAsync(string title)
+    {
+        var box = new PasswordBox { PlaceholderText = "Password" };
+        var dlg = new ContentDialog
+        {
+            Title = title,
+            Content = box,
+            PrimaryButtonText = "OK",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        return await dlg.ShowAsync() == ContentDialogResult.Primary && box.Password.Length > 0 ? box.Password : null;
+    }
+
+    private async Task<bool> EnsureUnlockedAsync(Notebook nb)
+    {
+        if (nb.PasswordHash == null || _unlockedNotebooks.Contains(nb.Id)) return true;
+        var pw = await PromptPasswordAsync($"“{nb.Name}” is locked");
+        if (pw == null) return false;
+        if (HashPw(pw) == nb.PasswordHash) { _unlockedNotebooks.Add(nb.Id); return true; }
+        ShowStatus("Incorrect password.");
+        return false;
+    }
+
+    private async void LockToggle_Click(object sender, RoutedEventArgs e)
+    {
+        var (nb, _, _) = ResolveSelection();
+        if (nb == null) { ShowStatus("Select a notebook to lock or unlock."); return; }
+        if (nb.PasswordHash == null)
+        {
+            var pw = await PromptPasswordAsync($"Set a password to lock “{nb.Name}”");
+            if (pw == null) return;
+            nb.PasswordHash = HashPw(pw);
+            _unlockedNotebooks.Add(nb.Id);
+            ScheduleSave();
+            ShowStatus($"“{nb.Name}” is locked — it'll ask for the password when you open it.");
+        }
+        else
+        {
+            var pw = await PromptPasswordAsync($"Enter the password to remove the lock on “{nb.Name}”");
+            if (pw == null) return;
+            if (HashPw(pw) == nb.PasswordHash)
+            {
+                nb.PasswordHash = null;
+                ScheduleSave();
+                ShowStatus($"“{nb.Name}” is unlocked.");
+            }
+            else ShowStatus("Incorrect password.");
         }
     }
 
@@ -904,61 +1006,578 @@ public sealed partial class MainWindow : Window
         ScheduleSave();
     }
 
-    private void SortPages_Click(object sender, RoutedEventArgs e)
+    // Order notebooks / sections / pages by creation date. Tag = "scope:dir",
+    // e.g. "pg:desc", "sec:asc", "nb:desc". Manual order is via Move up/down.
+    private void Order_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not MenuFlyoutItem item || item.Tag is not string dir) return;
-        var (_, selSec, _) = ResolveSelection();
-        var targets = selSec != null
-            ? new List<Section> { selSec }
-            : _library.Notebooks.SelectMany(n => n.Sections).ToList();
-        foreach (var sec in targets)
+        if (sender is not MenuFlyoutItem item || item.Tag is not string tag) return;
+        var parts = tag.Split(':');
+        if (parts.Length != 2) return;
+        string scope = parts[0];
+        bool asc = parts[1] == "asc";
+        var (selNb, selSec, _) = ResolveSelection();
+
+        switch (scope)
         {
-            var sorted = dir == "asc"
-                ? sec.Pages.OrderBy(p => p.CreatedTicks).ToList()
-                : sec.Pages.OrderByDescending(p => p.CreatedTicks).ToList();
-            sec.Pages.Clear();
-            sec.Pages.AddRange(sorted);
+            case "nb":
+                ReorderBy(_library.Notebooks, asc, n => n.CreatedTicks);
+                ShowStatus(asc ? "Notebooks: oldest first." : "Notebooks: newest first.");
+                break;
+            case "sec":
+            {
+                var nbs = selNb != null ? new List<Notebook> { selNb } : _library.Notebooks;
+                foreach (var nb in nbs) ReorderBy(nb.Sections, asc, s => s.CreatedTicks);
+                ShowStatus(asc ? "Sections: oldest first." : "Sections: newest first.");
+                break;
+            }
+            default: // pages
+            {
+                List<Section> targets = selSec != null ? new() { selSec }
+                    : selNb != null ? selNb.Sections.ToList()
+                    : _library.Notebooks.SelectMany(n => n.Sections).ToList();
+                foreach (var sec in targets) ReorderBy(sec.Pages, asc, p => p.CreatedTicks);
+                ShowStatus(asc ? "Pages: oldest first." : "Pages: newest first.");
+                break;
+            }
         }
         BuildTree();
         ScheduleSave();
-        ShowStatus(selSec != null ? $"Sorted pages in “{selSec.Name}” by date." : "Sorted all pages by date.");
     }
 
-    private void NotebookTree_DragItemsCompleted(TreeView sender, TreeViewDragItemsCompletedEventArgs args)
+    private static void ReorderBy<T>(List<T> list, bool asc, Func<T, long> key)
     {
-        // mirror the rearranged nodes back into the model; revert on anything invalid
+        var sorted = asc ? list.OrderBy(key).ToList() : list.OrderByDescending(key).ToList();
+        list.Clear();
+        list.AddRange(sorted);
+    }
+
+    // ---- manual reordering (replaces the old drag-reorder that lost notes) ----
+    private void MoveUp_Click(object sender, RoutedEventArgs e) => MoveSelected(-1);
+    private void MoveDown_Click(object sender, RoutedEventArgs e) => MoveSelected(+1);
+
+    private void MoveSelected(int delta)
+    {
+        var content = _selNode?.Content;
+        if (content == null) { ShowStatus("Select an item in the tree first."); return; }
+        bool moved = false;
+        switch (content)
+        {
+            case Notebook nb:
+                moved = MoveInList(_library.Notebooks, nb, delta);
+                break;
+            case Section sec:
+            {
+                var owner = _library.Notebooks.FirstOrDefault(n => n.Sections.Contains(sec));
+                if (owner != null) moved = MoveInList(owner.Sections, sec, delta);
+                break;
+            }
+            case NotePage pg:
+            {
+                var (_, sec) = FindContext(pg);
+                if (sec != null) moved = MoveInList(sec.Pages, pg, delta);
+                break;
+            }
+        }
+        if (!moved) return;
+        BuildTree();
+        var node = FindNode(content);
+        if (node != null)
+        {
+            _selNode = node;
+            try { NotebookTree.SelectedNode = node; } catch { }
+        }
+        ScheduleSave();
+    }
+
+    private static bool MoveInList<T>(IList<T> list, T item, int delta)
+    {
+        int i = list.IndexOf(item);
+        int j = i + delta;
+        if (i < 0 || j < 0 || j >= list.Count) return false;
+        list.RemoveAt(i);
+        list.Insert(j, item);
+        return true;
+    }
+
+    // Move a section to another notebook, or a page to another section, with no
+    // data loss (this is the safe replacement for cross-notebook drag).
+    private async void MoveTo_Click(object sender, RoutedEventArgs e)
+    {
+        var content = _selNode?.Content;
+        if (content is Section sec)
+        {
+            var owner = _library.Notebooks.FirstOrDefault(n => n.Sections.Contains(sec));
+            var targets = _library.Notebooks.Where(n => !ReferenceEquals(n, owner)).ToList();
+            if (targets.Count == 0) { ShowStatus("There's no other notebook to move this section into."); return; }
+            int pick = await PickFromAsync("Move section to notebook", targets.Select(n => n.Name).ToList());
+            if (pick < 0) return;
+            owner?.Sections.Remove(sec);
+            targets[pick].Sections.Add(sec);
+            BuildTree();
+            RefreshCrumb();
+            ScheduleSave();
+            ShowStatus($"Moved section “{sec.Name}” to “{targets[pick].Name}”.");
+        }
+        else if (content is NotePage pg)
+        {
+            var (_, curSec) = FindContext(pg);
+            var dests = _library.Notebooks
+                .SelectMany(n => n.Sections.Select(s => (Nb: n, Sec: s)))
+                .Where(t => !ReferenceEquals(t.Sec, curSec))
+                .ToList();
+            if (dests.Count == 0) { ShowStatus("There's no other section to move this page into."); return; }
+            int pick = await PickFromAsync("Move page to section",
+                dests.Select(t => $"{t.Nb.Name} ▸ {t.Sec.Name}").ToList());
+            if (pick < 0) return;
+            curSec?.Pages.Remove(pg);
+            dests[pick].Sec.Pages.Add(pg);
+            BuildTree();
+            RefreshCrumb();
+            ScheduleSave();
+            ShowStatus($"Moved page “{pg.Name}” to “{dests[pick].Sec.Name}”.");
+        }
+        else
+        {
+            ShowStatus("Select a section or a page to move it elsewhere.");
+        }
+    }
+
+    private async Task<int> PickFromAsync(string title, List<string> options)
+    {
+        var combo = new ComboBox
+        {
+            ItemsSource = options,
+            SelectedIndex = 0,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        var dlg = new ContentDialog
+        {
+            Title = title,
+            Content = combo,
+            PrimaryButtonText = "Move",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        return await dlg.ShowAsync() == ContentDialogResult.Primary ? combo.SelectedIndex : -1;
+    }
+
+    private void RefreshCrumb()
+    {
+        if (_curPage == null) return;
+        var (nb, sec) = FindContext(_curPage);
+        if (nb != null && sec != null)
+        {
+            _curNb = nb;
+            _curSec = sec;
+            CrumbText.Text = $"{nb.Name} ▸ {sec.Name} ▸ {_curPage.Name}";
+        }
+    }
+
+    // =======================================================================
+    // Search across all notes, incl. handwriting OCR (#18)
+    // =======================================================================
+    private sealed class SearchHit
+    {
+        public Notebook Nb = null!;
+        public Section Sec = null!;
+        public NotePage Page = null!;
+        public string Display = "";
+        public override string ToString() => Display;
+    }
+
+    private void SearchBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter) { e.Handled = true; _ = RunSearchAsync(SearchBox.Text); }
+    }
+
+    private async Task RunSearchAsync(string q)
+    {
+        q = (q ?? "").Trim();
+        SearchResults.ItemsSource = null;
+        if (q.Length == 0) { SearchStatus.Text = ""; return; }
+        SearchStatus.Text = "Searching…";
+        string ql = q.ToLowerInvariant();
+        var hits = new List<SearchHit>();
+        bool indexedSomething = false;
+
+        foreach (var nb in _library.Notebooks)
+            foreach (var sec in nb.Sections)
+                foreach (var pg in sec.Pages)
+                {
+                    // lazily OCR handwriting that hasn't been indexed yet
+                    if (string.IsNullOrEmpty(pg.OcrText) && pg.Strokes.Count > 0)
+                    {
+                        await IndexHandwritingAsync(pg);
+                        indexedSomething = true;
+                    }
+                    string texts = string.Join(" ", pg.Texts.Select(t => RtfToText(t.Rtf)));
+                    string hay = ($"{nb.Name} {sec.Name} {pg.Name} {texts} {pg.OcrText}").ToLowerInvariant();
+                    if (hay.Contains(ql))
+                        hits.Add(new SearchHit { Nb = nb, Sec = sec, Page = pg, Display = $"{nb.Name} ▸ {sec.Name} ▸ {pg.Name}" });
+                }
+
+        SearchResults.ItemsSource = hits;
+        SearchStatus.Text = hits.Count == 0 ? "No matches." : $"{hits.Count} match{(hits.Count == 1 ? "" : "es")}.";
+        if (indexedSomething) ScheduleSave(); // persist the new OCR index
+    }
+
+    private async void SearchResult_Click(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not SearchHit hit) return;
+        if (!await EnsureUnlockedAsync(hit.Nb)) return;
+        BuildTree();
+        SwitchToPage(hit.Nb, hit.Sec, hit.Page);
+    }
+
+    // Recognise handwriting on a page with the Windows ink analyzer and cache it.
+    private static async Task IndexHandwritingAsync(NotePage page)
+    {
         try
         {
-            var notebooks = new List<Notebook>();
-            foreach (var nbNode in NotebookTree.RootNodes)
+            if (page.Strokes.Count == 0) { page.OcrText = " "; return; }
+            var analyzer = new Windows.UI.Input.Inking.Analysis.InkAnalyzer();
+            var builder = new Windows.UI.Input.Inking.InkStrokeBuilder();
+            foreach (var s in page.Strokes)
             {
-                if (nbNode.Content is not Notebook nb) { BuildTree(); return; }
-                var sections = new List<Section>();
-                foreach (var secNode in nbNode.Children)
-                {
-                    if (secNode.Content is not Section sec) { BuildTree(); return; }
-                    var pages = new List<NotePage>();
-                    foreach (var pgNode in secNode.Children)
-                    {
-                        if (pgNode.Content is not NotePage pg || pgNode.Children.Count > 0) { BuildTree(); return; }
-                        pages.Add(pg);
-                    }
-                    sec.Pages.Clear();
-                    sec.Pages.AddRange(pages);
-                    sections.Add(sec);
-                }
-                nb.Sections.Clear();
-                nb.Sections.AddRange(sections);
-                notebooks.Add(nb);
+                if (s.Points.Count < 2) continue;
+                var pts = s.Points.Select(p =>
+                    new Windows.UI.Input.Inking.InkPoint(new Windows.Foundation.Point(p.X, p.Y), p.Pressure));
+                var stroke = builder.CreateStrokeFromInkPoints(pts, System.Numerics.Matrix3x2.Identity);
+                analyzer.AddDataForStroke(stroke);
             }
-            _library.Notebooks.Clear();
-            _library.Notebooks.AddRange(notebooks);
-            ScheduleSave();
+            await analyzer.AnalyzeAsync();
+            var words = analyzer.AnalysisRoot.FindNodes(Windows.UI.Input.Inking.Analysis.InkAnalysisNodeKind.InkWord);
+            var sb = new System.Text.StringBuilder();
+            foreach (var w in words)
+                sb.Append(((Windows.UI.Input.Inking.Analysis.InkAnalysisInkWord)w).RecognizedText).Append(' ');
+            page.OcrText = sb.Length > 0 ? sb.ToString() : " ";
         }
         catch
         {
-            BuildTree();
+            page.OcrText = " "; // mark as attempted so we don't retry endlessly
         }
+    }
+
+    private static string RtfToText(string rtf)
+    {
+        if (string.IsNullOrEmpty(rtf)) return "";
+        var sb = new System.Text.StringBuilder();
+        int depth = 0;
+        for (int i = 0; i < rtf.Length; i++)
+        {
+            char c = rtf[i];
+            if (c == '{' || c == '}') continue;
+            if (c == '\\')
+            {
+                // skip a control word and an optional trailing space
+                i++;
+                while (i < rtf.Length && (char.IsLetter(rtf[i]))) i++;
+                if (i < rtf.Length && (rtf[i] == '-' || char.IsDigit(rtf[i])))
+                    while (i < rtf.Length && (rtf[i] == '-' || char.IsDigit(rtf[i]))) i++;
+                if (i < rtf.Length && rtf[i] != ' ') i--; // step back if not the trailing space
+                sb.Append(' ');
+                continue;
+            }
+            if (c is '\r' or '\n') { sb.Append(' '); continue; }
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    // =======================================================================
+    // Notebook gallery (#16)
+    // =======================================================================
+    private static readonly (string Hex, string Name)[] NotebookColours =
+    {
+        ("#D97757", "Clay"), ("#6A9BCC", "Sky"), ("#788C5D", "Sage"), ("#D32F2F", "Red"),
+        ("#FBC02D", "Amber"), ("#7B1FA2", "Violet"), ("#3A3A38", "Graphite"), ("#2E7D6B", "Teal")
+    };
+
+    private void OpenGallery_Click(object sender, RoutedEventArgs e)
+    {
+        BuildGallery();
+        GalleryPanel.Visibility = Visibility.Visible;
+    }
+
+    private void CloseGallery_Click(object sender, RoutedEventArgs e)
+        => GalleryPanel.Visibility = Visibility.Collapsed;
+
+    private void BuildGallery()
+    {
+        GalleryHost.Children.Clear();
+
+        // ungrouped notebooks first
+        var ungrouped = _library.Notebooks.Where(n => string.IsNullOrEmpty(n.Folder)).ToList();
+        if (ungrouped.Count > 0) GalleryHost.Children.Add(BuildCardRow(ungrouped));
+
+        // then each folder (union of declared folders and folders in use)
+        var folders = _library.Folders
+            .Concat(_library.Notebooks.Select(n => n.Folder ?? "").Where(f => f != ""))
+            .Distinct().OrderBy(f => f).ToList();
+        foreach (var folder in folders)
+        {
+            GalleryHost.Children.Add(new TextBlock
+            {
+                Text = "\U0001F4C1  " + folder,
+                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Poppins"),
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                FontSize = 15,
+                Opacity = 0.85,
+                Margin = new Thickness(2, 6, 0, 0)
+            });
+            var inFolder = _library.Notebooks.Where(n => n.Folder == folder).ToList();
+            GalleryHost.Children.Add(inFolder.Count > 0
+                ? BuildCardRow(inFolder)
+                : new TextBlock { Text = "(empty — move a notebook here)", Opacity = 0.5, FontSize = 12, Margin = new Thickness(4, 0, 0, 0) });
+        }
+    }
+
+    private GridView BuildCardRow(List<Notebook> notebooks)
+    {
+        var gv = new GridView { SelectionMode = ListViewSelectionMode.None, IsItemClickEnabled = false };
+        foreach (var nb in notebooks) gv.Items.Add(MakeNotebookCard(nb));
+        return gv;
+    }
+
+    private Border MakeNotebookCard(Notebook nb)
+    {
+        bool dark = _library.Theme == "Dark";
+        var cardBg = new SolidColorBrush(dark ? Color.FromArgb(255, 0x22, 0x21, 0x1F) : Color.FromArgb(255, 0xFF, 0xFF, 0xFF));
+        var inkBrush = new SolidColorBrush(dark ? Color.FromArgb(255, 0xF4, 0xF2, 0xEC) : Color.FromArgb(255, 0x1B, 0x1A, 0x18));
+        var col = ColorUtil.Parse(nb.Color);
+        var card = new Border
+        {
+            Width = 188,
+            Height = 134,
+            Margin = new Thickness(0, 0, 14, 14),
+            CornerRadius = new CornerRadius(12),
+            Background = cardBg,
+            BorderBrush = new SolidColorBrush(Color.FromArgb(60, 128, 128, 128)),
+            BorderThickness = new Thickness(1)
+        };
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(60) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var strip = new Border { Background = new SolidColorBrush(col), CornerRadius = new CornerRadius(12, 12, 0, 0) };
+        if (nb.PasswordHash != null)
+            strip.Child = new FontIcon { Glyph = "", FontSize = 16, Foreground = new SolidColorBrush(Colors.White), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 8, 8, 0) };
+        Grid.SetRow(strip, 0);
+
+        var name = new TextBlock { Text = nb.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, MaxLines = 2, Margin = new Thickness(12, 8, 12, 0), Foreground = inkBrush };
+        Grid.SetRow(name, 1);
+
+        int pages = nb.Sections.Sum(s => s.Pages.Count);
+        var counts = new TextBlock { Text = $"{nb.Sections.Count} sections · {pages} pages", FontSize = 11, Opacity = 0.65, Margin = new Thickness(12, 2, 12, 10) };
+        Grid.SetRow(counts, 2);
+
+        grid.Children.Add(strip);
+        grid.Children.Add(name);
+        grid.Children.Add(counts);
+        card.Child = grid;
+
+        card.Tapped += async (_, _) =>
+        {
+            if (!await EnsureUnlockedAsync(nb)) return;
+            OpenNotebook(nb);
+            GalleryPanel.Visibility = Visibility.Collapsed;
+        };
+        card.ContextFlyout = BuildCardFlyout(nb);
+        ToolTipService.SetToolTip(card, "Click to open · right-click for colour, folder, rename, lock");
+        return card;
+    }
+
+    private MenuFlyout BuildCardFlyout(Notebook nb)
+    {
+        var fly = new MenuFlyout();
+
+        var colourSub = new MenuFlyoutSubItem { Text = "Colour" };
+        foreach (var (hex, cname) in NotebookColours)
+        {
+            var h = hex;
+            var it = new MenuFlyoutItem { Text = cname };
+            it.Click += (_, _) => { nb.Color = h; ScheduleSave(); BuildGallery(); };
+            colourSub.Items.Add(it);
+        }
+        fly.Items.Add(colourSub);
+
+        var folderSub = new MenuFlyoutSubItem { Text = "Move to folder" };
+        var none = new MenuFlyoutItem { Text = "(none)" };
+        none.Click += (_, _) => { nb.Folder = null; ScheduleSave(); BuildGallery(); };
+        folderSub.Items.Add(none);
+        foreach (var f in _library.Folders.OrderBy(x => x))
+        {
+            var ff = f;
+            var it = new MenuFlyoutItem { Text = f };
+            it.Click += (_, _) => { nb.Folder = ff; ScheduleSave(); BuildGallery(); };
+            folderSub.Items.Add(it);
+        }
+        var newF = new MenuFlyoutItem { Text = "New folder…" };
+        newF.Click += async (_, _) =>
+        {
+            var f = await PromptAsync("New folder", "Folder");
+            if (f == null) return;
+            if (!_library.Folders.Contains(f)) _library.Folders.Add(f);
+            nb.Folder = f;
+            ScheduleSave();
+            BuildGallery();
+        };
+        folderSub.Items.Add(newF);
+        fly.Items.Add(folderSub);
+
+        var rename = new MenuFlyoutItem { Text = "Rename" };
+        rename.Click += async (_, _) =>
+        {
+            var n = await PromptAsync("Rename notebook", nb.Name);
+            if (n == null) return;
+            nb.Name = n; ScheduleSave(); BuildGallery(); BuildTree();
+        };
+        fly.Items.Add(rename);
+
+        var lockItem = new MenuFlyoutItem { Text = nb.PasswordHash == null ? "Lock…" : "Remove lock…" };
+        lockItem.Click += (_, _) => { _selNode = FindNode(nb); LockToggle_Click(this, new RoutedEventArgs()); };
+        fly.Items.Add(lockItem);
+
+        return fly;
+    }
+
+    private void OpenNotebook(Notebook nb)
+    {
+        if (nb.Sections.Count == 0) nb.Sections.Add(new Section { Name = "Section 1" });
+        var sec = nb.Sections[0];
+        if (sec.Pages.Count == 0) sec.Pages.Add(NewPage("Page 1"));
+        BuildTree();
+        SwitchToPage(nb, sec, sec.Pages[0]);
+        ScheduleSave();
+    }
+
+    private async void GalleryNewNotebook_Click(object sender, RoutedEventArgs e)
+    {
+        var name = await PromptAsync("New notebook", $"Notebook {_library.Notebooks.Count + 1}");
+        if (name == null) return;
+        var nb = new Notebook { Name = name };
+        var sec = new Section { Name = "Section 1" };
+        sec.Pages.Add(NewPage("Page 1"));
+        nb.Sections.Add(sec);
+        _library.Notebooks.Add(nb);
+        BuildTree();
+        BuildGallery();
+        ScheduleSave();
+    }
+
+    private async void GalleryNewFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var f = await PromptAsync("New folder", "Folder");
+        if (f == null) return;
+        if (!_library.Folders.Contains(f)) _library.Folders.Add(f);
+        ScheduleSave();
+        BuildGallery();
+    }
+
+    // =======================================================================
+    // Settings page — central storage folder + recover/import notebooks
+    // =======================================================================
+    private async void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        var panel = new StackPanel { Spacing = 10, Width = 480 };
+
+        panel.Children.Add(new TextBlock { Text = "Notebook storage (universal sync)", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15 });
+        panel.Children.Add(new TextBlock { Text = "Every version of the app reads and writes notebooks from this one folder, so they always stay in sync.", FontSize = 12, Opacity = 0.75, TextWrapping = TextWrapping.Wrap });
+        var folderText = new TextBlock { Text = LibraryStore.Dir, FontSize = 12, Opacity = 0.9, TextWrapping = TextWrapping.Wrap, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") };
+        panel.Children.Add(folderText);
+        var changeBtn = new Button { Content = "Change folder…", HorizontalAlignment = HorizontalAlignment.Left };
+        changeBtn.Click += async (_, _) =>
+        {
+            var f = await PickFolderAsync();
+            if (f == null) return;
+            Surface.FlushTexts();
+            LibraryStore.SetDataFolder(f, _library);
+            folderText.Text = LibraryStore.Dir;
+            ShowStatus("Storage folder updated — notebooks now sync from here.");
+        };
+        panel.Children.Add(changeBtn);
+
+        // ---- default text font & size ----
+        panel.Children.Add(new TextBlock { Text = "Default text font & size", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var defFont = new ComboBox { Width = 200 };
+        foreach (var f in Fonts)
+            defFont.Items.Add(new ComboBoxItem { Content = new TextBlock { Text = f, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily(f) }, Tag = f });
+        foreach (ComboBoxItem it in defFont.Items)
+            if ((string)it.Tag == _library.DefaultFont) { defFont.SelectedItem = it; break; }
+        defFont.SelectionChanged += (_, _) =>
+        {
+            if (defFont.SelectedItem is ComboBoxItem ci && ci.Tag is string fn)
+            { _library.DefaultFont = fn; Surface.PendingFontFamily = fn; ScheduleSave(); }
+        };
+        var defSize = new ComboBox { Width = 92, IsEditable = true };
+        foreach (var sz in FontSizes) defSize.Items.Add(sz);
+        defSize.Text = ((int)_library.DefaultFontSize).ToString();
+        void ApplyDefaultSize(string? txt)
+        {
+            if (ParseSize(txt) is float v) { _library.DefaultFontSize = v; Surface.PendingFontSize = v; ScheduleSave(); }
+        }
+        defSize.SelectionChanged += (_, _) => { if (defSize.SelectedItem is string s2) ApplyDefaultSize(s2); };
+        defSize.TextSubmitted += (cb, args) => { ApplyDefaultSize(args.Text); };
+        row.Children.Add(new TextBlock { Text = "Font", VerticalAlignment = VerticalAlignment.Center, FontSize = 12 });
+        row.Children.Add(defFont);
+        row.Children.Add(new TextBlock { Text = "Size", VerticalAlignment = VerticalAlignment.Center, FontSize = 12 });
+        row.Children.Add(defSize);
+        panel.Children.Add(row);
+        panel.Children.Add(new TextBlock { Text = "New text boxes start with this font and size.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        panel.Children.Add(new TextBlock { Text = "Recover / import notebooks", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        var recoverBtn = new Button { Content = "Recover my old notebooks (previous location)", HorizontalAlignment = HorizontalAlignment.Left };
+        recoverBtn.Click += (_, _) => ImportFromLegacy();
+        panel.Children.Add(recoverBtn);
+        var importBtn = new Button { Content = "Import notebooks from a file…", HorizontalAlignment = HorizontalAlignment.Left };
+        importBtn.Click += async (_, _) => { var p = await PickJsonFileAsync(); if (p != null) ImportFromFile(p); };
+        panel.Children.Add(importBtn);
+        panel.Children.Add(new TextBlock { Text = "Importing only adds notebooks you don't already have — it never overwrites or deletes your current notes.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        var dlg = new ContentDialog { Title = "Settings", Content = panel, CloseButtonText = "Done", XamlRoot = RootGrid.XamlRoot };
+        await dlg.ShowAsync();
+    }
+
+    private async Task<string?> PickFolderAsync()
+    {
+        var picker = new FolderPicker();
+        picker.FileTypeFilter.Add("*");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        var folder = await picker.PickSingleFolderAsync();
+        return folder?.Path;
+    }
+
+    private async Task<string?> PickJsonFileAsync()
+    {
+        var picker = new FileOpenPicker();
+        picker.FileTypeFilter.Add(".json");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        var file = await picker.PickSingleFileAsync();
+        return file?.Path;
+    }
+
+    private void ImportFromLegacy()
+    {
+        var legacyPath = System.IO.Path.Combine(LibraryStore.LegacyDir, "library.json");
+        var src = LibraryStore.LoadFrom(legacyPath) ?? LibraryStore.LoadFrom(legacyPath + ".bak");
+        if (src == null) { ShowStatus("No notebooks found in the previous location."); return; }
+        int n = LibraryStore.Merge(_library, src);
+        BuildTree();
+        SaveNow();
+        ShowStatus(n > 0 ? $"Recovered {n} notebook(s)." : "Those notebooks are already here.");
+    }
+
+    private void ImportFromFile(string path)
+    {
+        var src = LibraryStore.LoadFrom(path);
+        if (src == null) { ShowStatus("That file didn't contain any notebooks."); return; }
+        int n = LibraryStore.Merge(_library, src);
+        BuildTree();
+        SaveNow();
+        ShowStatus(n > 0 ? $"Imported {n} notebook(s)." : "Those notebooks are already here.");
     }
 
     private void Sidebar_Toggle(object sender, RoutedEventArgs e)
@@ -984,11 +1603,16 @@ public sealed partial class MainWindow : Window
     {
         ToolPen.IsChecked = tag == "Pen";
         ToolText.IsChecked = tag == "Text";
-        ToolEraser.IsChecked = tag == "Eraser";
         ToolSelect.IsChecked = tag == "Select";
         ToolSpace.IsChecked = tag == "FreeSpace";
 
         var tool = Enum.Parse<ToolType>(tag);
+        // Leaving writing mode reverts the chosen size/font to the saved defaults (#8).
+        if (tool != ToolType.Text)
+        {
+            Surface.PendingFontSize = (float)_library.DefaultFontSize;
+            Surface.PendingFontFamily = _library.DefaultFont;
+        }
         Surface.SetTool(tool);
         UpdateFormatBarVisibility();
         RefreshEraserChip();
@@ -1045,6 +1669,31 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private void RulerToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        Surface.RulerMode = RulerToggle.IsOn;
+        if (RulerToggle.IsOn) SelectTool("Pen");
+        Surface.Refresh();
+    }
+
+    private void RulerSlider_Changed(object sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (RulerDegLabel == null) return;
+        Surface.RulerAngle = e.NewValue;
+        RulerDegLabel.Text = $"Angle: {(int)e.NewValue}°";
+        Surface.Refresh();
+    }
+
+    // Keep the Settings flyout slider in sync when the ruler is tilted by gesture.
+    private void OnRulerAngleChanged(double deg)
+    {
+        if (RulerSlider == null) return;
+        _syncingUi = true;
+        try { RulerSlider.Value = ((deg % 180) + 180) % 180; } catch { }
+        _syncingUi = false;
+        if (RulerDegLabel != null) RulerDegLabel.Text = $"Angle: {(int)deg}°";
+    }
+
     private void InsertShape_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuFlyoutItem item || item.Tag is not string tag) return;
@@ -1058,6 +1707,13 @@ public sealed partial class MainWindow : Window
             case "Ellipse": Surface.InsertShape(ShapeKind.Ellipse, false); break;
             case "Circle": Surface.InsertShape(ShapeKind.Ellipse, true); break;
             case "Triangle": Surface.InsertShape(ShapeKind.Triangle, false); break;
+            case "RightTriangle": Surface.InsertShape(ShapeKind.RightTriangle, false); break;
+            case "Diamond": Surface.InsertShape(ShapeKind.Diamond, false); break;
+            case "Parallelogram": Surface.InsertShape(ShapeKind.Parallelogram, false); break;
+            case "Trapezoid": Surface.InsertShape(ShapeKind.Trapezoid, false); break;
+            case "Pentagon": Surface.InsertShape(ShapeKind.Pentagon, false); break;
+            case "Hexagon": Surface.InsertShape(ShapeKind.Hexagon, false); break;
+            case "Star": Surface.InsertShape(ShapeKind.Star, false); break;
             case "AxesXY": Surface.InsertShape(ShapeKind.AxesXY, false); break;
             case "AxesXYZ": Surface.InsertShape(ShapeKind.AxesXYZ, false); break;
         }
@@ -1307,6 +1963,24 @@ public sealed partial class MainWindow : Window
         _hideEnteredFullscreen = false;
     }
 
+    private void SnapMinimalButtons()
+    {
+        try
+        {
+            var t = MinimalButtons.TransformToVisual(CanvasArea);
+            var tl = t.TransformPoint(new Point(0, 0));
+            double cx = tl.X + MinimalButtons.ActualWidth / 2.0;
+            double cy = tl.Y + MinimalButtons.ActualHeight / 2.0;
+            double w = CanvasArea.ActualWidth, h = CanvasArea.ActualHeight;
+            bool left = cx < w / 2, top = cy < h / 2;
+            MinimalButtons.HorizontalAlignment = left ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+            MinimalButtons.VerticalAlignment = top ? VerticalAlignment.Top : VerticalAlignment.Bottom;
+            MinimalButtons.Margin = new Thickness(left ? 14 : 0, top ? 14 : 0, left ? 0 : 14, top ? 0 : 14);
+            MinimalButtons.RenderTransform = null;
+        }
+        catch { }
+    }
+
     private void FloatPen_Click(object sender, RoutedEventArgs e)
     {
         _floatPen = !_floatPen;
@@ -1439,6 +2113,51 @@ public sealed partial class MainWindow : Window
         catch { }
     }
 
+    // Checklist: cycle the current paragraph through none -> ☐ -> ☑ -> none (#22).
+    private void FormatChecklist_Click(object sender, RoutedEventArgs e)
+    {
+        var box = Surface.ActiveTextBox;
+        if (box == null) { ShowStatus("Tap a text box first, then add a checklist."); return; }
+        try
+        {
+            var sel = box.Document.Selection;
+            var para = box.Document.GetRange(sel.StartPosition, sel.EndPosition);
+            para.Expand(TextRangeUnit.Paragraph);
+            para.GetText(TextGetOptions.None, out string txt);
+            string body = txt.TrimEnd('\r');
+            string tail = txt.Substring(body.Length);
+            string next;
+            if (body.StartsWith("☐ ")) next = "☑ " + body.Substring(2);
+            else if (body.StartsWith("☑ ")) next = body.Substring(2);
+            else next = "☐ " + body;
+            para.SetText(TextSetOptions.None, next + tail);
+        }
+        catch { ShowStatus("Couldn't update the checklist here."); }
+        box.Focus(FocusState.Programmatic);
+    }
+
+    // Add a hyperlink to the selected text (#24).
+    private async void FormatLink_Click(object sender, RoutedEventArgs e)
+    {
+        var box = Surface.ActiveTextBox;
+        if (box == null) { ShowStatus("Select some text in a text box first."); return; }
+        var sel = box.Document.Selection;
+        if (sel.StartPosition == sel.EndPosition)
+        {
+            ShowStatus("Select the text you want to turn into a link first.");
+            return;
+        }
+        var url = await PromptAsync("Add link", "https://");
+        if (url == null) return;
+        if (!url.Contains("://")) url = "https://" + url;
+        try { sel.Link = "\"" + url + "\""; }
+        catch { ShowStatus("Couldn't add that link."); return; }
+        box.Focus(FocusState.Programmatic);
+        ShowStatus("Link added. Ctrl+click it to open.");
+    }
+
+    private void RotateText_Click(object sender, RoutedEventArgs e) => Surface.RotateActiveText(15);
+
     private void AlignLeft_Click(object sender, RoutedEventArgs e) => SetAlignment(ParagraphAlignment.Left);
     private void AlignCenter_Click(object sender, RoutedEventArgs e) => SetAlignment(ParagraphAlignment.Center);
     private void AlignRight_Click(object sender, RoutedEventArgs e) => SetAlignment(ParagraphAlignment.Right);
@@ -1452,22 +2171,66 @@ public sealed partial class MainWindow : Window
 
     private void FontCombo_Changed(object sender, SelectionChangedEventArgs e)
     {
+        if (FontCombo.SelectedItem is not ComboBoxItem item || item.Tag is not string font) return;
+        Surface.PendingFontFamily = font; // also becomes the default for new boxes this session
         var s = Surface.ActiveTextBox?.Document.Selection;
-        if (s != null && FontCombo.SelectedItem is string font)
+        if (s != null)
         {
             s.CharacterFormat.Name = font;
             Surface.ActiveTextBox?.Focus(FocusState.Programmatic);
         }
     }
 
+    private static float? ParseSize(string? s) =>
+        float.TryParse(s, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var v) && v >= 1 && v <= 400
+            ? v : (float?)null;
+
     private void SizeCombo_Changed(object sender, SelectionChangedEventArgs e)
     {
-        var s = Surface.ActiveTextBox?.Document.Selection;
-        if (s != null && SizeCombo.SelectedItem is string sizeStr && float.TryParse(sizeStr, out float size))
+        if (_syncingSize) return; // ignore programmatic sync (prevents cross-box bleed)
+        if (SizeCombo.SelectedItem is string s && ParseSize(s) is float v) ApplyFontSize(v);
+    }
+
+    // Typed-in size (e.g. "37" + Enter) — makes the size fully typeable (#1).
+    private void SizeCombo_TextSubmitted(ComboBox sender, ComboBoxTextSubmittedEventArgs args)
+    {
+        if (ParseSize(args.Text) is float v)
         {
-            s.CharacterFormat.Size = size;
-            Surface.ActiveTextBox?.Focus(FocusState.Programmatic);
+            ApplyFontSize(v);
+            args.Handled = true;
         }
+    }
+
+    // Applies a size to the active text box's selection if there is one, and
+    // always records it as the session default for new boxes / new typing (#2, #8).
+    private void ApplyFontSize(float size)
+    {
+        Surface.PendingFontSize = size;
+        var box = Surface.ActiveTextBox;
+        if (box != null)
+        {
+            try { box.Document.Selection.CharacterFormat.Size = size; } catch { }
+            box.Focus(FocusState.Programmatic);
+        }
+    }
+
+    // Reflect the focused box's actual size in the combo so a later change is
+    // intentional and never carries a stale value onto another box (#14).
+    private void SyncSizeComboFromSelection(RichEditBox? box)
+    {
+        if (box == null) return;
+        try
+        {
+            float sz = box.Document.Selection.CharacterFormat.Size;
+            if (sz > 0)
+            {
+                _syncingSize = true;
+                SizeCombo.Text = sz % 1 == 0 ? ((int)sz).ToString() : sz.ToString("0.#");
+            }
+        }
+        catch { }
+        finally { _syncingSize = false; }
     }
 
     private void Symbol_Click(object sender, ItemClickEventArgs e)
@@ -1486,39 +2249,71 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     // Text styles (brand typography)
     // =======================================================================
-    private static readonly string[] StyleNames =
-        { "Normal", "Heading 1", "Heading 2", "Heading 3", "Heading 4", "Heading 5", "Heading 6", "Page Title", "Citation", "Quote", "Code" };
+    private record StyleDef(string Font, float Size, int Weight, bool Italic, Color? Color);
+
+    // Shared definitions used both to render the dropdown (each name shown in its
+    // own style, #26) and to apply the style to selected text.
+    private static readonly (string Name, StyleDef Def)[] StyleDefs =
+    {
+        ("Normal",     new StyleDef("Lora", 12, 400, false, null)),
+        ("Heading 1",  new StyleDef("Poppins", 22, 700, false, null)),
+        ("Heading 2",  new StyleDef("Poppins", 18, 700, false, null)),
+        ("Heading 3",  new StyleDef("Poppins", 16, 600, false, null)),
+        ("Heading 4",  new StyleDef("Poppins", 14, 600, true, null)),
+        ("Heading 5",  new StyleDef("Poppins", 13, 600, false, null)),
+        ("Heading 6",  new StyleDef("Poppins", 12, 600, false, Color.FromArgb(255, 138, 136, 127))),
+        ("Page Title", new StyleDef("Poppins", 28, 700, false, null)),
+        ("Citation",   new StyleDef("Lora", 10.5f, 400, true, Color.FromArgb(255, 138, 136, 127))),
+        ("Quote",      new StyleDef("Lora", 13, 400, true, Color.FromArgb(255, 106, 104, 98))),
+        ("Code",       new StyleDef("Consolas", 11.5f, 400, false, null)),
+    };
+
+    private void BuildStyleItems()
+    {
+        StyleCombo.Items.Clear();
+        foreach (var (name, d) in StyleDefs)
+        {
+            float display = Math.Clamp(d.Size, 11f, 19f); // keep the list compact
+            var tb = new TextBlock
+            {
+                Text = name,
+                FontFamily = new FontFamily(d.Font),
+                FontSize = display,
+                FontWeight = new Windows.UI.Text.FontWeight { Weight = (ushort)d.Weight },
+                FontStyle = d.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal
+            };
+            if (d.Color is Color c) tb.Foreground = new SolidColorBrush(c);
+            StyleCombo.Items.Add(new ComboBoxItem { Content = tb, Tag = name, MinHeight = 0 });
+        }
+    }
+
+    private void BuildFontItems()
+    {
+        FontCombo.Items.Clear();
+        foreach (var f in Fonts)
+        {
+            FontCombo.Items.Add(new ComboBoxItem
+            {
+                Content = new TextBlock { Text = f, FontFamily = new FontFamily(f) },
+                Tag = f,
+                MinHeight = 0
+            });
+        }
+    }
 
     private void StyleCombo_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (StyleCombo.SelectedItem is not string style) return;
+        if (StyleCombo.SelectedItem is not ComboBoxItem item || item.Tag is not string style) return;
+        var def = StyleDefs.FirstOrDefault(x => x.Name == style).Def;
+        if (def == null) return;
         var s = Surface.ActiveTextBox?.Document.Selection;
         if (s == null) return;
         var cf = s.CharacterFormat;
-
-        void Set(string font, float size, int weight, bool italic, Color? color = null)
-        {
-            cf.Name = font;
-            cf.Size = size;
-            cf.Weight = weight;
-            cf.Italic = italic ? FormatEffect.On : FormatEffect.Off;
-            if (color != null) cf.ForegroundColor = color.Value;
-        }
-
-        switch (style)
-        {
-            case "Page Title": Set("Poppins", 28, 700, false); break;
-            case "Heading 1": Set("Poppins", 22, 700, false); break;
-            case "Heading 2": Set("Poppins", 18, 700, false); break;
-            case "Heading 3": Set("Poppins", 16, 600, false); break;
-            case "Heading 4": Set("Poppins", 14, 600, true); break;
-            case "Heading 5": Set("Poppins", 13, 600, false); break;
-            case "Heading 6": Set("Poppins", 12, 600, false, Color.FromArgb(255, 138, 136, 127)); break;
-            case "Citation": Set("Lora", 10.5f, 400, true, Color.FromArgb(255, 138, 136, 127)); break;
-            case "Quote": Set("Lora", 13, 400, true, Color.FromArgb(255, 106, 104, 98)); break;
-            case "Code": Set("Consolas", 11.5f, 400, false); break;
-            default: Set("Lora", 12, 400, false); break;
-        }
+        cf.Name = def.Font;
+        cf.Size = def.Size;
+        cf.Weight = def.Weight;
+        cf.Italic = def.Italic ? FormatEffect.On : FormatEffect.Off;
+        if (def.Color is Color c) cf.ForegroundColor = c;
         Surface.ActiveTextBox?.Focus(FocusState.Programmatic);
     }
 
@@ -2277,7 +3072,7 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     // Export
     // =======================================================================
-    private async Task<(byte[] Pixels, int Width, int Height)?> CapturePageAsync()
+    private async Task<(byte[] Pixels, int Width, int Height)?> CaptureViewportAsync()
     {
         try
         {
@@ -2290,6 +3085,25 @@ public sealed partial class MainWindow : Window
         {
             ShowStatus("Could not capture the page. Try again.");
             return null;
+        }
+    }
+
+    // Export the WHOLE page (#13): fit all content into the viewport, render, then
+    // restore the user's original view.
+    private async Task<(byte[] Pixels, int Width, int Height)?> CapturePageAsync()
+    {
+        var saved = Surface.GetView();
+        try
+        {
+            // drop text focus so a focused box's grip/handles aren't captured
+            if (Surface.ActiveTextBox != null) ExportBtn.Focus(FocusState.Programmatic);
+            Surface.FitToContent(28);
+            await Task.Delay(110); // let the Win2D canvas + text layer re-render
+            return await CaptureViewportAsync();
+        }
+        finally
+        {
+            Surface.SetView(saved.Offset, saved.Zoom);
         }
     }
 

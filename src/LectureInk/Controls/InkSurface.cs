@@ -36,6 +36,7 @@ public sealed class InkSurface : UserControl
     public Vector2 ViewOffset { get; private set; } = Vector2.Zero;
     public float ViewZoom { get; private set; } = 1f;
     public event Action? ViewChanged;
+    public event Action<double>? RulerAngleChanged; // raised when 2-finger tilt changes the ruler
 
     // ---- tool state -------------------------------------------------------
     public ToolType Tool { get; private set; } = ToolType.Pen;
@@ -43,8 +44,15 @@ public sealed class InkSurface : UserControl
     public Color PenColor { get; set; } = Color.FromArgb(255, 20, 20, 19);
     public float PenSize { get; set; } = 3.5f;
     public float PenSensitivity { get; set; } = 1f;
+    // Default font + point size applied to newly created text boxes and to the
+    // first characters typed into them, so a size/font chosen with no box selected
+    // is honoured instead of falling back to the RichEdit default (#2, #8).
+    public float PendingFontSize { get; set; } = 16f;
+    public string PendingFontFamily { get; set; } = "Lora";
     public EraserMode EraserMode { get; set; } = EraserMode.Object;
     public bool RulerMode { get; set; }
+    // On-screen ruler angle in degrees (any value, not just 15° steps) (#21).
+    public double RulerAngle { get; set; }
     public bool HandDrawMode { get; set; }
     public MouseMode MouseMode { get; set; } = MouseMode.Auto;
 
@@ -72,7 +80,8 @@ public sealed class InkSurface : UserControl
 
     // Internal copy/paste clipboard for canvas objects (shared across pages).
     private static List<PenStroke>? _clipStrokes;
-    private static ShapeElement? _clipShape;
+    private static List<ShapeElement>? _clipShapes;
+    private static List<TextElement>? _clipTexts;
 
     // ---- gesture state ----------------------------------------------------
     private uint? _activePointer;
@@ -94,6 +103,11 @@ public sealed class InkSurface : UserControl
     private List<Vector2>? _lasso;
     private readonly List<PenStroke> _selected = new();
     private readonly HashSet<PenStroke> _selectedSet = new();
+    // Lasso/rubber-band can also select shapes and text boxes (#19).
+    private readonly List<ShapeElement> _selShapes = new();
+    private readonly HashSet<ShapeElement> _selShapeSet = new();
+    private readonly List<TextElement> _selTexts = new();
+    private readonly Dictionary<TextElement, (double L, double T)> _textMoveOrig = new();
     private Rect _selBounds = Rect.Empty;
     private bool _movingSel;
     private Vector2 _moveStart;
@@ -124,6 +138,9 @@ public sealed class InkSurface : UserControl
     private Vector2 _stablePos;
     private long _lastMoveMs;
     private bool _movingShape, _resizingShape;
+    private bool _rotatingShape;
+    private double _rotateStartPointerDeg, _rotateStartShapeDeg;
+    private Vector2 _rotateCenter;
     private double _resizeAspect;
     private Vector2 _shapeStart, _resizeAnchor;
     private (double X, double Y, double W, double H) _shapeOrig;
@@ -161,6 +178,13 @@ public sealed class InkSurface : UserControl
         StartCap = CanvasCapStyle.Round,
         EndCap = CanvasCapStyle.Round
     };
+    // Flat caps for the highlighter so it doesn't leave rounded blobs at the ends.
+    private readonly CanvasStrokeStyle _flatStyle = new()
+    {
+        StartCap = CanvasCapStyle.Flat,
+        EndCap = CanvasCapStyle.Flat,
+        LineJoin = CanvasLineJoin.Round
+    };
 
     private readonly Dictionary<Guid, (Grid Container, RichEditBox Box)> _textUi = new();
 
@@ -196,7 +220,7 @@ public sealed class InkSurface : UserControl
         // so nothing can steal the pen mid-stroke).
         _canvas.ManipulationMode =
             ManipulationModes.TranslateX | ManipulationModes.TranslateY |
-            ManipulationModes.Scale |
+            ManipulationModes.Scale | ManipulationModes.Rotate |
             ManipulationModes.TranslateInertia | ManipulationModes.ScaleInertia;
         _canvas.ManipulationStarted += OnManipStarted;
         _canvas.ManipulationDelta += OnManipDelta;
@@ -239,6 +263,69 @@ public sealed class InkSurface : UserControl
         OnViewChanged();
     }
 
+    public (Vector2 Offset, float Zoom) GetView() => (ViewOffset, ViewZoom);
+
+    public void SetView(Vector2 offset, float zoom)
+    {
+        ViewZoom = Math.Clamp(zoom, 0.05f, 8f);
+        ViewOffset = offset;
+        OnViewChanged();
+    }
+
+    /// <summary>World-space bounding rectangle of everything on the page (strokes,
+    /// shapes, text boxes and the title header). Used by whole-page export.</summary>
+    public Rect? ContentBoundsWorld()
+    {
+        if (_page == null) return null;
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        void Inc(double x, double y)
+        {
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+        }
+
+        foreach (var s in _page.Strokes)
+        {
+            if (s.Points.Count == 0) continue;
+            s.GetBounds(out float a, out float b, out float c, out float d);
+            Inc(a, b); Inc(c, d);
+        }
+        foreach (var sh in _page.Shapes)
+        {
+            var r = ShapeBounds(sh);
+            Inc(r.Left, r.Top); Inc(r.Right, r.Bottom);
+        }
+        foreach (var (_, ui) in _textUi)
+        {
+            double l = Canvas.GetLeft(ui.Container), t = Canvas.GetTop(ui.Container);
+            double w = ui.Container.ActualWidth > 0 ? ui.Container.ActualWidth : ui.Box.Width;
+            double h = ui.Container.ActualHeight > 0 ? ui.Container.ActualHeight : 48;
+            Inc(l, t); Inc(l + w, t + h);
+        }
+        // always include the title/date header at the top-left
+        Inc(40, 14); Inc(470, 96);
+        if (minX == double.MaxValue) { Inc(0, 0); Inc(_page.Width, _page.Height); }
+        return new Rect(minX, minY, Math.Max(1, maxX - minX), Math.Max(1, maxY - minY));
+    }
+
+    /// <summary>Pans/zooms so the whole page content fits the viewport (for export).</summary>
+    public void FitToContent(double marginPx)
+    {
+        var b = ContentBoundsWorld();
+        if (b == null) return;
+        var r = b.Value;
+        double vw = ActualWidth, vh = ActualHeight;
+        if (vw < 10 || vh < 10) return;
+        double zx = (vw - 2 * marginPx) / r.Width;
+        double zy = (vh - 2 * marginPx) / r.Height;
+        float zoom = (float)Math.Clamp(Math.Min(zx, zy), 0.05, 4.0);
+        float offX = (float)(marginPx - r.X * zoom);
+        float offY = (float)(marginPx - r.Y * zoom);
+        SetView(new Vector2(offX, offY), zoom);
+    }
+
     private void PanBy(Vector2 screenDelta)
     {
         ViewOffset += screenDelta;
@@ -274,6 +361,13 @@ public sealed class InkSurface : UserControl
     private void OnManipDelta(object sender, ManipulationDeltaRoutedEventArgs e)
     {
         if (!_touchPanActive || _gestureTool != null) return;
+        // While the ruler is shown, a two-finger twist tilts it to any angle (#21).
+        if (RulerMode && Math.Abs(e.Delta.Rotation) > 0.01)
+        {
+            RulerAngle += e.Delta.Rotation;
+            RulerAngleChanged?.Invoke(RulerAngle);
+            _canvas.Invalidate();
+        }
         if (Math.Abs(e.Delta.Scale - 1f) > 0.001f)
         {
             var pivot = new Vector2((float)e.Position.X, (float)e.Position.Y);
@@ -415,6 +509,7 @@ public sealed class InkSurface : UserControl
         FlushTexts();
         UndoManager.Undo(_page);
         ClearSelection();
+        _activeShape = null; // don't leave a removed shape's selection box behind
         RebuildTextLayer();
         _canvas.Invalidate();
         ContentChanged?.Invoke();
@@ -426,6 +521,7 @@ public sealed class InkSurface : UserControl
         FlushTexts();
         UndoManager.Redo(_page);
         ClearSelection();
+        _activeShape = null;
         RebuildTextLayer();
         _canvas.Invalidate();
         ContentChanged?.Invoke();
@@ -438,17 +534,23 @@ public sealed class InkSurface : UserControl
     {
         _selected.Clear();
         _selectedSet.Clear();
+        _selShapes.Clear();
+        _selShapeSet.Clear();
+        _selTexts.Clear();
+        _textMoveOrig.Clear();
         _selBounds = Rect.Empty;
         _movingSel = false;
         _moveDx = _moveDy = 0;
         _canvas.Invalidate();
     }
 
-    public bool HasSelection => _selected.Count > 0;
+    private bool HasMultiSelection => _selected.Count > 0 || _selShapes.Count > 0 || _selTexts.Count > 0;
 
-    /// <summary>True when Delete should remove something: a stroke selection or
+    public bool HasSelection => HasMultiSelection;
+
+    /// <summary>True when Delete should remove something: a multi-selection or
     /// the active shape/image.</summary>
-    public bool HasDeletable => _selected.Count > 0 || _activeShape != null;
+    public bool HasDeletable => HasMultiSelection || _activeShape != null;
 
     public void DeleteSelection()
     {
@@ -462,10 +564,14 @@ public sealed class InkSurface : UserControl
             ContentChanged?.Invoke();
             return;
         }
-        if (_selected.Count == 0) return;
-        var pairs = _selected.Select(s => (_page.Strokes.IndexOf(s), s)).ToList();
-        UndoManager.Push(new RemoveStrokesAction(pairs, "Delete selection"), _page);
+        if (!HasMultiSelection) return;
+        FlushTexts();
+        var strokes = _selected.ToList();
+        var shapes = _selShapes.ToList();
+        var texts = _selTexts.ToList();
+        UndoManager.Push(new RemoveMixedAction(strokes, shapes, texts), _page);
         ClearSelection();
+        RebuildTextLayer();
         ContentChanged?.Invoke();
     }
 
@@ -583,8 +689,7 @@ public sealed class InkSurface : UserControl
                 {
                     float tol = 10f / ViewZoom;
                     var handle = HitHandle(_activeShape, pos, tol);
-                    bool onBody = ShapeBounds(_activeShape).Contains(new Point(pos.X, pos.Y)) ||
-                                  DistToShapeOutline(_activeShape, pos) < tol;
+                    bool onBody = OnShapeBody(_activeShape, pos, tol);
                     if (handle != null || onBody)
                     {
                         _activePointer = e.Pointer.PointerId;
@@ -639,8 +744,7 @@ public sealed class InkSurface : UserControl
                 {
                     float tolP = 10f / ViewZoom;
                     var handleP = HitHandle(_activeShape, pos, tolP);
-                    bool onBody = ShapeBounds(_activeShape).Contains(new Point(pos.X, pos.Y)) ||
-                                  DistToShapeOutline(_activeShape, pos) < tolP;
+                    bool onBody = OnShapeBody(_activeShape, pos, tolP);
                     if (handleP != null || onBody)
                     {
                         _gestureTool = ToolType.Select; // reuse the move/resize machinery
@@ -774,6 +878,11 @@ public sealed class InkSurface : UserControl
         if (_page == null) return false;
         if (_activeShape != null)
         {
+            if (HitRotateHandle(_activeShape, pos, tol))
+            {
+                BeginRotate(_activeShape, pos);
+                return true;
+            }
             var handle = HitHandle(_activeShape, pos, tol);
             if (handle != null)
             {
@@ -786,8 +895,7 @@ public sealed class InkSurface : UserControl
                     : 0;
                 return true;
             }
-            if (ShapeBounds(_activeShape).Contains(new Point(pos.X, pos.Y)) ||
-                DistToShapeOutline(_activeShape, pos) < tol)
+            if (OnShapeBody(_activeShape, pos, tol))
             {
                 _movingShape = true;
                 _shapeStart = pos;
@@ -805,14 +913,23 @@ public sealed class InkSurface : UserControl
             _shapeOrig = Snapshot(hitShape);
             return true;
         }
-        if (_selected.Count > 0 && _selBounds.Contains(new Point(pos.X, pos.Y)))
+        if (HasMultiSelection && !_selBounds.IsEmpty && _selBounds.Contains(new Point(pos.X, pos.Y)))
         {
-            _movingSel = true;
-            _moveStart = pos;
-            _moveDx = _moveDy = 0;
+            BeginSelectionMove(pos);
             return true;
         }
         return false;
+    }
+
+    private void BeginSelectionMove(Vector2 pos)
+    {
+        _movingSel = true;
+        _moveStart = pos;
+        _moveDx = _moveDy = 0;
+        _textMoveOrig.Clear();
+        foreach (var t in _selTexts)
+            if (_textUi.TryGetValue(t.Id, out var ui))
+                _textMoveOrig[t] = (Canvas.GetLeft(ui.Container), Canvas.GetTop(ui.Container));
     }
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
@@ -895,9 +1012,17 @@ public sealed class InkSurface : UserControl
                     _rectCur = pos;
                     break;
                 }
-                if (_resizingShape && _activeShape != null)
+                if (_rotatingShape && _activeShape != null)
                 {
-                    ResizeShape(_activeShape, _resizeAnchor, pos, false, _resizeAspect);
+                    double cur = Math.Atan2(pos.Y - _rotateCenter.Y, pos.X - _rotateCenter.X) * 180.0 / Math.PI;
+                    double ang = _rotateStartShapeDeg + (cur - _rotateStartPointerDeg);
+                    double snap = Math.Round(ang / 15.0) * 15.0;     // gentle 15° snap
+                    if (Math.Abs(snap - ang) < 4) ang = snap;
+                    _activeShape.Rotation = ang;
+                }
+                else if (_resizingShape && _activeShape != null)
+                {
+                    ResizeShape(_activeShape, _resizeAnchor, ToShapeLocal(_activeShape, pos), false, _resizeAspect);
                 }
                 else if (_movingShape && _activeShape != null)
                 {
@@ -908,6 +1033,12 @@ public sealed class InkSurface : UserControl
                 {
                     _moveDx = pos.X - _moveStart.X;
                     _moveDy = pos.Y - _moveStart.Y;
+                    foreach (var kv in _textMoveOrig)
+                        if (_textUi.TryGetValue(kv.Key.Id, out var ui))
+                        {
+                            Canvas.SetLeft(ui.Container, kv.Value.L + _moveDx);
+                            Canvas.SetTop(ui.Container, kv.Value.T + _moveDy);
+                        }
                 }
                 else
                 {
@@ -1056,6 +1187,16 @@ public sealed class InkSurface : UserControl
                     }
                     break;
                 }
+                if (_rotatingShape && _activeShape != null)
+                {
+                    if (Math.Abs(_activeShape.Rotation - _rotateStartShapeDeg) > 0.1)
+                    {
+                        UndoManager.Push(new RotateShapeAction(_activeShape, _rotateStartShapeDeg, _activeShape.Rotation), _page, alreadyDone: true);
+                        changed = true;
+                    }
+                    _rotatingShape = false;
+                    break;
+                }
                 if ((_resizingShape || _movingShape) && _activeShape != null)
                 {
                     var now = Snapshot(_activeShape);
@@ -1072,11 +1213,20 @@ public sealed class InkSurface : UserControl
                 {
                     if (Math.Abs(_moveDx) > 0.5f || Math.Abs(_moveDy) > 0.5f)
                     {
-                        UndoManager.Push(new MoveStrokesAction(_selected.ToList(), _moveDx, _moveDy), _page);
-                        changed = true;
+                        var acts = new List<IPageAction>();
+                        if (_selected.Count > 0) acts.Add(new MoveStrokesAction(_selected.ToList(), _moveDx, _moveDy));
+                        if (_selShapes.Count > 0) acts.Add(new MoveShapesAction(_selShapes.ToList(), _moveDx, _moveDy));
+                        if (_selTexts.Count > 0) acts.Add(new MoveTextsAction(_selTexts.ToList(), _moveDx, _moveDy));
+                        if (acts.Count > 0)
+                        {
+                            UndoManager.Push(new CompositeAction(acts, "Move selection"), _page);
+                            changed = true;
+                        }
                     }
                     _movingSel = false;
                     _moveDx = _moveDy = 0;
+                    _textMoveOrig.Clear();
+                    if (_selTexts.Count > 0) RebuildTextLayer(); // resync moved text to model
                     RecomputeSelectionBounds();
                 }
                 else if (_lasso is { Count: > 2 })
@@ -1115,20 +1265,21 @@ public sealed class InkSurface : UserControl
         _shapeAdjust = false;
         _adjustShape = null;
         _movingShape = _resizingShape = false;
+        _rotatingShape = false;
         _rectSelect = false;
         _barrelGesture = false;
         _barrelMoved = false;
         _holdTimer.Stop();
     }
 
-    private static List<StrokePoint> BuildRulerPoints(Vector2 start, Vector2 end)
+    private List<StrokePoint> BuildRulerPoints(Vector2 start, Vector2 end)
     {
+        // Line locked to the ruler's exact angle (any degree), through the
+        // point where the pen went down.
+        double r = RulerAngle * Math.PI / 180.0;
+        var dir = new Vector2((float)Math.Cos(r), (float)Math.Sin(r));
         var d = end - start;
         if (d.Length() < 2) return new List<StrokePoint> { new(start.X, start.Y, 0.5f) };
-        double ang = Math.Atan2(d.Y, d.X);
-        double step = Math.PI / 12;
-        double snapped = Math.Round(ang / step) * step;
-        var dir = new Vector2((float)Math.Cos(snapped), (float)Math.Sin(snapped));
         float len = Vector2.Dot(d, dir);
         var pts = new List<StrokePoint>();
         int n = Math.Max(2, (int)(Math.Abs(len) / 4));
@@ -1138,6 +1289,58 @@ public sealed class InkSurface : UserControl
             pts.Add(new StrokePoint(p.X, p.Y, 0.5f));
         }
         return pts;
+    }
+
+    private void DrawRuler(CanvasDrawingSession ds, Color bg)
+    {
+        if (!RulerMode) return;
+        var center = ToWorld(new Vector2((float)ActualWidth / 2, (float)ActualHeight / 2));
+        double r = RulerAngle * Math.PI / 180.0;
+        var dir = new Vector2((float)Math.Cos(r), (float)Math.Sin(r));
+        var perp = new Vector2(-dir.Y, dir.X);
+        float half = (float)(Math.Max(ActualWidth, ActualHeight) / ViewZoom);
+        float width = 60f / ViewZoom;
+
+        var bodyColor = ColorUtil.IsDark(bg) ? Color.FromArgb(55, 255, 255, 255) : Color.FromArgb(46, 60, 80, 120);
+        var edgeColor = Color.FromArgb(210, 217, 119, 87);
+        var a1 = center - dir * half;
+        var a2 = center + dir * half;
+        var e1 = a1 + perp * width;
+        var e2 = a2 + perp * width;
+        using (var pb = new CanvasPathBuilder(_canvas))
+        {
+            pb.BeginFigure(a1);
+            pb.AddLine(a2);
+            pb.AddLine(e2);
+            pb.AddLine(e1);
+            pb.EndFigure(CanvasFigureLoop.Closed);
+            using var geo = CanvasGeometry.CreatePath(pb);
+            ds.FillGeometry(geo, bodyColor);
+        }
+        ds.DrawLine(a1, a2, edgeColor, 2.5f / ViewZoom); // the straightedge
+
+        var tickColor = ColorUtil.IsDark(bg) ? Color.FromArgb(150, 255, 255, 255) : Color.FromArgb(150, 40, 40, 40);
+        const float spacing = 40f;
+        int count = (int)(half / spacing);
+        for (int i = -count; i <= count; i++)
+        {
+            var p = center + dir * (i * spacing);
+            float tl = (i % 5 == 0) ? 14f : 8f;
+            ds.DrawLine(p, p + perp * (tl / ViewZoom), tickColor, 1f / ViewZoom);
+        }
+        // degree readout in a bubble at the centre of the ruler
+        string deg = $"{(((RulerAngle % 180) + 180) % 180):0}°";
+        float bw = 70f / ViewZoom, bh = 34f / ViewZoom;
+        var br = new Rect(center.X - bw / 2, center.Y - bh / 2, bw, bh);
+        ds.FillRoundedRectangle(br, 9f / ViewZoom, 9f / ViewZoom, Color.FromArgb(235, 28, 28, 32));
+        ds.DrawRoundedRectangle(br, 9f / ViewZoom, 9f / ViewZoom, edgeColor, 1.5f / ViewZoom);
+        using var bf = new CanvasTextFormat
+        {
+            FontSize = 16f / ViewZoom,
+            HorizontalAlignment = CanvasHorizontalAlignment.Center,
+            VerticalAlignment = CanvasVerticalAlignment.Center
+        };
+        ds.DrawText(deg, br, Colors.White, bf);
     }
 
     /// <summary>
@@ -1249,6 +1452,9 @@ public sealed class InkSurface : UserControl
         if (_page == null) return;
         _selected.Clear();
         _selectedSet.Clear();
+        _selShapes.Clear();
+        _selShapeSet.Clear();
+        _selTexts.Clear();
         foreach (var s in _page.Strokes)
         {
             if (s.Points.Count == 0) continue;
@@ -1259,33 +1465,65 @@ public sealed class InkSurface : UserControl
                 _selectedSet.Add(s);
             }
         }
+        foreach (var sh in _page.Shapes)
+        {
+            var r = ShapeBounds(sh);
+            var c = new Vector2((float)(r.X + r.Width / 2), (float)(r.Y + r.Height / 2));
+            if (GeometryUtil.PointInPolygon(c, poly)) { _selShapes.Add(sh); _selShapeSet.Add(sh); }
+        }
+        foreach (var t in _page.Texts)
+        {
+            double w = 180, h = 40;
+            if (_textUi.TryGetValue(t.Id, out var ui))
+            {
+                if (ui.Container.ActualWidth > 0) w = ui.Container.ActualWidth;
+                if (ui.Container.ActualHeight > 0) h = ui.Container.ActualHeight;
+            }
+            var c = new Vector2((float)(t.X + w / 2), (float)(t.Y + h / 2));
+            if (GeometryUtil.PointInPolygon(c, poly)) _selTexts.Add(t);
+        }
+        _activeShape = null; // a multi-selection supersedes the single active shape
         RecomputeSelectionBounds();
     }
 
     private void RecomputeSelectionBounds()
     {
-        if (_selected.Count == 0)
+        if (!HasMultiSelection) { _selBounds = Rect.Empty; return; }
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        void Inc(double x, double y)
         {
-            _selBounds = Rect.Empty;
-            return;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
         }
-        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
         foreach (var s in _selected)
-            foreach (var p in s.Points)
+            foreach (var p in s.Points) Inc(p.X, p.Y);
+        foreach (var sh in _selShapes)
+        {
+            var r = ShapeBounds(sh);
+            Inc(r.Left, r.Top); Inc(r.Right, r.Bottom);
+        }
+        foreach (var t in _selTexts)
+        {
+            double w = 180, h = 40;
+            if (_textUi.TryGetValue(t.Id, out var ui))
             {
-                if (p.X < minX) minX = p.X;
-                if (p.Y < minY) minY = p.Y;
-                if (p.X > maxX) maxX = p.X;
-                if (p.Y > maxY) maxY = p.Y;
+                if (ui.Container.ActualWidth > 0) w = ui.Container.ActualWidth;
+                if (ui.Container.ActualHeight > 0) h = ui.Container.ActualHeight;
             }
-        _selBounds = new Rect(minX - 8, minY - 8, maxX - minX + 16, maxY - minY + 16);
+            Inc(t.X, t.Y); Inc(t.X + w, t.Y + h);
+        }
+        if (minX == double.MaxValue) { _selBounds = Rect.Empty; return; }
+        _selBounds = new Rect(minX - 8, minY - 8, (maxX - minX) + 16, (maxY - minY) + 16);
     }
 
     // =======================================================================
     // Copy / paste (canvas objects)
     // =======================================================================
-    public bool HasCanvasSelection => _selected.Count > 0 || _activeShape != null;
-    public static bool HasCanvasClipboard => _clipStrokes is { Count: > 0 } || _clipShape != null;
+    public bool HasCanvasSelection => HasMultiSelection || _activeShape != null;
+    public static bool HasCanvasClipboard =>
+        _clipStrokes is { Count: > 0 } || _clipShapes is { Count: > 0 } || _clipTexts is { Count: > 0 };
 
     private static PenStroke CloneStroke(PenStroke s) =>
         s.CloneWithPoints(s.Points.Select(p => new StrokePoint(p.X, p.Y, p.Pressure)).ToList());
@@ -1293,21 +1531,29 @@ public sealed class InkSurface : UserControl
     private static ShapeElement CloneShape(ShapeElement s) => new()
     {
         Kind = s.Kind, X = s.X, Y = s.Y, W = s.W, H = s.H,
-        Color = s.Color, Size = s.Size, ImagePath = s.ImagePath
+        Color = s.Color, Size = s.Size, ImagePath = s.ImagePath, Rotation = s.Rotation
     };
 
-    /// <summary>Copies the current stroke selection or active shape/image.</summary>
+    private static TextElement CloneText(TextElement t) => new()
+    {
+        X = t.X, Y = t.Y, Width = t.Width, Rtf = t.Rtf, Rotation = t.Rotation
+    };
+
+    /// <summary>Copies the current multi-selection (strokes, shapes, text) or active shape.</summary>
     public void CopySelection()
     {
-        if (_selected.Count > 0)
+        FlushTexts();
+        if (HasMultiSelection)
         {
             _clipStrokes = _selected.Select(CloneStroke).ToList();
-            _clipShape = null;
+            _clipShapes = _selShapes.Select(CloneShape).ToList();
+            _clipTexts = _selTexts.Select(CloneText).ToList();
         }
         else if (_activeShape != null)
         {
-            _clipShape = CloneShape(_activeShape);
+            _clipShapes = new List<ShapeElement> { CloneShape(_activeShape) };
             _clipStrokes = null;
+            _clipTexts = null;
         }
     }
 
@@ -1315,34 +1561,40 @@ public sealed class InkSurface : UserControl
     public void PasteCanvasAt(Vector2 world)
     {
         if (_page == null) return;
-        if (_clipStrokes is { Count: > 0 })
-        {
-            float minX = float.MaxValue, minY = float.MaxValue;
+        bool any = _clipStrokes is { Count: > 0 } || _clipShapes is { Count: > 0 } || _clipTexts is { Count: > 0 };
+        if (!any) return;
+
+        double minX = double.MaxValue, minY = double.MaxValue;
+        if (_clipStrokes != null)
             foreach (var s in _clipStrokes)
                 foreach (var p in s.Points) { if (p.X < minX) minX = p.X; if (p.Y < minY) minY = p.Y; }
-            float dx = world.X - minX, dy = world.Y - minY;
-            var pasted = _clipStrokes.Select(s =>
-            {
-                var c = CloneStroke(s);
-                foreach (var p in c.Points) { p.X += dx; p.Y += dy; }
-                return c;
-            }).ToList();
-            UndoManager.Push(new AddStrokesAction(pasted), _page);
-            _selected.Clear(); _selectedSet.Clear();
-            _selected.AddRange(pasted);
-            foreach (var s in pasted) _selectedSet.Add(s);
-            _activeShape = null;
-            RecomputeSelectionBounds();
-        }
-        else if (_clipShape != null)
+        if (_clipShapes != null)
+            foreach (var s in _clipShapes) { minX = Math.Min(minX, Math.Min(s.X, s.X + s.W)); minY = Math.Min(minY, Math.Min(s.Y, s.Y + s.H)); }
+        if (_clipTexts != null)
+            foreach (var t in _clipTexts) { minX = Math.Min(minX, t.X); minY = Math.Min(minY, t.Y); }
+        if (minX == double.MaxValue) { minX = world.X; minY = world.Y; }
+        double dx = world.X - minX, dy = world.Y - minY;
+
+        var ns = (_clipStrokes ?? new()).Select(s =>
         {
-            var s = CloneShape(_clipShape);
-            s.X = world.X; s.Y = world.Y;
-            UndoManager.Push(new AddShapeAction(s), _page);
-            ClearSelection();
-            _activeShape = s;
-        }
-        else return;
+            var c = CloneStroke(s);
+            foreach (var p in c.Points) { p.X += (float)dx; p.Y += (float)dy; }
+            return c;
+        }).ToList();
+        var nsh = (_clipShapes ?? new()).Select(s => { var c = CloneShape(s); c.X += dx; c.Y += dy; return c; }).ToList();
+        var nt = (_clipTexts ?? new()).Select(t => { var c = CloneText(t); c.X += dx; c.Y += dy; return c; }).ToList();
+
+        UndoManager.Push(new AddMixedAction(ns, nsh, nt), _page);
+
+        _selected.Clear(); _selectedSet.Clear();
+        _selShapes.Clear(); _selShapeSet.Clear();
+        _selTexts.Clear();
+        foreach (var s in ns) { _selected.Add(s); _selectedSet.Add(s); }
+        foreach (var s in nsh) { _selShapes.Add(s); _selShapeSet.Add(s); }
+        foreach (var t in nt) _selTexts.Add(t);
+        _activeShape = null;
+        RebuildTextLayer();
+        RecomputeSelectionBounds();
         _canvas.Invalidate();
         ContentChanged?.Invoke();
     }
@@ -1394,8 +1646,29 @@ public sealed class InkSurface : UserControl
         DrawGrid(ds, bg);
         DrawPageTitle(ds, bg);
 
+        // Visible world rectangle — anything fully outside it is skipped so pages
+        // with thousands of strokes stay smooth (only on-screen content is drawn).
+        var vTL = ToWorld(new Vector2(0, 0));
+        var vBR = ToWorld(new Vector2((float)ActualWidth, (float)ActualHeight));
+        float visMinX = vTL.X, visMinY = vTL.Y, visMaxX = vBR.X, visMaxY = vBR.Y;
+
         foreach (var sh in _page.Shapes)
-            DrawShape(ds, sh);
+        {
+            var sb = ShapeBounds(sh);
+            if (sb.Right < visMinX - 8 || sb.Left > visMaxX + 8 ||
+                sb.Bottom < visMinY - 8 || sb.Top > visMaxY + 8) continue;
+            if (_movingSel && _selShapeSet.Contains(sh))
+            {
+                var prev = ds.Transform;
+                ds.Transform = Matrix3x2.CreateTranslation(_moveDx, _moveDy) * prev;
+                DrawShape(ds, sh);
+                ds.Transform = prev;
+            }
+            else
+            {
+                DrawShape(ds, sh);
+            }
+        }
 
         int idx = 0;
         foreach (var s in _page.Strokes)
@@ -1412,7 +1685,13 @@ public sealed class InkSurface : UserControl
             }
             else
             {
-                DrawStroke(ds, sender, s, off, null);
+                s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
+                float pad = s.Size * 2.5f + 6f;
+                if (bx1 + off.X >= visMinX - pad && bx0 + off.X <= visMaxX + pad &&
+                    by1 + off.Y >= visMinY - pad && by0 + off.Y <= visMaxY + pad)
+                {
+                    DrawStroke(ds, sender, s, off, null);
+                }
             }
             idx++;
         }
@@ -1460,12 +1739,14 @@ public sealed class InkSurface : UserControl
             ds.DrawRectangle(r, accent, uiScale, _dashStyle);
         }
 
-        if (_selected.Count > 0 && !_selBounds.IsEmpty)
+        if (HasMultiSelection && !_selBounds.IsEmpty)
         {
             var r = new Rect(_selBounds.X + _moveDx, _selBounds.Y + _moveDy, _selBounds.Width, _selBounds.Height);
             ds.FillRectangle(r, Color.FromArgb(26, 217, 119, 87));
             ds.DrawRectangle(r, accent, uiScale, _dashStyle);
         }
+
+        if (!_replaying) DrawRuler(ds, bg);
 
         // Eraser cursor: shown for the Eraser tool, while a pen hovers with its
         // eraser button held, and during an active erase gesture.
@@ -1567,18 +1848,90 @@ public sealed class InkSurface : UserControl
                 ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, hw / 2, color);
                 return;
             }
-            using var pb = new CanvasPathBuilder(rc);
-            pb.BeginFigure(new Vector2(pts[0].X, pts[0].Y) + offset);
-            for (int i = 1; i < n; i++)
-                pb.AddLine(new Vector2(pts[i].X, pts[i].Y) + offset);
-            pb.EndFigure(CanvasFigureLoop.Open);
-            using var geo = CanvasGeometry.CreatePath(pb);
-            ds.DrawGeometry(geo, color, hw, _roundStyle);
+            // single continuous geometry with FLAT caps -> no rounded end blobs
+            DrawPolyline(ds, rc, pts, n, offset, color, hw, _flatStyle);
             return;
         }
 
-        if (s.Pen == PenType.Pencil) color.A = 150;
-        else if (s.Pen == PenType.Marker) color.A = 235;
+        if (s.Pen == PenType.Pencil)
+        {
+            // Graphite: one continuous soft core (no beaded round-cap dots) plus
+            // two faint offset passes for grain. Width follows average pressure.
+            float prAvg = 0;
+            for (int i = 0; i < n; i++) prAvg += pts[i].Pressure;
+            prAvg = n > 0 ? prAvg / n : 0.5f;
+            if (prAvg <= 0.01f) prAvg = 0.5f;
+            float sens = s.Sens <= 0.01f ? 1f : s.Sens;
+            float pw = Math.Max(0.6f, s.Size * (0.45f + 0.7f * sens * prAvg));
+            if (n == 1)
+            {
+                var c1 = color; c1.A = 150;
+                ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, Math.Max(0.6f, pw / 2), c1);
+                return;
+            }
+            var core = color; core.A = 145;
+            DrawPolyline(ds, rc, pts, n, offset, core, pw, _roundStyle);
+            var grain = color; grain.A = 55;
+            DrawPolyline(ds, rc, pts, n, offset + new Vector2(0.5f, 0.45f), grain, pw * 0.5f, _roundStyle);
+            DrawPolyline(ds, rc, pts, n, offset + new Vector2(-0.45f, -0.4f), grain, pw * 0.45f, _roundStyle);
+            return;
+        }
+
+        if (s.Pen == PenType.Crayon)
+        {
+            // waxy, thick and grainy — heavier and more textured than the pencil
+            float prAvg = 0;
+            for (int i = 0; i < n; i++) prAvg += pts[i].Pressure;
+            prAvg = n > 0 ? prAvg / n : 0.5f;
+            if (prAvg <= 0.01f) prAvg = 0.5f;
+            float sens = s.Sens <= 0.01f ? 1f : s.Sens;
+            float cw = Math.Max(1.2f, s.Size * (0.9f + 0.7f * sens * prAvg));
+            if (n == 1)
+            {
+                var c1 = color; c1.A = 220;
+                ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, Math.Max(1f, cw / 2), c1);
+                return;
+            }
+            var coreC = color; coreC.A = 210;
+            DrawPolyline(ds, rc, pts, n, offset, coreC, cw, _roundStyle);
+            var gr = color; gr.A = 70;
+            DrawPolyline(ds, rc, pts, n, offset + new Vector2(0.8f, 0.7f), gr, cw * 0.55f, _roundStyle);
+            DrawPolyline(ds, rc, pts, n, offset + new Vector2(-0.7f, -0.6f), gr, cw * 0.5f, _roundStyle);
+            DrawPolyline(ds, rc, pts, n, offset + new Vector2(0.2f, -0.8f), gr, cw * 0.4f, _roundStyle);
+            return;
+        }
+
+        if (s.Pen == PenType.Watercolor)
+        {
+            // soft translucent wash that builds up where strokes overlap
+            var wc = color; wc.A = 70;
+            float ww = Math.Max(1.5f, s.Size * 2.2f);
+            if (n == 1)
+            {
+                ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, ww / 2, wc);
+                return;
+            }
+            var wc2 = color; wc2.A = 42;
+            DrawPolyline(ds, rc, pts, n, offset, wc2, ww * 1.5f, _roundStyle);
+            DrawPolyline(ds, rc, pts, n, offset, wc, ww, _roundStyle);
+            return;
+        }
+
+        if (s.Pen == PenType.Monoline)
+        {
+            // perfectly even technical line, independent of pressure
+            float mw = Math.Max(0.6f, s.Size);
+            if (n == 1)
+            {
+                ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, mw / 2, color);
+                return;
+            }
+            DrawPolyline(ds, rc, pts, n, offset, color, mw, _roundStyle);
+            return;
+        }
+
+        if (s.Pen == PenType.Marker) color.A = 235;
+        else if (s.Pen == PenType.Ballpoint) color.A = 240;
 
         if (n == 1)
         {
@@ -1597,6 +1950,21 @@ public sealed class InkSurface : UserControl
                 new Vector2(b.X, b.Y) + offset,
                 color, w, _roundStyle);
         }
+    }
+
+    // Strokes a single continuous polyline through the points (used for pens that
+    // should read as one smooth line rather than a chain of round-capped dots).
+    private static void DrawPolyline(CanvasDrawingSession ds, ICanvasResourceCreator rc,
+        List<StrokePoint> pts, int n, Vector2 offset, Color color, float width, CanvasStrokeStyle style)
+    {
+        if (n < 2) return;
+        using var pb = new CanvasPathBuilder(rc);
+        pb.BeginFigure(new Vector2(pts[0].X, pts[0].Y) + offset);
+        for (int i = 1; i < n; i++)
+            pb.AddLine(new Vector2(pts[i].X, pts[i].Y) + offset);
+        pb.EndFigure(CanvasFigureLoop.Open);
+        using var geo = CanvasGeometry.CreatePath(pb);
+        ds.DrawGeometry(geo, color, width, style);
     }
 
     private static float SegmentWidth(PenStroke s, StrokePoint a, StrokePoint b, int index)
@@ -1633,12 +2001,23 @@ public sealed class InkSurface : UserControl
                 return Math.Max(0.4f, s.Size * (0.12f + 3.2f * sens * pr * pr));
             case PenType.Fountain:
             {
-                // nib angle shapes the line; pressure opens the tines wide
+                // Broad-edge nib held ~40°: strong thick (down/perpendicular) vs
+                // thin (across the nib) contrast, with a gentle, wet pressure
+                // response — reads like real fountain-pen calligraphy.
                 double ang = Math.Atan2(b.Y - a.Y, b.X - a.X);
-                float nib = (float)Math.Abs(Math.Sin(ang - 0.7));
-                float open = 0.18f + 2.6f * sens * MathF.Pow(pr, 1.4f);
-                return Math.Max(0.4f, s.Size * (0.35f + 0.85f * nib) * open);
+                float nib = (float)Math.Abs(Math.Sin(ang - 0.7));   // 0 thin .. 1 thick
+                float contrast = 0.22f + 1.15f * nib;
+                float press = 0.78f + 0.5f * sens * pr;             // gentle flow, not flex
+                return Math.Max(0.5f, s.Size * 0.62f * contrast * press);
             }
+            case PenType.Rollerball:
+                return Math.Max(0.4f, s.Size * (0.7f + 0.5f * sens * pr));
+            case PenType.Gel:
+                return Math.Max(0.6f, s.Size * (0.85f + 0.5f * sens * pr));
+            case PenType.Ballpoint:
+                return Math.Max(0.35f, s.Size * (0.55f + 0.6f * sens * pr));
+            case PenType.FeltTip:
+                return Math.Max(1f, s.Size * (0.95f + 0.35f * sens * pr));
             default:
                 return s.Size;
         }
@@ -1716,31 +2095,167 @@ public sealed class InkSurface : UserControl
         float cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
         float rx = w / 2, ry = h / 2;
 
-        double ellErr = 0, rectErr = 0;
+        // average radial error from a perfect ellipse (used as the smooth fallback)
+        double ellErr = 0;
         foreach (var p in pts)
         {
             float dx = (p.X - cx) / rx, dy = (p.Y - cy) / ry;
             ellErr += Math.Abs(Math.Sqrt(dx * dx + dy * dy) - 1);
-            float d = Math.Min(
-                Math.Min(Math.Abs(p.X - minX), Math.Abs(maxX - p.X)),
-                Math.Min(Math.Abs(p.Y - minY), Math.Abs(maxY - p.Y)));
-            rectErr += d;
         }
         ellErr /= pts.Count;
-        rectErr = rectErr / pts.Count / (0.5 * Math.Min(w, h));
 
-        bool nearEqual = Math.Abs(w - h) <= 0.16f * Math.Max(w, h);
-        if (rectErr < 0.16 && rectErr * 1.15 < ellErr)
+        // Corner-based classification: distil the stroke to its dominant vertices,
+        // then decide by corner count + geometry. This recognises triangles,
+        // right-triangles and diamonds, and stops squares becoming circles.
+        var poly = new List<Vector2>(pts.Count);
+        foreach (var p in pts) poly.Add(new Vector2(p.X, p.Y));
+        var corners = DominantCorners(poly, Math.Max(w, h));
+        int n = corners.Count;
+        bool nearEqual = Math.Abs(w - h) <= 0.18f * Math.Max(w, h);
+
+        void Eq() { if (nearEqual) { float m = Math.Max(w, h); cx = (minX + maxX) / 2; cy = (minY + maxY) / 2; w = h = m; } }
+
+        if (n == 3)
         {
-            if (nearEqual) { float m = Math.Max(w, h); w = h = m; }
+            var kind = HasRightAngle(corners) ? ShapeKind.RightTriangle : ShapeKind.Triangle;
+            return (MakeShape(kind, cx - w / 2, cy - h / 2, w, h), false);
+        }
+        if (n == 4)
+        {
+            if (IsDiamond(corners, minX, minY, maxX, maxY))
+            {
+                Eq();
+                return (MakeShape(ShapeKind.Diamond, cx - w / 2, cy - h / 2, w, h), nearEqual);
+            }
+            if (IsAxisRect(corners, minX, minY, maxX, maxY))
+            {
+                Eq();
+                return (MakeShape(ShapeKind.Rect, cx - w / 2, cy - h / 2, w, h), nearEqual);
+            }
+            // a quad that's neither axis-aligned nor a diamond: treat as ellipse if
+            // the outline is smooth, otherwise a rectangle.
+            if (ellErr < 0.16) { Eq(); return (MakeShape(ShapeKind.Ellipse, cx - w / 2, cy - h / 2, w, h), nearEqual); }
+            Eq();
             return (MakeShape(ShapeKind.Rect, cx - w / 2, cy - h / 2, w, h), nearEqual);
         }
-        if (ellErr < 0.20)
+        if (n == 5)
         {
-            if (nearEqual) { float m = Math.Max(w, h); w = h = m; }
+            Eq();
+            return (MakeShape(ShapeKind.Pentagon, cx - w / 2, cy - h / 2, w, h), nearEqual);
+        }
+        if (n == 6)
+        {
+            Eq();
+            return (MakeShape(ShapeKind.Hexagon, cx - w / 2, cy - h / 2, w, h), nearEqual);
+        }
+        // smooth, many small corners -> ellipse
+        if (ellErr < 0.22)
+        {
+            Eq();
             return (MakeShape(ShapeKind.Ellipse, cx - w / 2, cy - h / 2, w, h), nearEqual);
         }
         return null;
+    }
+
+    // ---- corner detection helpers (shape recognition) ----
+    private static List<Vector2> DominantCorners(List<Vector2> poly, float size)
+    {
+        if (poly.Count < 3) return new List<Vector2>(poly);
+        Vector2 c = Vector2.Zero;
+        foreach (var p in poly) c += p;
+        c /= poly.Count;
+        // rotate so the path starts at the point farthest from the centroid (a
+        // likely true corner) — RDP keeps its endpoints, so this avoids cutting a
+        // real corner at the seam.
+        int start = 0; float bd = -1;
+        for (int i = 0; i < poly.Count; i++)
+        {
+            float d = Vector2.Distance(poly[i], c);
+            if (d > bd) { bd = d; start = i; }
+        }
+        var rot = new List<Vector2>(poly.Count + 1);
+        for (int i = 0; i < poly.Count; i++) rot.Add(poly[(start + i) % poly.Count]);
+        rot.Add(rot[0]);
+
+        float eps = Math.Max(7f, size * 0.075f);
+        var simp = Rdp(rot, eps);
+        if (simp.Count > 1 && Vector2.Distance(simp[0], simp[^1]) < eps) simp.RemoveAt(simp.Count - 1);
+
+        float mergeDist = size * 0.16f;
+        var merged = new List<Vector2>();
+        foreach (var p in simp)
+            if (merged.Count == 0 || Vector2.Distance(merged[^1], p) > mergeDist) merged.Add(p);
+        if (merged.Count >= 2 && Vector2.Distance(merged[0], merged[^1]) < mergeDist)
+            merged.RemoveAt(merged.Count - 1);
+        return merged;
+    }
+
+    private static List<Vector2> Rdp(List<Vector2> pts, float eps)
+    {
+        if (pts.Count < 3) return new List<Vector2>(pts);
+        int idx = 0; float dmax = 0;
+        for (int i = 1; i < pts.Count - 1; i++)
+        {
+            float d = GeometryUtil.DistToSegment(pts[i], pts[0], pts[^1]);
+            if (d > dmax) { dmax = d; idx = i; }
+        }
+        if (dmax > eps)
+        {
+            var left = Rdp(pts.GetRange(0, idx + 1), eps);
+            var right = Rdp(pts.GetRange(idx, pts.Count - idx), eps);
+            left.RemoveAt(left.Count - 1);
+            left.AddRange(right);
+            return left;
+        }
+        return new List<Vector2> { pts[0], pts[^1] };
+    }
+
+    private static float AngleDeg(Vector2 a, Vector2 b, Vector2 c)
+    {
+        var u = a - b; var w = c - b;
+        if (u.LengthSquared() < 1e-3f || w.LengthSquared() < 1e-3f) return 180f;
+        float dot = Math.Clamp(Vector2.Dot(Vector2.Normalize(u), Vector2.Normalize(w)), -1f, 1f);
+        return MathF.Acos(dot) * 180f / MathF.PI;
+    }
+
+    private static bool HasRightAngle(List<Vector2> v)
+    {
+        int n = v.Count;
+        for (int i = 0; i < n; i++)
+        {
+            float ang = AngleDeg(v[(i - 1 + n) % n], v[i], v[(i + 1) % n]);
+            if (ang >= 74 && ang <= 106) return true;
+        }
+        return false;
+    }
+
+    private static bool IsDiamond(List<Vector2> v, float minX, float minY, float maxX, float maxY)
+    {
+        float w = maxX - minX, h = maxY - minY;
+        float cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        float tol = 0.2f * Math.Max(w, h);
+        var mids = new[]
+        {
+            new Vector2(cx, minY), new Vector2(maxX, cy),
+            new Vector2(cx, maxY), new Vector2(minX, cy)
+        };
+        foreach (var m in mids)
+            if (!v.Any(p => Vector2.Distance(p, m) <= tol)) return false;
+        return true;
+    }
+
+    private static bool IsAxisRect(List<Vector2> v, float minX, float minY, float maxX, float maxY)
+    {
+        float w = maxX - minX, h = maxY - minY;
+        float tol = 0.22f * Math.Max(w, h);
+        var cor = new[]
+        {
+            new Vector2(minX, minY), new Vector2(maxX, minY),
+            new Vector2(maxX, maxY), new Vector2(minX, maxY)
+        };
+        foreach (var k in cor)
+            if (!v.Any(p => Vector2.Distance(p, k) <= tol)) return false;
+        return true;
     }
 
     private ShapeElement MakeShape(ShapeKind kind, double x, double y, double w, double h) => new()
@@ -1827,8 +2342,134 @@ public sealed class InkSurface : UserControl
         return new Rect(x - 4, y - 4, w + 8, h + 8);
     }
 
+    // ---- rotation helpers (#20) ----
+    private static Vector2 ShapeCenter(ShapeElement s)
+    {
+        double x = Math.Min(s.X, s.X + s.W), y = Math.Min(s.Y, s.Y + s.H);
+        return new Vector2((float)(x + Math.Abs(s.W) / 2), (float)(y + Math.Abs(s.H) / 2));
+    }
+
+    private static Vector2 RotatePoint(Vector2 p, Vector2 c, double deg)
+    {
+        if (Math.Abs(deg) < 0.001) return p;
+        double r = deg * Math.PI / 180.0;
+        float cos = (float)Math.Cos(r), sin = (float)Math.Sin(r);
+        var d = p - c;
+        return new Vector2(c.X + d.X * cos - d.Y * sin, c.Y + d.X * sin + d.Y * cos);
+    }
+
+    // World point -> the shape's un-rotated local frame (for hit-testing).
+    private static Vector2 ToShapeLocal(ShapeElement s, Vector2 p)
+        => Math.Abs(s.Rotation) < 0.001 ? p : RotatePoint(p, ShapeCenter(s), -s.Rotation);
+
+    // World position of the rotation handle (above the shape, in rotated space).
+    private Vector2 RotateHandlePos(ShapeElement s)
+    {
+        var bb = ShapeBounds(s);
+        var top = new Vector2((float)(bb.Left + bb.Width / 2), (float)bb.Top - 26f / ViewZoom);
+        return RotatePoint(top, ShapeCenter(s), s.Rotation);
+    }
+
+    private bool HitRotateHandle(ShapeElement s, Vector2 pos, float tol)
+        => Vector2.Distance(RotateHandlePos(s), pos) <= tol + 4f / ViewZoom;
+
+    private static bool OnShapeBody(ShapeElement s, Vector2 pos, float tol)
+    {
+        var lp = ToShapeLocal(s, pos);
+        return ShapeBounds(s).Contains(new Point(lp.X, lp.Y)) || DistToShapeOutline(s, pos) < tol;
+    }
+
+    private void BeginRotate(ShapeElement s, Vector2 pos)
+    {
+        _rotatingShape = true;
+        _rotateCenter = ShapeCenter(s);
+        _rotateStartShapeDeg = s.Rotation;
+        _rotateStartPointerDeg = Math.Atan2(pos.Y - _rotateCenter.Y, pos.X - _rotateCenter.X) * 180.0 / Math.PI;
+    }
+
+    // True outline vertices of a polygon shape (used for drawing, hit-testing and
+    // vertex resize handles). Bounds are normalised so negative W/H still work.
+    private static Vector2[] PolygonVertices(ShapeElement s)
+    {
+        float x = (float)Math.Min(s.X, s.X + s.W), y = (float)Math.Min(s.Y, s.Y + s.H);
+        float w = (float)Math.Abs(s.W), h = (float)Math.Abs(s.H);
+        float cx = x + w / 2, cy = y + h / 2;
+        switch (s.Kind)
+        {
+            case ShapeKind.Triangle:
+                return new[] { new Vector2(cx, y), new Vector2(x, y + h), new Vector2(x + w, y + h) };
+            case ShapeKind.RightTriangle:
+                return new[] { new Vector2(x, y), new Vector2(x, y + h), new Vector2(x + w, y + h) };
+            case ShapeKind.Diamond:
+                return new[] { new Vector2(cx, y), new Vector2(x + w, cy), new Vector2(cx, y + h), new Vector2(x, cy) };
+            case ShapeKind.Parallelogram:
+            {
+                float sx = w * 0.25f;
+                return new[] { new Vector2(x + sx, y), new Vector2(x + w, y), new Vector2(x + w - sx, y + h), new Vector2(x, y + h) };
+            }
+            case ShapeKind.Trapezoid:
+            {
+                float sx = w * 0.22f;
+                return new[] { new Vector2(x + sx, y), new Vector2(x + w - sx, y), new Vector2(x + w, y + h), new Vector2(x, y + h) };
+            }
+            case ShapeKind.Pentagon: return RegularPoly(cx, cy, w / 2, h / 2, 5, -MathF.PI / 2);
+            case ShapeKind.Hexagon: return RegularPoly(cx, cy, w / 2, h / 2, 6, -MathF.PI / 2);
+            case ShapeKind.Star: return StarPoly(cx, cy, w / 2, h / 2, 5, -MathF.PI / 2);
+            default: // Rect and any bbox-based kind
+                return new[] { new Vector2(x, y), new Vector2(x + w, y), new Vector2(x + w, y + h), new Vector2(x, y + h) };
+        }
+    }
+
+    private static bool IsPolygonKind(ShapeKind k) =>
+        k is ShapeKind.Rect or ShapeKind.Triangle or ShapeKind.RightTriangle or ShapeKind.Diamond
+          or ShapeKind.Pentagon or ShapeKind.Hexagon or ShapeKind.Star
+          or ShapeKind.Parallelogram or ShapeKind.Trapezoid;
+
+    private static Vector2[] RegularPoly(float cx, float cy, float rx, float ry, int n, float start)
+    {
+        var v = new Vector2[n];
+        for (int i = 0; i < n; i++)
+        {
+            float ang = start + i * MathF.PI * 2 / n;
+            v[i] = new Vector2(cx + rx * MathF.Cos(ang), cy + ry * MathF.Sin(ang));
+        }
+        return v;
+    }
+
+    private static Vector2[] StarPoly(float cx, float cy, float rx, float ry, int points, float start)
+    {
+        int n = points * 2;
+        var v = new Vector2[n];
+        for (int i = 0; i < n; i++)
+        {
+            float ang = start + i * MathF.PI / points;
+            float f = (i % 2 == 0) ? 1f : 0.42f;
+            v[i] = new Vector2(cx + rx * f * MathF.Cos(ang), cy + ry * f * MathF.Sin(ang));
+        }
+        return v;
+    }
+
+    // Vertices where resize handles are shown (#11): true polygon corners for
+    // polygons, the bbox corners for ellipse/image/axes, endpoints for lines.
+    private static Vector2[] HandleVertices(ShapeElement s)
+    {
+        if (s.Kind is ShapeKind.Line or ShapeKind.Arrow) return ShapeCorners(s);
+        if (IsPolygonKind(s.Kind)) return PolygonVertices(s);
+        return ShapeCorners(s); // ellipse / image / axes -> bbox corners
+    }
+
+    private static float PolyOutlineDist(Vector2[] v, Vector2 p)
+    {
+        float best = float.MaxValue;
+        for (int i = 0; i < v.Length; i++)
+            best = Math.Min(best, GeometryUtil.DistToSegment(p, v[i], v[(i + 1) % v.Length]));
+        return best;
+    }
+
     private static float DistToShapeOutline(ShapeElement s, Vector2 p)
     {
+        p = ToShapeLocal(s, p); // hit-test in the shape's un-rotated frame (#20)
+        if (IsPolygonKind(s.Kind)) return PolyOutlineDist(PolygonVertices(s), p);
         switch (s.Kind)
         {
             case ShapeKind.Line:
@@ -1859,15 +2500,6 @@ public sealed class InkSurface : UserControl
                 var v = p - c;
                 float val = MathF.Sqrt((v.X / rx) * (v.X / rx) + (v.Y / ry) * (v.Y / ry));
                 return Math.Abs(val - 1) * Math.Min(rx, ry);
-            }
-            case ShapeKind.Triangle:
-            {
-                var t1 = new Vector2((float)(s.X + s.W / 2), (float)s.Y);
-                var t2 = new Vector2((float)s.X, (float)(s.Y + s.H));
-                var t3 = new Vector2((float)(s.X + s.W), (float)(s.Y + s.H));
-                return Math.Min(GeometryUtil.DistToSegment(p, t1, t2),
-                       Math.Min(GeometryUtil.DistToSegment(p, t2, t3),
-                                GeometryUtil.DistToSegment(p, t3, t1)));
             }
             case ShapeKind.AxesXY:
             {
@@ -1910,23 +2542,38 @@ public sealed class InkSurface : UserControl
     /// <summary>Returns the resize ANCHOR (opposite corner / other endpoint) if a handle was hit.</summary>
     private static Vector2? HitHandle(ShapeElement s, Vector2 pos, float tol)
     {
-        var corners = ShapeCorners(s);
+        var lp = ToShapeLocal(s, pos); // test handles in the un-rotated frame (#20)
         if (s.Kind is ShapeKind.Line or ShapeKind.Arrow)
         {
-            if (Vector2.Distance(corners[0], pos) <= tol) return corners[1];
-            if (Vector2.Distance(corners[1], pos) <= tol) return corners[0];
+            var ep = ShapeCorners(s);
+            if (Vector2.Distance(ep[0], lp) <= tol) return ep[1];
+            if (Vector2.Distance(ep[1], lp) <= tol) return ep[0];
             return null;
         }
-        for (int i = 0; i < corners.Length; i++)
+        var bbox = ShapeCorners(s);            // [TL, TR, BL, BR]
+        foreach (var hpt in HandleVertices(s)) // true vertices (#11)
         {
-            if (Vector2.Distance(corners[i], pos) <= tol)
-                return corners[corners.Length - 1 - i]; // opposite corner
+            if (Vector2.Distance(hpt, lp) <= tol)
+            {
+                // resize the bbox from the corner diagonally opposite the grabbed vertex
+                int nearest = 0; float bd = float.MaxValue;
+                for (int i = 0; i < bbox.Length; i++)
+                {
+                    float d = Vector2.Distance(bbox[i], hpt);
+                    if (d < bd) { bd = d; nearest = i; }
+                }
+                return bbox[bbox.Length - 1 - nearest];
+            }
         }
         return null;
     }
 
     private void DrawShape(CanvasDrawingSession ds, ShapeElement s)
     {
+        Matrix3x2 prevT = ds.Transform;
+        bool rot = Math.Abs(s.Rotation) > 0.01;
+        if (rot)
+            ds.Transform = Matrix3x2.CreateRotation((float)(s.Rotation * Math.PI / 180.0), ShapeCenter(s)) * prevT;
         var color = ColorUtil.Parse(s.Color);
         float w = Math.Max(1f, s.Size);
         switch (s.Kind)
@@ -1947,15 +2594,15 @@ public sealed class InkSurface : UserControl
                     (float)Math.Max(1, s.W) / 2, (float)Math.Max(1, s.H) / 2, color, w);
                 break;
             case ShapeKind.Triangle:
-            {
-                var t1 = new Vector2((float)(s.X + s.W / 2), (float)s.Y);
-                var t2 = new Vector2((float)s.X, (float)(s.Y + s.H));
-                var t3 = new Vector2((float)(s.X + s.W), (float)(s.Y + s.H));
-                ds.DrawLine(t1, t2, color, w, _roundStyle);
-                ds.DrawLine(t2, t3, color, w, _roundStyle);
-                ds.DrawLine(t3, t1, color, w, _roundStyle);
+            case ShapeKind.RightTriangle:
+            case ShapeKind.Diamond:
+            case ShapeKind.Pentagon:
+            case ShapeKind.Hexagon:
+            case ShapeKind.Star:
+            case ShapeKind.Parallelogram:
+            case ShapeKind.Trapezoid:
+                DrawPolygon(ds, PolygonVertices(s), color, w);
                 break;
-            }
             case ShapeKind.Image:
             {
                 var r = new Rect(s.X, s.Y, Math.Max(1, s.W), Math.Max(1, s.H));
@@ -1991,6 +2638,14 @@ public sealed class InkSurface : UserControl
                 break;
             }
         }
+        if (rot) ds.Transform = prevT;
+    }
+
+    private void DrawPolygon(CanvasDrawingSession ds, Vector2[] v, Color color, float w)
+    {
+        if (v.Length < 2) return;
+        for (int i = 0; i < v.Length; i++)
+            ds.DrawLine(v[i], v[(i + 1) % v.Length], color, w, _roundStyle);
     }
 
     private void DrawArrow(CanvasDrawingSession ds, Vector2 a, Vector2 b, Color color, float w)
@@ -2008,14 +2663,33 @@ public sealed class InkSurface : UserControl
 
     private void DrawShapeSelection(CanvasDrawingSession ds, ShapeElement s, Color accent, float uiScale)
     {
+        var c = ShapeCenter(s);
         var bb = ShapeBounds(s);
-        ds.DrawRectangle(bb, accent, uiScale, _dashStyle);
-        float hs = 5.5f / ViewZoom;
-        foreach (var c in ShapeCorners(s))
+        var corners = new[]
         {
-            ds.FillRectangle(new Rect(c.X - hs, c.Y - hs, hs * 2, hs * 2), Colors.White);
-            ds.DrawRectangle(new Rect(c.X - hs, c.Y - hs, hs * 2, hs * 2), accent, uiScale);
+            new Vector2((float)bb.Left, (float)bb.Top),
+            new Vector2((float)bb.Right, (float)bb.Top),
+            new Vector2((float)bb.Right, (float)bb.Bottom),
+            new Vector2((float)bb.Left, (float)bb.Bottom)
+        };
+        for (int i = 0; i < 4; i++)
+            ds.DrawLine(RotatePoint(corners[i], c, s.Rotation),
+                        RotatePoint(corners[(i + 1) % 4], c, s.Rotation), accent, uiScale, _dashStyle);
+
+        float hs = 5.5f / ViewZoom;
+        foreach (var v in HandleVertices(s))
+        {
+            var p = RotatePoint(v, c, s.Rotation);
+            ds.FillRectangle(new Rect(p.X - hs, p.Y - hs, hs * 2, hs * 2), Colors.White);
+            ds.DrawRectangle(new Rect(p.X - hs, p.Y - hs, hs * 2, hs * 2), accent, uiScale);
         }
+
+        // rotation handle (small circle on a stem above the shape)
+        var topMid = RotatePoint(new Vector2((float)(bb.Left + bb.Width / 2), (float)bb.Top), c, s.Rotation);
+        var rh = RotateHandlePos(s);
+        ds.DrawLine(topMid, rh, accent, uiScale);
+        ds.FillCircle(rh, 6f / ViewZoom, Colors.White);
+        ds.DrawCircle(rh, 6f / ViewZoom, accent, uiScale);
     }
 
     private async void RequestBitmap(string path)
@@ -2090,6 +2764,13 @@ public sealed class InkSurface : UserControl
             case ShapeKind.Rect: if (equalDims) { w = h = 170; } break;
             case ShapeKind.Ellipse: if (equalDims) { w = h = 170; } break;
             case ShapeKind.Triangle: w = 210; h = 180; break;
+            case ShapeKind.RightTriangle: w = 200; h = 190; break;
+            case ShapeKind.Diamond: w = h = 190; break;
+            case ShapeKind.Pentagon: w = h = 200; break;
+            case ShapeKind.Hexagon: w = h = 200; break;
+            case ShapeKind.Star: w = h = 210; break;
+            case ShapeKind.Parallelogram: w = 250; h = 150; break;
+            case ShapeKind.Trapezoid: w = 250; h = 150; break;
             case ShapeKind.AxesXY: w = 280; h = 210; break;
             case ShapeKind.AxesXYZ: w = 240; h = 240; break;
         }
@@ -2163,20 +2844,41 @@ public sealed class InkSurface : UserControl
     private void SpawnTextBox(Vector2 worldPos, string? initial)
     {
         if (_page == null) return;
+        FlushTexts(); // save other boxes' live edits before adding a new one
         var t = new TextElement { X = worldPos.X - 4, Y = worldPos.Y - 10 };
         UndoManager.Push(new AddTextAction(t), _page);
-        RebuildTextLayer();
+        BuildTextUi(t); // add ONLY the new box so existing boxes keep their formatting
         if (_textUi.TryGetValue(t.Id, out var ui))
         {
             ui.Box.Focus(FocusState.Programmatic);
+            // Honour the chosen default font + size for the first characters typed.
+            try { var cf = ui.Box.Document.Selection.CharacterFormat; cf.Name = PendingFontFamily; cf.Size = PendingFontSize; } catch { }
             if (!string.IsNullOrEmpty(initial))
                 try { ui.Box.Document.Selection.TypeText(initial); } catch { }
         }
         ContentChanged?.Invoke();
     }
 
+    /// <summary>Rotates the focused text box by the given delta in degrees (#20).</summary>
+    public void RotateActiveText(double deltaDeg)
+    {
+        if (_page == null || ActiveTextBox == null) return;
+        foreach (var (id, ui) in _textUi)
+        {
+            if (!ReferenceEquals(ui.Box, ActiveTextBox)) continue;
+            var t = _page.Texts.FirstOrDefault(x => x.Id == id);
+            if (t == null) return;
+            t.Rotation = (t.Rotation + deltaDeg) % 360;
+            ui.Container.RenderTransformOrigin = new Point(0.5, 0.5);
+            ui.Container.RenderTransform = new RotateTransform { Angle = t.Rotation };
+            ContentChanged?.Invoke();
+            return;
+        }
+    }
+
     public void RebuildTextLayer()
     {
+        FlushTexts(); // persist any live edits before tearing boxes down (prevents resets)
         _textLayer.Children.Clear();
         _textUi.Clear();
         ActiveTextBox = null;
@@ -2191,10 +2893,13 @@ public sealed class InkSurface : UserControl
         container.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         container.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
+        // The grip bar stays transparent (but still draggable) until the box is
+        // focused, so an unselected text box shows only its text — no chrome (#3).
+        var gripBrush = new SolidColorBrush(Colors.Transparent);
         var grip = new Grid
         {
             Height = 16,
-            Background = new SolidColorBrush(Color.FromArgb(50, 217, 119, 87)),
+            Background = gripBrush,
             CornerRadius = new CornerRadius(5, 5, 0, 0)
         };
         var dots = new TextBlock
@@ -2203,7 +2908,8 @@ public sealed class InkSurface : UserControl
             FontSize = 9,
             Margin = new Thickness(6, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            Opacity = 0.7
+            Opacity = 0.7,
+            Visibility = Visibility.Collapsed
         };
         var close = new Button
         {
@@ -2215,7 +2921,8 @@ public sealed class InkSurface : UserControl
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             Background = new SolidColorBrush(Colors.Transparent),
-            BorderThickness = new Thickness(0)
+            BorderThickness = new Thickness(0),
+            Visibility = Visibility.Collapsed
         };
         grip.Children.Add(dots);
         grip.Children.Add(close);
@@ -2226,10 +2933,12 @@ public sealed class InkSurface : UserControl
             MinWidth = 160,
             Width = t.Width,
             MinHeight = 40,
-            FontSize = 16,
+            FontSize = PendingFontSize,
+            FontFamily = new FontFamily(PendingFontFamily),
             TextWrapping = TextWrapping.Wrap,
             IsSpellCheckEnabled = true,
-            Background = new SolidColorBrush(Colors.Transparent)
+            Background = new SolidColorBrush(Colors.Transparent),
+            BorderThickness = new Thickness(0)
         };
         if (!string.IsNullOrEmpty(t.Rtf))
         {
@@ -2241,6 +2950,11 @@ public sealed class InkSurface : UserControl
         container.Children.Add(box);
         Canvas.SetLeft(container, t.X);
         Canvas.SetTop(container, t.Y);
+        if (Math.Abs(t.Rotation) > 0.01)
+        {
+            container.RenderTransformOrigin = new Point(0.5, 0.5);
+            container.RenderTransform = new RotateTransform { Angle = t.Rotation };
+        }
 
         box.GotFocus += (_, _) =>
         {
@@ -2271,14 +2985,31 @@ public sealed class InkSurface : UserControl
         var rGrip = new Border
         {
             Width = 11,
-            Background = new SolidColorBrush(Color.FromArgb(80, 217, 119, 87)),
+            Background = new SolidColorBrush(Color.FromArgb(110, 217, 119, 87)),
             CornerRadius = new CornerRadius(3),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Stretch,
-            Margin = new Thickness(0, 4, -13, 4)
+            Margin = new Thickness(0, 4, -13, 4),
+            Visibility = Visibility.Collapsed
         };
         Grid.SetRow(rGrip, 1);
         ToolTipService.SetToolTip(rGrip, "Drag to change the text box width");
+
+        // Reveal the grip / close / resize handle only while this box is focused.
+        box.GotFocus += (_, _) =>
+        {
+            gripBrush.Color = Color.FromArgb(60, 217, 119, 87);
+            dots.Visibility = Visibility.Visible;
+            close.Visibility = Visibility.Visible;
+            rGrip.Visibility = Visibility.Visible;
+        };
+        box.LostFocus += (_, _) =>
+        {
+            gripBrush.Color = Colors.Transparent;
+            dots.Visibility = Visibility.Collapsed;
+            close.Visibility = Visibility.Collapsed;
+            rGrip.Visibility = Visibility.Collapsed;
+        };
         rGrip.ManipulationMode = ManipulationModes.TranslateX;
         rGrip.ManipulationDelta += (_, e) =>
         {

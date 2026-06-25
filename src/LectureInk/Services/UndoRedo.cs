@@ -156,6 +156,16 @@ public class MoveResizeShapeAction : IPageAction
     }
 }
 
+public class RotateShapeAction : IPageAction
+{
+    private readonly ShapeElement _s;
+    private readonly double _from, _to;
+    public RotateShapeAction(ShapeElement s, double from, double to) { _s = s; _from = from; _to = to; }
+    public string Description => "Rotate";
+    public void Do(NotePage page) => _s.Rotation = _to;
+    public void Undo(NotePage page) => _s.Rotation = _from;
+}
+
 public class AddTextAction : IPageAction
 {
     private readonly TextElement _text;
@@ -192,6 +202,107 @@ public class MoveTextAction : IPageAction
     public string Description => "Move text box";
     public void Do(NotePage page) { _text.X = _tx; _text.Y = _ty; }
     public void Undo(NotePage page) { _text.X = _fx; _text.Y = _fy; }
+}
+
+// Bundles several actions into one undo/redo step (e.g. moving a mixed
+// selection of strokes, shapes and text boxes together).
+public class CompositeAction : IPageAction
+{
+    private readonly List<IPageAction> _actions;
+    public CompositeAction(IEnumerable<IPageAction> actions, string description)
+    {
+        _actions = actions.ToList();
+        Description = description;
+    }
+    public string Description { get; }
+    public void Do(NotePage page) { foreach (var a in _actions) a.Do(page); }
+    public void Undo(NotePage page) { for (int i = _actions.Count - 1; i >= 0; i--) _actions[i].Undo(page); }
+}
+
+// Moves a set of shapes by a delta (used in mixed-selection moves).
+public class MoveShapesAction : IPageAction
+{
+    private readonly List<ShapeElement> _shapes;
+    private readonly double _dx, _dy;
+    public MoveShapesAction(List<ShapeElement> shapes, double dx, double dy)
+    {
+        _shapes = shapes; _dx = dx; _dy = dy;
+    }
+    public string Description => "Move shapes";
+    public void Do(NotePage page) => Shift(_dx, _dy);
+    public void Undo(NotePage page) => Shift(-_dx, -_dy);
+    private void Shift(double dx, double dy)
+    {
+        foreach (var s in _shapes) { s.X += dx; s.Y += dy; }
+    }
+}
+
+// Moves a set of text boxes by a delta.
+public class MoveTextsAction : IPageAction
+{
+    private readonly List<TextElement> _texts;
+    private readonly double _dx, _dy;
+    public MoveTextsAction(List<TextElement> texts, double dx, double dy)
+    {
+        _texts = texts; _dx = dx; _dy = dy;
+    }
+    public string Description => "Move text";
+    public void Do(NotePage page) => Shift(_dx, _dy);
+    public void Undo(NotePage page) => Shift(-_dx, -_dy);
+    private void Shift(double dx, double dy)
+    {
+        foreach (var t in _texts) { t.X += dx; t.Y += dy; }
+    }
+}
+
+// Adds a batch of strokes, shapes and texts (used by mixed paste).
+public class AddMixedAction : IPageAction
+{
+    private readonly List<PenStroke> _strokes;
+    private readonly List<ShapeElement> _shapes;
+    private readonly List<TextElement> _texts;
+    public AddMixedAction(List<PenStroke> strokes, List<ShapeElement> shapes, List<TextElement> texts)
+    {
+        _strokes = strokes; _shapes = shapes; _texts = texts;
+    }
+    public string Description => "Paste";
+    public void Do(NotePage page)
+    {
+        page.Strokes.AddRange(_strokes);
+        page.Shapes.AddRange(_shapes);
+        page.Texts.AddRange(_texts);
+    }
+    public void Undo(NotePage page)
+    {
+        foreach (var s in _strokes) page.Strokes.Remove(s);
+        foreach (var s in _shapes) page.Shapes.Remove(s);
+        foreach (var t in _texts) page.Texts.Remove(t);
+    }
+}
+
+// Removes a batch of strokes, shapes and texts (used by mixed delete).
+public class RemoveMixedAction : IPageAction
+{
+    private readonly List<PenStroke> _strokes;
+    private readonly List<ShapeElement> _shapes;
+    private readonly List<TextElement> _texts;
+    public RemoveMixedAction(List<PenStroke> strokes, List<ShapeElement> shapes, List<TextElement> texts)
+    {
+        _strokes = strokes; _shapes = shapes; _texts = texts;
+    }
+    public string Description => "Delete selection";
+    public void Do(NotePage page)
+    {
+        foreach (var s in _strokes) page.Strokes.Remove(s);
+        foreach (var s in _shapes) page.Shapes.Remove(s);
+        foreach (var t in _texts) page.Texts.Remove(t);
+    }
+    public void Undo(NotePage page)
+    {
+        page.Strokes.AddRange(_strokes);
+        page.Shapes.AddRange(_shapes);
+        page.Texts.AddRange(_texts);
+    }
 }
 
 public class UndoRedoManager

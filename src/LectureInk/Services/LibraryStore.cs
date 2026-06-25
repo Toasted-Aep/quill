@@ -7,19 +7,146 @@ public static class LibraryStore
 {
     private static readonly JsonSerializerOptions Opts = new() { WriteIndented = false };
 
-    public static string Dir =>
+    // A small settings file lives at a FIXED anchor (Documents\LectureInk) and
+    // records the chosen central storage folder, so every build/version reads and
+    // writes the same notebooks (universal sync) (#settings).
+    public sealed class AppSettings
+    {
+        public string? DataFolder { get; set; }
+        public bool ImportedLegacy { get; set; }
+    }
+
+    private static AppSettings? _settings;
+    private static string AnchorDir =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "LectureInk");
+    private static string SettingsPath => Path.Combine(AnchorDir, "settings.json");
+
+    public static AppSettings Settings
+    {
+        get
+        {
+            if (_settings != null) return _settings;
+            try
+            {
+                if (File.Exists(SettingsPath))
+                    _settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
+            }
+            catch { }
+            return _settings ??= new AppSettings();
+        }
+    }
+
+    public static void SaveSettings()
+    {
+        try
+        {
+            Directory.CreateDirectory(AnchorDir);
+            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(Settings, Opts));
+        }
+        catch { }
+    }
+
+    // The central, user-configurable storage folder (default Documents\LectureInk).
+    public static string Dir
+    {
+        get
+        {
+            var f = Settings.DataFolder;
+            return !string.IsNullOrWhiteSpace(f) ? f! : AnchorDir;
+        }
+    }
+
+    // Old hidden location — migrated/imported once, then kept as a read fallback.
+    public static string LegacyDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LectureInk");
 
     public static string FilePath => Path.Combine(Dir, "library.json");
+    private static string LegacyFilePath => Path.Combine(LegacyDir, "library.json");
 
     public static Library Load()
     {
-        // Try the primary file, then the last known-good backup. Each read is
-        // isolated so a CORRUPT primary (parse throws) still falls through to
-        // the ".bak" recovery instead of short-circuiting to a fresh seed.
-        return TryRead(FilePath, preserveCorrupt: true)
+        MigrateFromLegacyIfNeeded();
+        var lib = TryRead(FilePath, preserveCorrupt: true)
             ?? TryRead(FilePath + ".bak", preserveCorrupt: false)
+            ?? TryRead(LegacyFilePath, preserveCorrupt: false)
+            ?? TryRead(LegacyFilePath + ".bak", preserveCorrupt: false)
             ?? Seed();
+
+        // One-time automatic recovery: pull in any notebooks that exist in the old
+        // location but not in the current central library (this restores notebooks
+        // that an earlier version left behind). Runs in the user's normal session
+        // where the old location is fully visible.
+        if (!Settings.ImportedLegacy)
+        {
+            var legacy = TryRead(LegacyFilePath, false) ?? TryRead(LegacyFilePath + ".bak", false);
+            int added = legacy != null ? Merge(lib, legacy) : 0;
+            Settings.ImportedLegacy = true;
+            SaveSettings();
+            if (added > 0) Save(lib);
+        }
+        return lib;
+    }
+
+    /// <summary>Loads a library from an arbitrary file (for the Settings "Import" action).</summary>
+    public static Library? LoadFrom(string path) => TryRead(path, false);
+
+    /// <summary>Adds every notebook (and folder) from <paramref name="source"/> that
+    /// isn't already in <paramref name="target"/> (matched by Id). Returns how many
+    /// notebooks were added.</summary>
+    public static int Merge(Library target, Library source)
+    {
+        int added = 0;
+        var have = new HashSet<Guid>(target.Notebooks.Select(n => n.Id));
+        foreach (var nb in source.Notebooks)
+        {
+            if (have.Contains(nb.Id)) continue;
+            // deep clone via JSON so the two libraries never share references
+            var clone = JsonSerializer.Deserialize<Notebook>(JsonSerializer.Serialize(nb, Opts), Opts);
+            if (clone != null) { target.Notebooks.Add(clone); have.Add(clone.Id); added++; }
+        }
+        foreach (var f in source.Folders)
+            if (!target.Folders.Contains(f)) target.Folders.Add(f);
+        return added;
+    }
+
+    /// <summary>Changes the central storage folder, copying the current library and
+    /// backups into it. Returns the new folder path.</summary>
+    public static void SetDataFolder(string newFolder, Library current)
+    {
+        try
+        {
+            Directory.CreateDirectory(newFolder);
+            Settings.DataFolder = newFolder;
+            SaveSettings();
+            Save(current); // writes the library (and a snapshot) into the new folder
+        }
+        catch { }
+    }
+
+    // One-time copy of the old AppData library (and its backups) into the new
+    // central folder. Copy-only: the originals are never deleted.
+    private static void MigrateFromLegacyIfNeeded()
+    {
+        try
+        {
+            if (File.Exists(FilePath)) return;          // already on the new path
+            if (!File.Exists(LegacyFilePath)) return;   // nothing to migrate
+            Directory.CreateDirectory(Dir);
+            File.Copy(LegacyFilePath, FilePath, false);
+            if (File.Exists(LegacyFilePath + ".bak"))
+                try { File.Copy(LegacyFilePath + ".bak", FilePath + ".bak", false); } catch { }
+
+            var legacyBackups = Path.Combine(LegacyDir, "backups");
+            if (Directory.Exists(legacyBackups))
+            {
+                Directory.CreateDirectory(BackupDir);
+                foreach (var f in Directory.GetFiles(legacyBackups, "library-*.json"))
+                    try { File.Copy(f, Path.Combine(BackupDir, Path.GetFileName(f)), false); } catch { }
+            }
+            foreach (var f in Directory.GetFiles(LegacyDir, "library.recovery-*.json"))
+                try { File.Copy(f, Path.Combine(Dir, Path.GetFileName(f)), false); } catch { }
+        }
+        catch { /* migration is best-effort; the legacy copy stays intact */ }
     }
 
     private static Library? TryRead(string path, bool preserveCorrupt)
@@ -68,6 +195,40 @@ public static class LibraryStore
             // don't leave a stale ".tmp" (containing note data) behind.
             try { if (File.Exists(FilePath + ".tmp")) File.Delete(FilePath + ".tmp"); } catch { }
         }
+
+        TrySnapshot(json);
+    }
+
+    /// <summary>Folder of timestamped rolling backups, kept so a single bad save
+    /// can never silently erase note history.</summary>
+    public static string BackupDir => Path.Combine(Dir, "backups");
+
+    // Keep periodic timestamped snapshots (throttled to one per 15 min, newest 12
+    // retained). These are the safety net behind "library.json" + "library.json.bak".
+    private static void TrySnapshot(string json)
+    {
+        try
+        {
+            Directory.CreateDirectory(BackupDir);
+            var existing = new DirectoryInfo(BackupDir)
+                .GetFiles("library-*.json")
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .ToList();
+
+            if (existing.Count > 0 &&
+                DateTime.UtcNow - existing[0].LastWriteTimeUtc < TimeSpan.FromMinutes(15))
+                return; // throttle: don't snapshot on every debounced save
+
+            var name = $"library-{DateTime.Now:yyyyMMdd-HHmmss}.json";
+            File.WriteAllText(Path.Combine(BackupDir, name), json);
+
+            // keep the newest 12 snapshots (existing 11 + the new one)
+            foreach (var old in existing.Skip(11))
+            {
+                try { old.Delete(); } catch { }
+            }
+        }
+        catch { /* backups are best-effort; never disrupt a save */ }
     }
 
     private static Library Seed()

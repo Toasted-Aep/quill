@@ -47,9 +47,6 @@
                     <ToggleButton x:Name="ToolText" Tag="Text" Click="ToolButton_Click" ToolTipService.ToolTip="Text (tap the page to add a text box)">
                         <FontIcon Glyph="&#xE8D2;" FontSize="14"/>
                     </ToggleButton>
-                    <ToggleButton x:Name="ToolEraser" Tag="Eraser" Click="ToolButton_Click" ToolTipService.ToolTip="Eraser (or use the pen's first button)">
-                        <FontIcon Glyph="&#xE75C;" FontSize="14"/>
-                    </ToggleButton>
                     <ToggleButton x:Name="ToolSelect" Tag="Select" Click="ToolButton_Click" ToolTipService.ToolTip="Lasso select (or hold the pen's second button)">
                         <FontIcon Glyph="&#xE8B3;" FontSize="14"/>
                     </ToggleButton>
@@ -71,14 +68,19 @@
                                 <MenuFlyoutItem Text="Ellipse" Tag="Ellipse" Click="InsertShape_Click"/>
                                 <MenuFlyoutItem Text="Circle" Tag="Circle" Click="InsertShape_Click"/>
                                 <MenuFlyoutItem Text="Triangle" Tag="Triangle" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Right triangle" Tag="RightTriangle" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Diamond" Tag="Diamond" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Parallelogram" Tag="Parallelogram" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Trapezoid" Tag="Trapezoid" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Pentagon" Tag="Pentagon" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Hexagon" Tag="Hexagon" Click="InsertShape_Click"/>
+                                <MenuFlyoutItem Text="Star" Tag="Star" Click="InsertShape_Click"/>
                                 <MenuFlyoutSeparator/>
                                 <MenuFlyoutItem Text="x-y plane" Tag="AxesXY" Click="InsertShape_Click"/>
                                 <MenuFlyoutItem Text="x-y-z axes" Tag="AxesXYZ" Click="InsertShape_Click"/>
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>
-
-                    <AppBarSeparator/>
 
                     <DropDownButton x:Name="MouseModeBtn" ToolTipService.ToolTip="Mouse mode — how the mouse behaves while the pen tool is active">
                         <StackPanel Orientation="Horizontal" Spacing="5">
@@ -202,12 +204,26 @@
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="ExportBtn" ToolTipService.ToolTip="Export the current view">
+                    <Button x:Name="SearchBtn" ToolTipService.ToolTip="Search all notes (text and handwriting)">
+                        <FontIcon Glyph="&#xE721;" FontSize="14"/>
+                        <Button.Flyout>
+                            <Flyout>
+                                <StackPanel Width="340" Spacing="8">
+                                    <TextBox x:Name="SearchBox" PlaceholderText="Search notes…" KeyDown="SearchBox_KeyDown"/>
+                                    <TextBlock x:Name="SearchStatus" FontSize="11" Opacity="0.7"/>
+                                    <ListView x:Name="SearchResults" MaxHeight="380" SelectionMode="None"
+                                              IsItemClickEnabled="True" ItemClick="SearchResult_Click"/>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <Button x:Name="ExportBtn" ToolTipService.ToolTip="Export the whole page">
                         <FontIcon Glyph="&#xE74E;" FontSize="14"/>
                         <Button.Flyout>
                             <MenuFlyout>
-                                <MenuFlyoutItem Text="Export view as PDF" Click="ExportPdf_Click"/>
-                                <MenuFlyoutItem Text="Export view as PNG" Click="ExportPng_Click"/>
+                                <MenuFlyoutItem Text="Export whole page as PDF" Click="ExportPdf_Click"/>
+                                <MenuFlyoutItem Text="Export whole page as PNG" Click="ExportPng_Click"/>
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>
@@ -217,6 +233,9 @@
                     <ToggleButton x:Name="BtnCalc" Click="Calc_Toggle" ToolTipService.ToolTip="Calculator">
                         <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
                     </ToggleButton>
+                    <Button x:Name="BtnSettings" Click="Settings_Click" ToolTipService.ToolTip="Settings — storage folder &amp; recover/import notebooks">
+                        <FontIcon Glyph="&#xE713;" FontSize="14"/>
+                    </Button>
                     <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
                         <FontIcon Glyph="&#xE890;" FontSize="14"/>
                     </Button>
@@ -240,8 +259,9 @@
                               PlaceholderText="Styles" ToolTipService.ToolTip="Text styles (brand typography)"/>
                     <ComboBox x:Name="FontCombo" Width="150" SelectionChanged="FontCombo_Changed"
                               ToolTipService.ToolTip="Font family"/>
-                    <ComboBox x:Name="SizeCombo" Width="68" SelectionChanged="SizeCombo_Changed"
-                              ToolTipService.ToolTip="Font size"/>
+                    <ComboBox x:Name="SizeCombo" Width="74" IsEditable="True"
+                              SelectionChanged="SizeCombo_Changed" TextSubmitted="SizeCombo_TextSubmitted"
+                              ToolTipService.ToolTip="Font size — pick one or type any value"/>
 
                     <AppBarSeparator/>
 
@@ -298,6 +318,15 @@
                     </Button>
                     <Button Click="FormatIndent_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Increase indent">
                         <FontIcon Glyph="&#xE72A;" FontSize="14"/>
+                    </Button>
+                    <Button Click="FormatChecklist_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Checklist — cycle ☐ / ☑ / none on this line">
+                        <TextBlock Text="&#x2611;" FontSize="15"/>
+                    </Button>
+                    <Button Click="FormatLink_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Add a link to the selected text">
+                        <FontIcon Glyph="&#xE71B;" FontSize="14"/>
+                    </Button>
+                    <Button Click="RotateText_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Rotate this text box 15°">
+                        <FontIcon Glyph="&#xE7AD;" FontSize="14"/>
                     </Button>
 
                     <AppBarSeparator/>
@@ -390,20 +419,46 @@
                         <Button Click="DeleteItem_Click" Padding="6,4" ToolTipService.ToolTip="Delete selected item">
                             <FontIcon Glyph="&#xE74D;" FontSize="12"/>
                         </Button>
-                        <Button Padding="6,4" ToolTipService.ToolTip="Sort pages by date (drag items to reorder by hand)">
+                        <Button Click="MoveUp_Click" Padding="6,4" ToolTipService.ToolTip="Move selected item up">
+                            <FontIcon Glyph="&#xE74A;" FontSize="12"/>
+                        </Button>
+                        <Button Click="MoveDown_Click" Padding="6,4" ToolTipService.ToolTip="Move selected item down">
+                            <FontIcon Glyph="&#xE74B;" FontSize="12"/>
+                        </Button>
+                        <Button Click="MoveTo_Click" Padding="6,4" ToolTipService.ToolTip="Move section/page to another notebook or section (no data loss)">
+                            <FontIcon Glyph="&#xE8DE;" FontSize="12"/>
+                        </Button>
+                        <Button Click="LockToggle_Click" Padding="6,4" ToolTipService.ToolTip="Lock / unlock the selected notebook with a password">
+                            <FontIcon Glyph="&#xE72E;" FontSize="12"/>
+                        </Button>
+                        <Button Padding="6,4" ToolTipService.ToolTip="Order notebooks, sections or pages (or reorder by hand with the arrows)">
                             <FontIcon Glyph="&#xE8CB;" FontSize="12"/>
                             <Button.Flyout>
                                 <MenuFlyout>
-                                    <MenuFlyoutItem Text="Newest pages first" Tag="desc" Click="SortPages_Click"/>
-                                    <MenuFlyoutItem Text="Oldest pages first" Tag="asc" Click="SortPages_Click"/>
+                                    <MenuFlyoutSubItem Text="Pages">
+                                        <MenuFlyoutItem Text="Newest first" Tag="pg:desc" Click="Order_Click"/>
+                                        <MenuFlyoutItem Text="Oldest first" Tag="pg:asc" Click="Order_Click"/>
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="Sections">
+                                        <MenuFlyoutItem Text="Newest first" Tag="sec:desc" Click="Order_Click"/>
+                                        <MenuFlyoutItem Text="Oldest first" Tag="sec:asc" Click="Order_Click"/>
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSubItem Text="Notebooks">
+                                        <MenuFlyoutItem Text="Newest first" Tag="nb:desc" Click="Order_Click"/>
+                                        <MenuFlyoutItem Text="Oldest first" Tag="nb:asc" Click="Order_Click"/>
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSeparator/>
+                                    <MenuFlyoutItem Text="Manual order: use the ↑ ↓ buttons" IsEnabled="False"/>
                                 </MenuFlyout>
                             </Button.Flyout>
+                        </Button>
+                        <Button Click="OpenGallery_Click" Padding="6,4" ToolTipService.ToolTip="Notebook gallery (colours &amp; folders)">
+                            <FontIcon Glyph="&#xE80A;" FontSize="12"/>
                         </Button>
                     </StackPanel>
                     <TreeView x:Name="NotebookTree" Grid.Row="2"
                               SelectionMode="Single" ItemInvoked="NotebookTree_ItemInvoked"
-                              CanDragItems="True" CanReorderItems="True" AllowDrop="True"
-                              DragItemsCompleted="NotebookTree_DragItemsCompleted"/>
+                              CanDragItems="False" CanReorderItems="False" AllowDrop="False"/>
                     <Border x:Name="NbGrip" Grid.Row="2" Width="22" Height="22"
                             HorizontalAlignment="Right" VerticalAlignment="Bottom"
                             Margin="0,2,-6,-6" Background="Transparent"
@@ -434,6 +489,22 @@
                                 ToolTipService.ToolTip="Save the current pen as a new pen (right-click any pen to edit it)">
                             <FontIcon Glyph="&#xE710;" FontSize="12"/>
                         </Button>
+
+                        <DropDownButton x:Name="RulerBtn" Padding="6,4" ToolTipService.ToolTip="Ruler — draw straight lines at any angle">
+                            <TextBlock Text="&#x1F4CF;" FontSize="13" VerticalAlignment="Center"/>
+                            <DropDownButton.Flyout>
+                                <Flyout>
+                                    <StackPanel Spacing="8" Width="230">
+                                        <ToggleSwitch x:Name="RulerToggle" Header="Show ruler" Toggled="RulerToggle_Toggled"/>
+                                        <TextBlock x:Name="RulerDegLabel" Text="Angle: 0°" FontSize="12"/>
+                                        <Slider x:Name="RulerSlider" Minimum="0" Maximum="180" StepFrequency="1" Value="0"
+                                                ValueChanged="RulerSlider_Changed"/>
+                                        <TextBlock Text="Turn it on, set any angle, then draw with the pen — lines lock to that angle."
+                                                   FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Flyout>
+                            </DropDownButton.Flyout>
+                        </DropDownButton>
 
                         <AppBarSeparator/>
 
@@ -532,7 +603,8 @@
 
             <!-- Minimal-UI floating buttons -->
             <StackPanel x:Name="MinimalButtons" Orientation="Horizontal" Spacing="8" Visibility="Collapsed"
-                        HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,14,14,0">
+                        HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,14,14,0"
+                        ToolTipService.ToolTip="Drag to move — snaps to the nearest corner">
                 <Button x:Name="BtnFloatNotebook" Click="FloatNotebook_Click"
                         Width="42" Height="42" CornerRadius="21"
                         Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
@@ -563,6 +635,28 @@
                     BorderBrush="{StaticResource GlowBrush}" BorderThickness="1.5"
                     CornerRadius="8" Padding="8,3" IsHitTestVisible="False">
                 <TextBlock x:Name="ZoomText" Text="100%" FontSize="12" Foreground="{ThemeResource InkBrush}"/>
+            </Border>
+
+            <!-- ===================== NOTEBOOK GALLERY (#16) ===================== -->
+            <Border x:Name="GalleryPanel" Visibility="Collapsed" Background="{ThemeResource SurfaceBrush}">
+                <Grid Margin="26">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="0,0,0,16">
+                        <TextBlock Text="Notebooks" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
+                                   FontSize="24" Foreground="{ThemeResource InkBrush}" VerticalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                            <Button Click="GalleryNewNotebook_Click" Content="New notebook"/>
+                            <Button Click="GalleryNewFolder_Click" Content="New folder"/>
+                            <Button Click="CloseGallery_Click" Style="{StaticResource AccentButtonStyle}" Content="Done"/>
+                        </StackPanel>
+                    </Grid>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
+                        <StackPanel x:Name="GalleryHost" Spacing="20"/>
+                    </ScrollViewer>
+                </Grid>
             </Border>
         </Grid>
     </Grid>
