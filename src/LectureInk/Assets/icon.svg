@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Fluent Ink — a quill writing a cursive f. Anthropic palette:
+       dark #141413, ivory #faf9f5, clay #d97757 -->
+  <rect x="0" y="0" width="512" height="512" rx="96" fill="#141413"/>
+
+  <!-- cursive f: top hook, slanted stem, bottom hook -->
+  <path d="M 298 130
+           C 292 92, 252 74, 226 102
+           C 204 126, 196 190, 190 260
+           C 184 330, 178 390, 166 428
+           C 154 466, 118 478, 98 452
+           C 84 434, 92 414, 110 410"
+        fill="none" stroke="#faf9f5" stroke-width="26" stroke-linecap="round"/>
+
+  <!-- crossbar: written part in ivory, fresh clay ink at the nib -->
+  <path d="M 118 268 C 150 262, 186 258, 224 256"
+        fill="none" stroke="#faf9f5" stroke-width="22" stroke-linecap="round"/>
+  <path d="M 224 256 C 248 255, 268 254, 284 254"
+        fill="none" stroke="#d97757" stroke-width="16" stroke-linecap="round"/>
+
+  <!-- quill, nib tip at (292,254) -->
+  <g>
+    <!-- feather: pointed leaf -->
+    <path d="M 306 238
+             C 322 176, 356 116, 404 76
+             C 420 62, 440 56, 456 58
+             C 452 96, 438 140, 414 178
+             C 388 218, 350 246, 306 238
+             Z"
+          fill="#d97757"/>
+    <!-- thin barb notches -->
+    <path d="M 410 118 L 372 172 L 383 175 L 418 124 Z" fill="#141413"/>
+    <path d="M 378 194 L 346 238 L 357 240 L 388 199 Z" fill="#141413"/>
+    <!-- shaft -->
+    <path d="M 292 254 C 330 208, 392 134, 448 70"
+          fill="none" stroke="#faf9f5" stroke-width="9" stroke-linecap="round"/>
+    <!-- nib -->
+    <path d="M 292 254 L 312 218 L 330 234 Z" fill="#faf9f5"/>
+    <circle cx="292" cy="254" r="7" fill="#d97757"/>
+  </g>
+</svg>

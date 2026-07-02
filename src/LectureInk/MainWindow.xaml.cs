@@ -83,7 +83,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Title = "LectureInk";
+        Title = "Fluent Ink";
         try
         {
             var icon = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
@@ -3167,82 +3167,35 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
-
         ds.DrawText($"y: {yMin:0.##} … {yMax:0.##}  (radians)",
             new System.Numerics.Vector2(6, 4), axis, _graphLabelFormat);
     }
 
-    // =======================================================================
-    // Converter
-    // =======================================================================
+    // ---- converter ----
     private static readonly string[] ConvCategories =
+        { "Length", "Mass", "Temperature", "Area", "Volume", "Speed", "Time", "Data", "Energy", "Power", "Pressure", "Angle" };
+
+    private static readonly Dictionary<string, (string Unit, double Factor)[]> ConvData = new()
     {
-        "Length", "Mass", "Temperature", "Area", "Volume", "Speed", "Time",
-        "Data", "Energy", "Power", "Pressure", "Angle"
+        ["Length"] = new[] { ("millimetre", 0.001), ("centimetre", 0.01), ("metre", 1.0), ("kilometre", 1000.0), ("inch", 0.0254), ("foot", 0.3048), ("yard", 0.9144), ("mile", 1609.344) },
+        ["Mass"] = new[] { ("milligram", 1e-6), ("gram", 0.001), ("kilogram", 1.0), ("tonne", 1000.0), ("ounce", 0.0283495), ("pound", 0.453592), ("stone", 6.35029) },
+        ["Area"] = new[] { ("cm²", 1e-4), ("m²", 1.0), ("km²", 1e6), ("in²", 0.00064516), ("ft²", 0.092903), ("acre", 4046.8564), ("hectare", 10000.0) },
+        ["Volume"] = new[] { ("millilitre", 0.001), ("litre", 1.0), ("m³", 1000.0), ("teaspoon", 0.00492892), ("tablespoon", 0.0147868), ("cup", 0.24), ("pint (US)", 0.473176), ("gallon (US)", 3.78541) },
+        ["Speed"] = new[] { ("m/s", 1.0), ("km/h", 0.2777778), ("mph", 0.44704), ("knot", 0.514444) },
+        ["Time"] = new[] { ("millisecond", 0.001), ("second", 1.0), ("minute", 60.0), ("hour", 3600.0), ("day", 86400.0), ("week", 604800.0) },
+        ["Data"] = new[] { ("bit", 0.125), ("byte", 1.0), ("kB", 1e3), ("MB", 1e6), ("GB", 1e9), ("TB", 1e12), ("KiB", 1024.0), ("MiB", 1048576.0), ("GiB", 1073741824.0) },
+        ["Energy"] = new[] { ("joule", 1.0), ("kilojoule", 1000.0), ("calorie", 4.184), ("kcal", 4184.0), ("watt-hour", 3600.0), ("kWh", 3.6e6) },
+        ["Power"] = new[] { ("watt", 1.0), ("kilowatt", 1000.0), ("megawatt", 1e6), ("horsepower", 745.7) },
+        ["Pressure"] = new[] { ("pascal", 1.0), ("kPa", 1000.0), ("bar", 1e5), ("atm", 101325.0), ("psi", 6894.757), ("mmHg", 133.322) },
+        ["Angle"] = new[] { ("degree", 1.0), ("radian", 57.29577951), ("gradian", 0.9), ("turn", 360.0) }
     };
 
     private static readonly string[] TempUnits = { "Celsius", "Fahrenheit", "Kelvin" };
 
-    private static readonly Dictionary<string, (string Unit, double Factor)[]> ConvData = new()
-    {
-        ["Length"] = new[]
-        {
-            ("millimetre", 0.001), ("centimetre", 0.01), ("metre", 1.0), ("kilometre", 1000.0),
-            ("inch", 0.0254), ("foot", 0.3048), ("yard", 0.9144), ("mile", 1609.344)
-        },
-        ["Mass"] = new[]
-        {
-            ("milligram", 1e-6), ("gram", 0.001), ("kilogram", 1.0), ("tonne", 1000.0),
-            ("ounce", 0.0283495), ("pound", 0.453592), ("stone", 6.35029)
-        },
-        ["Area"] = new[]
-        {
-            ("cm²", 0.0001), ("m²", 1.0), ("km²", 1_000_000.0), ("in²", 0.00064516),
-            ("ft²", 0.092903), ("acre", 4046.8564), ("hectare", 10000.0)
-        },
-        ["Volume"] = new[]
-        {
-            ("millilitre", 0.001), ("litre", 1.0), ("m³", 1000.0), ("teaspoon", 0.00492892),
-            ("tablespoon", 0.0147868), ("cup", 0.24), ("pint (US)", 0.473176), ("gallon (US)", 3.78541)
-        },
-        ["Speed"] = new[]
-        {
-            ("m/s", 1.0), ("km/h", 0.2777778), ("mph", 0.44704), ("knot", 0.514444)
-        },
-        ["Time"] = new[]
-        {
-            ("millisecond", 0.001), ("second", 1.0), ("minute", 60.0), ("hour", 3600.0),
-            ("day", 86400.0), ("week", 604800.0)
-        },
-        ["Data"] = new[]
-        {
-            ("bit", 0.125), ("byte", 1.0), ("kB", 1000.0), ("MB", 1_000_000.0), ("GB", 1_000_000_000.0),
-            ("TB", 1_000_000_000_000.0), ("KiB", 1024.0), ("MiB", 1_048_576.0), ("GiB", 1_073_741_824.0)
-        },
-        ["Energy"] = new[]
-        {
-            ("joule", 1.0), ("kilojoule", 1000.0), ("calorie", 4.184), ("kcal", 4184.0),
-            ("watt-hour", 3600.0), ("kWh", 3_600_000.0)
-        },
-        ["Power"] = new[]
-        {
-            ("watt", 1.0), ("kilowatt", 1000.0), ("megawatt", 1_000_000.0), ("horsepower", 745.7)
-        },
-        ["Pressure"] = new[]
-        {
-            ("pascal", 1.0), ("kPa", 1000.0), ("bar", 100000.0), ("atm", 101325.0),
-            ("psi", 6894.757), ("mmHg", 133.322)
-        },
-        ["Angle"] = new[]
-        {
-            ("degree", 1.0), ("radian", 57.29577951), ("gradian", 0.9), ("turn", 360.0)
-        }
-    };
-
     private void FillConvUnits()
     {
         if (ConvCat.SelectedItem is not string cat) return;
-        var units = cat == "Temperature" ? TempUnits : ConvData[cat].Select(u => u.Unit).ToArray();
+        string[] units = cat == "Temperature" ? TempUnits : ConvData[cat].Select(u => u.Unit).ToArray();
         ConvFrom.ItemsSource = units;
         ConvTo.ItemsSource = units;
         ConvFrom.SelectedIndex = 0;
@@ -3256,10 +3209,10 @@ public sealed partial class MainWindow : Window
         DoConvert();
     }
 
-    // Wired to both SelectionChanged and TextChanged, hence the loose signature.
     private void Conv_Changed(object sender, object e)
     {
-        if (_calcReady) DoConvert();
+        if (!_calcReady) return;
+        DoConvert();
     }
 
     private void ConvSwap_Click(object sender, RoutedEventArgs e)
@@ -3270,13 +3223,21 @@ public sealed partial class MainWindow : Window
 
     private void DoConvert()
     {
-        if (ConvCat.SelectedItem is not string cat) return;
-        if (ConvFrom.SelectedItem is not string fu || ConvTo.SelectedItem is not string tu) return;
-        var txt = ConvInput.Text.Trim();
-        if (txt.Length == 0) { ConvResult.Text = ""; return; }
-        if (!CalcEngine.TryEvaluate(txt, true, out double v, out _)) { ConvResult.Text = "…"; return; }
+        if (ConvCat.SelectedItem is not string cat ||
+            ConvFrom.SelectedItem is not string fu ||
+            ConvTo.SelectedItem is not string tu)
+        {
+            return;
+        }
+        var raw = ConvInput.Text.Trim();
+        if (raw.Length == 0) { ConvResult.Text = ""; return; }
+        if (!CalcEngine.TryEvaluate(raw, true, out double v, out _))
+        {
+            ConvResult.Text = "…";
+            return;
+        }
 
-        double value;
+        double result;
         if (cat == "Temperature")
         {
             double c = fu switch
@@ -3285,7 +3246,7 @@ public sealed partial class MainWindow : Window
                 "Kelvin" => v - 273.15,
                 _ => v
             };
-            value = tu switch
+            result = tu switch
             {
                 "Fahrenheit" => c * 9 / 5 + 32,
                 "Kelvin" => c + 273.15,
@@ -3295,16 +3256,13 @@ public sealed partial class MainWindow : Window
         else
         {
             var units = ConvData[cat];
-            double f = units.First(u => u.Unit == fu).Factor;
-            double t = units.First(u => u.Unit == tu).Factor;
-            value = v * f / t;
+            double f1 = units.First(u => u.Unit == fu).Factor;
+            double f2 = units.First(u => u.Unit == tu).Factor;
+            result = v * f1 / f2;
         }
-        ConvResult.Text = $"= {value:G10} {tu}";
+        ConvResult.Text = $"= {result:G10} {tu}";
     }
 
-    // =======================================================================
-    // Page title / date (invoked from the canvas header)
-    // =======================================================================
     private async Task RenamePageFromTitleAsync()
     {
         if (_curPage == null) return;
@@ -3343,14 +3301,11 @@ public sealed partial class MainWindow : Window
         ScheduleSave();
     }
 
-    // =======================================================================
-    // Calculator input
-    // =======================================================================
     private void Calc_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: string tag }) return;
+        if (sender is not Button b || b.Tag is not string token) return;
         CalcError.Text = "";
-        switch (tag)
+        switch (token)
         {
             case "C":
                 CalcInput.Text = "";
@@ -3363,37 +3318,40 @@ public sealed partial class MainWindow : Window
                 if (CalcModeName == "Programmer") ProgEvaluate();
                 else CalcEvaluate();
                 break;
-            case "C₁":
+            case "C₁": // programmer hex digit C
                 CalcInput.Text += "C";
                 break;
             case "±":
                 CalcInput.Text = CalcInput.Text.StartsWith("-(") && CalcInput.Text.EndsWith(")")
                     ? CalcInput.Text[2..^1]
-                    : CalcInput.Text.Length > 0 ? $"-({CalcInput.Text})" : "-";
+                    : (CalcInput.Text.Length > 0 ? $"-({CalcInput.Text})" : "-");
                 break;
             default:
-                CalcInput.Text += tag;
+                CalcInput.Text += token;
                 break;
         }
-        if (tag != "=") CalcInput.SelectionStart = CalcInput.Text.Length;
+        if (token != "=") CalcInput.SelectionStart = CalcInput.Text.Length;
     }
 
     private void CalcEvaluate()
     {
-        var txt = CalcInput.Text.Trim();
-        if (txt.Length == 0) return;
-        if (CalcEngine.TryEvaluate(txt, CalcDeg.IsChecked == true, out double result, out string error))
+        var expr = CalcInput.Text.Trim();
+        if (expr.Length == 0) return;
+        if (CalcEngine.TryEvaluate(expr, CalcDeg.IsChecked == true, out double result, out string error))
         {
-            var res = result.ToString("G12");
-            var list = CalcHistory.ItemsSource as List<string> ?? new List<string>();
-            list.Insert(0, $"{txt} = {res}");
-            if (list.Count > 60) list.RemoveAt(list.Count - 1);
+            string res = result.ToString("G12");
+            var items = CalcHistory.ItemsSource as List<string> ?? new List<string>();
+            items.Insert(0, $"{expr} = {res}");
+            if (items.Count > 60) items.RemoveAt(items.Count - 1);
             CalcHistory.ItemsSource = null;
-            CalcHistory.ItemsSource = list;
+            CalcHistory.ItemsSource = items;
             CalcInput.Text = res;
             CalcInput.SelectionStart = CalcInput.Text.Length;
         }
-        else CalcError.Text = error;
+        else
+        {
+            CalcError.Text = error;
+        }
     }
 
     private void CalcInput_KeyDown(object sender, KeyRoutedEventArgs e)
@@ -3405,23 +3363,12 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void CalcHistory_Click(object sender, ItemClickEventArgs e)
-    {
-        if (e.ClickedItem is not string s) return;
-        int i = s.LastIndexOf("= ", StringComparison.Ordinal);
-        if (i >= 0) CalcInput.Text += s[(i + 2)..];
-        CalcInput.SelectionStart = CalcInput.Text.Length;
-    }
-
-    // =======================================================================
-    // Copy / cut / paste accelerators
-    // =======================================================================
     private bool TextBoxFocused =>
         Surface.ActiveTextBox != null && Surface.ActiveTextBox.FocusState != FocusState.Unfocused;
 
     private void CopyAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
-        if (TextBoxFocused) { args.Handled = false; return; }
+        if (TextBoxFocused) { args.Handled = false; return; } // text box keeps its own Ctrl+C
         if (Surface.HasCanvasSelection)
         {
             Surface.CopySelection();
@@ -3446,26 +3393,34 @@ public sealed partial class MainWindow : Window
 
     private void PasteAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
-        bool hasImage = false;
+        bool hasBitmap = false;
         try
         {
-            hasImage = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
+            hasBitmap = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
                 .Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap);
         }
         catch { }
 
-        if (hasImage)
+        if (hasBitmap)
         {
+            // images always become resizable canvas objects
             args.Handled = true;
             _ = PasteImageAsync();
+            return;
         }
-        else if (TextBoxFocused) args.Handled = false;
-        else if (InkSurface.HasCanvasClipboard)
+        if (TextBoxFocused)
         {
+            args.Handled = false; // plain text: let the focused text box paste
+            return;
+        }
+        if (InkSurface.HasCanvasClipboard)
+        {
+            // paste copied / cut writings or shapes near the centre of the view
             Surface.PasteCanvasAtViewCenter();
             args.Handled = true;
+            return;
         }
-        else args.Handled = false;
+        args.Handled = false;
     }
 
     private async Task PasteImageAsync(System.Numerics.Vector2? worldTopLeft = null)
@@ -3478,29 +3433,39 @@ public sealed partial class MainWindow : Window
                 ShowStatus("Clipboard has no image to paste.");
                 return;
             }
-            using var stream = await (await content.GetBitmapAsync()).OpenReadAsync();
+            var streamRef = await content.GetBitmapAsync();
+            using var stream = await streamRef.OpenReadAsync();
             var decoder = await BitmapDecoder.CreateAsync(stream);
-            var software = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+            var software = await decoder.GetSoftwareBitmapAsync(
+                BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
 
             var dir = System.IO.Path.Combine(LibraryStore.Dir, "assets");
             Directory.CreateDirectory(dir);
             var path = System.IO.Path.Combine(dir, $"{Guid.NewGuid():N}.png");
             using (var outStream = new FileStream(path, FileMode.Create, FileAccess.ReadWrite))
             {
-                var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, outStream.AsRandomAccessStream());
+                var encoder = await BitmapEncoder.CreateAsync(
+                    BitmapEncoder.PngEncoderId, outStream.AsRandomAccessStream());
                 encoder.SetSoftwareBitmap(software);
                 await encoder.FlushAsync();
             }
 
-            if (worldTopLeft is System.Numerics.Vector2 tl)
+            if (worldTopLeft is { } tl)
             {
+                // pasted via the context menu at a specific point
                 Surface.InsertImageAt(path, decoder.PixelWidth, decoder.PixelHeight, tl);
             }
             else
             {
+                // Insert first so the image can consume a pending text caret as its
+                // position, then switch to Pen so pen and touch behave as normal,
+                // but keep the mouse in Auto/Move mode to allow mouse dragging.
                 Surface.InsertImage(path, decoder.PixelWidth, decoder.PixelHeight);
                 SelectTool("Pen");
-                if (Surface.MouseMode == MouseMode.Grab) SetMouseMode(MouseMode.Auto);
+                if (Surface.MouseMode == MouseMode.Grab)
+                {
+                    SetMouseMode(MouseMode.Auto);
+                }
             }
             ShowStatus("Image pasted — drag it with the mouse to move, drag a corner to resize.");
         }
@@ -3510,8 +3475,16 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void CalcHistory_Click(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not string entry) return;
+        int idx = entry.LastIndexOf("= ", StringComparison.Ordinal);
+        if (idx >= 0) CalcInput.Text += entry[(idx + 2)..];
+        CalcInput.SelectionStart = CalcInput.Text.Length;
+    }
+
     // =======================================================================
-    // Export (PNG / PDF)
+    // Export
     // =======================================================================
     private async Task<(byte[] Pixels, int Width, int Height)?> CaptureViewportAsync()
     {
@@ -3519,7 +3492,8 @@ public sealed partial class MainWindow : Window
         {
             var rtb = new RenderTargetBitmap();
             await rtb.RenderAsync(Surface);
-            return ((await rtb.GetPixelsAsync()).ToArray(), rtb.PixelWidth, rtb.PixelHeight);
+            var buffer = await rtb.GetPixelsAsync();
+            return (buffer.ToArray(), rtb.PixelWidth, rtb.PixelHeight);
         }
         catch
         {
@@ -3528,14 +3502,17 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // Export the WHOLE page (#13): fit all content into the viewport, render, then
+    // restore the user's original view.
     private async Task<(byte[] Pixels, int Width, int Height)?> CapturePageAsync()
     {
         var saved = Surface.GetView();
         try
         {
+            // drop text focus so a focused box's grip/handles aren't captured
             if (Surface.ActiveTextBox != null) ExportBtn.Focus(FocusState.Programmatic);
             Surface.FitToContent(28);
-            await Task.Delay(110);
+            await Task.Delay(110); // let the Win2D canvas + text layer re-render
             return await CaptureViewportAsync();
         }
         finally
@@ -3552,7 +3529,8 @@ public sealed partial class MainWindow : Window
             SuggestedFileName = _curPage?.Name ?? "page"
         };
         picker.FileTypeChoices.Add(typeName, new List<string> { extension });
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
         return await picker.PickSaveFileAsync();
     }
 
@@ -3563,12 +3541,15 @@ public sealed partial class MainWindow : Window
         if (capture == null) return;
         var file = await PickSaveFileAsync(".png", "PNG image");
         if (file == null) return;
+
         try
         {
             using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
             var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
-                (uint)capture.Value.Width, (uint)capture.Value.Height, 96, 96, capture.Value.Pixels);
+            encoder.SetPixelData(
+                BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+                (uint)capture.Value.Width, (uint)capture.Value.Height,
+                96, 96, capture.Value.Pixels);
             await encoder.FlushAsync();
             ShowStatus($"Exported {file.Name}");
         }
@@ -3585,6 +3566,7 @@ public sealed partial class MainWindow : Window
         if (capture == null) return;
         var file = await PickSaveFileAsync(".pdf", "PDF document");
         if (file == null) return;
+
         try
         {
             var pdf = PdfExporter.Create(new[]
