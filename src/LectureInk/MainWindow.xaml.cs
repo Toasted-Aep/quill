@@ -51,6 +51,10 @@ public sealed partial class MainWindow : Window
     // true only when the hide-all button is what entered full screen, so restore
     // won't pull the user out of a full screen they set up themselves.
     private bool _hideEnteredFullscreen;
+    // Gallery / start-screen state: which notebook is being browsed (null = the
+    // notebook grid) and whether the gallery is acting as the startup picker (#31).
+    private Notebook? _galleryNb;
+    private bool _galleryLauncher;
 
     private static readonly string[] QuickColors =
         { "#141413", "#FAF9F5", "#D97757", "#D32F2F", "#FBC02D", "#788C5D", "#6A9BCC", "#7B1FA2" };
@@ -189,11 +193,19 @@ public sealed partial class MainWindow : Window
         ApplyPenDock();
         BuildTree();
         BuildPenStrip();
-        OpenFirstPage();
+        OpenStartupPage();
         SelectTool("Pen");
         if (_library.Pens.Count > 0) ApplyPreset(_library.Pens[0]);
         UpdateUndoButtons();
-        ShowStatus("Right-click a pen to edit its type, colour, size and pressure response.");
+
+        // Startup experience: full screen + the notebook/section/page picker,
+        // with the last-used page already loaded behind it (#31).
+        if (_library.StartFullscreen)
+            try { AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen); } catch { }
+        UpdateFullscreenIcon();
+        if (_library.StartOnGallery) ShowGallery(launcher: true);
+
+        ShowStatus("Right-click a pen to edit its type, colour, size and pressure response. F11 toggles full screen.");
     }
 
     private void StartGlowPulse()
@@ -815,6 +827,39 @@ public sealed partial class MainWindow : Window
         return (null, null);
     }
 
+    private (Notebook? nb, Section? sec, NotePage? pg) FindPageById(Guid? id)
+    {
+        if (id == null) return (null, null, null);
+        foreach (var nb in _library.Notebooks)
+            foreach (var sec in nb.Sections)
+                foreach (var pg in sec.Pages)
+                    if (pg.Id == id) return (nb, sec, pg);
+        return (null, null, null);
+    }
+
+    // Loads the page the user worked on last (so the startup picker sits over it),
+    // skipping locked notebooks; falls back to the first available page.
+    private void OpenStartupPage()
+    {
+        var (nb, sec, pg) = FindPageById(_library.LastPageId);
+        if (pg != null && nb!.PasswordHash == null)
+        {
+            SwitchToPage(nb, sec!, pg);
+            return;
+        }
+        foreach (var n in _library.Notebooks)
+        {
+            if (n.PasswordHash != null) continue;
+            if (n.Sections.Count == 0) n.Sections.Add(new Section { Name = "Section 1" });
+            var s = n.Sections[0];
+            if (s.Pages.Count == 0) s.Pages.Add(NewPage("Page 1"));
+            BuildTree();
+            SwitchToPage(n, s, s.Pages[0]);
+            return;
+        }
+        OpenFirstPage();
+    }
+
     private void OpenFirstPage()
     {
         if (_library.Notebooks.Count == 0)
@@ -834,6 +879,11 @@ public sealed partial class MainWindow : Window
         _curNb = nb;
         _curSec = sec;
         _curPage = page;
+        if (_library.LastPageId != page.Id)
+        {
+            _library.LastPageId = page.Id;   // remembered for "Continue" at startup
+            ScheduleSave();
+        }
 
         Surface.LoadPage(page);
         CrumbText.Text = $"{nb.Name} ▸ {sec.Name} ▸ {page.Name}";
@@ -1294,18 +1344,80 @@ public sealed partial class MainWindow : Window
         ("#FBC02D", "Amber"), ("#7B1FA2", "Violet"), ("#3A3A38", "Graphite"), ("#2E7D6B", "Teal")
     };
 
-    private void OpenGallery_Click(object sender, RoutedEventArgs e)
+    private void OpenGallery_Click(object sender, RoutedEventArgs e) => ShowGallery(launcher: false);
+
+    // Shows the gallery as an overlay. launcher = the startup picker variant
+    // (welcome title + "Continue where I left off").
+    private void ShowGallery(bool launcher, Notebook? nb = null)
     {
+        _galleryLauncher = launcher;
+        _galleryNb = nb;
         BuildGallery();
         GalleryPanel.Visibility = Visibility.Visible;
+        try
+        {
+            var anim = new DoubleAnimation
+            {
+                From = 0, To = 1,
+                Duration = new Duration(TimeSpan.FromMilliseconds(220)),
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut }
+            };
+            Storyboard.SetTarget(anim, GalleryPanel);
+            Storyboard.SetTargetProperty(anim, "Opacity");
+            var sb = new Storyboard();
+            sb.Children.Add(anim);
+            sb.Begin();
+        }
+        catch { GalleryPanel.Opacity = 1; }
     }
 
-    private void CloseGallery_Click(object sender, RoutedEventArgs e)
-        => GalleryPanel.Visibility = Visibility.Collapsed;
+    private void CloseGallery()
+    {
+        GalleryPanel.Visibility = Visibility.Collapsed;
+        _galleryLauncher = false;
+        _galleryNb = null;
+    }
+
+    private void CloseGallery_Click(object sender, RoutedEventArgs e) => CloseGallery();
+
+    private void GalleryBack_Click(object sender, RoutedEventArgs e)
+    {
+        _galleryNb = null;
+        BuildGallery();
+    }
 
     private void BuildGallery()
     {
         GalleryHost.Children.Clear();
+
+        bool detail = _galleryNb != null;
+        GalleryBackBtn.Visibility = detail ? Visibility.Visible : Visibility.Collapsed;
+        GalleryNbBtn.Visibility = detail ? Visibility.Collapsed : Visibility.Visible;
+        GalleryFolderBtn.Visibility = detail ? Visibility.Collapsed : Visibility.Visible;
+        GallerySecBtn.Visibility = detail ? Visibility.Visible : Visibility.Collapsed;
+
+        if (detail)
+        {
+            GalleryTitle.Text = _galleryNb!.Name;
+            GallerySubtitle.Text = "Pick a page to work on — or create a new section or page.";
+            GalleryContinueBtn.Visibility = Visibility.Collapsed;
+            BuildNotebookDetail(_galleryNb!);
+            return;
+        }
+
+        GalleryTitle.Text = _galleryLauncher ? "Welcome back" : "Notebooks";
+        GallerySubtitle.Text = _galleryLauncher
+            ? "Choose a notebook to browse its sections and pages — or continue where you left off."
+            : "Click a notebook to browse its sections and pages · right-click for colour, folder, rename, lock.";
+
+        var (lnb, lsec, lpg) = FindPageById(_library.LastPageId);
+        if (_galleryLauncher && lpg != null)
+        {
+            GalleryContinueBtn.Content = $"Continue: {lpg.Name}";
+            ToolTipService.SetToolTip(GalleryContinueBtn, $"{lnb!.Name} ▸ {lsec!.Name} ▸ {lpg.Name}");
+            GalleryContinueBtn.Visibility = Visibility.Visible;
+        }
+        else GalleryContinueBtn.Visibility = Visibility.Collapsed;
 
         // ungrouped notebooks first
         var ungrouped = _library.Notebooks.Where(n => string.IsNullOrEmpty(n.Folder)).ToList();
@@ -1381,17 +1493,43 @@ public sealed partial class MainWindow : Window
         card.Tapped += async (_, _) =>
         {
             if (!await EnsureUnlockedAsync(nb)) return;
-            OpenNotebook(nb);
-            GalleryPanel.Visibility = Visibility.Collapsed;
+            _galleryNb = nb;             // drill into sections & pages
+            BuildGallery();
         };
+
+        // hover polish: brand glow + a gentle lift
+        var restBrush = card.BorderBrush;
+        card.PointerEntered += (_, _) =>
+        {
+            if (Application.Current.Resources["GlowBrush"] is Brush glow) card.BorderBrush = glow;
+            card.BorderThickness = new Thickness(1.5);
+            card.Translation = new System.Numerics.Vector3(0, -2, 0);
+        };
+        card.PointerExited += (_, _) =>
+        {
+            card.BorderBrush = restBrush;
+            card.BorderThickness = new Thickness(1);
+            card.Translation = new System.Numerics.Vector3(0, 0, 0);
+        };
+
         card.ContextFlyout = BuildCardFlyout(nb);
-        ToolTipService.SetToolTip(card, "Click to open · right-click for colour, folder, rename, lock");
+        ToolTipService.SetToolTip(card, "Click to browse sections & pages · right-click for more");
         return card;
     }
 
     private MenuFlyout BuildCardFlyout(Notebook nb)
     {
         var fly = new MenuFlyout();
+
+        var openItem = new MenuFlyoutItem { Text = "Open first page" };
+        openItem.Click += async (_, _) =>
+        {
+            if (!await EnsureUnlockedAsync(nb)) return;
+            OpenNotebook(nb);
+            CloseGallery();
+        };
+        fly.Items.Add(openItem);
+        fly.Items.Add(new MenuFlyoutSeparator());
 
         var colourSub = new MenuFlyoutSubItem { Text = "Colour" };
         foreach (var (hex, cname) in NotebookColours)
@@ -1440,7 +1578,219 @@ public sealed partial class MainWindow : Window
         lockItem.Click += (_, _) => { _selNode = FindNode(nb); LockToggle_Click(this, new RoutedEventArgs()); };
         fly.Items.Add(lockItem);
 
+        fly.Items.Add(new MenuFlyoutSeparator());
+        var delItem = new MenuFlyoutItem { Text = "Delete notebook…" };
+        delItem.Click += async (_, _) =>
+        {
+            if (!await EnsureUnlockedAsync(nb)) return;
+            if (!await ConfirmAsync($"Delete notebook “{nb.Name}” and everything inside it?")) return;
+            _library.Notebooks.Remove(nb);
+            _selNode = null;
+            BuildTree();
+            if (_curPage == null || FindContext(_curPage).Item1 == null) OpenFirstPage();
+            ScheduleSave();
+            BuildGallery();
+        };
+        fly.Items.Add(delItem);
+
         return fly;
+    }
+
+    // ---- notebook detail: sections with page chips (start-screen drill-down) ----
+    private void BuildNotebookDetail(Notebook nb)
+    {
+        bool dark = _library.Theme == "Dark";
+        var inkBrush = new SolidColorBrush(dark ? Color.FromArgb(255, 0xF4, 0xF2, 0xEC) : Color.FromArgb(255, 0x1B, 0x1A, 0x18));
+        var cardBg = new SolidColorBrush(dark ? Color.FromArgb(255, 0x1C, 0x1B, 0x20) : Color.FromArgb(255, 0xFF, 0xFF, 0xFF));
+        var chipBg = new SolidColorBrush(dark ? Color.FromArgb(255, 0x27, 0x26, 0x2C) : Color.FromArgb(255, 0xF3, 0xF1, 0xEA));
+        var hairline = new SolidColorBrush(Color.FromArgb(60, 128, 128, 128));
+        var accent = new SolidColorBrush(ColorUtil.Parse(nb.Color));
+
+        if (nb.Sections.Count == 0)
+            GalleryHost.Children.Add(new TextBlock
+            {
+                Text = "This notebook is empty — click “New section” above to get started.",
+                Opacity = 0.6, FontSize = 13, Margin = new Thickness(4, 8, 0, 0)
+            });
+
+        foreach (var sec in nb.Sections)
+        {
+            var s0 = sec;
+            var secCard = new Border
+            {
+                Background = cardBg,
+                BorderBrush = hairline,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(16, 12, 16, 12)
+            };
+            var stack = new StackPanel { Spacing = 8 };
+
+            var header = new Grid();
+            var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+            titleRow.Children.Add(new Border
+            {
+                Width = 10, Height = 10, CornerRadius = new CornerRadius(5),
+                Background = accent, VerticalAlignment = VerticalAlignment.Center
+            });
+            titleRow.Children.Add(new TextBlock
+            {
+                Text = sec.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 16,
+                Foreground = inkBrush, VerticalAlignment = VerticalAlignment.Center
+            });
+            titleRow.Children.Add(new TextBlock
+            {
+                Text = $"{sec.Pages.Count} page{(sec.Pages.Count == 1 ? "" : "s")}",
+                FontSize = 11, Opacity = 0.55, VerticalAlignment = VerticalAlignment.Center
+            });
+            header.Children.Add(titleRow);
+
+            var addPg = new Button
+            {
+                Content = "+ New page", FontSize = 12,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Padding = new Thickness(10, 4, 10, 4)
+            };
+            addPg.Click += async (_, _) => await GalleryNewPageAsync(nb, s0);
+            header.Children.Add(addPg);
+            stack.Children.Add(header);
+
+            var secFly = new MenuFlyout();
+            var renSec = new MenuFlyoutItem { Text = "Rename section" };
+            renSec.Click += async (_, _) =>
+            {
+                var n2 = await PromptAsync("Rename section", s0.Name);
+                if (n2 == null) return;
+                s0.Name = n2;
+                ScheduleSave(); BuildTree(); BuildGallery();
+                if (_curSec == s0 && _curNb != null && _curPage != null)
+                    CrumbText.Text = $"{_curNb.Name} ▸ {_curSec.Name} ▸ {_curPage.Name}";
+            };
+            secFly.Items.Add(renSec);
+            var delSec = new MenuFlyoutItem { Text = "Delete section…" };
+            delSec.Click += async (_, _) =>
+            {
+                if (!await ConfirmAsync($"Delete section “{s0.Name}” and all its pages?")) return;
+                nb.Sections.Remove(s0);
+                ScheduleSave(); BuildTree();
+                if (_curPage != null && FindContext(_curPage).Item1 == null) OpenFirstPage();
+                BuildGallery();
+            };
+            secFly.Items.Add(delSec);
+            secCard.ContextFlyout = secFly;
+            ToolTipService.SetToolTip(secCard, "Right-click to rename or delete this section");
+
+            if (sec.Pages.Count == 0)
+                stack.Children.Add(new TextBlock { Text = "No pages yet — add one above.", FontSize = 12, Opacity = 0.55 });
+            else
+            {
+                var wrap = new GridView { SelectionMode = ListViewSelectionMode.None, IsItemClickEnabled = false };
+                foreach (var pg in sec.Pages) wrap.Items.Add(MakePageChip(nb, sec, pg, chipBg, inkBrush));
+                stack.Children.Add(wrap);
+            }
+
+            secCard.Child = stack;
+            GalleryHost.Children.Add(secCard);
+        }
+    }
+
+    private Button MakePageChip(Notebook nb, Section sec, NotePage pg, Brush bg, Brush ink)
+    {
+        bool current = ReferenceEquals(pg, _curPage);
+        var inner = new StackPanel { Spacing = 2 };
+        inner.Children.Add(new TextBlock
+        {
+            Text = pg.Name, Foreground = ink, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 160
+        });
+        inner.Children.Add(new TextBlock
+        {
+            Text = new DateTime(pg.CreatedTicks, DateTimeKind.Utc).ToLocalTime().ToString("d MMM yyyy"),
+            FontSize = 10, Opacity = 0.55
+        });
+
+        var chip = new Button
+        {
+            Content = inner,
+            Background = bg,
+            Padding = new Thickness(12, 8, 12, 8),
+            CornerRadius = new CornerRadius(10),
+            BorderThickness = new Thickness(current ? 1.5 : 1),
+            BorderBrush = current
+                ? (Brush)Application.Current.Resources["BrandOrangeBrush"]
+                : new SolidColorBrush(Color.FromArgb(50, 128, 128, 128))
+        };
+        ToolTipService.SetToolTip(chip, current
+            ? "This page is open right now"
+            : "Open this page · right-click to rename or delete");
+
+        chip.Click += (_, _) =>
+        {
+            BuildTree();
+            SwitchToPage(nb, sec, pg);
+            CloseGallery();
+        };
+
+        var fly = new MenuFlyout();
+        var ren = new MenuFlyoutItem { Text = "Rename page" };
+        ren.Click += async (_, _) =>
+        {
+            var n2 = await PromptAsync("Rename page", pg.Name);
+            if (n2 == null) return;
+            pg.Name = n2;
+            ScheduleSave(); BuildTree(); BuildGallery();
+            if (ReferenceEquals(pg, _curPage))
+            {
+                CrumbText.Text = $"{nb.Name} ▸ {sec.Name} ▸ {pg.Name}";
+                Surface.Refresh();
+            }
+        };
+        fly.Items.Add(ren);
+        var del = new MenuFlyoutItem { Text = "Delete page…" };
+        del.Click += async (_, _) =>
+        {
+            if (!await ConfirmAsync($"Delete page “{pg.Name}”?")) return;
+            sec.Pages.Remove(pg);
+            ScheduleSave(); BuildTree();
+            if (ReferenceEquals(pg, _curPage)) OpenFirstPage();
+            BuildGallery();
+        };
+        fly.Items.Add(del);
+        chip.ContextFlyout = fly;
+        return chip;
+    }
+
+    private async Task GalleryNewPageAsync(Notebook nb, Section sec)
+    {
+        var name = await PromptAsync("New page", $"Page {sec.Pages.Count + 1}");
+        if (name == null) return;
+        var pg = NewPage(name);
+        sec.Pages.Add(pg);
+        BuildTree();
+        ScheduleSave();
+        SwitchToPage(nb, sec, pg);   // creating a page means "work on it now"
+        CloseGallery();
+    }
+
+    private async void GalleryNewSection_Click(object sender, RoutedEventArgs e)
+    {
+        if (_galleryNb == null) return;
+        var name = await PromptAsync("New section", $"Section {_galleryNb.Sections.Count + 1}");
+        if (name == null) return;
+        _galleryNb.Sections.Add(new Section { Name = name });
+        BuildTree();
+        ScheduleSave();
+        BuildGallery();   // stay in the picker so a page can be added next
+    }
+
+    private async void GalleryContinue_Click(object sender, RoutedEventArgs e)
+    {
+        var (nb, sec, pg) = FindPageById(_library.LastPageId);
+        if (pg == null) { CloseGallery(); return; }
+        if (!await EnsureUnlockedAsync(nb!)) return;
+        BuildTree();
+        SwitchToPage(nb!, sec!, pg);
+        CloseGallery();
     }
 
     private void OpenNotebook(Notebook nb)
@@ -1463,6 +1813,7 @@ public sealed partial class MainWindow : Window
         nb.Sections.Add(sec);
         _library.Notebooks.Add(nb);
         BuildTree();
+        _galleryNb = nb;      // jump straight into the new notebook's pages
         BuildGallery();
         ScheduleSave();
     }
@@ -1527,6 +1878,16 @@ public sealed partial class MainWindow : Window
         row.Children.Add(defSize);
         panel.Children.Add(row);
         panel.Children.Add(new TextBlock { Text = "New text boxes start with this font and size.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- startup behaviour ----
+        panel.Children.Add(new TextBlock { Text = "Startup", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        var fsToggle = new ToggleSwitch { Header = "Start in full screen", IsOn = _library.StartFullscreen };
+        fsToggle.Toggled += (_, _) => { _library.StartFullscreen = fsToggle.IsOn; ScheduleSave(); };
+        panel.Children.Add(fsToggle);
+        var pickerToggle = new ToggleSwitch { Header = "Show the notebook picker at startup", IsOn = _library.StartOnGallery };
+        pickerToggle.Toggled += (_, _) => { _library.StartOnGallery = pickerToggle.IsOn; ScheduleSave(); };
+        panel.Children.Add(pickerToggle);
+        panel.Children.Add(new TextBlock { Text = "The picker opens over your last page — press Esc to skip it.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         panel.Children.Add(new TextBlock { Text = "Recover / import notebooks", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
         var recoverBtn = new Button { Content = "Recover my old notebooks (previous location)", HorizontalAlignment = HorizontalAlignment.Left };
@@ -1942,6 +2303,7 @@ public sealed partial class MainWindow : Window
             }
         }
         catch { }
+        UpdateFullscreenIcon();
     }
 
     private void RestoreUi_Click(object sender, RoutedEventArgs e)
@@ -1961,6 +2323,7 @@ public sealed partial class MainWindow : Window
         }
         catch { }
         _hideEnteredFullscreen = false;
+        UpdateFullscreenIcon();
     }
 
     private void SnapMinimalButtons()
@@ -2001,6 +2364,57 @@ public sealed partial class MainWindow : Window
             AppWindow.SetPresenter(AppWindowPresenterKind.Default);
         else
             AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+        UpdateFullscreenIcon();
+    }
+
+    private void UpdateFullscreenIcon()
+    {
+        try
+        {
+            bool fs = AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
+            BtnFullscreenIcon.Glyph = fs ? "\uE73F" : "\uE740";   // BackToWindow / FullScreen
+            ToolTipService.SetToolTip(BtnFullscreen, fs ? "Exit full screen (F11)" : "Full screen (F11)");
+        }
+        catch { }
+    }
+
+    private void FullscreenAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        Fullscreen_Click(this, new RoutedEventArgs());
+        args.Handled = true;
+    }
+
+    // Esc: close the start screen / gallery if it's open; otherwise leave full
+    // screen (unless a text box has focus — then let the control handle it).
+    private void EscAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (GalleryPanel.Visibility == Visibility.Visible)
+        {
+            if (_galleryNb != null) { _galleryNb = null; BuildGallery(); }   // step back first
+            else CloseGallery();
+            args.Handled = true;
+            return;
+        }
+        if (Surface.ActiveTextBox == null && AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
+        {
+            AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+            UpdateFullscreenIcon();
+            args.Handled = true;
+            return;
+        }
+        args.Handled = false;
+    }
+
+    private void SearchAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        try
+        {
+            if (_uiHidden || SearchBtn.Flyout == null) { args.Handled = false; return; }
+            SearchBtn.Flyout.ShowAt(SearchBtn);
+            SearchBox.Focus(FocusState.Programmatic);
+            args.Handled = true;
+        }
+        catch { args.Handled = false; }
     }
 
     // =======================================================================
@@ -2753,35 +3167,82 @@ public sealed partial class MainWindow : Window
                 }
             }
         }
+
         ds.DrawText($"y: {yMin:0.##} … {yMax:0.##}  (radians)",
             new System.Numerics.Vector2(6, 4), axis, _graphLabelFormat);
     }
 
-    // ---- converter ----
+    // =======================================================================
+    // Converter
+    // =======================================================================
     private static readonly string[] ConvCategories =
-        { "Length", "Mass", "Temperature", "Area", "Volume", "Speed", "Time", "Data", "Energy", "Power", "Pressure", "Angle" };
-
-    private static readonly Dictionary<string, (string Unit, double Factor)[]> ConvData = new()
     {
-        ["Length"] = new[] { ("millimetre", 0.001), ("centimetre", 0.01), ("metre", 1.0), ("kilometre", 1000.0), ("inch", 0.0254), ("foot", 0.3048), ("yard", 0.9144), ("mile", 1609.344) },
-        ["Mass"] = new[] { ("milligram", 1e-6), ("gram", 0.001), ("kilogram", 1.0), ("tonne", 1000.0), ("ounce", 0.0283495), ("pound", 0.453592), ("stone", 6.35029) },
-        ["Area"] = new[] { ("cm²", 1e-4), ("m²", 1.0), ("km²", 1e6), ("in²", 0.00064516), ("ft²", 0.092903), ("acre", 4046.8564), ("hectare", 10000.0) },
-        ["Volume"] = new[] { ("millilitre", 0.001), ("litre", 1.0), ("m³", 1000.0), ("teaspoon", 0.00492892), ("tablespoon", 0.0147868), ("cup", 0.24), ("pint (US)", 0.473176), ("gallon (US)", 3.78541) },
-        ["Speed"] = new[] { ("m/s", 1.0), ("km/h", 0.2777778), ("mph", 0.44704), ("knot", 0.514444) },
-        ["Time"] = new[] { ("millisecond", 0.001), ("second", 1.0), ("minute", 60.0), ("hour", 3600.0), ("day", 86400.0), ("week", 604800.0) },
-        ["Data"] = new[] { ("bit", 0.125), ("byte", 1.0), ("kB", 1e3), ("MB", 1e6), ("GB", 1e9), ("TB", 1e12), ("KiB", 1024.0), ("MiB", 1048576.0), ("GiB", 1073741824.0) },
-        ["Energy"] = new[] { ("joule", 1.0), ("kilojoule", 1000.0), ("calorie", 4.184), ("kcal", 4184.0), ("watt-hour", 3600.0), ("kWh", 3.6e6) },
-        ["Power"] = new[] { ("watt", 1.0), ("kilowatt", 1000.0), ("megawatt", 1e6), ("horsepower", 745.7) },
-        ["Pressure"] = new[] { ("pascal", 1.0), ("kPa", 1000.0), ("bar", 1e5), ("atm", 101325.0), ("psi", 6894.757), ("mmHg", 133.322) },
-        ["Angle"] = new[] { ("degree", 1.0), ("radian", 57.29577951), ("gradian", 0.9), ("turn", 360.0) }
+        "Length", "Mass", "Temperature", "Area", "Volume", "Speed", "Time",
+        "Data", "Energy", "Power", "Pressure", "Angle"
     };
 
     private static readonly string[] TempUnits = { "Celsius", "Fahrenheit", "Kelvin" };
 
+    private static readonly Dictionary<string, (string Unit, double Factor)[]> ConvData = new()
+    {
+        ["Length"] = new[]
+        {
+            ("millimetre", 0.001), ("centimetre", 0.01), ("metre", 1.0), ("kilometre", 1000.0),
+            ("inch", 0.0254), ("foot", 0.3048), ("yard", 0.9144), ("mile", 1609.344)
+        },
+        ["Mass"] = new[]
+        {
+            ("milligram", 1e-6), ("gram", 0.001), ("kilogram", 1.0), ("tonne", 1000.0),
+            ("ounce", 0.0283495), ("pound", 0.453592), ("stone", 6.35029)
+        },
+        ["Area"] = new[]
+        {
+            ("cm²", 0.0001), ("m²", 1.0), ("km²", 1_000_000.0), ("in²", 0.00064516),
+            ("ft²", 0.092903), ("acre", 4046.8564), ("hectare", 10000.0)
+        },
+        ["Volume"] = new[]
+        {
+            ("millilitre", 0.001), ("litre", 1.0), ("m³", 1000.0), ("teaspoon", 0.00492892),
+            ("tablespoon", 0.0147868), ("cup", 0.24), ("pint (US)", 0.473176), ("gallon (US)", 3.78541)
+        },
+        ["Speed"] = new[]
+        {
+            ("m/s", 1.0), ("km/h", 0.2777778), ("mph", 0.44704), ("knot", 0.514444)
+        },
+        ["Time"] = new[]
+        {
+            ("millisecond", 0.001), ("second", 1.0), ("minute", 60.0), ("hour", 3600.0),
+            ("day", 86400.0), ("week", 604800.0)
+        },
+        ["Data"] = new[]
+        {
+            ("bit", 0.125), ("byte", 1.0), ("kB", 1000.0), ("MB", 1_000_000.0), ("GB", 1_000_000_000.0),
+            ("TB", 1_000_000_000_000.0), ("KiB", 1024.0), ("MiB", 1_048_576.0), ("GiB", 1_073_741_824.0)
+        },
+        ["Energy"] = new[]
+        {
+            ("joule", 1.0), ("kilojoule", 1000.0), ("calorie", 4.184), ("kcal", 4184.0),
+            ("watt-hour", 3600.0), ("kWh", 3_600_000.0)
+        },
+        ["Power"] = new[]
+        {
+            ("watt", 1.0), ("kilowatt", 1000.0), ("megawatt", 1_000_000.0), ("horsepower", 745.7)
+        },
+        ["Pressure"] = new[]
+        {
+            ("pascal", 1.0), ("kPa", 1000.0), ("bar", 100000.0), ("atm", 101325.0),
+            ("psi", 6894.757), ("mmHg", 133.322)
+        },
+        ["Angle"] = new[]
+        {
+            ("degree", 1.0), ("radian", 57.29577951), ("gradian", 0.9), ("turn", 360.0)
+        }
+    };
+
     private void FillConvUnits()
     {
         if (ConvCat.SelectedItem is not string cat) return;
-        string[] units = cat == "Temperature" ? TempUnits : ConvData[cat].Select(u => u.Unit).ToArray();
+        var units = cat == "Temperature" ? TempUnits : ConvData[cat].Select(u => u.Unit).ToArray();
         ConvFrom.ItemsSource = units;
         ConvTo.ItemsSource = units;
         ConvFrom.SelectedIndex = 0;
@@ -2795,10 +3256,10 @@ public sealed partial class MainWindow : Window
         DoConvert();
     }
 
+    // Wired to both SelectionChanged and TextChanged, hence the loose signature.
     private void Conv_Changed(object sender, object e)
     {
-        if (!_calcReady) return;
-        DoConvert();
+        if (_calcReady) DoConvert();
     }
 
     private void ConvSwap_Click(object sender, RoutedEventArgs e)
@@ -2809,21 +3270,13 @@ public sealed partial class MainWindow : Window
 
     private void DoConvert()
     {
-        if (ConvCat.SelectedItem is not string cat ||
-            ConvFrom.SelectedItem is not string fu ||
-            ConvTo.SelectedItem is not string tu)
-        {
-            return;
-        }
-        var raw = ConvInput.Text.Trim();
-        if (raw.Length == 0) { ConvResult.Text = ""; return; }
-        if (!CalcEngine.TryEvaluate(raw, true, out double v, out _))
-        {
-            ConvResult.Text = "…";
-            return;
-        }
+        if (ConvCat.SelectedItem is not string cat) return;
+        if (ConvFrom.SelectedItem is not string fu || ConvTo.SelectedItem is not string tu) return;
+        var txt = ConvInput.Text.Trim();
+        if (txt.Length == 0) { ConvResult.Text = ""; return; }
+        if (!CalcEngine.TryEvaluate(txt, true, out double v, out _)) { ConvResult.Text = "…"; return; }
 
-        double result;
+        double value;
         if (cat == "Temperature")
         {
             double c = fu switch
@@ -2832,7 +3285,7 @@ public sealed partial class MainWindow : Window
                 "Kelvin" => v - 273.15,
                 _ => v
             };
-            result = tu switch
+            value = tu switch
             {
                 "Fahrenheit" => c * 9 / 5 + 32,
                 "Kelvin" => c + 273.15,
@@ -2842,13 +3295,16 @@ public sealed partial class MainWindow : Window
         else
         {
             var units = ConvData[cat];
-            double f1 = units.First(u => u.Unit == fu).Factor;
-            double f2 = units.First(u => u.Unit == tu).Factor;
-            result = v * f1 / f2;
+            double f = units.First(u => u.Unit == fu).Factor;
+            double t = units.First(u => u.Unit == tu).Factor;
+            value = v * f / t;
         }
-        ConvResult.Text = $"= {result:G10} {tu}";
+        ConvResult.Text = $"= {value:G10} {tu}";
     }
 
+    // =======================================================================
+    // Page title / date (invoked from the canvas header)
+    // =======================================================================
     private async Task RenamePageFromTitleAsync()
     {
         if (_curPage == null) return;
@@ -2887,11 +3343,14 @@ public sealed partial class MainWindow : Window
         ScheduleSave();
     }
 
+    // =======================================================================
+    // Calculator input
+    // =======================================================================
     private void Calc_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button b || b.Tag is not string token) return;
+        if (sender is not Button { Tag: string tag }) return;
         CalcError.Text = "";
-        switch (token)
+        switch (tag)
         {
             case "C":
                 CalcInput.Text = "";
@@ -2904,40 +3363,37 @@ public sealed partial class MainWindow : Window
                 if (CalcModeName == "Programmer") ProgEvaluate();
                 else CalcEvaluate();
                 break;
-            case "C₁": // programmer hex digit C
+            case "C₁":
                 CalcInput.Text += "C";
                 break;
             case "±":
                 CalcInput.Text = CalcInput.Text.StartsWith("-(") && CalcInput.Text.EndsWith(")")
                     ? CalcInput.Text[2..^1]
-                    : (CalcInput.Text.Length > 0 ? $"-({CalcInput.Text})" : "-");
+                    : CalcInput.Text.Length > 0 ? $"-({CalcInput.Text})" : "-";
                 break;
             default:
-                CalcInput.Text += token;
+                CalcInput.Text += tag;
                 break;
         }
-        if (token != "=") CalcInput.SelectionStart = CalcInput.Text.Length;
+        if (tag != "=") CalcInput.SelectionStart = CalcInput.Text.Length;
     }
 
     private void CalcEvaluate()
     {
-        var expr = CalcInput.Text.Trim();
-        if (expr.Length == 0) return;
-        if (CalcEngine.TryEvaluate(expr, CalcDeg.IsChecked == true, out double result, out string error))
+        var txt = CalcInput.Text.Trim();
+        if (txt.Length == 0) return;
+        if (CalcEngine.TryEvaluate(txt, CalcDeg.IsChecked == true, out double result, out string error))
         {
-            string res = result.ToString("G12");
-            var items = CalcHistory.ItemsSource as List<string> ?? new List<string>();
-            items.Insert(0, $"{expr} = {res}");
-            if (items.Count > 60) items.RemoveAt(items.Count - 1);
+            var res = result.ToString("G12");
+            var list = CalcHistory.ItemsSource as List<string> ?? new List<string>();
+            list.Insert(0, $"{txt} = {res}");
+            if (list.Count > 60) list.RemoveAt(list.Count - 1);
             CalcHistory.ItemsSource = null;
-            CalcHistory.ItemsSource = items;
+            CalcHistory.ItemsSource = list;
             CalcInput.Text = res;
             CalcInput.SelectionStart = CalcInput.Text.Length;
         }
-        else
-        {
-            CalcError.Text = error;
-        }
+        else CalcError.Text = error;
     }
 
     private void CalcInput_KeyDown(object sender, KeyRoutedEventArgs e)
@@ -2949,12 +3405,23 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void CalcHistory_Click(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not string s) return;
+        int i = s.LastIndexOf("= ", StringComparison.Ordinal);
+        if (i >= 0) CalcInput.Text += s[(i + 2)..];
+        CalcInput.SelectionStart = CalcInput.Text.Length;
+    }
+
+    // =======================================================================
+    // Copy / cut / paste accelerators
+    // =======================================================================
     private bool TextBoxFocused =>
         Surface.ActiveTextBox != null && Surface.ActiveTextBox.FocusState != FocusState.Unfocused;
 
     private void CopyAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
-        if (TextBoxFocused) { args.Handled = false; return; } // text box keeps its own Ctrl+C
+        if (TextBoxFocused) { args.Handled = false; return; }
         if (Surface.HasCanvasSelection)
         {
             Surface.CopySelection();
@@ -2979,34 +3446,26 @@ public sealed partial class MainWindow : Window
 
     private void PasteAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
-        bool hasBitmap = false;
+        bool hasImage = false;
         try
         {
-            hasBitmap = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
+            hasImage = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
                 .Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap);
         }
         catch { }
 
-        if (hasBitmap)
+        if (hasImage)
         {
-            // images always become resizable canvas objects
             args.Handled = true;
             _ = PasteImageAsync();
-            return;
         }
-        if (TextBoxFocused)
+        else if (TextBoxFocused) args.Handled = false;
+        else if (InkSurface.HasCanvasClipboard)
         {
-            args.Handled = false; // plain text: let the focused text box paste
-            return;
-        }
-        if (InkSurface.HasCanvasClipboard)
-        {
-            // paste copied / cut writings or shapes near the centre of the view
             Surface.PasteCanvasAtViewCenter();
             args.Handled = true;
-            return;
         }
-        args.Handled = false;
+        else args.Handled = false;
     }
 
     private async Task PasteImageAsync(System.Numerics.Vector2? worldTopLeft = null)
@@ -3019,39 +3478,29 @@ public sealed partial class MainWindow : Window
                 ShowStatus("Clipboard has no image to paste.");
                 return;
             }
-            var streamRef = await content.GetBitmapAsync();
-            using var stream = await streamRef.OpenReadAsync();
+            using var stream = await (await content.GetBitmapAsync()).OpenReadAsync();
             var decoder = await BitmapDecoder.CreateAsync(stream);
-            var software = await decoder.GetSoftwareBitmapAsync(
-                BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+            var software = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
 
             var dir = System.IO.Path.Combine(LibraryStore.Dir, "assets");
             Directory.CreateDirectory(dir);
             var path = System.IO.Path.Combine(dir, $"{Guid.NewGuid():N}.png");
             using (var outStream = new FileStream(path, FileMode.Create, FileAccess.ReadWrite))
             {
-                var encoder = await BitmapEncoder.CreateAsync(
-                    BitmapEncoder.PngEncoderId, outStream.AsRandomAccessStream());
+                var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, outStream.AsRandomAccessStream());
                 encoder.SetSoftwareBitmap(software);
                 await encoder.FlushAsync();
             }
 
-            if (worldTopLeft is { } tl)
+            if (worldTopLeft is System.Numerics.Vector2 tl)
             {
-                // pasted via the context menu at a specific point
                 Surface.InsertImageAt(path, decoder.PixelWidth, decoder.PixelHeight, tl);
             }
             else
             {
-                // Insert first so the image can consume a pending text caret as its
-                // position, then switch to Pen so pen and touch behave as normal,
-                // but keep the mouse in Auto/Move mode to allow mouse dragging.
                 Surface.InsertImage(path, decoder.PixelWidth, decoder.PixelHeight);
                 SelectTool("Pen");
-                if (Surface.MouseMode == MouseMode.Grab)
-                {
-                    SetMouseMode(MouseMode.Auto);
-                }
+                if (Surface.MouseMode == MouseMode.Grab) SetMouseMode(MouseMode.Auto);
             }
             ShowStatus("Image pasted — drag it with the mouse to move, drag a corner to resize.");
         }
@@ -3061,16 +3510,8 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void CalcHistory_Click(object sender, ItemClickEventArgs e)
-    {
-        if (e.ClickedItem is not string entry) return;
-        int idx = entry.LastIndexOf("= ", StringComparison.Ordinal);
-        if (idx >= 0) CalcInput.Text += entry[(idx + 2)..];
-        CalcInput.SelectionStart = CalcInput.Text.Length;
-    }
-
     // =======================================================================
-    // Export
+    // Export (PNG / PDF)
     // =======================================================================
     private async Task<(byte[] Pixels, int Width, int Height)?> CaptureViewportAsync()
     {
@@ -3078,8 +3519,7 @@ public sealed partial class MainWindow : Window
         {
             var rtb = new RenderTargetBitmap();
             await rtb.RenderAsync(Surface);
-            var buffer = await rtb.GetPixelsAsync();
-            return (buffer.ToArray(), rtb.PixelWidth, rtb.PixelHeight);
+            return ((await rtb.GetPixelsAsync()).ToArray(), rtb.PixelWidth, rtb.PixelHeight);
         }
         catch
         {
@@ -3088,17 +3528,14 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // Export the WHOLE page (#13): fit all content into the viewport, render, then
-    // restore the user's original view.
     private async Task<(byte[] Pixels, int Width, int Height)?> CapturePageAsync()
     {
         var saved = Surface.GetView();
         try
         {
-            // drop text focus so a focused box's grip/handles aren't captured
             if (Surface.ActiveTextBox != null) ExportBtn.Focus(FocusState.Programmatic);
             Surface.FitToContent(28);
-            await Task.Delay(110); // let the Win2D canvas + text layer re-render
+            await Task.Delay(110);
             return await CaptureViewportAsync();
         }
         finally
@@ -3115,8 +3552,7 @@ public sealed partial class MainWindow : Window
             SuggestedFileName = _curPage?.Name ?? "page"
         };
         picker.FileTypeChoices.Add(typeName, new List<string> { extension });
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
         return await picker.PickSaveFileAsync();
     }
 
@@ -3127,15 +3563,12 @@ public sealed partial class MainWindow : Window
         if (capture == null) return;
         var file = await PickSaveFileAsync(".png", "PNG image");
         if (file == null) return;
-
         try
         {
             using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
             var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
-            encoder.SetPixelData(
-                BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
-                (uint)capture.Value.Width, (uint)capture.Value.Height,
-                96, 96, capture.Value.Pixels);
+            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+                (uint)capture.Value.Width, (uint)capture.Value.Height, 96, 96, capture.Value.Pixels);
             await encoder.FlushAsync();
             ShowStatus($"Exported {file.Name}");
         }
@@ -3152,7 +3585,6 @@ public sealed partial class MainWindow : Window
         if (capture == null) return;
         var file = await PickSaveFileAsync(".pdf", "PDF document");
         if (file == null) return;
-
         try
         {
             var pdf = PdfExporter.Create(new[]

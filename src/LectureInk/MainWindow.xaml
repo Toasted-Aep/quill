@@ -13,6 +13,9 @@
             <KeyboardAccelerator Key="C" Modifiers="Control" Invoked="CopyAccel_Invoked"/>
             <KeyboardAccelerator Key="X" Modifiers="Control" Invoked="CutAccel_Invoked"/>
             <KeyboardAccelerator Key="V" Modifiers="Control" Invoked="PasteAccel_Invoked"/>
+            <KeyboardAccelerator Key="F11" Invoked="FullscreenAccel_Invoked"/>
+            <KeyboardAccelerator Key="Escape" Invoked="EscAccel_Invoked"/>
+            <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="SearchAccel_Invoked"/>
         </Grid.KeyboardAccelerators>
 
         <Grid.RowDefinitions>
@@ -204,7 +207,7 @@
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="SearchBtn" ToolTipService.ToolTip="Search all notes (text and handwriting)">
+                    <Button x:Name="SearchBtn" ToolTipService.ToolTip="Search all notes — text and handwriting (Ctrl+F)">
                         <FontIcon Glyph="&#xE721;" FontSize="14"/>
                         <Button.Flyout>
                             <Flyout>
@@ -239,8 +242,8 @@
                     <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
                         <FontIcon Glyph="&#xE890;" FontSize="14"/>
                     </Button>
-                    <Button x:Name="BtnFullscreen" Click="Fullscreen_Click" ToolTipService.ToolTip="Full screen">
-                        <FontIcon Glyph="&#xE740;" FontSize="14"/>
+                    <Button x:Name="BtnFullscreen" Click="Fullscreen_Click" ToolTipService.ToolTip="Full screen (F11)">
+                        <FontIcon x:Name="BtnFullscreenIcon" Glyph="&#xE740;" FontSize="14"/>
                     </Button>
                 </StackPanel>
             </ScrollViewer>
@@ -645,12 +648,26 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <Grid Grid.Row="0" Margin="0,0,0,16">
-                        <TextBlock Text="Notebooks" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
-                                   FontSize="24" Foreground="{ThemeResource InkBrush}" VerticalAlignment="Center"/>
-                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                            <Button Click="GalleryNewNotebook_Click" Content="New notebook"/>
-                            <Button Click="GalleryNewFolder_Click" Content="New folder"/>
-                            <Button Click="CloseGallery_Click" Style="{StaticResource AccentButtonStyle}" Content="Done"/>
+                        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                            <Button x:Name="GalleryBackBtn" Click="GalleryBack_Click" Visibility="Collapsed"
+                                    Background="Transparent" BorderThickness="0" Padding="8" VerticalAlignment="Center"
+                                    ToolTipService.ToolTip="Back to all notebooks (Esc)">
+                                <FontIcon Glyph="&#xE72B;" FontSize="16"/>
+                            </Button>
+                            <StackPanel VerticalAlignment="Center" Spacing="2">
+                                <TextBlock x:Name="GalleryTitle" Text="Notebooks" FontFamily="{StaticResource HeadingFont}"
+                                           FontWeight="SemiBold" FontSize="24" Foreground="{ThemeResource InkBrush}"/>
+                                <TextBlock x:Name="GallerySubtitle" Text="" FontSize="12" Opacity="0.65"
+                                           Foreground="{ThemeResource InkBrush}"/>
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <Button x:Name="GalleryContinueBtn" Click="GalleryContinue_Click" Visibility="Collapsed"
+                                    Style="{StaticResource AccentButtonStyle}"/>
+                            <Button x:Name="GalleryNbBtn" Click="GalleryNewNotebook_Click" Content="New notebook"/>
+                            <Button x:Name="GalleryFolderBtn" Click="GalleryNewFolder_Click" Content="New folder"/>
+                            <Button x:Name="GallerySecBtn" Click="GalleryNewSection_Click" Content="New section" Visibility="Collapsed"/>
+                            <Button x:Name="GalleryDoneBtn" Click="CloseGallery_Click" Content="Close" ToolTipService.ToolTip="Close the picker (Esc)"/>
                         </StackPanel>
                     </Grid>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">

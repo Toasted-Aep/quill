@@ -190,4 +190,9 @@ public class Library
     public string PenDock { get; set; } = "Bottom";
     public double NotebookPanelW { get; set; } = 300;
     public double NotebookPanelH { get; set; }
+    // Last page the user worked on — restored (and offered as "Continue") at startup.
+    public Guid? LastPageId { get; set; }
+    // Startup behaviour: launch full screen with the notebook picker shown.
+    public bool StartFullscreen { get; set; } = true;
+    public bool StartOnGallery { get; set; } = true;
 }
