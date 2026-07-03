@@ -235,6 +235,55 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // =======================================================================
+    // UI transitions (#32): panels fade in and out instead of snapping.
+    // A version counter per element keeps rapid toggles from fighting each
+    // other (an interrupted fade-out must not collapse a re-shown panel).
+    // =======================================================================
+    private readonly Dictionary<FrameworkElement, int> _fadeVer = new();
+
+    private void FadeTo(FrameworkElement el, double to, int ms, bool collapseAtEnd)
+    {
+        int ver = _fadeVer.TryGetValue(el, out var v) ? v + 1 : 1;
+        _fadeVer[el] = ver;
+        try
+        {
+            var anim = new DoubleAnimation
+            {
+                To = to,   // no From: animates from the current opacity
+                Duration = new Duration(TimeSpan.FromMilliseconds(ms)),
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut }
+            };
+            Storyboard.SetTarget(anim, el);
+            Storyboard.SetTargetProperty(anim, "Opacity");
+            var sb = new Storyboard();
+            sb.Children.Add(anim);
+            sb.Completed += (_, _) =>
+            {
+                if (_fadeVer[el] != ver) return;
+                if (collapseAtEnd) { el.Visibility = Visibility.Collapsed; el.Opacity = 1; }
+            };
+            sb.Begin();
+        }
+        catch
+        {
+            el.Opacity = collapseAtEnd ? 1 : to;
+            if (collapseAtEnd) el.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void FadeIn(FrameworkElement el, int ms = 170)
+    {
+        if (el.Visibility != Visibility.Visible) { el.Opacity = 0; el.Visibility = Visibility.Visible; }
+        FadeTo(el, 1, ms, collapseAtEnd: false);
+    }
+
+    private void FadeOut(FrameworkElement el, int ms = 140)
+    {
+        if (el.Visibility != Visibility.Visible) return;
+        FadeTo(el, 0, ms, collapseAtEnd: true);
+    }
+
     private void BarScroll_Wheel(object sender, PointerRoutedEventArgs e)
     {
         if (sender is not ScrollViewer sv) return;
@@ -875,6 +924,7 @@ public sealed partial class MainWindow : Window
 
     private void SwitchToPage(Notebook nb, Section sec, NotePage page)
     {
+        bool pageChanged = !ReferenceEquals(_curPage, page);
         if (_curPage != null) SaveNow();
         _curNb = nb;
         _curSec = sec;
@@ -886,6 +936,12 @@ public sealed partial class MainWindow : Window
         }
 
         Surface.LoadPage(page);
+        if (pageChanged)
+        {
+            // gentle cross-fade so the new page eases in rather than snapping
+            Surface.Opacity = 0.25;
+            FadeTo(Surface, 1, 200, collapseAtEnd: false);
+        }
         CrumbText.Text = $"{nb.Name} ▸ {sec.Name} ▸ {page.Name}";
 
         _syncingUi = true;
@@ -1352,27 +1408,12 @@ public sealed partial class MainWindow : Window
         _galleryLauncher = launcher;
         _galleryNb = nb;
         BuildGallery();
-        GalleryPanel.Visibility = Visibility.Visible;
-        try
-        {
-            var anim = new DoubleAnimation
-            {
-                From = 0, To = 1,
-                Duration = new Duration(TimeSpan.FromMilliseconds(220)),
-                EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut }
-            };
-            Storyboard.SetTarget(anim, GalleryPanel);
-            Storyboard.SetTargetProperty(anim, "Opacity");
-            var sb = new Storyboard();
-            sb.Children.Add(anim);
-            sb.Begin();
-        }
-        catch { GalleryPanel.Opacity = 1; }
+        FadeIn(GalleryPanel, 220);
     }
 
     private void CloseGallery()
     {
-        GalleryPanel.Visibility = Visibility.Collapsed;
+        FadeOut(GalleryPanel, 160);
         _galleryLauncher = false;
         _galleryNb = null;
     }
@@ -1388,6 +1429,9 @@ public sealed partial class MainWindow : Window
     private void BuildGallery()
     {
         GalleryHost.Children.Clear();
+        // soft content transition when moving between the grid and a notebook
+        GalleryHost.Opacity = 0;
+        FadeTo(GalleryHost, 1, 160, collapseAtEnd: false);
 
         bool detail = _galleryNb != null;
         GalleryBackBtn.Visibility = detail ? Visibility.Visible : Visibility.Collapsed;
@@ -1942,13 +1986,14 @@ public sealed partial class MainWindow : Window
 
     private void Sidebar_Toggle(object sender, RoutedEventArgs e)
     {
-        NotebookPanel.Visibility = BtnSidebar.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        if (BtnSidebar.IsChecked == true) FadeIn(NotebookPanel);
+        else FadeOut(NotebookPanel);
     }
 
     private void Sidebar_Close(object sender, RoutedEventArgs e)
     {
         BtnSidebar.IsChecked = false;
-        NotebookPanel.Visibility = Visibility.Collapsed;
+        FadeOut(NotebookPanel);
     }
 
     // =======================================================================
@@ -2237,16 +2282,10 @@ public sealed partial class MainWindow : Window
     private void ApplyPenRowVisibility()
     {
         bool rowOn = _curPage?.PenRowVisible ?? true;
-        if (_uiHidden)
-        {
-            PenRow.Visibility = _floatPen ? Visibility.Visible : Visibility.Collapsed;
-            PenRowShowBtn.Visibility = Visibility.Collapsed;
-        }
-        else
-        {
-            PenRow.Visibility = rowOn ? Visibility.Visible : Visibility.Collapsed;
-            PenRowShowBtn.Visibility = rowOn ? Visibility.Collapsed : Visibility.Visible;
-        }
+        bool showRow = _uiHidden ? _floatPen : rowOn;
+        bool showChip = !_uiHidden && !rowOn;
+        if (showRow) FadeIn(PenRow); else FadeOut(PenRow);
+        if (showChip) FadeIn(PenRowShowBtn); else FadeOut(PenRowShowBtn);
     }
 
     private void PenRowCollapse_Click(object sender, RoutedEventArgs e)
@@ -2280,12 +2319,12 @@ public sealed partial class MainWindow : Window
     {
         _uiHidden = true;
         _floatPen = false;
-        TopBar.Visibility = Visibility.Collapsed;
-        FormatBar.Visibility = Visibility.Collapsed;
-        NotebookPanel.Visibility = Visibility.Collapsed;
-        CalcPanel.Visibility = Visibility.Collapsed;
+        FadeOut(TopBar);
+        FadeOut(FormatBar);
+        FadeOut(NotebookPanel);
+        FadeOut(CalcPanel);
         BtnCalc.IsChecked = false;
-        MinimalButtons.Visibility = Visibility.Visible;
+        FadeIn(MinimalButtons);
         ApplyPenRowVisibility();
         // hiding everything also goes full screen — but only take credit for it
         // if we weren't already full screen, so restore won't yank the user out.
@@ -2308,9 +2347,10 @@ public sealed partial class MainWindow : Window
     private void RestoreUi_Click(object sender, RoutedEventArgs e)
     {
         _uiHidden = false;
-        TopBar.Visibility = Visibility.Visible;
-        MinimalButtons.Visibility = Visibility.Collapsed;
-        NotebookPanel.Visibility = BtnSidebar.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        FadeIn(TopBar);
+        FadeOut(MinimalButtons);
+        if (BtnSidebar.IsChecked == true) FadeIn(NotebookPanel);
+        else FadeOut(NotebookPanel);
         UpdateFormatBarVisibility();
         ApplyPenRowVisibility();
         // only leave full screen if hiding the UI is what entered it; if the user
@@ -2421,9 +2461,8 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     private void UpdateFormatBarVisibility()
     {
-        if (_uiHidden) { FormatBar.Visibility = Visibility.Collapsed; return; }
-        bool show = Surface.Tool == ToolType.Text || Surface.ActiveTextBox != null;
-        FormatBar.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        bool show = !_uiHidden && (Surface.Tool == ToolType.Text || Surface.ActiveTextBox != null);
+        if (show) FadeIn(FormatBar, 150); else FadeOut(FormatBar, 120);
     }
 
     private ITextSelection? Sel()
@@ -2881,14 +2920,18 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     private void Calc_Toggle(object sender, RoutedEventArgs e)
     {
-        CalcPanel.Visibility = BtnCalc.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
-        if (CalcPanel.Visibility == Visibility.Visible) CalcInput.Focus(FocusState.Programmatic);
+        if (BtnCalc.IsChecked == true)
+        {
+            FadeIn(CalcPanel);
+            CalcInput.Focus(FocusState.Programmatic);
+        }
+        else FadeOut(CalcPanel);
     }
 
     private void Calc_Close(object sender, RoutedEventArgs e)
     {
         BtnCalc.IsChecked = false;
-        CalcPanel.Visibility = Visibility.Collapsed;
+        FadeOut(CalcPanel);
     }
 
     private void CalcMode_Click(object sender, RoutedEventArgs e) => BuildCalcButtons();
