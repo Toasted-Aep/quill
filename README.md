@@ -1,6 +1,6 @@
-# Fluent Ink — pen-first lecture notes for Windows 11
+# Quill — pen-first lecture notes for Windows 11
 
-*(formerly LectureInk — the internal namespace, exe name and storage folder keep the old name so existing notes and shortcuts continue to work)*
+*(formerly LectureInk / Fluent Ink — the internal namespace, exe name and storage folder keep the LectureInk name so existing notes and shortcuts continue to work)*
 
 A WinUI 3 (Windows App SDK) drawing/notes app built from your design spec.
 Ink rendering is custom, on a GPU-accelerated Win2D canvas, with pressure-aware

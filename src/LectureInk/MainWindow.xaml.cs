@@ -83,7 +83,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Title = "Fluent Ink";
+        Title = "Quill";
         try
         {
             var icon = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
@@ -698,14 +698,14 @@ public sealed partial class MainWindow : Window
 
     private void BuildTree()
     {
-        // Remember which notebooks/sections the user had collapsed so a rebuild
-        // (after add / rename / reorder / move) doesn't re-expand everything (#29).
-        var collapsed = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        // Everything starts collapsed; remember what the user expanded so a
+        // rebuild (after add / rename / reorder / move) keeps their state (#29).
+        var expanded = new HashSet<object>(ReferenceEqualityComparer.Instance);
         void Scan(IList<TreeViewNode> nodes)
         {
             foreach (var n in nodes)
             {
-                if (!n.IsExpanded && n.Content != null) collapsed.Add(n.Content);
+                if (n.IsExpanded && n.Content != null) expanded.Add(n.Content);
                 Scan(n.Children);
             }
         }
@@ -714,10 +714,10 @@ public sealed partial class MainWindow : Window
         NotebookTree.RootNodes.Clear();
         foreach (var nb in _library.Notebooks)
         {
-            var nbNode = new TreeViewNode { Content = nb, IsExpanded = !collapsed.Contains(nb) };
+            var nbNode = new TreeViewNode { Content = nb, IsExpanded = expanded.Contains(nb) };
             foreach (var sec in nb.Sections)
             {
-                var secNode = new TreeViewNode { Content = sec, IsExpanded = !collapsed.Contains(sec) };
+                var secNode = new TreeViewNode { Content = sec, IsExpanded = expanded.Contains(sec) };
                 foreach (var pg in sec.Pages)
                     secNode.Children.Add(new TreeViewNode { Content = pg });
                 nbNode.Children.Add(secNode);
@@ -1313,7 +1313,6 @@ public sealed partial class MainWindow : Window
     {
         if (string.IsNullOrEmpty(rtf)) return "";
         var sb = new System.Text.StringBuilder();
-        int depth = 0;
         for (int i = 0; i < rtf.Length; i++)
         {
             char c = rtf[i];

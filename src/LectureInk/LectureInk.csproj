@@ -16,10 +16,10 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <AssemblyName>LectureInk</AssemblyName>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <!-- App display name is "Fluent Ink"; assembly/namespace stay LectureInk so
+    <!-- App display name is "Quill"; assembly/namespace stay LectureInk so
          the exe name, shortcuts and the notes storage folder keep working. -->
-    <AssemblyTitle>Fluent Ink</AssemblyTitle>
-    <Product>Fluent Ink</Product>
+    <AssemblyTitle>Quill</AssemblyTitle>
+    <Product>Quill</Product>
     <!-- Work around WinUI XAML compiler MSVC discovery failing when the VS C++
          workload is not installed. vcmeta.dll is only used for C++ XAML apps,
          so dummy values are safe for a C# project. -->
