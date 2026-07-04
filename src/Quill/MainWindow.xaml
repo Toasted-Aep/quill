@@ -37,6 +37,11 @@
                                   ToolTipService.ToolTip="Show or hide the notebook panel">
                         <FontIcon Glyph="&#xE700;" FontSize="14"/>
                     </ToggleButton>
+                    <!-- takes the hamburger's spot while the start screen is open -->
+                    <Button x:Name="BtnSettings" Click="Settings_Click" Visibility="Collapsed"
+                            ToolTipService.ToolTip="Settings — accent colour, startup, storage folder &amp; import">
+                        <FontIcon Glyph="&#xE713;" FontSize="14"/>
+                    </Button>
                     <TextBlock x:Name="CrumbText" VerticalAlignment="Center" Margin="6,0,10,0"
                                FontSize="13" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
                                Foreground="{ThemeResource InkBrush}"
@@ -236,9 +241,6 @@
                     <ToggleButton x:Name="BtnCalc" Click="Calc_Toggle" ToolTipService.ToolTip="Calculator">
                         <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
                     </ToggleButton>
-                    <Button x:Name="BtnSettings" Click="Settings_Click" ToolTipService.ToolTip="Settings — storage folder &amp; recover/import notebooks">
-                        <FontIcon Glyph="&#xE713;" FontSize="14"/>
-                    </Button>
                     <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
                         <FontIcon Glyph="&#xE890;" FontSize="14"/>
                     </Button>

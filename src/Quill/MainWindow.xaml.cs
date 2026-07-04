@@ -1487,6 +1487,10 @@ public sealed partial class MainWindow : Window
         _galleryNb = nb;
         BuildGallery();
         FadeIn(GalleryPanel, 220);
+        // start-screen top bar: settings takes the hamburger's spot, crumb hides
+        BtnSidebar.Visibility = Visibility.Collapsed;
+        BtnSettings.Visibility = Visibility.Visible;
+        CrumbText.Visibility = Visibility.Collapsed;
     }
 
     private void CloseGallery()
@@ -1494,6 +1498,9 @@ public sealed partial class MainWindow : Window
         FadeOut(GalleryPanel, 160);
         _galleryLauncher = false;
         _galleryNb = null;
+        BtnSidebar.Visibility = Visibility.Visible;
+        BtnSettings.Visibility = Visibility.Collapsed;
+        CrumbText.Visibility = Visibility.Visible;
     }
 
     private void CloseGallery_Click(object sender, RoutedEventArgs e) => CloseGallery();
@@ -1534,8 +1541,13 @@ public sealed partial class MainWindow : Window
         var (lnb, lsec, lpg) = FindPageById(_library.LastPageId);
         if (_galleryLauncher && lpg != null)
         {
-            GalleryContinueBtn.Content = $"Continue: {lpg.Name}";
-            ToolTipService.SetToolTip(GalleryContinueBtn, $"{lnb!.Name} ▸ {lsec!.Name} ▸ {lpg.Name}");
+            GalleryContinueBtn.Content = new TextBlock
+            {
+                Text = $"Continue: {lnb!.Name}, {lsec!.Name}, {lpg.Name}",
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = 380
+            };
+            ToolTipService.SetToolTip(GalleryContinueBtn, $"{lnb.Name} ▸ {lsec!.Name} ▸ {lpg.Name}");
             GalleryContinueBtn.Visibility = Visibility.Visible;
         }
         else GalleryContinueBtn.Visibility = Visibility.Collapsed;
@@ -2060,7 +2072,17 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(importBtn);
         panel.Children.Add(new TextBlock { Text = "Importing only adds notebooks you don't already have — it never overwrites or deletes your current notes.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
-        var dlg = new ContentDialog { Title = "Settings", Content = panel, CloseButtonText = "Done", XamlRoot = RootGrid.XamlRoot };
+        // scrollable so every section (incl. the colour picker) stays reachable
+        var scroller = new ScrollViewer
+        {
+            Content = panel,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            MaxHeight = 540,
+            Padding = new Thickness(0, 0, 12, 0)
+        };
+        var dlg = new ContentDialog { Title = "Settings", Content = scroller, CloseButtonText = "Done", XamlRoot = RootGrid.XamlRoot };
         await dlg.ShowAsync();
     }
 
