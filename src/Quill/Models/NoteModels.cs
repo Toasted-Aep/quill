@@ -195,4 +195,6 @@ public class Library
     // Startup behaviour: launch full screen with the notebook picker shown.
     public bool StartFullscreen { get; set; } = true;
     public bool StartOnGallery { get; set; } = true;
+    // Accent colour for glows, highlights and buttons (#33).
+    public string AccentColor { get; set; } = "#D97757";
 }

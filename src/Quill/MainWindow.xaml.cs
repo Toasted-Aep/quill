@@ -190,6 +190,7 @@ public sealed partial class MainWindow : Window
         };
 
         ApplyTheme();
+        try { ApplyAccent(ColorUtil.Parse(_library.AccentColor), refreshTheme: true); } catch { }
         ApplyPenDock();
         BuildTree();
         BuildPenStrip();
@@ -323,6 +324,62 @@ public sealed partial class MainWindow : Window
         RootGrid.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
         BtnThemeIcon.Glyph = dark ? "\uE706" : "\uE708";
         ApplyTitleBarColors(dark);
+    }
+
+    // =======================================================================
+    // Accent colour (#33): retints the glow, brand brush and system accent so
+    // every glow, icon highlight and control picks up the user's colour.
+    // =======================================================================
+    private readonly DispatcherTimer _accentTimer = new() { Interval = TimeSpan.FromMilliseconds(280) };
+    private bool _accentTimerHooked;
+
+    private void SetAccent(Color c)
+    {
+        _library.AccentColor = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+        ApplyAccent(c, refreshTheme: false);   // brushes update live while dragging
+        if (!_accentTimerHooked)
+        {
+            _accentTimerHooked = true;
+            _accentTimer.Tick += (_, _) => { _accentTimer.Stop(); RefreshThemeForAccent(); };
+        }
+        _accentTimer.Stop();
+        _accentTimer.Start();                  // debounce the (heavier) theme refresh
+        ScheduleSave();
+    }
+
+    private void ApplyAccent(Color c, bool refreshTheme)
+    {
+        var res = Application.Current.Resources;
+        if (res["BrandOrangeBrush"] is SolidColorBrush brand) brand.Color = c;
+        if (res["GlowBrush"] is LinearGradientBrush glow)
+            foreach (var stop in glow.GradientStops)
+                stop.Color = Color.FromArgb(stop.Color.A, c.R, c.G, c.B);
+        res["SystemAccentColor"] = c;
+        res["SystemAccentColorLight1"] = Mix(c, Colors.White, 0.15);
+        res["SystemAccentColorLight2"] = Mix(c, Colors.White, 0.30);
+        res["SystemAccentColorLight3"] = Mix(c, Colors.White, 0.45);
+        res["SystemAccentColorDark1"] = Mix(c, Colors.Black, 0.12);
+        res["SystemAccentColorDark2"] = Mix(c, Colors.Black, 0.25);
+        res["SystemAccentColorDark3"] = Mix(c, Colors.Black, 0.38);
+        if (refreshTheme) RefreshThemeForAccent();
+    }
+
+    private static Color Mix(Color a, Color b, double t) => Color.FromArgb(255,
+        (byte)(a.R + (b.R - a.R) * t),
+        (byte)(a.G + (b.G - a.G) * t),
+        (byte)(a.B + (b.B - a.B) * t));
+
+    // Theme resources cache the accent-derived brushes, so flip the theme once
+    // and back to force WinUI to re-resolve them with the new accent.
+    private void RefreshThemeForAccent()
+    {
+        try
+        {
+            var cur = RootGrid.RequestedTheme;
+            RootGrid.RequestedTheme = cur == ElementTheme.Dark ? ElementTheme.Light : ElementTheme.Dark;
+            RootGrid.RequestedTheme = cur;
+        }
+        catch { }
     }
 
     private void ApplyTitleBarColors(bool dark)
@@ -865,6 +922,27 @@ public sealed partial class MainWindow : Window
             }
             else ShowStatus("Incorrect password.");
         }
+    }
+
+    private async Task<Color?> PickColorAsync(string title, Color initial)
+    {
+        var picker = new ColorPicker
+        {
+            IsAlphaEnabled = false,
+            IsMoreButtonVisible = false,
+            ColorSpectrumShape = ColorSpectrumShape.Box,
+            Color = initial
+        };
+        var dlg = new ContentDialog
+        {
+            Title = title,
+            Content = picker,
+            PrimaryButtonText = "OK",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        return await dlg.ShowAsync() == ContentDialogResult.Primary ? picker.Color : null;
     }
 
     private (Notebook?, Section?) FindContext(NotePage page)
@@ -1582,6 +1660,17 @@ public sealed partial class MainWindow : Window
             it.Click += (_, _) => { nb.Color = h; ScheduleSave(); BuildGallery(); };
             colourSub.Items.Add(it);
         }
+        colourSub.Items.Add(new MenuFlyoutSeparator());
+        var customColour = new MenuFlyoutItem { Text = "Custom…" };
+        customColour.Click += async (_, _) =>
+        {
+            var picked = await PickColorAsync($"Colour for “{nb.Name}”", ColorUtil.Parse(nb.Color));
+            if (picked is not Color c) return;
+            nb.Color = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+            ScheduleSave();
+            BuildGallery();
+        };
+        colourSub.Items.Add(customColour);
         fly.Items.Add(colourSub);
 
         var folderSub = new MenuFlyoutSubItem { Text = "Move to folder" };
@@ -1931,6 +2020,36 @@ public sealed partial class MainWindow : Window
         pickerToggle.Toggled += (_, _) => { _library.StartOnGallery = pickerToggle.IsOn; ScheduleSave(); };
         panel.Children.Add(pickerToggle);
         panel.Children.Add(new TextBlock { Text = "The picker opens over your last page — press Esc to skip it.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- accent colour (#33) ----
+        panel.Children.Add(new TextBlock { Text = "Accent colour", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = "Used for the glows, highlights, buttons and selection colours.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        var accentPicker = new ColorPicker
+        {
+            IsAlphaEnabled = false,
+            IsMoreButtonVisible = false,
+            ColorSpectrumShape = ColorSpectrumShape.Box,
+            Color = ColorUtil.Parse(_library.AccentColor)
+        };
+        var swatchRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        string[] accentPresets = { "#D97757", "#6A9BCC", "#788C5D", "#7B1FA2", "#2E7D6B", "#FBC02D", "#D32F2F" };
+        foreach (var hex in accentPresets)
+        {
+            var h = hex;
+            var sw = new Button
+            {
+                Width = 36, Height = 26,
+                Background = new SolidColorBrush(ColorUtil.Parse(h)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 128, 128, 128))
+            };
+            ToolTipService.SetToolTip(sw, h == "#D97757" ? "Clay (default)" : h);
+            sw.Click += (_, _) => accentPicker.Color = ColorUtil.Parse(h);   // fires ColorChanged
+            swatchRow.Children.Add(sw);
+        }
+        panel.Children.Add(swatchRow);
+        var accentExp = new Expander { Header = "Custom colour (RGB)", Content = accentPicker, HorizontalAlignment = HorizontalAlignment.Stretch };
+        panel.Children.Add(accentExp);
+        accentPicker.ColorChanged += (_, args) => SetAccent(args.NewColor);
 
         panel.Children.Add(new TextBlock { Text = "Recover / import notebooks", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
         var recoverBtn = new Button { Content = "Recover my old notebooks (previous location)", HorizontalAlignment = HorizontalAlignment.Left };
