@@ -1,13 +1,13 @@
 using System.Text.Json;
-using LectureInk.Models;
+using Quill.Models;
 
-namespace LectureInk.Services;
+namespace Quill.Services;
 
 public static class LibraryStore
 {
     private static readonly JsonSerializerOptions Opts = new() { WriteIndented = false };
 
-    // A small settings file lives at a FIXED anchor (Documents\LectureInk) and
+    // A small settings file lives at a FIXED anchor (Documents\Quill) and
     // records the chosen central storage folder, so every build/version reads and
     // writes the same notebooks (universal sync) (#settings).
     public sealed class AppSettings
@@ -18,8 +18,14 @@ public static class LibraryStore
 
     private static AppSettings? _settings;
     private static string AnchorDir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "LectureInk");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Quill");
     private static string SettingsPath => Path.Combine(AnchorDir, "settings.json");
+
+    // Pre-rename anchor (the app used to be called LectureInk) — adopted once,
+    // then kept as a read fallback so no notes are ever lost by the rename.
+    private static string OldAnchorDir =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "LectureInk");
+    private static string OldSettingsPath => Path.Combine(OldAnchorDir, "settings.json");
 
     public static AppSettings Settings
     {
@@ -30,6 +36,12 @@ public static class LibraryStore
             {
                 if (File.Exists(SettingsPath))
                     _settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
+                else if (File.Exists(OldSettingsPath))
+                {
+                    // adopt the old settings (incl. any custom storage folder)
+                    _settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(OldSettingsPath));
+                    if (_settings != null) SaveSettings();
+                }
             }
             catch { }
             return _settings ??= new AppSettings();
@@ -46,7 +58,7 @@ public static class LibraryStore
         catch { }
     }
 
-    // The central, user-configurable storage folder (default Documents\LectureInk).
+    // The central, user-configurable storage folder (default Documents\Quill).
     public static string Dir
     {
         get
@@ -56,7 +68,8 @@ public static class LibraryStore
         }
     }
 
-    // Old hidden location — migrated/imported once, then kept as a read fallback.
+    // Old hidden location (from the LectureInk era) — migrated/imported once,
+    // then kept as a read fallback. Deliberately NOT renamed to Quill.
     public static string LegacyDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LectureInk");
 
@@ -68,6 +81,8 @@ public static class LibraryStore
         MigrateFromLegacyIfNeeded();
         var lib = TryRead(FilePath, preserveCorrupt: true)
             ?? TryRead(FilePath + ".bak", preserveCorrupt: false)
+            ?? TryRead(Path.Combine(OldAnchorDir, "library.json"), preserveCorrupt: false)
+            ?? TryRead(Path.Combine(OldAnchorDir, "library.json.bak"), preserveCorrupt: false)
             ?? TryRead(LegacyFilePath, preserveCorrupt: false)
             ?? TryRead(LegacyFilePath + ".bak", preserveCorrupt: false)
             ?? Seed();
@@ -130,20 +145,28 @@ public static class LibraryStore
         try
         {
             if (File.Exists(FilePath)) return;          // already on the new path
-            if (!File.Exists(LegacyFilePath)) return;   // nothing to migrate
-            Directory.CreateDirectory(Dir);
-            File.Copy(LegacyFilePath, FilePath, false);
-            if (File.Exists(LegacyFilePath + ".bak"))
-                try { File.Copy(LegacyFilePath + ".bak", FilePath + ".bak", false); } catch { }
 
-            var legacyBackups = Path.Combine(LegacyDir, "backups");
-            if (Directory.Exists(legacyBackups))
+            // prefer the pre-rename Documents\LectureInk library, then the old
+            // hidden AppData location
+            string srcDir;
+            if (File.Exists(Path.Combine(OldAnchorDir, "library.json"))) srcDir = OldAnchorDir;
+            else if (File.Exists(LegacyFilePath)) srcDir = LegacyDir;
+            else return;                                // nothing to migrate
+
+            var srcFile = Path.Combine(srcDir, "library.json");
+            Directory.CreateDirectory(Dir);
+            File.Copy(srcFile, FilePath, false);
+            if (File.Exists(srcFile + ".bak"))
+                try { File.Copy(srcFile + ".bak", FilePath + ".bak", false); } catch { }
+
+            var srcBackups = Path.Combine(srcDir, "backups");
+            if (Directory.Exists(srcBackups))
             {
                 Directory.CreateDirectory(BackupDir);
-                foreach (var f in Directory.GetFiles(legacyBackups, "library-*.json"))
+                foreach (var f in Directory.GetFiles(srcBackups, "library-*.json"))
                     try { File.Copy(f, Path.Combine(BackupDir, Path.GetFileName(f)), false); } catch { }
             }
-            foreach (var f in Directory.GetFiles(LegacyDir, "library.recovery-*.json"))
+            foreach (var f in Directory.GetFiles(srcDir, "library.recovery-*.json"))
                 try { File.Copy(f, Path.Combine(Dir, Path.GetFileName(f)), false); } catch { }
         }
         catch { /* migration is best-effort; the legacy copy stays intact */ }

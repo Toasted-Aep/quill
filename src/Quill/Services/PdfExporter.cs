@@ -1,7 +1,7 @@
 using System.IO.Compression;
 using System.Text;
 
-namespace LectureInk.Services;
+namespace Quill.Services;
 
 public record PdfPageImage(int PixelWidth, int PixelHeight, byte[] Bgra8Pixels);
 

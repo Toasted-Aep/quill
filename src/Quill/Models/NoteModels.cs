@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace LectureInk.Models;
+namespace Quill.Models;
 
 public enum PenType
 {

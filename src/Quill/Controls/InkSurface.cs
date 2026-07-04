@@ -1,7 +1,7 @@
 using System.Numerics;
-using LectureInk.Helpers;
-using LectureInk.Models;
-using LectureInk.Services;
+using Quill.Helpers;
+using Quill.Models;
+using Quill.Services;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Geometry;
 using Microsoft.Graphics.Canvas.Text;
@@ -16,7 +16,7 @@ using Windows.Foundation;
 using Windows.System;
 using Windows.UI;
 
-namespace LectureInk.Controls;
+namespace Quill.Controls;
 
 /// <summary>
 /// Infinite pen-first drawing surface. The canvas fills the viewport and all

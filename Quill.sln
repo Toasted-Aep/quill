@@ -2,7 +2,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.8.34330.188
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LectureInk", "src\LectureInk\LectureInk.csproj", "{3C2A9A8E-5F1D-4B6C-9D2E-7A1B0C4D5E6F}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Quill", "src\Quill\Quill.csproj", "{3C2A9A8E-5F1D-4B6C-9D2E-7A1B0C4D5E6F}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

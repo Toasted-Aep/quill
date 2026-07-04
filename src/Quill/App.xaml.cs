@@ -1,6 +1,6 @@
 using Microsoft.UI.Xaml;
 
-namespace LectureInk;
+namespace Quill;
 
 public partial class App : Application
 {

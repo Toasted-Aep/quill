@@ -1,6 +1,6 @@
-using LectureInk.Models;
+using Quill.Models;
 
-namespace LectureInk.Services;
+namespace Quill.Services;
 
 public interface IPageAction
 {

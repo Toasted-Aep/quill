@@ -1,6 +1,6 @@
 # Quill — pen-first lecture notes for Windows 11
 
-*(formerly LectureInk / Fluent Ink — the internal namespace, exe name and storage folder keep the LectureInk name so existing notes and shortcuts continue to work)*
+*(formerly LectureInk, briefly Fluent Ink — fully renamed to Quill. On first run the app automatically adopts existing notes from `Documents\LectureInk`; nothing is deleted.)*
 
 A WinUI 3 (Windows App SDK) drawing/notes app built from your design spec.
 Ink rendering is custom, on a GPU-accelerated Win2D canvas, with pressure-aware
@@ -11,7 +11,7 @@ pen physics, so it feels closer to OneNote than to a toy canvas demo.
 1. Install **Visual Studio 2022** (17.8 or newer) with these workloads:
    - *.NET desktop development*
    - *Windows application development* (includes the Windows App SDK / WinUI tooling)
-2. Open `LectureInk.sln`.
+2. Open `Quill.sln`.
 3. In the toolbar, set the platform to **x64** (Win2D does not support AnyCPU).
 4. Press **F5**. The project is configured as *unpackaged + self-contained*,
    so no MSIX packaging or certificate is needed.
@@ -22,8 +22,10 @@ If NuGet restore complains about exact versions, update `Microsoft.WindowsAppSDK
 and `Microsoft.Graphics.Win2D` to the latest stable — the API surface used here
 is conservative.
 
-Notes are auto-saved to `%LocalAppData%\LectureInk\library.json` (debounced,
-plus on page switch and app close).
+Notes are auto-saved to `Documents\Quill\library.json` by default (debounced,
+plus on page switch and app close); the folder is configurable in Settings.
+Existing `Documents\LectureInk` or `%LocalAppData%\LectureInk` notes are
+migrated automatically on first run (copy-only — originals stay put).
 
 ## What's implemented (vs the spec)
 
@@ -97,13 +99,13 @@ toggle; Mica backdrop; pen-first layout with tooltips everywhere.
 ## Project layout
 
 ```
-src/LectureInk/
+src/Quill/
   App.xaml(.cs)           app entry
   MainWindow.xaml(.cs)    all chrome: toolbars, tree, format bar, export, zoom
   Controls/InkSurface.cs  the ink engine (Win2D rendering, input, tools, replay)
   Models/NoteModels.cs    Notebook/Section/Page/Stroke/Text data model (JSON)
   Services/UndoRedo.cs    command-pattern undo/redo actions
-  Services/LibraryStore.cs persistence in %LocalAppData%
+  Services/LibraryStore.cs persistence (Documents\Quill + backups/migration)
   Services/PdfExporter.cs minimal PDF writer (no dependencies)
   Helpers/Util.cs         colour + geometry helpers
 ```

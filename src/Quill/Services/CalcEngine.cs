@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace LectureInk.Services;
+namespace Quill.Services;
 
 /// <summary>
 /// Recursive-descent scientific expression evaluator.

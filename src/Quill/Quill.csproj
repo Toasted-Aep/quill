@@ -4,7 +4,7 @@
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
-    <RootNamespace>LectureInk</RootNamespace>
+    <RootNamespace>Quill</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x86;x64;ARM64</Platforms>
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
@@ -14,10 +14,8 @@
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <AssemblyName>LectureInk</AssemblyName>
+    <AssemblyName>Quill</AssemblyName>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <!-- App display name is "Quill"; assembly/namespace stay LectureInk so
-         the exe name, shortcuts and the notes storage folder keep working. -->
     <AssemblyTitle>Quill</AssemblyTitle>
     <Product>Quill</Product>
     <!-- Work around WinUI XAML compiler MSVC discovery failing when the VS C++

@@ -1,7 +1,7 @@
 using System.Numerics;
 using Windows.UI;
 
-namespace LectureInk.Helpers;
+namespace Quill.Helpers;
 
 public static class ColorUtil
 {

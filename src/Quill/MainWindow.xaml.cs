@@ -1,8 +1,8 @@
 using System.Runtime.InteropServices.WindowsRuntime;
-using LectureInk.Controls;
-using LectureInk.Helpers;
-using LectureInk.Models;
-using LectureInk.Services;
+using Quill.Controls;
+using Quill.Helpers;
+using Quill.Models;
+using Quill.Services;
 using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Windowing;
@@ -20,7 +20,7 @@ using Windows.Storage;
 using Windows.Storage.Pickers;
 using Windows.UI;
 
-namespace LectureInk;
+namespace Quill;
 
 public sealed partial class MainWindow : Window
 {
