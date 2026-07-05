@@ -5,11 +5,14 @@ namespace Quill.Services;
 
 public record PdfPageImage(int PixelWidth, int PixelHeight, byte[] Bgra8Pixels);
 
-// ---- vector export primitives (phase 2) ----
+// ---- vector export primitives (phase 2/3) ----
 public record PdfVectorPath(List<(float X, float Y)> Points, string Color, float Width, bool Closed, float Alpha);
 public record PdfVectorDot(float X, float Y, float R, string Color);
+public record PdfVectorImage(double X, double Y, double W, double H, int PixW, int PixH, byte[] Bgra8);
+public record PdfVectorText(float X, float Y, float Size, string Color, string Text);
 public record PdfVectorPage(double Width, double Height, double OffsetX, double OffsetY, string Background,
-                            List<PdfVectorPath> Paths, List<PdfVectorDot> Dots);
+                            List<PdfVectorPath> Paths, List<PdfVectorDot> Dots,
+                            List<PdfVectorImage> Images, List<PdfVectorText> Texts);
 
 /// <summary>
 /// Minimal dependency-free PDF writer: each page is a full-bleed RGB image
@@ -89,8 +92,8 @@ public static class PdfExporter
         return ms.ToArray();
     }
 
-    /// <summary>True vector PDF: strokes, shapes and grid as scalable paths.
-    /// Infinite zoom, tiny files; text boxes/images are not included.</summary>
+    /// <summary>True vector PDF: strokes, shapes and grid as scalable paths,
+    /// with embedded images and text boxes as selectable Helvetica text.</summary>
     public static byte[] CreateVector(IReadOnlyList<PdfVectorPage> pages)
     {
         const double k = 72.0 / 96.0;   // world px -> PDF points
@@ -103,50 +106,75 @@ public static class PdfExporter
         }
         void BeginObj() => offsets.Add(ms.Position);
 
+        // ---- object numbering: 1 catalog, 2 pages, 3 ExtGState, 4 font,
+        //      then per page: page, content, one object per image ----
+        int next = 5;
+        var pageIds = new int[pages.Count];
+        var contentIds = new int[pages.Count];
+        var imageIds = new int[pages.Count][];
+        for (int i = 0; i < pages.Count; i++)
+        {
+            pageIds[i] = next++;
+            contentIds[i] = next++;
+            imageIds[i] = new int[pages[i].Images.Count];
+            for (int j = 0; j < imageIds[i].Length; j++) imageIds[i][j] = next++;
+        }
+        int total = next - 1;
+
         WriteAscii("%PDF-1.4\n");
         ms.Write(new byte[] { 0x25, 0xE2, 0xE3, 0xCF, 0xD3, 0x0A }, 0, 6);
-
-        int total = 3 + pages.Count * 2;   // catalog, pages tree, shared ExtGState
 
         BeginObj();
         WriteAscii("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
 
         BeginObj();
         var kids = new StringBuilder();
-        for (int i = 0; i < pages.Count; i++) kids.Append($"{4 + i * 2} 0 R ");
+        foreach (var id in pageIds) kids.Append($"{id} 0 R ");
         WriteAscii($"2 0 obj\n<< /Type /Pages /Kids [ {kids}] /Count {pages.Count} >>\nendobj\n");
 
-        // 3: shared translucency graphics state (highlighter strokes)
         BeginObj();
         WriteAscii("3 0 obj\n<< /Type /ExtGState /CA 0.35 /ca 0.35 >>\nendobj\n");
+
+        BeginObj();
+        WriteAscii("4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n");
 
         for (int i = 0; i < pages.Count; i++)
         {
             var pg = pages[i];
             double wPt = pg.Width * k, hPt = pg.Height * k;
-            int pageObj = 4 + i * 2, contentObj = pageObj + 1;
+
+            var xobjects = new StringBuilder();
+            for (int j = 0; j < pg.Images.Count; j++)
+                xobjects.Append($"/Im{j} {imageIds[i][j]} 0 R ");
 
             BeginObj();
             WriteAscii(
-                $"{pageObj} 0 obj\n<< /Type /Page /Parent 2 0 R " +
+                $"{pageIds[i]} 0 obj\n<< /Type /Page /Parent 2 0 R " +
                 $"/MediaBox [0 0 {Num(wPt)} {Num(hPt)}] " +
-                "/Resources << /ExtGState << /GHl 3 0 R >> >> " +
-                $"/Contents {contentObj} 0 R >>\nendobj\n");
+                "/Resources << /ExtGState << /GHl 3 0 R >> /Font << /F1 4 0 R >> " +
+                $"/XObject << {xobjects}>> >> " +
+                $"/Contents {contentIds[i]} 0 R >>\nendobj\n");
 
             string X(double wx) => Num((wx - pg.OffsetX) * k);
             string Y(double wy) => Num(hPt - (wy - pg.OffsetY) * k);
 
             var sb = new StringBuilder();
-            // background
             sb.Append(Rgb(pg.Background, "rg")).Append('\n');
             sb.Append($"0 0 {Num(wPt)} {Num(hPt)} re f\n");
-            sb.Append("1 J 1 j\n");   // round caps + joins for ink
+            sb.Append("1 J 1 j\n");
 
             foreach (var d in pg.Dots)
             {
                 sb.Append(Rgb(d.Color, "rg")).Append('\n');
                 double r = d.R * k;
                 sb.Append($"{Num((d.X - pg.OffsetX) * k - r)} {Num(hPt - (d.Y - pg.OffsetY) * k - r)} {Num(r * 2)} {Num(r * 2)} re f\n");
+            }
+
+            // images sit under the ink, matching on-screen ordering
+            for (int j = 0; j < pg.Images.Count; j++)
+            {
+                var im = pg.Images[j];
+                sb.Append($"q {Num(im.W * k)} 0 0 {Num(im.H * k)} {X(im.X)} {Y(im.Y + im.H)} cm /Im{j} Do Q\n");
             }
 
             foreach (var p in pg.Paths)
@@ -164,12 +192,36 @@ public static class PdfExporter
                 if (translucent) sb.Append("Q\n");
             }
 
+            foreach (var t in pg.Texts)
+            {
+                if (string.IsNullOrWhiteSpace(t.Text)) continue;
+                sb.Append("BT /F1 ").Append(Num(t.Size * k)).Append(" Tf ")
+                  .Append(Rgb(t.Color, "rg")).Append(' ')
+                  .Append($"1 0 0 1 {X(t.X)} {Y(t.Y)} Tm (")
+                  .Append(EscapePdfText(t.Text)).Append(") Tj ET\n");
+            }
+
             byte[] raw = Encoding.ASCII.GetBytes(sb.ToString());
             byte[] compressed = Deflate(raw);
             BeginObj();
-            WriteAscii($"{contentObj} 0 obj\n<< /Length {compressed.Length} /Filter /FlateDecode >>\nstream\n");
+            WriteAscii($"{contentIds[i]} 0 obj\n<< /Length {compressed.Length} /Filter /FlateDecode >>\nstream\n");
             ms.Write(compressed, 0, compressed.Length);
             WriteAscii("\nendstream\nendobj\n");
+
+            for (int j = 0; j < pg.Images.Count; j++)
+            {
+                var im = pg.Images[j];
+                byte[] rgb = BgraToRgb(im.Bgra8);
+                byte[] comp = Deflate(rgb);
+                BeginObj();
+                WriteAscii(
+                    $"{imageIds[i][j]} 0 obj\n<< /Type /XObject /Subtype /Image " +
+                    $"/Width {im.PixW} /Height {im.PixH} " +
+                    "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode " +
+                    $"/Length {comp.Length} >>\nstream\n");
+                ms.Write(comp, 0, comp.Length);
+                WriteAscii("\nendstream\nendobj\n");
+            }
         }
 
         long xrefPos = ms.Position;
@@ -178,6 +230,20 @@ public static class PdfExporter
             WriteAscii($"{off:0000000000} 00000 n \n");
         WriteAscii($"trailer\n<< /Size {total + 1} /Root 1 0 R >>\nstartxref\n{xrefPos}\n%%EOF\n");
         return ms.ToArray();
+    }
+
+    private static string EscapePdfText(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s)
+        {
+            if (c is '(' or ')' or '\\') sb.Append('\\').Append(c);
+            else if (c is '\r' or '\n') sb.Append(' ');
+            else if (c < 32) { }
+            else if (c > 255) sb.Append('?');   // Helvetica/WinAnsi can't encode it
+            else sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     // "#RRGGBB" -> "r g b rg" / "r g b RG" PDF colour operator

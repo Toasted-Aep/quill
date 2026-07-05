@@ -305,6 +305,30 @@ public class RemoveMixedAction : IPageAction
     }
 }
 
+// Repositions table cell text boxes after their table moves or resizes (#40).
+public class RepositionTextsAction : IPageAction
+{
+    private readonly List<(TextElement T, double FromX, double FromY, double ToX, double ToY)> _items;
+    public RepositionTextsAction(List<(TextElement, double, double, double, double)> items) => _items = items;
+    public string Description => "Reflow table";
+    public void Do(NotePage page) { foreach (var (t, _, _, tx, ty) in _items) { t.X = tx; t.Y = ty; } }
+    public void Undo(NotePage page) { foreach (var (t, fx, fy, _, _) in _items) { t.X = fx; t.Y = fy; } }
+}
+
+// Changes a table's grid dimensions undoably (#40).
+public class TableGridAction : IPageAction
+{
+    private readonly ShapeElement _s;
+    private readonly int _fr, _fc, _tr, _tc;
+    public TableGridAction(ShapeElement s, int fromRows, int fromCols, int toRows, int toCols)
+    {
+        _s = s; _fr = fromRows; _fc = fromCols; _tr = toRows; _tc = toCols;
+    }
+    public string Description => "Resize table grid";
+    public void Do(NotePage page) { _s.TRows = _tr; _s.TCols = _tc; }
+    public void Undo(NotePage page) { _s.TRows = _fr; _s.TCols = _fc; }
+}
+
 public class UndoRedoManager
 {
     private readonly Stack<IPageAction> _undo = new();

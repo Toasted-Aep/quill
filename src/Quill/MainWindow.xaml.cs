@@ -853,6 +853,55 @@ public sealed partial class MainWindow : Window
         return Walk(NotebookTree.RootNodes);
     }
 
+    // Right-click on a tree item: rename / delete / move / lock (#39)
+    private void NotebookTree_RightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        // walk up to the TreeViewItem that was clicked
+        var el = e.OriginalSource as DependencyObject;
+        while (el != null && el is not TreeViewItem)
+            el = VisualTreeHelper.GetParent(el);
+        if (el is not TreeViewItem item) return;
+        var node = NotebookTree.NodeFromContainer(item);
+        if (node?.Content == null) return;
+        _selNode = node;
+        NotebookTree.SelectedNode = node;
+
+        var fly = new MenuFlyout();
+        void Add(string txt, RoutedEventHandler h)
+        {
+            var it = new MenuFlyoutItem { Text = txt };
+            it.Click += h;
+            fly.Items.Add(it);
+        }
+        Add("Rename…", Rename_Click);
+        Add("Delete…", DeleteItem_Click);
+        fly.Items.Add(new MenuFlyoutSeparator());
+        Add("Move up", MoveUp_Click);
+        Add("Move down", MoveDown_Click);
+        if (node.Content is Section or NotePage)
+            Add("Move to…", MoveTo_Click);
+        if (node.Content is Notebook nb)
+        {
+            fly.Items.Add(new MenuFlyoutSeparator());
+            Add(nb.PasswordHash == null ? "Lock…" : "Remove lock…", LockToggle_Click);
+        }
+        fly.ShowAt(NotebookTree, e.GetPosition(NotebookTree));
+        e.Handled = true;
+    }
+
+    // Keep the tree tidy: only the notebook/section being worked on expands.
+    private void ExpandCurrentInTree()
+    {
+        foreach (var nbNode in NotebookTree.RootNodes)
+        {
+            if (!ReferenceEquals(nbNode.Content, _curNb)) continue;
+            nbNode.IsExpanded = true;
+            foreach (var secNode in nbNode.Children)
+                if (ReferenceEquals(secNode.Content, _curSec))
+                    secNode.IsExpanded = true;
+        }
+    }
+
     private async void NotebookTree_ItemInvoked(TreeView sender, TreeViewItemInvokedEventArgs args)
     {
         object? item = args.InvokedItem;
@@ -1037,6 +1086,7 @@ public sealed partial class MainWindow : Window
         ApplyPenRowVisibility();
         UpdateUndoButtons();
         UpdateFormatBarVisibility();
+        ExpandCurrentInTree();
     }
 
     private async Task<string?> PromptAsync(string title, string initial)
@@ -1381,6 +1431,10 @@ public sealed partial class MainWindow : Window
         if (e.Key == Windows.System.VirtualKey.Enter) { e.Handled = true; _ = RunSearchAsync(SearchBox.Text); }
     }
 
+    // Set once ink analysis fails, so a broken analyzer can't take the whole
+    // search down with it — typed text and names remain searchable.
+    private static bool _inkAnalysisBroken;
+
     private async Task RunSearchAsync(string q)
     {
         q = (q ?? "").Trim();
@@ -1391,21 +1445,32 @@ public sealed partial class MainWindow : Window
         var hits = new List<SearchHit>();
         bool indexedSomething = false;
 
-        foreach (var nb in _library.Notebooks)
-            foreach (var sec in nb.Sections)
-                foreach (var pg in sec.Pages)
-                {
-                    // lazily OCR handwriting that hasn't been indexed yet
-                    if (string.IsNullOrEmpty(pg.OcrText) && pg.Strokes.Count > 0)
+        try
+        {
+            foreach (var nb in _library.Notebooks)
+                foreach (var sec in nb.Sections)
+                    foreach (var pg in sec.Pages)
                     {
-                        await IndexHandwritingAsync(pg);
-                        indexedSomething = true;
+                        try
+                        {
+                            // lazily OCR handwriting that hasn't been indexed yet
+                            if (!_inkAnalysisBroken && string.IsNullOrEmpty(pg.OcrText) && pg.Strokes.Count > 0)
+                            {
+                                await IndexHandwritingAsync(pg);
+                                indexedSomething = true;
+                            }
+                            string texts = string.Join(" ", pg.Texts.Select(t => RtfToText(t.Rtf)));
+                            string hay = ($"{nb.Name} {sec.Name} {pg.Name} {texts} {pg.OcrText}").ToLowerInvariant();
+                            if (hay.Contains(ql))
+                                hits.Add(new SearchHit { Nb = nb, Sec = sec, Page = pg, Display = $"{nb.Name} ▸ {sec.Name} ▸ {pg.Name}" });
+                        }
+                        catch
+                        {
+                            // one bad page must never abort the whole search
+                        }
                     }
-                    string texts = string.Join(" ", pg.Texts.Select(t => RtfToText(t.Rtf)));
-                    string hay = ($"{nb.Name} {sec.Name} {pg.Name} {texts} {pg.OcrText}").ToLowerInvariant();
-                    if (hay.Contains(ql))
-                        hits.Add(new SearchHit { Nb = nb, Sec = sec, Page = pg, Display = $"{nb.Name} ▸ {sec.Name} ▸ {pg.Name}" });
-                }
+        }
+        catch { }
 
         SearchResults.ItemsSource = hits;
         SearchStatus.Text = hits.Count == 0 ? "No matches." : $"{hits.Count} match{(hits.Count == 1 ? "" : "es")}.";
@@ -1446,6 +1511,7 @@ public sealed partial class MainWindow : Window
         catch
         {
             page.OcrText = " "; // mark as attempted so we don't retry endlessly
+            _inkAnalysisBroken = true;
         }
     }
 
@@ -1487,35 +1553,48 @@ public sealed partial class MainWindow : Window
 
     private async Task ConvertSelectionAsync(bool math)
     {
-        var strokes = Surface.SelectedStrokes.ToList();
-        if (strokes.Count == 0) { ShowStatus("Lasso-select some handwriting first."); return; }
-        var bounds = Surface.SelectionBoundsWorld;
-        ShowStatus("Reading your handwriting…");
-        var text = await RecognizeStrokesAsync(strokes);
-        if (string.IsNullOrWhiteSpace(text)) { ShowStatus("Couldn't read that handwriting — try selecting a full word or line."); return; }
-
-        if (math)
+        try
         {
-            var expr = NormalizeMathText(text);
-            text = CalcEngine.TryEvaluate(expr, true, out double val, out _)
-                ? $"{expr} = {val:G10}"
-                : expr;   // couldn't evaluate: still insert the recognised expression
-        }
+            var strokes = Surface.SelectedStrokes.ToList();
+            if (strokes.Count == 0) { ShowStatus("Lasso-select some handwriting first."); return; }
+            var bounds = Surface.SelectionBoundsWorld;
+            ShowStatus("Reading your handwriting…");
+            var text = await RecognizeStrokesAsync(strokes);
+            if (string.IsNullOrWhiteSpace(text)) { ShowStatus("Couldn't read that handwriting — try selecting a full word or line."); return; }
 
-        Surface.DeleteSelection();   // undoable
-        double x = bounds.IsEmpty ? 100 : bounds.X;
-        double y = bounds.IsEmpty ? 100 : bounds.Y;
-        double w = bounds.IsEmpty ? 320 : Math.Max(220, bounds.Width + 60);
-        Surface.AddTextElement(x, y, w, PlainToRtf(text, _library.DefaultFont, (float)_library.DefaultFontSize));
-        ShowStatus(math ? "Converted to maths." : "Converted to text — tap it with the Text tool to edit.");
+            if (math)
+            {
+                var expr = NormalizeMathText(text);
+                text = CalcEngine.TryEvaluate(expr, true, out double val, out _)
+                    ? $"{expr} = {val:G10}"
+                    : expr;   // couldn't evaluate: still insert the recognised expression
+            }
+
+            Surface.DeleteSelection();   // undoable
+            double x = bounds.IsEmpty ? 100 : bounds.X;
+            double y = bounds.IsEmpty ? 100 : bounds.Y;
+            double w = bounds.IsEmpty ? 320 : Math.Max(220, bounds.Width + 60);
+            Surface.AddTextElement(x, y, w,
+                PlainToRtf(text, _library.DefaultFont, (float)_library.DefaultFontSize, ContrastHexForPage()));
+            ShowStatus(math ? "Converted to maths." : "Converted to text — tap it with the Text tool to edit.");
+        }
+        catch (Exception ex)
+        {
+            ShowStatus("Convert failed: " + ex.Message);
+        }
     }
+
+    // Text inserted programmatically should be readable on the page: use the
+    // opposite of the background (ivory on dark pages, near-black on light).
+    private string ContrastHexForPage() =>
+        ColorUtil.IsDark(ColorUtil.Parse(_curPage?.Background ?? "#FFFFFF")) ? "#FAF9F5" : "#141413";
 
     // Common handwriting-recognition slips for maths input.
     private static string NormalizeMathText(string t) => t
         .Replace("×", "*").Replace("÷", "/").Replace("−", "-").Replace("–", "-")
         .Replace("^", "^").Replace(",", ".").Replace(" ", "");
 
-    private static string PlainToRtf(string text, string font, float size)
+    private static string PlainToRtf(string text, string font, float size, string hexColor)
     {
         var body = new System.Text.StringBuilder();
         foreach (var ch in text)
@@ -1527,7 +1606,10 @@ public sealed partial class MainWindow : Window
             else body.Append(ch);
         }
         int halfPts = Math.Max(8, (int)Math.Round(size * 2));
-        return "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 " + font + ";}}\\f0\\fs" + halfPts + " " + body + "}";
+        var c = ColorUtil.Parse(hexColor);
+        return "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 " + font + ";}}" +
+               "{\\colortbl ;\\red" + c.R + "\\green" + c.G + "\\blue" + c.B + ";}" +
+               "\\f0\\cf1\\fs" + halfPts + " " + body + "}";
     }
 
     private static string RtfToText(string rtf)
@@ -3038,7 +3120,8 @@ public sealed partial class MainWindow : Window
         int r = double.IsNaN(rows.Value) ? 3 : (int)rows.Value;
         int c = double.IsNaN(cols.Value) ? 3 : (int)cols.Value;
         Surface.InsertTable(r, c, 190, 64);
-        ShowStatus("Table inserted — the cells are editable text boxes.");
+        SelectTool("Text");   // writing-first: tap any cell and type straight away
+        ShowStatus("Table inserted — tap a cell to type. Right-click the table for more rows or columns.");
     }
 
     private const string EquationHtml = """
@@ -3063,6 +3146,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
     private async void InsertEquation_Click(object sender, RoutedEventArgs e)
     {
+        string? latex = null;
         WebView2? web = null;
         try
         {
@@ -3076,74 +3160,183 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                 DefaultButton = ContentDialogButton.Primary,
                 XamlRoot = RootGrid.XamlRoot
             };
+            bool webReady = false;
             dlg.Opened += async (_, _) =>
             {
                 try
                 {
                     await web.EnsureCoreWebView2Async();
                     web.NavigateToString(EquationHtml);
+                    webReady = true;
                 }
-                catch
-                {
-                    ShowStatus("The equation editor needs the WebView2 runtime installed.");
-                }
+                catch { /* fall through to the plain LaTeX prompt below */ }
             };
             dlg.PrimaryButtonClick += async (_, args) =>
             {
                 var deferral = args.GetDeferral();
                 try
                 {
-                    if (web.CoreWebView2 == null) return;
-                    string raw = await web.CoreWebView2.ExecuteScriptAsync("getFormulaRect()");
-                    string? inner = System.Text.Json.JsonSerializer.Deserialize<string>(raw);
-                    if (inner == null) return;
-                    using var doc = System.Text.Json.JsonDocument.Parse(inner);
-                    double s = doc.RootElement.GetProperty("s").GetDouble();
-                    double rx = doc.RootElement.GetProperty("x").GetDouble() * s;
-                    double ry = doc.RootElement.GetProperty("y").GetDouble() * s;
-                    double rw = doc.RootElement.GetProperty("w").GetDouble() * s;
-                    double rh = doc.RootElement.GetProperty("h").GetDouble() * s;
-                    if (rw < 4 || rh < 4) return;
-
-                    using var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
-                    await web.CoreWebView2.CapturePreviewAsync(
-                        Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png, stream);
-                    var decoder = await BitmapDecoder.CreateAsync(stream);
-                    uint bx = (uint)Math.Clamp(rx, 0, Math.Max(0, decoder.PixelWidth - 5));
-                    uint by = (uint)Math.Clamp(ry, 0, Math.Max(0, decoder.PixelHeight - 5));
-                    uint bw = (uint)Math.Clamp(rw + 6 * s, 4, decoder.PixelWidth - bx);
-                    uint bh = (uint)Math.Clamp(rh + 6 * s, 4, decoder.PixelHeight - by);
-                    var transform = new BitmapTransform { Bounds = new BitmapBounds { X = bx, Y = by, Width = bw, Height = bh } };
-                    var pix = await decoder.GetPixelDataAsync(
-                        BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, transform,
-                        ExifOrientationMode.IgnoreExifOrientation, ColorManagementMode.DoNotColorManage);
-                    var bytes = pix.DetachPixelData();
-
-                    var dir = System.IO.Path.Combine(LibraryStore.Dir, "assets");
-                    Directory.CreateDirectory(dir);
-                    var path = System.IO.Path.Combine(dir, $"{Guid.NewGuid():N}.png");
-                    using (var outStream = new FileStream(path, FileMode.Create, FileAccess.ReadWrite))
+                    if (webReady && web.CoreWebView2 != null)
                     {
-                        var enc = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, outStream.AsRandomAccessStream());
-                        enc.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, bw, bh, 96, 96, bytes);
-                        await enc.FlushAsync();
+                        string raw = await web.CoreWebView2.ExecuteScriptAsync("document.getElementById('mf').value");
+                        latex = System.Text.Json.JsonSerializer.Deserialize<string>(raw);
                     }
-                    Surface.InsertImage(path, bw, bh);
-                    ShowStatus("Equation inserted — drag it to move, drag a corner to resize.");
                 }
-                catch
-                {
-                    ShowStatus("Couldn't render the equation — the editor needs internet access for MathLive.");
-                }
+                catch { }
                 finally { deferral.Complete(); }
             };
-            await dlg.ShowAsync();
+            var res = await dlg.ShowAsync();
+            if (res != ContentDialogResult.Primary) return;
         }
-        catch
-        {
-            ShowStatus("The equation editor needs the WebView2 runtime installed.");
-        }
+        catch { /* WebView2 runtime missing */ }
         finally { try { web?.Close(); } catch { } }
+
+        // offline / no-WebView2 fallback: type LaTeX directly
+        latex ??= await PromptAsync("Equation (LaTeX)", @"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}");
+        if (string.IsNullOrWhiteSpace(latex)) return;
+
+        var unicode = LatexToUnicode(latex);
+        var centre = Surface.ScreenToWorld(new Point(Surface.ActualWidth / 2, Surface.ActualHeight / 2));
+        Surface.AddTextElement(centre.X - 160, centre.Y - 20, 360,
+            PlainToRtf(unicode, "Cambria Math", 20f, ContrastHexForPage()));
+        ShowStatus("Equation inserted as editable text.");
+    }
+
+    // ---- LaTeX → Unicode maths text (#37): keeps equations editable ----
+    private static readonly Dictionary<string, string> LatexSymbols = new()
+    {
+        ["alpha"] = "α", ["beta"] = "β", ["gamma"] = "γ", ["delta"] = "δ", ["epsilon"] = "ε",
+        ["zeta"] = "ζ", ["eta"] = "η", ["theta"] = "θ", ["iota"] = "ι", ["kappa"] = "κ",
+        ["lambda"] = "λ", ["mu"] = "μ", ["nu"] = "ν", ["xi"] = "ξ", ["pi"] = "π",
+        ["rho"] = "ρ", ["sigma"] = "σ", ["tau"] = "τ", ["upsilon"] = "υ", ["phi"] = "φ",
+        ["chi"] = "χ", ["psi"] = "ψ", ["omega"] = "ω",
+        ["Gamma"] = "Γ", ["Delta"] = "Δ", ["Theta"] = "Θ", ["Lambda"] = "Λ", ["Xi"] = "Ξ",
+        ["Pi"] = "Π", ["Sigma"] = "Σ", ["Phi"] = "Φ", ["Psi"] = "Ψ", ["Omega"] = "Ω",
+        ["pm"] = "±", ["mp"] = "∓", ["times"] = "×", ["div"] = "÷", ["cdot"] = "·",
+        ["le"] = "≤", ["leq"] = "≤", ["ge"] = "≥", ["geq"] = "≥", ["ne"] = "≠", ["neq"] = "≠",
+        ["approx"] = "≈", ["equiv"] = "≡", ["propto"] = "∝", ["infty"] = "∞",
+        ["sum"] = "∑", ["prod"] = "∏", ["int"] = "∫", ["iint"] = "∬", ["oint"] = "∮",
+        ["partial"] = "∂", ["nabla"] = "∇", ["to"] = "→", ["rightarrow"] = "→",
+        ["leftarrow"] = "←", ["Rightarrow"] = "⇒", ["Leftrightarrow"] = "⇔",
+        ["in"] = "∈", ["notin"] = "∉", ["subset"] = "⊂", ["subseteq"] = "⊆",
+        ["cup"] = "∪", ["cap"] = "∩", ["emptyset"] = "∅", ["forall"] = "∀", ["exists"] = "∃",
+        ["land"] = "∧", ["lor"] = "∨", ["neg"] = "¬", ["angle"] = "∠", ["degree"] = "°",
+        ["therefore"] = "∴", ["because"] = "∵", ["ldots"] = "…", ["cdots"] = "⋯",
+        ["prime"] = "′", ["hbar"] = "ℏ", ["ell"] = "ℓ",
+        ["left"] = "", ["right"] = "", ["!"] = "", [","] = " ", [";"] = " ", ["quad"] = "  ", ["qquad"] = "    "
+    };
+
+    private static readonly Dictionary<char, char> SuperMap = new()
+    {
+        ['0'] = '⁰', ['1'] = '¹', ['2'] = '²', ['3'] = '³', ['4'] = '⁴', ['5'] = '⁵',
+        ['6'] = '⁶', ['7'] = '⁷', ['8'] = '⁸', ['9'] = '⁹', ['+'] = '⁺', ['-'] = '⁻',
+        ['='] = '⁼', ['('] = '⁽', [')'] = '⁾', ['n'] = 'ⁿ', ['i'] = 'ⁱ'
+    };
+
+    private static readonly Dictionary<char, char> SubMap = new()
+    {
+        ['0'] = '₀', ['1'] = '₁', ['2'] = '₂', ['3'] = '₃', ['4'] = '₄', ['5'] = '₅',
+        ['6'] = '₆', ['7'] = '₇', ['8'] = '₈', ['9'] = '₉', ['+'] = '₊', ['-'] = '₋',
+        ['='] = '₌', ['('] = '₍', [')'] = '₎', ['a'] = 'ₐ', ['e'] = 'ₑ', ['i'] = 'ᵢ',
+        ['n'] = 'ₙ', ['m'] = 'ₘ', ['x'] = 'ₓ', ['k'] = 'ₖ', ['t'] = 'ₜ'
+    };
+
+    /// <summary>Best-effort LaTeX → Unicode plain-text maths. Handles \frac,
+    /// \sqrt, super/subscripts, Greek letters and common operators; unknown
+    /// commands are kept as-is so nothing is silently lost.</summary>
+    private static string LatexToUnicode(string latex)
+    {
+        // grab the {...} group starting at index i (which must point at '{')
+        static string Group(string s, ref int i)
+        {
+            if (i >= s.Length || s[i] != '{') { var ch = i < s.Length ? s[i++].ToString() : ""; return ch; }
+            int depth = 0, start = ++i;
+            for (; i < s.Length; i++)
+            {
+                if (s[i] == '{') depth++;
+                else if (s[i] == '}')
+                {
+                    if (depth == 0) { var inner = s[start..i]; i++; return inner; }
+                    depth--;
+                }
+            }
+            return s[start..];
+        }
+
+        static string MapScript(string s, Dictionary<char, char> map, string fallbackPrefix)
+        {
+            if (s.Length > 0 && s.All(map.ContainsKey))
+                return new string(s.Select(c => map[c]).ToArray());
+            return fallbackPrefix + "(" + s + ")";
+        }
+
+        var output = new System.Text.StringBuilder();
+        int p = 0;
+        while (p < latex.Length)
+        {
+            char c = latex[p];
+            if (c == '\\')
+            {
+                p++;
+                int cmdStart = p;
+                while (p < latex.Length && char.IsLetter(latex[p])) p++;
+                string cmd = latex[cmdStart..p];
+                if (cmd.Length == 0 && p < latex.Length) { cmd = latex[p].ToString(); p++; }
+
+                switch (cmd)
+                {
+                    case "frac":
+                    {
+                        string a = LatexToUnicode(Group(latex, ref p));
+                        string b = LatexToUnicode(Group(latex, ref p));
+                        bool simpleA = a.Length <= 2, simpleB = b.Length <= 2;
+                        output.Append(simpleA ? a : "(" + a + ")").Append('/')
+                              .Append(simpleB ? b : "(" + b + ")");
+                        break;
+                    }
+                    case "sqrt":
+                    {
+                        if (p < latex.Length && latex[p] == '[')
+                        {
+                            int close = latex.IndexOf(']', p);
+                            if (close > 0) { output.Append(LatexToUnicode(latex[(p + 1)..close])).Append('√'); p = close + 1; }
+                        }
+                        else output.Append('√');
+                        string inner = LatexToUnicode(Group(latex, ref p));
+                        output.Append('(').Append(inner).Append(')');
+                        break;
+                    }
+                    case "text":
+                    case "mathrm":
+                    case "operatorname":
+                        output.Append(Group(latex, ref p));
+                        break;
+                    default:
+                        output.Append(LatexSymbols.TryGetValue(cmd, out var sym) ? sym : cmd);
+                        break;
+                }
+            }
+            else if (c == '^')
+            {
+                p++;
+                output.Append(MapScript(LatexToUnicode(Group(latex, ref p)), SuperMap, "^"));
+            }
+            else if (c == '_')
+            {
+                p++;
+                output.Append(MapScript(LatexToUnicode(Group(latex, ref p)), SubMap, "_"));
+            }
+            else if (c is '{' or '}')
+            {
+                p++;
+            }
+            else
+            {
+                output.Append(c);
+                p++;
+            }
+        }
+        return output.ToString();
     }
 
     // ---- multi-page + vector PDF export ----
@@ -3206,20 +3399,50 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     }
 
     private async void ExportVectorPdf_Click(object sender, RoutedEventArgs e)
+        => await ExportVectorAsync(_curPage != null ? new List<NotePage> { _curPage } : new List<NotePage>());
+
+    private async void ExportSectionVectorPdf_Click(object sender, RoutedEventArgs e)
+        => await ExportVectorAsync(_curSec?.Pages.ToList() ?? new List<NotePage>());
+
+    private async void ExportNotebookVectorPdf_Click(object sender, RoutedEventArgs e)
+        => await ExportVectorAsync(_curNb?.Sections.SelectMany(s => s.Pages).ToList() ?? new List<NotePage>());
+
+    private async Task ExportVectorAsync(List<NotePage> pages)
     {
-        Surface.FlushTexts();
-        var page = Surface.BuildVectorPage(28);
-        if (page == null) return;
+        if (pages.Count == 0 || _curNb == null || _curSec == null || _curPage == null)
+        {
+            ShowStatus("Nothing to export.");
+            return;
+        }
         var file = await PickSaveFileAsync(".pdf", "PDF document");
         if (file == null) return;
+
+        Surface.FlushTexts();
+        var (keepNb, keepSec, keepPage) = (_curNb, _curSec, _curPage);
+        var vpages = new List<PdfVectorPage>();
+        _suppressPageFade = true;
         try
         {
-            await FileIO.WriteBytesAsync(file, PdfExporter.CreateVector(new[] { page }));
-            bool omitted = (_curPage?.Texts.Count ?? 0) > 0 ||
-                           (_curPage?.Shapes.Any(sh => sh.Kind == ShapeKind.Image) ?? false);
-            ShowStatus(omitted
-                ? $"Exported vector PDF {file.Name}. Text boxes and images aren't included — use the normal PDF export for those."
-                : $"Exported vector PDF {file.Name} — crisp at any zoom.");
+            foreach (var pg in pages)
+            {
+                var (nb, sec) = FindContext(pg);
+                if (nb == null || sec == null) continue;
+                SwitchToPage(nb, sec, pg);
+                ShowStatus($"Exporting page {vpages.Count + 1} of {pages.Count}…");
+                var vp = await Surface.BuildVectorPageAsync(28);
+                if (vp != null) vpages.Add(vp);
+            }
+        }
+        finally
+        {
+            SwitchToPage(keepNb, keepSec, keepPage);
+            _suppressPageFade = false;
+        }
+        if (vpages.Count == 0) { ShowStatus("Nothing to export."); return; }
+        try
+        {
+            await FileIO.WriteBytesAsync(file, PdfExporter.CreateVector(vpages));
+            ShowStatus($"Exported {vpages.Count} vector page{(vpages.Count == 1 ? "" : "s")} to {file.Name} — ink stays crisp, text stays selectable.");
         }
         catch
         {
@@ -3227,33 +3450,45 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
     }
 
-    // ---- touch-screen mode (#36): larger tap targets on every toolbar ----
+    // ---- touch-screen mode (#36): larger ICONS (buttons grow to fit) ----
+    private readonly Dictionary<FrameworkElement, double> _touchOrigSize = new();
+
     private void ApplyTouchMode(bool on)
     {
-        void Walk(DependencyObject root)
+        void Bump(FrameworkElement el, double current, Action<double> set)
+        {
+            if (on)
+            {
+                if (!_touchOrigSize.ContainsKey(el)) _touchOrigSize[el] = current;
+                set(Math.Max(current, 21));
+            }
+            else if (_touchOrigSize.TryGetValue(el, out var orig))
+            {
+                set(orig);
+            }
+        }
+
+        void Walk(DependencyObject root, bool insideButton)
         {
             int n = VisualTreeHelper.GetChildrenCount(root);
             for (int i = 0; i < n; i++)
             {
                 var ch = VisualTreeHelper.GetChild(root, i);
+                bool inButton = insideButton || ch is Microsoft.UI.Xaml.Controls.Primitives.ButtonBase;
                 switch (ch)
                 {
-                    case Microsoft.UI.Xaml.Controls.Primitives.ButtonBase bb:
-                        bb.MinWidth = on ? 44 : 0;
-                        bb.MinHeight = on ? 42 : 0;
+                    case FontIcon fi when insideButton || inButton:
+                        Bump(fi, fi.FontSize, v => fi.FontSize = v);
                         break;
-                    case ComboBox cb:
-                        cb.MinHeight = on ? 42 : 0;
-                        break;
-                    case Slider sl:
-                        sl.MinHeight = on ? 42 : 0;
+                    case TextBlock tb when inButton && tb.FontSize <= 16:
+                        Bump(tb, tb.FontSize, v => tb.FontSize = v);
                         break;
                 }
-                Walk(ch);
+                Walk(ch, inButton);
             }
         }
         foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
-            try { Walk(root); } catch { }
+            try { Walk(root, false); } catch { }
     }
 
     private void ShowCanvasContextMenu(Point pos)
@@ -3295,6 +3530,18 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             var toMath = new MenuFlyoutItem { Text = "Convert handwriting to maths (evaluate)", Icon = new FontIcon { Glyph = "" } };
             toMath.Click += async (_, _) => await ConvertSelectionAsync(math: true);
             menu.Items.Add(toMath);
+        }
+
+        // Table grow actions when a table is selected (#40)
+        if (Surface.ActiveShape is { Kind: ShapeKind.Table } table)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            var addRow = new MenuFlyoutItem { Text = "Table: add row" };
+            addRow.Click += (_, _) => Surface.TableAddRow(table);
+            menu.Items.Add(addRow);
+            var addCol = new MenuFlyoutItem { Text = "Table: add column" };
+            addCol.Click += (_, _) => Surface.TableAddColumn(table);
+            menu.Items.Add(addCol);
         }
 
         // Word-style formatting when text is selected: style, font, size (punto).

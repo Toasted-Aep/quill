@@ -98,10 +98,7 @@
                     </Button>
 
                     <DropDownButton x:Name="MouseModeBtn" ToolTipService.ToolTip="Mouse mode — how the mouse behaves while the pen tool is active">
-                        <StackPanel Orientation="Horizontal" Spacing="5">
-                            <TextBlock Text="Mouse" FontSize="11" Opacity="0.7" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="MouseModeGlyph" Text="&#x2196;" FontSize="14" VerticalAlignment="Center"/>
-                        </StackPanel>
+                        <TextBlock x:Name="MouseModeGlyph" Text="&#x2196;" FontSize="14" VerticalAlignment="Center"/>
                         <DropDownButton.Flyout>
                             <MenuFlyout>
                                 <RadioMenuFlyoutItem x:Name="MouseAuto" Tag="Auto" GroupName="MouseMode" IsChecked="True"
@@ -243,7 +240,11 @@
                                 <MenuFlyoutItem Text="Export section as PDF (all pages)" Click="ExportSectionPdf_Click"/>
                                 <MenuFlyoutItem Text="Export notebook as PDF (all pages)" Click="ExportNotebookPdf_Click"/>
                                 <MenuFlyoutSeparator/>
-                                <MenuFlyoutItem Text="Export page as vector PDF (ink &amp; shapes)" Click="ExportVectorPdf_Click"/>
+                                <MenuFlyoutSubItem Text="Vector PDF (crisp at any zoom)">
+                                    <MenuFlyoutItem Text="This page" Click="ExportVectorPdf_Click"/>
+                                    <MenuFlyoutItem Text="Whole section" Click="ExportSectionVectorPdf_Click"/>
+                                    <MenuFlyoutItem Text="Whole notebook" Click="ExportNotebookVectorPdf_Click"/>
+                                </MenuFlyoutSubItem>
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>
@@ -342,9 +343,6 @@
                     <Button Click="FormatLink_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Add a link to the selected text">
                         <FontIcon Glyph="&#xE71B;" FontSize="14"/>
                     </Button>
-                    <Button Click="RotateText_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Rotate this text box 15°">
-                        <FontIcon Glyph="&#xE7AD;" FontSize="14"/>
-                    </Button>
 
                     <AppBarSeparator/>
 
@@ -407,10 +405,34 @@
                     <Grid Grid.Row="0" Margin="2,0,0,6">
                         <TextBlock Text="Notebooks" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
                                    FontSize="14" Foreground="{ThemeResource InkBrush}" VerticalAlignment="Center"/>
-                        <Button Click="Sidebar_Close" HorizontalAlignment="Right" Padding="4,2"
-                                Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Close panel">
-                            <FontIcon Glyph="&#xE711;" FontSize="11"/>
-                        </Button>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="2">
+                            <Button Padding="4,2" Background="Transparent" BorderThickness="0"
+                                    ToolTipService.ToolTip="Order notebooks, sections or pages by date">
+                                <FontIcon Glyph="&#xE8CB;" FontSize="11"/>
+                                <Button.Flyout>
+                                    <MenuFlyout>
+                                        <MenuFlyoutSubItem Text="Pages">
+                                            <MenuFlyoutItem Text="Newest first" Tag="pg:desc" Click="Order_Click"/>
+                                            <MenuFlyoutItem Text="Oldest first" Tag="pg:asc" Click="Order_Click"/>
+                                        </MenuFlyoutSubItem>
+                                        <MenuFlyoutSubItem Text="Sections">
+                                            <MenuFlyoutItem Text="Newest first" Tag="sec:desc" Click="Order_Click"/>
+                                            <MenuFlyoutItem Text="Oldest first" Tag="sec:asc" Click="Order_Click"/>
+                                        </MenuFlyoutSubItem>
+                                        <MenuFlyoutSubItem Text="Notebooks">
+                                            <MenuFlyoutItem Text="Newest first" Tag="nb:desc" Click="Order_Click"/>
+                                            <MenuFlyoutItem Text="Oldest first" Tag="nb:asc" Click="Order_Click"/>
+                                        </MenuFlyoutSubItem>
+                                        <MenuFlyoutSeparator/>
+                                        <MenuFlyoutItem Text="Manual order: right-click an item → Move up / down" IsEnabled="False"/>
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                            </Button>
+                            <Button Click="Sidebar_Close" Padding="4,2"
+                                    Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="Close panel">
+                                <FontIcon Glyph="&#xE711;" FontSize="11"/>
+                            </Button>
+                        </StackPanel>
                     </Grid>
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="4" Margin="0,0,0,6">
                         <Button Padding="10,4" Style="{StaticResource AccentButtonStyle}"
@@ -430,51 +452,16 @@
                                 </MenuFlyout>
                             </Button.Flyout>
                         </Button>
-                        <Button Click="Rename_Click" Padding="6,4" ToolTipService.ToolTip="Rename selected item">
-                            <FontIcon Glyph="&#xE8AC;" FontSize="12"/>
-                        </Button>
-                        <Button Click="DeleteItem_Click" Padding="6,4" ToolTipService.ToolTip="Delete selected item">
-                            <FontIcon Glyph="&#xE74D;" FontSize="12"/>
-                        </Button>
-                        <Button Click="MoveUp_Click" Padding="6,4" ToolTipService.ToolTip="Move selected item up">
-                            <FontIcon Glyph="&#xE74A;" FontSize="12"/>
-                        </Button>
-                        <Button Click="MoveDown_Click" Padding="6,4" ToolTipService.ToolTip="Move selected item down">
-                            <FontIcon Glyph="&#xE74B;" FontSize="12"/>
-                        </Button>
-                        <Button Click="MoveTo_Click" Padding="6,4" ToolTipService.ToolTip="Move section/page to another notebook or section (no data loss)">
-                            <FontIcon Glyph="&#xE8DE;" FontSize="12"/>
-                        </Button>
-                        <Button Click="LockToggle_Click" Padding="6,4" ToolTipService.ToolTip="Lock / unlock the selected notebook with a password">
-                            <FontIcon Glyph="&#xE72E;" FontSize="12"/>
-                        </Button>
-                        <Button Padding="6,4" ToolTipService.ToolTip="Order notebooks, sections or pages (or reorder by hand with the arrows)">
-                            <FontIcon Glyph="&#xE8CB;" FontSize="12"/>
-                            <Button.Flyout>
-                                <MenuFlyout>
-                                    <MenuFlyoutSubItem Text="Pages">
-                                        <MenuFlyoutItem Text="Newest first" Tag="pg:desc" Click="Order_Click"/>
-                                        <MenuFlyoutItem Text="Oldest first" Tag="pg:asc" Click="Order_Click"/>
-                                    </MenuFlyoutSubItem>
-                                    <MenuFlyoutSubItem Text="Sections">
-                                        <MenuFlyoutItem Text="Newest first" Tag="sec:desc" Click="Order_Click"/>
-                                        <MenuFlyoutItem Text="Oldest first" Tag="sec:asc" Click="Order_Click"/>
-                                    </MenuFlyoutSubItem>
-                                    <MenuFlyoutSubItem Text="Notebooks">
-                                        <MenuFlyoutItem Text="Newest first" Tag="nb:desc" Click="Order_Click"/>
-                                        <MenuFlyoutItem Text="Oldest first" Tag="nb:asc" Click="Order_Click"/>
-                                    </MenuFlyoutSubItem>
-                                    <MenuFlyoutSeparator/>
-                                    <MenuFlyoutItem Text="Manual order: use the ↑ ↓ buttons" IsEnabled="False"/>
-                                </MenuFlyout>
-                            </Button.Flyout>
-                        </Button>
                         <Button Click="OpenGallery_Click" Padding="6,4" ToolTipService.ToolTip="Notebook gallery (colours &amp; folders)">
                             <FontIcon Glyph="&#xE80A;" FontSize="12"/>
                         </Button>
+                        <TextBlock Text="Right-click an item for rename, delete, move &amp; lock"
+                                   FontSize="10" Opacity="0.55" VerticalAlignment="Center" Margin="4,0,0,0"
+                                   TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
                     <TreeView x:Name="NotebookTree" Grid.Row="2"
                               SelectionMode="Single" ItemInvoked="NotebookTree_ItemInvoked"
+                              RightTapped="NotebookTree_RightTapped"
                               CanDragItems="False" CanReorderItems="False" AllowDrop="False"/>
                     <Border x:Name="NbGrip" Grid.Row="2" Width="22" Height="22"
                             HorizontalAlignment="Right" VerticalAlignment="Bottom"

@@ -16,7 +16,8 @@ public enum GridType { None, Dotted, Square, Lines }
 public enum ShapeKind
 {
     Line, Rect, Ellipse, Triangle, AxesXY, AxesXYZ, Image, Arrow,
-    RightTriangle, Diamond, Pentagon, Hexagon, Star, Parallelogram, Trapezoid
+    RightTriangle, Diamond, Pentagon, Hexagon, Star, Parallelogram, Trapezoid,
+    Table
 }
 
 public class StrokePoint
@@ -103,6 +104,9 @@ public class ShapeElement
     public string? ImagePath { get; set; }
     // Rotation in degrees about the shape's centre (#20).
     public double Rotation { get; set; }
+    // Table shapes only: grid dimensions (#40).
+    public int TRows { get; set; }
+    public int TCols { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
 }
 
@@ -114,6 +118,10 @@ public class TextElement
     public double Width { get; set; } = 280;
     public string Rtf { get; set; } = "";
     public double Rotation { get; set; }
+    // Cell membership for table shapes (#40): null = a free text box.
+    public Guid? TableId { get; set; }
+    public int TableRow { get; set; }
+    public int TableCol { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
 }
 

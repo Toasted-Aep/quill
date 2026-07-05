@@ -192,6 +192,7 @@ public sealed class InkSurface : UserControl
     {
         _canvas = new CanvasControl();
         _canvas.Draw += OnDraw;
+        ContentChanged += () => _inkCacheDirty = true;   // any edit invalidates the ink cache (#43)
         _textLayer = new Canvas { Background = null, RenderTransform = _textTransform };
 
         var root = new Grid();
@@ -413,6 +414,7 @@ public sealed class InkSurface : UserControl
         CancelPendingText();
         NormalizeContent(page);
         _page = page;
+        _inkCacheDirty = true;   // fresh page, fresh ink cache (#43)
         UndoManager.Clear();
         ClearSelection();
         _activeShape = null;
@@ -665,9 +667,22 @@ public sealed class InkSurface : UserControl
             _activePointer = e.Pointer.PointerId;
             _gestureTool = ToolType.Select;
             _canvas.CapturePointer(e.Pointer);
-            ClearSelection();
-            _activeShape = null;
-            _lasso = new List<Vector2> { pos };
+            // Barrel press ON the current selection keeps it: a tap opens the
+            // selection's context menu, a drag moves it (#42). Elsewhere it
+            // starts a fresh lasso as before.
+            bool overSelection =
+                (HasMultiSelection && !_selBounds.IsEmpty && _selBounds.Contains(new Point(pos.X, pos.Y))) ||
+                (_activeShape != null && OnShapeBody(_activeShape, pos, 10f / ViewZoom));
+            if (overSelection)
+            {
+                TryBeginShapeOrSelectionDrag(pos, 10f / ViewZoom);
+            }
+            else
+            {
+                ClearSelection();
+                _activeShape = null;
+                _lasso = new List<Vector2> { pos };
+            }
             e.Handled = true;
             _canvas.Invalidate();
             return;
@@ -736,6 +751,15 @@ public sealed class InkSurface : UserControl
         switch (tool)
         {
             case ToolType.Pen:
+                // The pen can grab and drag a lasso selection directly (#42):
+                // pressing inside the selection box moves it instead of drawing.
+                if (HasMultiSelection && !_selBounds.IsEmpty &&
+                    _selBounds.Contains(new Point(pos.X, pos.Y)))
+                {
+                    _gestureTool = ToolType.Select;
+                    BeginSelectionMove(pos);
+                    break;
+                }
                 // A selected shape/image can be moved or resized with the pen:
                 // pressing on the active shape's body or a handle grabs it,
                 // pressing anywhere else draws — so you can still draw over
@@ -1204,6 +1228,8 @@ public sealed class InkSurface : UserControl
                         Math.Abs(now.W - _shapeOrig.W) > 0.5 || Math.Abs(now.H - _shapeOrig.H) > 0.5)
                     {
                         UndoManager.Push(new MoveResizeShapeAction(_activeShape, _shapeOrig, now), _page, alreadyDone: true);
+                        if (_activeShape.Kind == ShapeKind.Table)
+                            ReflowTableCells(_activeShape);   // cells follow their table (#40)
                         changed = true;
                     }
                     _movingShape = _resizingShape = false;
@@ -1626,6 +1652,76 @@ public sealed class InkSurface : UserControl
     }
 
     // =======================================================================
+    // Static ink cache (phase 3 #43): on pages with thousands of strokes the
+    // settled ink is rendered once into an offscreen bitmap covering ~3x the
+    // viewport, then blitted each frame. Rebuilt when content changes, zoom
+    // drifts, or the view pans outside the cached area.
+    // =======================================================================
+    private CanvasRenderTarget? _inkCache;
+    private Rect _inkCacheWorld;
+    private float _inkCacheScale = 1f;
+    private bool _inkCacheDirty = true;
+    private const int InkCacheThreshold = 2500;
+
+    private bool TryDrawInkCache(CanvasDrawingSession ds, CanvasControl sender,
+                                 float vx0, float vy0, float vx1, float vy1)
+    {
+        try
+        {
+            bool zoomOk = _inkCache != null && ViewZoom / _inkCacheScale is > 0.75f and < 1.35f;
+            bool coversView = _inkCache != null &&
+                vx0 >= _inkCacheWorld.Left && vy0 >= _inkCacheWorld.Top &&
+                vx1 <= _inkCacheWorld.Right && vy1 <= _inkCacheWorld.Bottom;
+
+            if (_inkCacheDirty || !zoomOk || !coversView)
+            {
+                double vw = Math.Max(64, vx1 - vx0), vh = Math.Max(64, vy1 - vy0);
+                var world = new Rect(vx0 - vw, vy0 - vh, vw * 3, vh * 3);
+                float scale = ViewZoom;
+                double pxW = world.Width * scale, pxH = world.Height * scale;
+                const double maxPx = 4096;
+                if (pxW > maxPx || pxH > maxPx)
+                {
+                    double f = Math.Min(maxPx / pxW, maxPx / pxH);
+                    scale *= (float)f;
+                    pxW *= f;
+                    pxH *= f;
+                }
+
+                _inkCache?.Dispose();
+                _inkCache = new CanvasRenderTarget(sender, (float)pxW, (float)pxH, 96);
+                using (var cds = _inkCache.CreateDrawingSession())
+                {
+                    cds.Clear(Colors.Transparent);
+                    cds.Transform = Matrix3x2.CreateTranslation((float)-world.X, (float)-world.Y) *
+                                    Matrix3x2.CreateScale(scale);
+                    foreach (var s in _page!.Strokes)
+                    {
+                        s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
+                        float pad = s.Size * 2.5f + 6f;
+                        if (bx1 < world.Left - pad || bx0 > world.Right + pad ||
+                            by1 < world.Top - pad || by0 > world.Bottom + pad) continue;
+                        DrawStroke(cds, sender, s, Vector2.Zero, null);
+                    }
+                }
+                _inkCacheWorld = world;
+                _inkCacheScale = scale;
+                _inkCacheDirty = false;
+            }
+
+            if (_inkCache == null) return false;
+            ds.DrawImage(_inkCache, _inkCacheWorld);
+            return true;
+        }
+        catch
+        {
+            _inkCache?.Dispose();
+            _inkCache = null;
+            return false;   // fall back to the per-stroke path
+        }
+    }
+
+    // =======================================================================
     // Drawing
     // =======================================================================
     private void OnDraw(CanvasControl sender, CanvasDrawEventArgs args)
@@ -1670,30 +1766,38 @@ public sealed class InkSurface : UserControl
             }
         }
 
-        int idx = 0;
-        foreach (var s in _page.Strokes)
+        // Big pages draw settled ink from the offscreen cache (#43); anything
+        // that offsets strokes (replay, selection move, free space) falls back
+        // to the classic per-stroke path so offsets stay live.
+        bool cacheEligible = !_replaying && !_movingSel && !_spacing &&
+                             _page.Strokes.Count >= InkCacheThreshold;
+        if (!(cacheEligible && TryDrawInkCache(ds, sender, visMinX, visMinY, visMaxX, visMaxY)))
         {
-            var off = Vector2.Zero;
-            if (_movingSel && _selectedSet.Contains(s)) off = new Vector2(_moveDx, _moveDy);
-            else if (_spacing && s.Points.Count > 0 && s.MinY >= _spaceY) off = new Vector2(0, (float)_spaceDelta);
+            int idx = 0;
+            foreach (var s in _page.Strokes)
+            {
+                var off = Vector2.Zero;
+                if (_movingSel && _selectedSet.Contains(s)) off = new Vector2(_moveDx, _moveDy);
+                else if (_spacing && s.Points.Count > 0 && s.MinY >= _spaceY) off = new Vector2(0, (float)_spaceDelta);
 
-            if (_replaying)
-            {
-                if (idx > _replayStroke) break;
-                int? limit = idx == _replayStroke ? _replayPoint : null;
-                DrawStroke(ds, sender, s, off, limit);
-            }
-            else
-            {
-                s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
-                float pad = s.Size * 2.5f + 6f;
-                if (bx1 + off.X >= visMinX - pad && bx0 + off.X <= visMaxX + pad &&
-                    by1 + off.Y >= visMinY - pad && by0 + off.Y <= visMaxY + pad)
+                if (_replaying)
                 {
-                    DrawStroke(ds, sender, s, off, null);
+                    if (idx > _replayStroke) break;
+                    int? limit = idx == _replayStroke ? _replayPoint : null;
+                    DrawStroke(ds, sender, s, off, limit);
                 }
+                else
+                {
+                    s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
+                    float pad = s.Size * 2.5f + 6f;
+                    if (bx1 + off.X >= visMinX - pad && bx0 + off.X <= visMaxX + pad &&
+                        by1 + off.Y >= visMinY - pad && by0 + off.Y <= visMaxY + pad)
+                    {
+                        DrawStroke(ds, sender, s, off, null);
+                    }
+                }
+                idx++;
             }
-            idx++;
         }
 
         if (_gestureTool == ToolType.Pen)
@@ -2617,6 +2721,19 @@ public sealed class InkSurface : UserControl
                 }
                 break;
             }
+            case ShapeKind.Table:
+            {
+                var r = new Rect(s.X, s.Y, Math.Max(1, s.W), Math.Max(1, s.H));
+                ds.DrawRectangle(r, color, w);
+                int rows = Math.Max(1, s.TRows), cols = Math.Max(1, s.TCols);
+                double chh = s.H / rows, cww = s.W / cols;
+                float inner = Math.Max(1f, w * 0.75f);
+                for (int i = 1; i < rows; i++)
+                    ds.DrawLine((float)s.X, (float)(s.Y + i * chh), (float)(s.X + s.W), (float)(s.Y + i * chh), color, inner);
+                for (int i = 1; i < cols; i++)
+                    ds.DrawLine((float)(s.X + i * cww), (float)s.Y, (float)(s.X + i * cww), (float)(s.Y + s.H), color, inner);
+                break;
+            }
             case ShapeKind.AxesXY:
             {
                 var o = new Vector2((float)s.X, (float)(s.Y + s.H));
@@ -2893,8 +3010,8 @@ public sealed class InkSurface : UserControl
         ContentChanged?.Invoke();
     }
 
-    /// <summary>Inserts an empty rows×cols table centred in the view: border
-    /// shapes plus one text box per cell, as a single undo step (#34).</summary>
+    /// <summary>Inserts an empty rows×cols table centred in the view: ONE table
+    /// shape plus a linked text bubble per cell, as a single undo step (#40).</summary>
     public void InsertTable(int rows, int cols, double cellW, double cellH)
     {
         if (_page == null) return;
@@ -2903,42 +3020,156 @@ public sealed class InkSurface : UserControl
         FlushTexts();
         var centre = ToWorld(new Vector2((float)ActualWidth / 2, (float)ActualHeight / 2));
         double x0 = centre.X - cols * cellW / 2, y0 = centre.Y - rows * cellH / 2;
-        const string lineColor = "#8A8884";   // neutral grey, readable on light and dark pages
 
-        var shapes = new List<ShapeElement>
+        var table = new ShapeElement
         {
-            new() { Kind = ShapeKind.Rect, X = x0, Y = y0, W = cols * cellW, H = rows * cellH, Color = lineColor, Size = 2f }
+            Kind = ShapeKind.Table, X = x0, Y = y0,
+            W = cols * cellW, H = rows * cellH,
+            Color = "#8A8884", Size = 1.6f, TRows = rows, TCols = cols
         };
-        for (int r = 1; r < rows; r++)
-            shapes.Add(new ShapeElement { Kind = ShapeKind.Line, X = x0, Y = y0 + r * cellH, W = cols * cellW, H = 0, Color = lineColor, Size = 1.5f });
-        for (int c = 1; c < cols; c++)
-            shapes.Add(new ShapeElement { Kind = ShapeKind.Line, X = x0 + c * cellW, Y = y0, W = 0, H = rows * cellH, Color = lineColor, Size = 1.5f });
-
         var texts = new List<TextElement>();
         for (int r = 0; r < rows; r++)
             for (int c = 0; c < cols; c++)
-                texts.Add(new TextElement { X = x0 + c * cellW + 6, Y = y0 + r * cellH + 2, Width = cellW - 28 });
+                texts.Add(new TextElement
+                {
+                    X = x0 + c * cellW + 6, Y = y0 + r * cellH + 2, Width = cellW - 28,
+                    TableId = table.Id, TableRow = r, TableCol = c
+                });
 
-        UndoManager.Push(new AddMixedAction(new List<PenStroke>(), shapes, texts), _page);
+        UndoManager.Push(new AddMixedAction(new List<PenStroke>(), new List<ShapeElement> { table }, texts), _page);
+        _activeShape = table;
         RebuildTextLayer();
         _canvas.Invalidate();
         ContentChanged?.Invoke();
     }
 
-    /// <summary>Flattens the current page's ink, shapes and grid into vector
-    /// primitives for the vector PDF exporter. Text boxes and images are not
-    /// included (use the raster export for those).</summary>
-    public PdfVectorPage? BuildVectorPage(double marginPx)
+    public ShapeElement? ActiveShape => _activeShape;
+
+    /// <summary>Snaps a table's cell bubbles back onto its grid after the
+    /// table shape has been moved or resized (#40).</summary>
+    public void ReflowTableCells(ShapeElement table)
+    {
+        if (_page == null || table.Kind != ShapeKind.Table) return;
+        int rows = Math.Max(1, table.TRows), cols = Math.Max(1, table.TCols);
+        double cw = table.W / cols, chh = table.H / rows;
+        var moves = new List<(TextElement, double, double, double, double)>();
+        foreach (var t in _page.Texts)
+        {
+            if (t.TableId != table.Id) continue;
+            double nx = table.X + t.TableCol * cw + 6;
+            double ny = table.Y + t.TableRow * chh + 2;
+            t.Width = Math.Max(60, cw - 28);
+            if (Math.Abs(t.X - nx) > 0.01 || Math.Abs(t.Y - ny) > 0.01)
+                moves.Add((t, t.X, t.Y, nx, ny));
+        }
+        if (moves.Count == 0) return;
+        UndoManager.Push(new RepositionTextsAction(moves), _page);
+        RebuildTextLayer();
+    }
+
+    public void TableAddRow(ShapeElement table)
+    {
+        if (_page == null || table.Kind != ShapeKind.Table) return;
+        FlushTexts();
+        int rows = Math.Max(1, table.TRows), cols = Math.Max(1, table.TCols);
+        double cellH = table.H / rows, cw = table.W / cols;
+        var texts = new List<TextElement>();
+        for (int c = 0; c < cols; c++)
+            texts.Add(new TextElement
+            {
+                X = table.X + c * cw + 6, Y = table.Y + rows * cellH + 2, Width = Math.Max(60, cw - 28),
+                TableId = table.Id, TableRow = rows, TableCol = c
+            });
+        var acts = new IPageAction[]
+        {
+            new MoveResizeShapeAction(table, (table.X, table.Y, table.W, table.H), (table.X, table.Y, table.W, table.H + cellH)),
+            new TableGridAction(table, rows, cols, rows + 1, cols),
+            new AddMixedAction(new List<PenStroke>(), new List<ShapeElement>(), texts)
+        };
+        UndoManager.Push(new CompositeAction(acts, "Add table row"), _page);
+        RebuildTextLayer();
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    public void TableAddColumn(ShapeElement table)
+    {
+        if (_page == null || table.Kind != ShapeKind.Table) return;
+        FlushTexts();
+        int rows = Math.Max(1, table.TRows), cols = Math.Max(1, table.TCols);
+        double cellH = table.H / rows, cw = table.W / cols;
+        var texts = new List<TextElement>();
+        for (int r = 0; r < rows; r++)
+            texts.Add(new TextElement
+            {
+                X = table.X + cols * cw + 6, Y = table.Y + r * cellH + 2, Width = Math.Max(60, cw - 28),
+                TableId = table.Id, TableRow = r, TableCol = cols
+            });
+        var acts = new IPageAction[]
+        {
+            new MoveResizeShapeAction(table, (table.X, table.Y, table.W, table.H), (table.X, table.Y, table.W + cw, table.H)),
+            new TableGridAction(table, rows, cols, rows, cols + 1),
+            new AddMixedAction(new List<PenStroke>(), new List<ShapeElement>(), texts)
+        };
+        UndoManager.Push(new CompositeAction(acts, "Add table column"), _page);
+        RebuildTextLayer();
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    /// <summary>Flattens the current page's ink, shapes, grid, images and text
+    /// into vector primitives for the vector PDF exporter (#41).</summary>
+    public async Task<PdfVectorPage?> BuildVectorPageAsync(double marginPx)
     {
         if (_page == null) return null;
+        FlushTexts();
         var content = ContentBoundsWorld() ?? new Rect(0, 0, 800, 600);
+        // make sure text boxes are inside the exported area too
+        foreach (var t in _page.Texts)
+        {
+            var est = new Rect(t.X, t.Y, Math.Max(60, t.Width), 60);
+            content = content.IsEmpty ? est : RectUnion(content, est);
+        }
         double minX = content.X - marginPx, minY = content.Y - marginPx;
         double w = Math.Max(64, content.Width + marginPx * 2);
         double h = Math.Max(64, content.Height + marginPx * 2);
 
         var paths = new List<PdfVectorPath>();
         var dots = new List<PdfVectorDot>();
+        var images = new List<PdfVectorImage>();
+        var texts = new List<PdfVectorText>();
         var bgCol = ColorUtil.Parse(_page.Background);
+        string inkHex = ColorUtil.IsDark(bgCol) ? "#FAF9F5" : "#141413";
+
+        // ---- images, decoded to pixels for embedding ----
+        foreach (var sh in _page.Shapes)
+        {
+            if (sh.Kind != ShapeKind.Image || sh.ImagePath == null) continue;
+            try
+            {
+                CanvasBitmap? bmp = _bitmaps.TryGetValue(sh.ImagePath, out var cached) ? cached : null;
+                bmp ??= await CanvasBitmap.LoadAsync(_canvas, sh.ImagePath);
+                images.Add(new PdfVectorImage(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H),
+                    (int)bmp.SizeInPixels.Width, (int)bmp.SizeInPixels.Height, bmp.GetPixelBytes()));
+            }
+            catch { /* unreadable image: skip, ink still exports */ }
+        }
+
+        // ---- text boxes as selectable PDF text ----
+        foreach (var t in _page.Texts)
+        {
+            var plain = RtfToPlainText(t.Rtf, out float size);
+            if (string.IsNullOrWhiteSpace(plain)) continue;
+            var lines = plain.Split('\n');
+            for (int li = 0; li < lines.Length; li++)
+            {
+                if (lines[li].Length == 0) continue;
+                texts.Add(new PdfVectorText(
+                    (float)(t.X + 4),
+                    (float)(t.Y + 16 + size + li * size * 1.35),
+                    size, inkHex, lines[li]));
+            }
+        }
 
         // ---- grid, pre-blended against the background ----
         if (_page.Grid != GridType.None)
@@ -2988,7 +3219,87 @@ public sealed class InkSurface : UserControl
             paths.Add(new PdfVectorPath(pts, s.Color, s.Size * (hl ? 1.6f : 1f), false, hl ? 0.35f : 1f));
         }
 
-        return new PdfVectorPage(w, h, minX, minY, _page.Background, paths, dots);
+        return new PdfVectorPage(w, h, minX, minY, _page.Background, paths, dots, images, texts);
+    }
+
+    private static Rect RectUnion(Rect a, Rect b)
+    {
+        double x = Math.Min(a.X, b.X), y = Math.Min(a.Y, b.Y);
+        return new Rect(x, y, Math.Max(a.Right, b.Right) - x, Math.Max(a.Bottom, b.Bottom) - y);
+    }
+
+    // Best-effort RTF → plain text with \par as newlines; also pulls the first
+    // \fsN font size. Skips the fonttbl/colortbl header groups.
+    private static string RtfToPlainText(string rtf, out float fontSize)
+    {
+        fontSize = 16f;
+        if (string.IsNullOrEmpty(rtf)) return "";
+        var sb = new System.Text.StringBuilder();
+        bool sizeFound = false;
+        for (int i = 0; i < rtf.Length; i++)
+        {
+            char c = rtf[i];
+            if (c == '{')
+            {
+                // skip header groups entirely: {\fonttbl...} {\colortbl...} {\*\...}
+                foreach (var head in new[] { "{\\fonttbl", "{\\colortbl", "{\\stylesheet", "{\\*" })
+                {
+                    if (i + head.Length <= rtf.Length && rtf.AsSpan(i, head.Length).SequenceEqual(head))
+                    {
+                        int depth = 0;
+                        for (; i < rtf.Length; i++)
+                        {
+                            if (rtf[i] == '{') depth++;
+                            else if (rtf[i] == '}' && --depth == 0) break;
+                        }
+                        break;
+                    }
+                }
+                continue;
+            }
+            if (c == '}') continue;
+            if (c == '\\')
+            {
+                if (i + 1 < rtf.Length && (rtf[i + 1] is '{' or '}' or '\\'))
+                {
+                    sb.Append(rtf[i + 1]);
+                    i++;
+                    continue;
+                }
+                if (i + 3 < rtf.Length && rtf[i + 1] == '\'' &&
+                    byte.TryParse(rtf.AsSpan(i + 2, 2), System.Globalization.NumberStyles.HexNumber, null, out byte bv))
+                {
+                    sb.Append((char)bv);
+                    i += 3;
+                    continue;
+                }
+                i++;
+                int ws = i;
+                while (i < rtf.Length && char.IsLetter(rtf[i])) i++;
+                string word = rtf[ws..i];
+                int ns = i;
+                while (i < rtf.Length && (rtf[i] == '-' || char.IsDigit(rtf[i]))) i++;
+                string num = rtf[ns..i];
+                if (i >= rtf.Length || rtf[i] != ' ') i--;
+                if (word is "par" or "line") sb.Append('\n');
+                else if (word == "fs" && !sizeFound && int.TryParse(num, out int hp) && hp > 4)
+                {
+                    fontSize = hp / 2f;
+                    sizeFound = true;
+                }
+                else if (word == "u" && int.TryParse(num, out int uc))
+                {
+                    sb.Append((char)Math.Abs(uc));
+                    if (i + 1 < rtf.Length) i++;   // skip the '?' substitute
+                }
+                continue;
+            }
+            if (c is '\r' or '\n') continue;
+            sb.Append(c);
+        }
+        var cleaned = string.Join('\n',
+            sb.ToString().Split('\n').Select(l => System.Text.RegularExpressions.Regex.Replace(l, " {2,}", " ").Trim()));
+        return cleaned.Trim('\n');
     }
 
     private static PdfVectorPath LinePath(double x0, double y0, double x1, double y1, string color, float width)
@@ -3068,6 +3379,21 @@ public sealed class InkSurface : UserControl
                 Add(pts, true);
                 break;
             }
+            case ShapeKind.Table:
+            {
+                Add(new List<(float X, float Y)>
+                {
+                    ((float)s.X, (float)s.Y), ((float)(s.X + s.W), (float)s.Y),
+                    ((float)(s.X + s.W), (float)(s.Y + s.H)), ((float)s.X, (float)(s.Y + s.H))
+                }, true);
+                int rows = Math.Max(1, s.TRows), cols = Math.Max(1, s.TCols);
+                double chh = s.H / rows, cww = s.W / cols;
+                for (int i = 1; i < rows; i++)
+                    AddLine(s.X, s.Y + i * chh, s.X + s.W, s.Y + i * chh);
+                for (int i = 1; i < cols; i++)
+                    AddLine(s.X + i * cww, s.Y, s.X + i * cww, s.Y + s.H);
+                break;
+            }
             case ShapeKind.AxesXY:
             {
                 var o = new Vector2((float)s.X, (float)(s.Y + s.H));
@@ -3135,7 +3461,35 @@ public sealed class InkSurface : UserControl
             BorderThickness = new Thickness(0),
             Visibility = Visibility.Collapsed
         };
+        // rotate handle: drag left/right to spin the box, like image rotation (#38)
+        var rotate = new TextBlock
+        {
+            Text = "⟳",
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 28, 0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Opacity = 0.75,
+            Visibility = Visibility.Collapsed
+        };
+        ToolTipService.SetToolTip(rotate, "Drag left/right to rotate (double-tap to reset)");
+        rotate.ManipulationMode = ManipulationModes.TranslateX;
+        rotate.ManipulationDelta += (_, e) =>
+        {
+            t.Rotation = (t.Rotation + e.Delta.Translation.X * 0.75) % 360;
+            container.RenderTransformOrigin = new Point(0.5, 0.5);
+            container.RenderTransform = new RotateTransform { Angle = t.Rotation };
+        };
+        rotate.ManipulationCompleted += (_, _) => ContentChanged?.Invoke();
+        rotate.DoubleTapped += (_, _) =>
+        {
+            t.Rotation = 0;
+            container.RenderTransform = null;
+            ContentChanged?.Invoke();
+        };
+
         grip.Children.Add(dots);
+        grip.Children.Add(rotate);
         grip.Children.Add(close);
         Grid.SetRow(grip, 0);
 
@@ -3211,6 +3565,7 @@ public sealed class InkSurface : UserControl
         {
             gripBrush.Color = Color.FromArgb(60, 217, 119, 87);
             dots.Visibility = Visibility.Visible;
+            rotate.Visibility = Visibility.Visible;
             close.Visibility = Visibility.Visible;
             rGrip.Visibility = Visibility.Visible;
         };
@@ -3218,6 +3573,7 @@ public sealed class InkSurface : UserControl
         {
             gripBrush.Color = Colors.Transparent;
             dots.Visibility = Visibility.Collapsed;
+            rotate.Visibility = Visibility.Collapsed;
             close.Visibility = Visibility.Collapsed;
             rGrip.Visibility = Visibility.Collapsed;
         };
