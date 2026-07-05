@@ -206,6 +206,9 @@ public sealed partial class MainWindow : Window
         UpdateFullscreenIcon();
         if (_library.StartOnGallery) ShowGallery(launcher: true);
 
+        // touch mode needs the visual tree, so apply it after first layout (#36)
+        RootGrid.Loaded += (_, _) => { if (_library.TouchMode) ApplyTouchMode(true); };
+
         ShowStatus("Right-click a pen to edit its type, colour, size and pressure response. F11 toggles full screen.");
     }
 
@@ -523,6 +526,9 @@ public sealed partial class MainWindow : Window
     {
         PresetPanel.Children.Clear();
         BuildEraserChip();
+        // freshly built chips must honour touch mode (#36)
+        if (_library.TouchMode)
+            DispatcherQueue.TryEnqueue(() => ApplyTouchMode(true));
         foreach (var preset in _library.Pens)
         {
             var p = preset;
@@ -1014,7 +1020,7 @@ public sealed partial class MainWindow : Window
         }
 
         Surface.LoadPage(page);
-        if (pageChanged)
+        if (pageChanged && !_suppressPageFade)
         {
             // gentle cross-fade so the new page eases in rather than snapping
             Surface.Opacity = 0.25;
@@ -1441,6 +1447,87 @@ public sealed partial class MainWindow : Window
         {
             page.OcrText = " "; // mark as attempted so we don't retry endlessly
         }
+    }
+
+    // =======================================================================
+    // Handwriting → text / maths (phase 2 #35): recognise the lasso-selected
+    // strokes and replace them with an editable text box.
+    // =======================================================================
+    private static async Task<string?> RecognizeStrokesAsync(IReadOnlyList<PenStroke> strokes)
+    {
+        try
+        {
+            var analyzer = new Windows.UI.Input.Inking.Analysis.InkAnalyzer();
+            var builder = new Windows.UI.Input.Inking.InkStrokeBuilder();
+            int added = 0;
+            foreach (var s in strokes)
+            {
+                if (s.Points.Count < 2) continue;
+                var pts = s.Points.Select(p =>
+                    new Windows.UI.Input.Inking.InkPoint(new Windows.Foundation.Point(p.X, p.Y), p.Pressure));
+                analyzer.AddDataForStroke(builder.CreateStrokeFromInkPoints(pts, System.Numerics.Matrix3x2.Identity));
+                added++;
+            }
+            if (added == 0) return null;
+            await analyzer.AnalyzeAsync();
+            var lines = analyzer.AnalysisRoot.FindNodes(Windows.UI.Input.Inking.Analysis.InkAnalysisNodeKind.Line);
+            var sb = new System.Text.StringBuilder();
+            foreach (var l in lines)
+            {
+                if (sb.Length > 0) sb.Append('\n');
+                sb.Append(((Windows.UI.Input.Inking.Analysis.InkAnalysisLine)l).RecognizedText);
+            }
+            return sb.Length > 0 ? sb.ToString() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task ConvertSelectionAsync(bool math)
+    {
+        var strokes = Surface.SelectedStrokes.ToList();
+        if (strokes.Count == 0) { ShowStatus("Lasso-select some handwriting first."); return; }
+        var bounds = Surface.SelectionBoundsWorld;
+        ShowStatus("Reading your handwriting…");
+        var text = await RecognizeStrokesAsync(strokes);
+        if (string.IsNullOrWhiteSpace(text)) { ShowStatus("Couldn't read that handwriting — try selecting a full word or line."); return; }
+
+        if (math)
+        {
+            var expr = NormalizeMathText(text);
+            text = CalcEngine.TryEvaluate(expr, true, out double val, out _)
+                ? $"{expr} = {val:G10}"
+                : expr;   // couldn't evaluate: still insert the recognised expression
+        }
+
+        Surface.DeleteSelection();   // undoable
+        double x = bounds.IsEmpty ? 100 : bounds.X;
+        double y = bounds.IsEmpty ? 100 : bounds.Y;
+        double w = bounds.IsEmpty ? 320 : Math.Max(220, bounds.Width + 60);
+        Surface.AddTextElement(x, y, w, PlainToRtf(text, _library.DefaultFont, (float)_library.DefaultFontSize));
+        ShowStatus(math ? "Converted to maths." : "Converted to text — tap it with the Text tool to edit.");
+    }
+
+    // Common handwriting-recognition slips for maths input.
+    private static string NormalizeMathText(string t) => t
+        .Replace("×", "*").Replace("÷", "/").Replace("−", "-").Replace("–", "-")
+        .Replace("^", "^").Replace(",", ".").Replace(" ", "");
+
+    private static string PlainToRtf(string text, string font, float size)
+    {
+        var body = new System.Text.StringBuilder();
+        foreach (var ch in text)
+        {
+            if (ch is '\\' or '{' or '}') body.Append('\\').Append(ch);
+            else if (ch == '\n') body.Append("\\par ");
+            else if (ch == '\r') { }
+            else if (ch > 127) body.Append("\\u").Append((int)ch).Append('?');
+            else body.Append(ch);
+        }
+        int halfPts = Math.Max(8, (int)Math.Round(size * 2));
+        return "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 " + font + ";}}\\f0\\fs" + halfPts + " " + body + "}";
     }
 
     private static string RtfToText(string rtf)
@@ -2032,6 +2119,16 @@ public sealed partial class MainWindow : Window
         pickerToggle.Toggled += (_, _) => { _library.StartOnGallery = pickerToggle.IsOn; ScheduleSave(); };
         panel.Children.Add(pickerToggle);
         panel.Children.Add(new TextBlock { Text = "The picker opens over your last page — press Esc to skip it.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- touch-screen mode (#36) ----
+        var touchToggle = new ToggleSwitch { Header = "Touch screen mode (larger buttons)", IsOn = _library.TouchMode };
+        touchToggle.Toggled += (_, _) =>
+        {
+            _library.TouchMode = touchToggle.IsOn;
+            ApplyTouchMode(touchToggle.IsOn);
+            ScheduleSave();
+        };
+        panel.Children.Add(touchToggle);
 
         // ---- accent colour (#33) ----
         panel.Children.Add(new TextBlock { Text = "Accent colour", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
@@ -2913,6 +3010,252 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     // Canvas context menu (right-click / pen barrel-tap / touch long-press)
     // =======================================================================
+    // =======================================================================
+    // Phase 2: tables, typed equations, multi-page & vector PDF, touch mode
+    // =======================================================================
+    private async void InsertTable_Click(object sender, RoutedEventArgs e)
+    {
+        var rows = new NumberBox { Header = "Rows", Value = 3, Minimum = 1, Maximum = 20, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline };
+        var cols = new NumberBox { Header = "Columns", Value = 3, Minimum = 1, Maximum = 12, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline };
+        var panel = new StackPanel { Spacing = 10, Width = 260 };
+        panel.Children.Add(rows);
+        panel.Children.Add(cols);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Cells are text boxes — click one with the Text tool to type. Lines can be moved with the Move mouse mode.",
+            FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap
+        });
+        var dlg = new ContentDialog
+        {
+            Title = "Insert table",
+            Content = panel,
+            PrimaryButtonText = "Insert",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        int r = double.IsNaN(rows.Value) ? 3 : (int)rows.Value;
+        int c = double.IsNaN(cols.Value) ? 3 : (int)cols.Value;
+        Surface.InsertTable(r, c, 190, 64);
+        ShowStatus("Table inserted — the cells are editable text boxes.");
+    }
+
+    private const string EquationHtml = """
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<script defer src="https://cdn.jsdelivr.net/npm/mathlive"></script>
+<style>
+ body{background:#ffffff;margin:12px;font-family:sans-serif}
+ math-field{font-size:26px;display:block;border:1px solid #bbb;border-radius:6px;padding:8px;min-height:44px}
+ #out{margin-top:18px;display:inline-block;padding:10px;background:#ffffff}
+ #hint{color:#777;font-size:12px;margin-top:6px}
+</style></head><body>
+<math-field id="mf">x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}</math-field>
+<div id="hint">Type maths above (LaTeX shortcuts work: \frac, \sqrt, ^, _ ...). The preview below is what gets inserted.</div>
+<div id="out"></div>
+<script>
+const mf=document.getElementById('mf'),out=document.getElementById('out');
+function render(){out.innerHTML='';const m=document.createElement('math-field');m.setAttribute('read-only','');m.style.border='none';m.style.fontSize='34px';m.value=mf.value;out.appendChild(m);}
+window.addEventListener('load',()=>{mf.addEventListener('input',render);setTimeout(render,400);});
+function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.stringify({x:r.x,y:r.y,w:r.width,h:r.height,s:window.devicePixelRatio||1});}
+</script></body></html>
+""";
+
+    private async void InsertEquation_Click(object sender, RoutedEventArgs e)
+    {
+        WebView2? web = null;
+        try
+        {
+            web = new WebView2 { Width = 640, Height = 360 };
+            var dlg = new ContentDialog
+            {
+                Title = "Insert equation",
+                Content = web,
+                PrimaryButtonText = "Insert",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = RootGrid.XamlRoot
+            };
+            dlg.Opened += async (_, _) =>
+            {
+                try
+                {
+                    await web.EnsureCoreWebView2Async();
+                    web.NavigateToString(EquationHtml);
+                }
+                catch
+                {
+                    ShowStatus("The equation editor needs the WebView2 runtime installed.");
+                }
+            };
+            dlg.PrimaryButtonClick += async (_, args) =>
+            {
+                var deferral = args.GetDeferral();
+                try
+                {
+                    if (web.CoreWebView2 == null) return;
+                    string raw = await web.CoreWebView2.ExecuteScriptAsync("getFormulaRect()");
+                    string? inner = System.Text.Json.JsonSerializer.Deserialize<string>(raw);
+                    if (inner == null) return;
+                    using var doc = System.Text.Json.JsonDocument.Parse(inner);
+                    double s = doc.RootElement.GetProperty("s").GetDouble();
+                    double rx = doc.RootElement.GetProperty("x").GetDouble() * s;
+                    double ry = doc.RootElement.GetProperty("y").GetDouble() * s;
+                    double rw = doc.RootElement.GetProperty("w").GetDouble() * s;
+                    double rh = doc.RootElement.GetProperty("h").GetDouble() * s;
+                    if (rw < 4 || rh < 4) return;
+
+                    using var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+                    await web.CoreWebView2.CapturePreviewAsync(
+                        Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png, stream);
+                    var decoder = await BitmapDecoder.CreateAsync(stream);
+                    uint bx = (uint)Math.Clamp(rx, 0, Math.Max(0, decoder.PixelWidth - 5));
+                    uint by = (uint)Math.Clamp(ry, 0, Math.Max(0, decoder.PixelHeight - 5));
+                    uint bw = (uint)Math.Clamp(rw + 6 * s, 4, decoder.PixelWidth - bx);
+                    uint bh = (uint)Math.Clamp(rh + 6 * s, 4, decoder.PixelHeight - by);
+                    var transform = new BitmapTransform { Bounds = new BitmapBounds { X = bx, Y = by, Width = bw, Height = bh } };
+                    var pix = await decoder.GetPixelDataAsync(
+                        BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, transform,
+                        ExifOrientationMode.IgnoreExifOrientation, ColorManagementMode.DoNotColorManage);
+                    var bytes = pix.DetachPixelData();
+
+                    var dir = System.IO.Path.Combine(LibraryStore.Dir, "assets");
+                    Directory.CreateDirectory(dir);
+                    var path = System.IO.Path.Combine(dir, $"{Guid.NewGuid():N}.png");
+                    using (var outStream = new FileStream(path, FileMode.Create, FileAccess.ReadWrite))
+                    {
+                        var enc = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, outStream.AsRandomAccessStream());
+                        enc.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, bw, bh, 96, 96, bytes);
+                        await enc.FlushAsync();
+                    }
+                    Surface.InsertImage(path, bw, bh);
+                    ShowStatus("Equation inserted — drag it to move, drag a corner to resize.");
+                }
+                catch
+                {
+                    ShowStatus("Couldn't render the equation — the editor needs internet access for MathLive.");
+                }
+                finally { deferral.Complete(); }
+            };
+            await dlg.ShowAsync();
+        }
+        catch
+        {
+            ShowStatus("The equation editor needs the WebView2 runtime installed.");
+        }
+        finally { try { web?.Close(); } catch { } }
+    }
+
+    // ---- multi-page + vector PDF export ----
+    private bool _suppressPageFade;
+
+    private async void ExportSectionPdf_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curSec == null) return;
+        await ExportMultiPdfAsync(_curSec.Pages.ToList());
+    }
+
+    private async void ExportNotebookPdf_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curNb == null) return;
+        await ExportMultiPdfAsync(_curNb.Sections.SelectMany(s => s.Pages).ToList());
+    }
+
+    private async Task ExportMultiPdfAsync(List<NotePage> pages)
+    {
+        if (pages.Count == 0 || _curNb == null || _curSec == null || _curPage == null)
+        {
+            ShowStatus("Nothing to export.");
+            return;
+        }
+        var file = await PickSaveFileAsync(".pdf", "PDF document");
+        if (file == null) return;
+
+        Surface.FlushTexts();
+        var (keepNb, keepSec, keepPage) = (_curNb, _curSec, _curPage);
+        var images = new List<PdfPageImage>();
+        _suppressPageFade = true;
+        try
+        {
+            foreach (var pg in pages)
+            {
+                var (nb, sec) = FindContext(pg);
+                if (nb == null || sec == null) continue;
+                SwitchToPage(nb, sec, pg);
+                ShowStatus($"Exporting page {images.Count + 1} of {pages.Count}…");
+                var cap = await CapturePageAsync();
+                if (cap != null)
+                    images.Add(new PdfPageImage(cap.Value.Width, cap.Value.Height, cap.Value.Pixels));
+            }
+        }
+        finally
+        {
+            SwitchToPage(keepNb, keepSec, keepPage);
+            _suppressPageFade = false;
+        }
+        if (images.Count == 0) { ShowStatus("Could not capture any pages."); return; }
+        try
+        {
+            await FileIO.WriteBytesAsync(file, PdfExporter.Create(images));
+            ShowStatus($"Exported {images.Count} page{(images.Count == 1 ? "" : "s")} to {file.Name}");
+        }
+        catch
+        {
+            ShowStatus("Could not save the PDF. Check the location and try again.");
+        }
+    }
+
+    private async void ExportVectorPdf_Click(object sender, RoutedEventArgs e)
+    {
+        Surface.FlushTexts();
+        var page = Surface.BuildVectorPage(28);
+        if (page == null) return;
+        var file = await PickSaveFileAsync(".pdf", "PDF document");
+        if (file == null) return;
+        try
+        {
+            await FileIO.WriteBytesAsync(file, PdfExporter.CreateVector(new[] { page }));
+            bool omitted = (_curPage?.Texts.Count ?? 0) > 0 ||
+                           (_curPage?.Shapes.Any(sh => sh.Kind == ShapeKind.Image) ?? false);
+            ShowStatus(omitted
+                ? $"Exported vector PDF {file.Name}. Text boxes and images aren't included — use the normal PDF export for those."
+                : $"Exported vector PDF {file.Name} — crisp at any zoom.");
+        }
+        catch
+        {
+            ShowStatus("Could not save the PDF. Check the location and try again.");
+        }
+    }
+
+    // ---- touch-screen mode (#36): larger tap targets on every toolbar ----
+    private void ApplyTouchMode(bool on)
+    {
+        void Walk(DependencyObject root)
+        {
+            int n = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+            {
+                var ch = VisualTreeHelper.GetChild(root, i);
+                switch (ch)
+                {
+                    case Microsoft.UI.Xaml.Controls.Primitives.ButtonBase bb:
+                        bb.MinWidth = on ? 44 : 0;
+                        bb.MinHeight = on ? 42 : 0;
+                        break;
+                    case ComboBox cb:
+                        cb.MinHeight = on ? 42 : 0;
+                        break;
+                    case Slider sl:
+                        sl.MinHeight = on ? 42 : 0;
+                        break;
+                }
+                Walk(ch);
+            }
+        }
+        foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
+            try { Walk(root); } catch { }
+    }
+
     private void ShowCanvasContextMenu(Point pos)
     {
         var menu = new MenuFlyout();
@@ -2940,6 +3283,18 @@ public sealed partial class MainWindow : Window
             var del = new MenuFlyoutItem { Text = "Delete", Icon = new FontIcon { Glyph = "" } };
             del.Click += (_, _) => Surface.DeleteSelection();
             menu.Items.Add(del);
+        }
+
+        // Handwriting → text / maths for lasso-selected ink (#35)
+        if (Surface.SelectedStrokes.Count > 0)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            var toText = new MenuFlyoutItem { Text = "Convert handwriting to text", Icon = new FontIcon { Glyph = "" } };
+            toText.Click += async (_, _) => await ConvertSelectionAsync(math: false);
+            menu.Items.Add(toText);
+            var toMath = new MenuFlyoutItem { Text = "Convert handwriting to maths (evaluate)", Icon = new FontIcon { Glyph = "" } };
+            toMath.Click += async (_, _) => await ConvertSelectionAsync(math: true);
+            menu.Items.Add(toMath);
         }
 
         // Word-style formatting when text is selected: style, font, size (punto).
@@ -3117,6 +3472,8 @@ public sealed partial class MainWindow : Window
     {
         if (CalcButtons == null) return;
         CalcButtons.Children.Clear();
+        if (_library.TouchMode)
+            DispatcherQueue.TryEnqueue(() => ApplyTouchMode(true));
         if (CalcModeName == "Programmer")
         {
             BuildProgButtons();

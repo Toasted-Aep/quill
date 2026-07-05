@@ -197,4 +197,6 @@ public class Library
     public bool StartOnGallery { get; set; } = true;
     // Accent colour for glows, highlights and buttons (#33).
     public string AccentColor { get; set; } = "#D97757";
+    // Touch-screen mode: larger tap targets across the toolbars (#36).
+    public bool TouchMode { get; set; }
 }

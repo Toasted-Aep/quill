@@ -2876,6 +2876,217 @@ public sealed class InkSurface : UserControl
         }
     }
 
+    // =======================================================================
+    // Programmatic content (phase 2): handwriting→text, tables, vector export
+    // =======================================================================
+    public IReadOnlyList<PenStroke> SelectedStrokes => _selected;
+    public Rect SelectionBoundsWorld => _selBounds;
+
+    /// <summary>Adds a text box with pre-built RTF (undoable).</summary>
+    public void AddTextElement(double x, double y, double width, string rtf)
+    {
+        if (_page == null) return;
+        FlushTexts();
+        var t = new TextElement { X = x, Y = y, Width = Math.Max(60, width), Rtf = rtf };
+        UndoManager.Push(new AddTextAction(t), _page);
+        BuildTextUi(t);
+        ContentChanged?.Invoke();
+    }
+
+    /// <summary>Inserts an empty rows×cols table centred in the view: border
+    /// shapes plus one text box per cell, as a single undo step (#34).</summary>
+    public void InsertTable(int rows, int cols, double cellW, double cellH)
+    {
+        if (_page == null) return;
+        rows = Math.Clamp(rows, 1, 20);
+        cols = Math.Clamp(cols, 1, 12);
+        FlushTexts();
+        var centre = ToWorld(new Vector2((float)ActualWidth / 2, (float)ActualHeight / 2));
+        double x0 = centre.X - cols * cellW / 2, y0 = centre.Y - rows * cellH / 2;
+        const string lineColor = "#8A8884";   // neutral grey, readable on light and dark pages
+
+        var shapes = new List<ShapeElement>
+        {
+            new() { Kind = ShapeKind.Rect, X = x0, Y = y0, W = cols * cellW, H = rows * cellH, Color = lineColor, Size = 2f }
+        };
+        for (int r = 1; r < rows; r++)
+            shapes.Add(new ShapeElement { Kind = ShapeKind.Line, X = x0, Y = y0 + r * cellH, W = cols * cellW, H = 0, Color = lineColor, Size = 1.5f });
+        for (int c = 1; c < cols; c++)
+            shapes.Add(new ShapeElement { Kind = ShapeKind.Line, X = x0 + c * cellW, Y = y0, W = 0, H = rows * cellH, Color = lineColor, Size = 1.5f });
+
+        var texts = new List<TextElement>();
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+                texts.Add(new TextElement { X = x0 + c * cellW + 6, Y = y0 + r * cellH + 2, Width = cellW - 28 });
+
+        UndoManager.Push(new AddMixedAction(new List<PenStroke>(), shapes, texts), _page);
+        RebuildTextLayer();
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    /// <summary>Flattens the current page's ink, shapes and grid into vector
+    /// primitives for the vector PDF exporter. Text boxes and images are not
+    /// included (use the raster export for those).</summary>
+    public PdfVectorPage? BuildVectorPage(double marginPx)
+    {
+        if (_page == null) return null;
+        var content = ContentBoundsWorld() ?? new Rect(0, 0, 800, 600);
+        double minX = content.X - marginPx, minY = content.Y - marginPx;
+        double w = Math.Max(64, content.Width + marginPx * 2);
+        double h = Math.Max(64, content.Height + marginPx * 2);
+
+        var paths = new List<PdfVectorPath>();
+        var dots = new List<PdfVectorDot>();
+        var bgCol = ColorUtil.Parse(_page.Background);
+
+        // ---- grid, pre-blended against the background ----
+        if (_page.Grid != GridType.None)
+        {
+            float spacing = (float)Math.Max(8, _page.GridSpacing);
+            while (w / spacing * (h / spacing) > 25000) spacing *= 2;
+            var over = ColorUtil.IsDark(bgCol) ? Color.FromArgb(70, 255, 255, 255) : Color.FromArgb(46, 0, 0, 0);
+            var blended = Color.FromArgb(255,
+                (byte)((over.R * over.A + bgCol.R * (255 - over.A)) / 255),
+                (byte)((over.G * over.A + bgCol.G * (255 - over.A)) / 255),
+                (byte)((over.B * over.A + bgCol.B * (255 - over.A)) / 255));
+            string gHex = ColorUtil.ToHex(blended);
+            double sx = Math.Floor(minX / spacing) * spacing;
+            double sy = Math.Floor(minY / spacing) * spacing;
+            switch (_page.Grid)
+            {
+                case GridType.Dotted:
+                    for (double y = sy; y < minY + h; y += spacing)
+                        for (double x = sx; x < minX + w; x += spacing)
+                            dots.Add(new PdfVectorDot((float)x, (float)y, 1.4f, gHex));
+                    break;
+                case GridType.Square:
+                    for (double x = sx; x < minX + w; x += spacing)
+                        paths.Add(LinePath(x, minY, x, minY + h, gHex, 1f));
+                    for (double y = sy; y < minY + h; y += spacing)
+                        paths.Add(LinePath(minX, y, minX + w, y, gHex, 1f));
+                    break;
+                case GridType.Lines:
+                    for (double y = sy; y < minY + h; y += spacing)
+                        paths.Add(LinePath(minX, y, minX + w, y, gHex, 1f));
+                    break;
+            }
+        }
+
+        // ---- shapes ----
+        foreach (var sh in _page.Shapes)
+            FlattenShape(sh, paths);
+
+        // ---- ink strokes ----
+        foreach (var s in _page.Strokes)
+        {
+            if (s.Points.Count == 0) continue;
+            var pts = new List<(float X, float Y)>(s.Points.Count);
+            foreach (var p in s.Points) pts.Add((p.X, p.Y));
+            if (pts.Count == 1) pts.Add((pts[0].X + 0.2f, pts[0].Y + 0.2f)); // dot taps
+            bool hl = s.Pen == PenType.Highlighter;
+            paths.Add(new PdfVectorPath(pts, s.Color, s.Size * (hl ? 1.6f : 1f), false, hl ? 0.35f : 1f));
+        }
+
+        return new PdfVectorPage(w, h, minX, minY, _page.Background, paths, dots);
+    }
+
+    private static PdfVectorPath LinePath(double x0, double y0, double x1, double y1, string color, float width)
+        => new(new List<(float X, float Y)> { ((float)x0, (float)y0), ((float)x1, (float)y1) }, color, width, false, 1f);
+
+    private void FlattenShape(ShapeElement s, List<PdfVectorPath> paths)
+    {
+        void Add(List<(float X, float Y)> pts, bool closed)
+        {
+            if (Math.Abs(s.Rotation) > 0.01)
+            {
+                var c = ShapeCenter(s);
+                for (int i = 0; i < pts.Count; i++)
+                {
+                    var rp = RotatePoint(new Vector2(pts[i].X, pts[i].Y), c, s.Rotation);
+                    pts[i] = (rp.X, rp.Y);
+                }
+            }
+            paths.Add(new PdfVectorPath(pts, s.Color, Math.Max(1f, s.Size), closed, 1f));
+        }
+        void AddLine(double x0, double y0, double x1, double y1)
+            => Add(new List<(float X, float Y)> { ((float)x0, (float)y0), ((float)x1, (float)y1) }, false);
+        void AddArrow(Vector2 a, Vector2 b)
+        {
+            AddLine(a.X, a.Y, b.X, b.Y);
+            var dir = b - a;
+            float len = dir.Length();
+            if (len < 1) return;
+            dir /= len;
+            float hs = Math.Max(9f, Math.Max(1f, s.Size) * 3.2f);
+            var perp = new Vector2(-dir.Y, dir.X);
+            var h1 = b - dir * hs + perp * hs * 0.5f;
+            var h2 = b - dir * hs - perp * hs * 0.5f;
+            AddLine(b.X, b.Y, h1.X, h1.Y);
+            AddLine(b.X, b.Y, h2.X, h2.Y);
+        }
+
+        switch (s.Kind)
+        {
+            case ShapeKind.Line:
+                AddLine(s.X, s.Y, s.X + s.W, s.Y + s.H);
+                break;
+            case ShapeKind.Arrow:
+                AddArrow(new Vector2((float)s.X, (float)s.Y), new Vector2((float)(s.X + s.W), (float)(s.Y + s.H)));
+                break;
+            case ShapeKind.Rect:
+                Add(new List<(float X, float Y)>
+                {
+                    ((float)s.X, (float)s.Y), ((float)(s.X + s.W), (float)s.Y),
+                    ((float)(s.X + s.W), (float)(s.Y + s.H)), ((float)s.X, (float)(s.Y + s.H))
+                }, true);
+                break;
+            case ShapeKind.Ellipse:
+            {
+                var pts = new List<(float X, float Y)>();
+                double cx = s.X + s.W / 2, cy = s.Y + s.H / 2, rx = Math.Max(1, s.W) / 2, ry = Math.Max(1, s.H) / 2;
+                for (int i = 0; i < 48; i++)
+                {
+                    double a = i * Math.PI * 2 / 48;
+                    pts.Add(((float)(cx + Math.Cos(a) * rx), (float)(cy + Math.Sin(a) * ry)));
+                }
+                Add(pts, true);
+                break;
+            }
+            case ShapeKind.Triangle:
+            case ShapeKind.RightTriangle:
+            case ShapeKind.Diamond:
+            case ShapeKind.Pentagon:
+            case ShapeKind.Hexagon:
+            case ShapeKind.Star:
+            case ShapeKind.Parallelogram:
+            case ShapeKind.Trapezoid:
+            {
+                var v = PolygonVertices(s);
+                var pts = new List<(float X, float Y)>(v.Length);
+                foreach (var p in v) pts.Add((p.X, p.Y));
+                Add(pts, true);
+                break;
+            }
+            case ShapeKind.AxesXY:
+            {
+                var o = new Vector2((float)s.X, (float)(s.Y + s.H));
+                AddArrow(o, new Vector2((float)(s.X + s.W), o.Y));
+                AddArrow(o, new Vector2(o.X, (float)s.Y));
+                break;
+            }
+            case ShapeKind.AxesXYZ:
+            {
+                var o = new Vector2((float)(s.X + s.W / 2), (float)(s.Y + s.H / 2));
+                AddArrow(o, new Vector2((float)(s.X + s.W), o.Y));
+                AddArrow(o, new Vector2(o.X, (float)s.Y));
+                AddArrow(o, new Vector2((float)s.X, (float)(s.Y + s.H)));
+                break;
+            }
+            // Image shapes are skipped — vector export covers ink, shapes, grid.
+        }
+    }
+
     public void RebuildTextLayer()
     {
         FlushTexts(); // persist any live edits before tearing boxes down (prevents resets)

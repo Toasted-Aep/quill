@@ -86,6 +86,13 @@
                                 <MenuFlyoutSeparator/>
                                 <MenuFlyoutItem Text="x-y plane" Tag="AxesXY" Click="InsertShape_Click"/>
                                 <MenuFlyoutItem Text="x-y-z axes" Tag="AxesXYZ" Click="InsertShape_Click"/>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutItem Text="Table…" Click="InsertTable_Click">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE80A;"/></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Equation (typed)…" Click="InsertEquation_Click">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE943;"/></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>
@@ -232,6 +239,11 @@
                             <MenuFlyout>
                                 <MenuFlyoutItem Text="Export whole page as PDF" Click="ExportPdf_Click"/>
                                 <MenuFlyoutItem Text="Export whole page as PNG" Click="ExportPng_Click"/>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutItem Text="Export section as PDF (all pages)" Click="ExportSectionPdf_Click"/>
+                                <MenuFlyoutItem Text="Export notebook as PDF (all pages)" Click="ExportNotebookPdf_Click"/>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutItem Text="Export page as vector PDF (ink &amp; shapes)" Click="ExportVectorPdf_Click"/>
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>
