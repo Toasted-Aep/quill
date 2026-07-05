@@ -652,6 +652,36 @@ public sealed class InkSurface : UserControl
             e.Handled = true;
             return;
         }
+        // Right-button DRAG lassos; right-button TAP opens the context menu (#44).
+        // Over an existing selection the tap keeps it (menu applies to it) and a
+        // drag moves it — mirroring the pen's barrel button.
+        if (isMouse && props.IsRightButtonPressed)
+        {
+            _barrelGesture = true;   // reuse the barrel tap-vs-drag machinery
+            _barrelMoved = false;
+            _barrelStartScreen = screen;
+            _skipNextRightTap = true;
+            _activePointer = e.Pointer.PointerId;
+            _gestureTool = ToolType.Select;
+            _canvas.CapturePointer(e.Pointer);
+            bool overSel =
+                (HasMultiSelection && !_selBounds.IsEmpty && _selBounds.Contains(new Point(pos.X, pos.Y))) ||
+                (_activeShape != null && OnShapeBody(_activeShape, pos, 10f / ViewZoom));
+            if (overSel)
+            {
+                TryBeginShapeOrSelectionDrag(pos, 10f / ViewZoom);
+            }
+            else
+            {
+                ClearSelection();
+                _activeShape = null;
+                _lasso = new List<Vector2> { pos };
+            }
+            e.Handled = true;
+            _canvas.Invalidate();
+            return;
+        }
+
         if (isMouse && !props.IsLeftButtonPressed) return;
 
         // Pen barrel ("select") button opens the context menu. RightTapped is
@@ -688,6 +718,14 @@ public sealed class InkSurface : UserControl
             return;
         }
 
+        // "+" adder buttons around a selected table work with any input (#49)
+        if (_activeShape is { Kind: ShapeKind.Table } tPlus && HitTablePlus(tPlus, pos, out bool plusColumn))
+        {
+            ShowTablePlusMenu(tPlus, plusColumn, screen);
+            e.Handled = true;
+            return;
+        }
+
         var tool = Tool;
         // Pen first button (eraser tip / inverted pen / extra side buttons)
         // acts as the eraser.
@@ -700,6 +738,17 @@ public sealed class InkSurface : UserControl
         {
             if (!isMouse)
             {
+                // touch can grab and move an existing lasso selection (#42)
+                if (HasMultiSelection && !_selBounds.IsEmpty &&
+                    _selBounds.Contains(new Point(pos.X, pos.Y)))
+                {
+                    _activePointer = e.Pointer.PointerId;
+                    _gestureTool = ToolType.Select;
+                    _canvas.CapturePointer(e.Pointer);
+                    BeginSelectionMove(pos);
+                    e.Handled = true;
+                    return;
+                }
                 if (_activeShape != null)
                 {
                     float tol = 10f / ViewZoom;
@@ -900,6 +949,21 @@ public sealed class InkSurface : UserControl
     private bool TryBeginShapeOrSelectionDrag(Vector2 pos, float tol)
     {
         if (_page == null) return false;
+        // table dividers first: grab an inner line to resize its column/row (#49)
+        if (_activeShape is { Kind: ShapeKind.Table } tab &&
+            HitTableDivider(tab, pos, Math.Max(tol, 6f / ViewZoom), out int dc, out int dr))
+        {
+            _tableDividerDrag = true;
+            _tableDivCol = dc;
+            _tableDivRow = dr;
+            _tableOrigColW = TableColWidths(tab).ToList();
+            _tableOrigRowH = TableRowHeights(tab).ToList();
+            _tableOrigW = tab.W;
+            _tableOrigH = tab.H;
+            tab.TColW = _tableOrigColW.ToList();
+            tab.TRowH = _tableOrigRowH.ToList();
+            return true;
+        }
         if (_activeShape != null)
         {
             if (HitRotateHandle(_activeShape, pos, tol))
@@ -1036,6 +1100,25 @@ public sealed class InkSurface : UserControl
                     _rectCur = pos;
                     break;
                 }
+                if (_tableDividerDrag && _activeShape is { Kind: ShapeKind.Table } tdrag)
+                {
+                    // live column/row resize (#49); cells snap on release
+                    if (_tableDivCol > 0 && tdrag.TColW != null)
+                    {
+                        double before = 0;
+                        for (int i = 0; i < _tableDivCol - 1; i++) before += tdrag.TColW[i];
+                        tdrag.TColW[_tableDivCol - 1] = Math.Clamp(pos.X - tdrag.X - before, 28, 4000);
+                        tdrag.W = tdrag.TColW.Sum();
+                    }
+                    else if (_tableDivRow > 0 && tdrag.TRowH != null)
+                    {
+                        double before = 0;
+                        for (int i = 0; i < _tableDivRow - 1; i++) before += tdrag.TRowH[i];
+                        tdrag.TRowH[_tableDivRow - 1] = Math.Clamp(pos.Y - tdrag.Y - before, 24, 4000);
+                        tdrag.H = tdrag.TRowH.Sum();
+                    }
+                    break;
+                }
                 if (_rotatingShape && _activeShape != null)
                 {
                     double cur = Math.Atan2(pos.Y - _rotateCenter.Y, pos.X - _rotateCenter.X) * 180.0 / Math.PI;
@@ -1093,14 +1176,30 @@ public sealed class InkSurface : UserControl
         CommitGesture();
     }
 
+    private bool _skipNextRightTap;
+
     private void OnRightTapped(object sender, RightTappedRoutedEventArgs e)
     {
         if (_page == null || _replaying) return;
+        if (_skipNextRightTap)
+        {
+            // the press-side right-button gesture already handled this click
+            _skipNextRightTap = false;
+            e.Handled = true;
+            return;
+        }
         ContextMenuRequested?.Invoke(e.GetPosition(this));
         e.Handled = true;
     }
 
     public Vector2 ScreenToWorld(Point screen) => ToWorld(new Vector2((float)screen.X, (float)screen.Y));
+
+    /// <summary>Pans (keeping the current zoom) so the given world point sits
+    /// in the middle of the view — used by search result navigation (#46).</summary>
+    public void CenterOnWorld(double x, double y) =>
+        SetView(new Vector2(
+            (float)(ActualWidth / 2 - x * ViewZoom),
+            (float)(ActualHeight / 2 - y * ViewZoom)), ViewZoom);
 
     private void CommitGesture()
     {
@@ -1209,6 +1308,20 @@ public sealed class InkSurface : UserControl
                             SetPendingText(cp);
                         }
                     }
+                    break;
+                }
+                if (_tableDividerDrag && _activeShape is { Kind: ShapeKind.Table } tdone)
+                {
+                    UndoManager.Push(new TableLayoutAction(tdone,
+                        _tableOrigColW ?? TableColWidths(tdone).ToList(),
+                        _tableOrigRowH ?? TableRowHeights(tdone).ToList(),
+                        _tableOrigW, _tableOrigH,
+                        TableColWidths(tdone).ToList(), TableRowHeights(tdone).ToList(),
+                        tdone.W, tdone.H), _page, alreadyDone: true);
+                    ReflowTableCells(tdone);
+                    _tableDividerDrag = false;
+                    _tableDivCol = _tableDivRow = -1;
+                    changed = true;
                     break;
                 }
                 if (_rotatingShape && _activeShape != null)
@@ -1826,6 +1939,21 @@ public sealed class InkSurface : UserControl
         if (_activeShape != null && !_replaying)
         {
             DrawShapeSelection(ds, _activeShape, accent, uiScale);
+
+            // Word-like "+" adders for tables: top = column, left = row (#49)
+            if (_activeShape.Kind == ShapeKind.Table)
+            {
+                var (cb, rb) = TablePlusCentres(_activeShape);
+                float r = 11f / ViewZoom;
+                foreach (var centre in new[] { cb, rb })
+                {
+                    ds.FillCircle(centre, r, Colors.White);
+                    ds.DrawCircle(centre, r, accent, uiScale);
+                    float a = r * 0.5f;
+                    ds.DrawLine(centre.X - a, centre.Y, centre.X + a, centre.Y, accent, uiScale * 1.4f);
+                    ds.DrawLine(centre.X, centre.Y - a, centre.X, centre.Y + a, accent, uiScale * 1.4f);
+                }
+            }
         }
 
         if (_lasso is { Count: > 1 })
@@ -2725,13 +2853,21 @@ public sealed class InkSurface : UserControl
             {
                 var r = new Rect(s.X, s.Y, Math.Max(1, s.W), Math.Max(1, s.H));
                 ds.DrawRectangle(r, color, w);
-                int rows = Math.Max(1, s.TRows), cols = Math.Max(1, s.TCols);
-                double chh = s.H / rows, cww = s.W / cols;
                 float inner = Math.Max(1f, w * 0.75f);
-                for (int i = 1; i < rows; i++)
-                    ds.DrawLine((float)s.X, (float)(s.Y + i * chh), (float)(s.X + s.W), (float)(s.Y + i * chh), color, inner);
-                for (int i = 1; i < cols; i++)
-                    ds.DrawLine((float)(s.X + i * cww), (float)s.Y, (float)(s.X + i * cww), (float)(s.Y + s.H), color, inner);
+                var cw = TableColWidths(s);
+                var rh = TableRowHeights(s);
+                double acc = 0;
+                for (int i = 0; i < rh.Length - 1; i++)
+                {
+                    acc += rh[i];
+                    ds.DrawLine((float)s.X, (float)(s.Y + acc), (float)(s.X + s.W), (float)(s.Y + acc), color, inner);
+                }
+                acc = 0;
+                for (int i = 0; i < cw.Length - 1; i++)
+                {
+                    acc += cw[i];
+                    ds.DrawLine((float)(s.X + acc), (float)s.Y, (float)(s.X + acc), (float)(s.Y + s.H), color, inner);
+                }
                 break;
             }
             case ShapeKind.AxesXY:
@@ -3025,7 +3161,9 @@ public sealed class InkSurface : UserControl
         {
             Kind = ShapeKind.Table, X = x0, Y = y0,
             W = cols * cellW, H = rows * cellH,
-            Color = "#8A8884", Size = 1.6f, TRows = rows, TCols = cols
+            Color = "#8A8884", Size = 1.6f, TRows = rows, TCols = cols,
+            TColW = Enumerable.Repeat(cellW, cols).ToList(),
+            TRowH = Enumerable.Repeat(cellH, rows).ToList()
         };
         var texts = new List<TextElement>();
         for (int r = 0; r < rows; r++)
@@ -3045,76 +3183,287 @@ public sealed class InkSurface : UserControl
 
     public ShapeElement? ActiveShape => _activeShape;
 
+    // ---- Word-like table geometry (#49): per-column widths / per-row heights ----
+    private static double[] TableColWidths(ShapeElement t)
+    {
+        int cols = Math.Max(1, t.TCols);
+        var w = new double[cols];
+        double sum = 0;
+        for (int i = 0; i < cols; i++)
+        {
+            w[i] = t.TColW != null && i < t.TColW.Count && t.TColW[i] > 4 ? t.TColW[i] : t.W / cols;
+            sum += w[i];
+        }
+        if (sum > 1 && Math.Abs(sum - t.W) > 0.5)
+        {
+            double f = t.W / sum;                    // whole-table resize scales columns
+            for (int i = 0; i < cols; i++) w[i] *= f;
+        }
+        return w;
+    }
+
+    private static double[] TableRowHeights(ShapeElement t)
+    {
+        int rows = Math.Max(1, t.TRows);
+        var h = new double[rows];
+        double sum = 0;
+        for (int i = 0; i < rows; i++)
+        {
+            h[i] = t.TRowH != null && i < t.TRowH.Count && t.TRowH[i] > 4 ? t.TRowH[i] : t.H / rows;
+            sum += h[i];
+        }
+        if (sum > 1 && Math.Abs(sum - t.H) > 0.5)
+        {
+            double f = t.H / sum;
+            for (int i = 0; i < rows; i++) h[i] *= f;
+        }
+        return h;
+    }
+
+    /// <summary>Which cell of the table the world point is in, if any.</summary>
+    public (int Row, int Col)? TableCellAt(ShapeElement table, Vector2 world)
+    {
+        if (table.Kind != ShapeKind.Table) return null;
+        double lx = world.X - table.X, ly = world.Y - table.Y;
+        if (lx < 0 || ly < 0 || lx > table.W || ly > table.H) return null;
+        var cw = TableColWidths(table);
+        var rh = TableRowHeights(table);
+        int col = 0, row = 0;
+        double acc = 0;
+        for (int i = 0; i < cw.Length; i++) { acc += cw[i]; if (lx <= acc) { col = i; break; } col = i; }
+        acc = 0;
+        for (int i = 0; i < rh.Length; i++) { acc += rh[i]; if (ly <= acc) { row = i; break; } row = i; }
+        return (row, col);
+    }
+
     /// <summary>Snaps a table's cell bubbles back onto its grid after the
-    /// table shape has been moved or resized (#40).</summary>
+    /// table shape has been moved, resized or restructured (#40/#49).</summary>
     public void ReflowTableCells(ShapeElement table)
     {
         if (_page == null || table.Kind != ShapeKind.Table) return;
-        int rows = Math.Max(1, table.TRows), cols = Math.Max(1, table.TCols);
-        double cw = table.W / cols, chh = table.H / rows;
+        var cw = TableColWidths(table);
+        var rh = TableRowHeights(table);
+        double[] px = new double[cw.Length + 1];
+        for (int i = 0; i < cw.Length; i++) px[i + 1] = px[i] + cw[i];
+        double[] py = new double[rh.Length + 1];
+        for (int i = 0; i < rh.Length; i++) py[i + 1] = py[i] + rh[i];
+
         var moves = new List<(TextElement, double, double, double, double)>();
         foreach (var t in _page.Texts)
         {
             if (t.TableId != table.Id) continue;
-            double nx = table.X + t.TableCol * cw + 6;
-            double ny = table.Y + t.TableRow * chh + 2;
-            t.Width = Math.Max(60, cw - 28);
+            int c = Math.Clamp(t.TableCol, 0, cw.Length - 1);
+            int r = Math.Clamp(t.TableRow, 0, rh.Length - 1);
+            double nx = table.X + px[c] + 6;
+            double ny = table.Y + py[r] + 2;
+            t.Width = Math.Max(48, cw[c] - 16);
             if (Math.Abs(t.X - nx) > 0.01 || Math.Abs(t.Y - ny) > 0.01)
                 moves.Add((t, t.X, t.Y, nx, ny));
         }
-        if (moves.Count == 0) return;
+        if (moves.Count == 0) { RebuildTextLayer(); return; }
         UndoManager.Push(new RepositionTextsAction(moves), _page);
         RebuildTextLayer();
     }
 
-    public void TableAddRow(ShapeElement table)
+    /// <summary>Inserts a column at the given index (0 = far left).</summary>
+    public void TableInsertColumn(ShapeElement table, int at)
     {
         if (_page == null || table.Kind != ShapeKind.Table) return;
         FlushTexts();
         int rows = Math.Max(1, table.TRows), cols = Math.Max(1, table.TCols);
-        double cellH = table.H / rows, cw = table.W / cols;
-        var texts = new List<TextElement>();
-        for (int c = 0; c < cols; c++)
-            texts.Add(new TextElement
-            {
-                X = table.X + c * cw + 6, Y = table.Y + rows * cellH + 2, Width = Math.Max(60, cw - 28),
-                TableId = table.Id, TableRow = rows, TableCol = c
-            });
+        at = Math.Clamp(at, 0, cols);
+        var colW = TableColWidths(table).ToList();
+        var rowH = TableRowHeights(table).ToList();
+        double newW = colW.Average();
+
+        var shifted = _page.Texts.Where(t => t.TableId == table.Id && t.TableCol >= at).ToList();
+        var newCells = new List<TextElement>();
+        for (int r = 0; r < rows; r++)
+            newCells.Add(new TextElement { TableId = table.Id, TableRow = r, TableCol = at, Width = Math.Max(48, newW - 16) });
+
+        var newColW = colW.ToList();
+        newColW.Insert(at, newW);
         var acts = new IPageAction[]
         {
-            new MoveResizeShapeAction(table, (table.X, table.Y, table.W, table.H), (table.X, table.Y, table.W, table.H + cellH)),
-            new TableGridAction(table, rows, cols, rows + 1, cols),
-            new AddMixedAction(new List<PenStroke>(), new List<ShapeElement>(), texts)
+            new ShiftTableCellsAction(shifted, 0, +1),
+            new TableGridAction(table, rows, cols, rows, cols + 1),
+            new TableLayoutAction(table, colW, rowH, table.W, table.H, newColW, rowH, table.W + newW, table.H),
+            new AddMixedAction(new List<PenStroke>(), new List<ShapeElement>(), newCells)
         };
-        UndoManager.Push(new CompositeAction(acts, "Add table row"), _page);
-        RebuildTextLayer();
+        UndoManager.Push(new CompositeAction(acts, "Add table column"), _page);
+        ReflowTableCells(table);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
     }
 
-    public void TableAddColumn(ShapeElement table)
+    /// <summary>Inserts a row at the given index (0 = top).</summary>
+    public void TableInsertRow(ShapeElement table, int at)
     {
         if (_page == null || table.Kind != ShapeKind.Table) return;
         FlushTexts();
         int rows = Math.Max(1, table.TRows), cols = Math.Max(1, table.TCols);
-        double cellH = table.H / rows, cw = table.W / cols;
-        var texts = new List<TextElement>();
-        for (int r = 0; r < rows; r++)
-            texts.Add(new TextElement
-            {
-                X = table.X + cols * cw + 6, Y = table.Y + r * cellH + 2, Width = Math.Max(60, cw - 28),
-                TableId = table.Id, TableRow = r, TableCol = cols
-            });
+        at = Math.Clamp(at, 0, rows);
+        var colW = TableColWidths(table).ToList();
+        var rowH = TableRowHeights(table).ToList();
+        double newH = rowH.Average();
+
+        var shifted = _page.Texts.Where(t => t.TableId == table.Id && t.TableRow >= at).ToList();
+        var newCells = new List<TextElement>();
+        for (int c = 0; c < cols; c++)
+            newCells.Add(new TextElement { TableId = table.Id, TableRow = at, TableCol = c, Width = Math.Max(48, colW[c] - 16) });
+
+        var newRowH = rowH.ToList();
+        newRowH.Insert(at, newH);
         var acts = new IPageAction[]
         {
-            new MoveResizeShapeAction(table, (table.X, table.Y, table.W, table.H), (table.X, table.Y, table.W + cw, table.H)),
-            new TableGridAction(table, rows, cols, rows, cols + 1),
-            new AddMixedAction(new List<PenStroke>(), new List<ShapeElement>(), texts)
+            new ShiftTableCellsAction(shifted, +1, 0),
+            new TableGridAction(table, rows, cols, rows + 1, cols),
+            new TableLayoutAction(table, colW, rowH, table.W, table.H, colW, newRowH, table.W, table.H + newH),
+            new AddMixedAction(new List<PenStroke>(), new List<ShapeElement>(), newCells)
         };
-        UndoManager.Push(new CompositeAction(acts, "Add table column"), _page);
-        RebuildTextLayer();
+        UndoManager.Push(new CompositeAction(acts, "Add table row"), _page);
+        ReflowTableCells(table);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
+    }
+
+    public void TableDeleteRow(ShapeElement table, int row)
+    {
+        if (_page == null || table.Kind != ShapeKind.Table || table.TRows <= 1) return;
+        FlushTexts();
+        int rows = Math.Max(1, table.TRows), cols = Math.Max(1, table.TCols);
+        row = Math.Clamp(row, 0, rows - 1);
+        var colW = TableColWidths(table).ToList();
+        var rowH = TableRowHeights(table).ToList();
+        var doomed = _page.Texts.Where(t => t.TableId == table.Id && t.TableRow == row).ToList();
+        var shifted = _page.Texts.Where(t => t.TableId == table.Id && t.TableRow > row).ToList();
+        var newRowH = rowH.ToList();
+        double gone = newRowH[row];
+        newRowH.RemoveAt(row);
+        var acts = new IPageAction[]
+        {
+            new RemoveMixedAction(new List<PenStroke>(), new List<ShapeElement>(), doomed),
+            new ShiftTableCellsAction(shifted, -1, 0),
+            new TableGridAction(table, rows, cols, rows - 1, cols),
+            new TableLayoutAction(table, colW, rowH, table.W, table.H, colW, newRowH, table.W, table.H - gone)
+        };
+        UndoManager.Push(new CompositeAction(acts, "Delete table row"), _page);
+        ReflowTableCells(table);
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    public void TableDeleteColumn(ShapeElement table, int col)
+    {
+        if (_page == null || table.Kind != ShapeKind.Table || table.TCols <= 1) return;
+        FlushTexts();
+        int rows = Math.Max(1, table.TRows), cols = Math.Max(1, table.TCols);
+        col = Math.Clamp(col, 0, cols - 1);
+        var colW = TableColWidths(table).ToList();
+        var rowH = TableRowHeights(table).ToList();
+        var doomed = _page.Texts.Where(t => t.TableId == table.Id && t.TableCol == col).ToList();
+        var shifted = _page.Texts.Where(t => t.TableId == table.Id && t.TableCol > col).ToList();
+        var newColW = colW.ToList();
+        double gone = newColW[col];
+        newColW.RemoveAt(col);
+        var acts = new IPageAction[]
+        {
+            new RemoveMixedAction(new List<PenStroke>(), new List<ShapeElement>(), doomed),
+            new ShiftTableCellsAction(shifted, 0, -1),
+            new TableGridAction(table, rows, cols, rows, cols - 1),
+            new TableLayoutAction(table, colW, rowH, table.W, table.H, newColW, rowH, table.W - gone, table.H)
+        };
+        UndoManager.Push(new CompositeAction(acts, "Delete table column"), _page);
+        ReflowTableCells(table);
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    public void SelectTableRow(ShapeElement table, int row)
+    {
+        if (_page == null) return;
+        ClearSelection();
+        foreach (var t in _page.Texts.Where(t => t.TableId == table.Id && t.TableRow == row))
+            _selTexts.Add(t);
+        RecomputeSelectionBounds();
+        _canvas.Invalidate();
+    }
+
+    public void SelectTableColumn(ShapeElement table, int col)
+    {
+        if (_page == null) return;
+        ClearSelection();
+        foreach (var t in _page.Texts.Where(t => t.TableId == table.Id && t.TableCol == col))
+            _selTexts.Add(t);
+        RecomputeSelectionBounds();
+        _canvas.Invalidate();
+    }
+
+    // ---- divider dragging (#49): grab an inner grid line to resize its column/row ----
+    private bool _tableDividerDrag;
+    private int _tableDivCol = -1, _tableDivRow = -1;
+    private List<double>? _tableOrigColW, _tableOrigRowH;
+    private double _tableOrigW, _tableOrigH;
+
+    private bool HitTableDivider(ShapeElement t, Vector2 pos, float tol, out int col, out int row)
+    {
+        col = row = -1;
+        double lx = pos.X - t.X, ly = pos.Y - t.Y;
+        if (lx < -tol || ly < -tol || lx > t.W + tol || ly > t.H + tol) return false;
+        var cw = TableColWidths(t);
+        double acc = 0;
+        for (int i = 0; i < cw.Length - 1; i++)
+        {
+            acc += cw[i];
+            if (Math.Abs(lx - acc) <= tol && ly >= 0 && ly <= t.H) { col = i + 1; return true; }
+        }
+        var rh = TableRowHeights(t);
+        acc = 0;
+        for (int i = 0; i < rh.Length - 1; i++)
+        {
+            acc += rh[i];
+            if (Math.Abs(ly - acc) <= tol && lx >= 0 && lx <= t.W) { row = i + 1; return true; }
+        }
+        return false;
+    }
+
+    // ---- floating "+" buttons (#49): top = add column, left = add row ----
+    private (Vector2 ColBtn, Vector2 RowBtn) TablePlusCentres(ShapeElement t)
+    {
+        float d = 26f / ViewZoom;
+        return (new Vector2((float)(t.X + t.W / 2), (float)t.Y - d),
+                new Vector2((float)t.X - d, (float)(t.Y + t.H / 2)));
+    }
+
+    private bool HitTablePlus(ShapeElement t, Vector2 pos, out bool column)
+    {
+        var (cb, rb) = TablePlusCentres(t);
+        float r = 15f / ViewZoom;
+        column = Vector2.Distance(pos, cb) <= r;
+        if (column) return true;
+        return Vector2.Distance(pos, rb) <= r;
+    }
+
+    private void ShowTablePlusMenu(ShapeElement table, bool column, Vector2 screen)
+    {
+        var fly = new MenuFlyout();
+        void Add(string txt, Action act)
+        {
+            var it = new MenuFlyoutItem { Text = txt };
+            it.Click += (_, _) => act();
+            fly.Items.Add(it);
+        }
+        if (column)
+        {
+            Add("Add column left", () => TableInsertColumn(table, 0));
+            Add("Add column right", () => TableInsertColumn(table, Math.Max(1, table.TCols)));
+        }
+        else
+        {
+            Add("Add row above", () => TableInsertRow(table, 0));
+            Add("Add row below", () => TableInsertRow(table, Math.Max(1, table.TRows)));
+        }
+        fly.ShowAt(_canvas, new Point(screen.X, screen.Y));
     }
 
     /// <summary>Flattens the current page's ink, shapes, grid, images and text
@@ -3386,12 +3735,12 @@ public sealed class InkSurface : UserControl
                     ((float)s.X, (float)s.Y), ((float)(s.X + s.W), (float)s.Y),
                     ((float)(s.X + s.W), (float)(s.Y + s.H)), ((float)s.X, (float)(s.Y + s.H))
                 }, true);
-                int rows = Math.Max(1, s.TRows), cols = Math.Max(1, s.TCols);
-                double chh = s.H / rows, cww = s.W / cols;
-                for (int i = 1; i < rows; i++)
-                    AddLine(s.X, s.Y + i * chh, s.X + s.W, s.Y + i * chh);
-                for (int i = 1; i < cols; i++)
-                    AddLine(s.X + i * cww, s.Y, s.X + i * cww, s.Y + s.H);
+                var cw = TableColWidths(s);
+                var rh = TableRowHeights(s);
+                double acc = 0;
+                for (int i = 0; i < rh.Length - 1; i++) { acc += rh[i]; AddLine(s.X, s.Y + acc, s.X + s.W, s.Y + acc); }
+                acc = 0;
+                for (int i = 0; i < cw.Length - 1; i++) { acc += cw[i]; AddLine(s.X + acc, s.Y, s.X + acc, s.Y + s.H); }
                 break;
             }
             case ShapeKind.AxesXY:
@@ -3472,15 +3821,43 @@ public sealed class InkSurface : UserControl
             Opacity = 0.75,
             Visibility = Visibility.Collapsed
         };
-        ToolTipService.SetToolTip(rotate, "Drag left/right to rotate (double-tap to reset)");
-        rotate.ManipulationMode = ManipulationModes.TranslateX;
-        rotate.ManipulationDelta += (_, e) =>
+        ToolTipService.SetToolTip(rotate, "Drag to rotate around the centre (double-tap to reset)");
+        // Rotation tracks the pointer's absolute angle around the box centre in
+        // the (non-rotating) layer space — no feedback loop, no barrel rolls.
+        bool rotating = false;
+        double rotStartAngle = 0, rotStartDeg = 0;
+        Point RotCentre() => new(
+            Canvas.GetLeft(container) + container.ActualWidth / 2,
+            Canvas.GetTop(container) + container.ActualHeight / 2);
+        rotate.PointerPressed += (s2, e) =>
         {
-            t.Rotation = (t.Rotation + e.Delta.Translation.X * 0.75) % 360;
+            rotating = true;
+            var c = RotCentre();
+            var p = e.GetCurrentPoint(_textLayer).Position;
+            rotStartAngle = Math.Atan2(p.Y - c.Y, p.X - c.X);
+            rotStartDeg = t.Rotation;
+            ((UIElement)s2).CapturePointer(e.Pointer);
+            e.Handled = true;
+        };
+        rotate.PointerMoved += (_, e) =>
+        {
+            if (!rotating) return;
+            var c = RotCentre();
+            var p = e.GetCurrentPoint(_textLayer).Position;
+            double angle = Math.Atan2(p.Y - c.Y, p.X - c.X);
+            t.Rotation = (rotStartDeg + (angle - rotStartAngle) * 180.0 / Math.PI) % 360;
             container.RenderTransformOrigin = new Point(0.5, 0.5);
             container.RenderTransform = new RotateTransform { Angle = t.Rotation };
+            e.Handled = true;
         };
-        rotate.ManipulationCompleted += (_, _) => ContentChanged?.Invoke();
+        rotate.PointerReleased += (s2, e) =>
+        {
+            if (!rotating) return;
+            rotating = false;
+            ((UIElement)s2).ReleasePointerCaptures();
+            ContentChanged?.Invoke();
+            e.Handled = true;
+        };
         rotate.DoubleTapped += (_, _) =>
         {
             t.Rotation = 0;

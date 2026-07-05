@@ -329,6 +329,39 @@ public class TableGridAction : IPageAction
     public void Undo(NotePage page) { _s.TRows = _fr; _s.TCols = _fc; }
 }
 
+// Changes a table's column widths / row heights (and outer size) undoably (#49).
+public class TableLayoutAction : IPageAction
+{
+    private readonly ShapeElement _s;
+    private readonly List<double> _fcw, _frh, _tcw, _trh;
+    private readonly double _fw, _fh, _tw, _th;
+    public TableLayoutAction(ShapeElement s,
+        List<double> fromColW, List<double> fromRowH, double fromW, double fromH,
+        List<double> toColW, List<double> toRowH, double toW, double toH)
+    {
+        _s = s;
+        _fcw = fromColW.ToList(); _frh = fromRowH.ToList(); _fw = fromW; _fh = fromH;
+        _tcw = toColW.ToList(); _trh = toRowH.ToList(); _tw = toW; _th = toH;
+    }
+    public string Description => "Resize table cells";
+    public void Do(NotePage page) { _s.TColW = _tcw.ToList(); _s.TRowH = _trh.ToList(); _s.W = _tw; _s.H = _th; }
+    public void Undo(NotePage page) { _s.TColW = _fcw.ToList(); _s.TRowH = _frh.ToList(); _s.W = _fw; _s.H = _fh; }
+}
+
+// Shifts table cells' row/column indices (used when inserting/deleting) (#49).
+public class ShiftTableCellsAction : IPageAction
+{
+    private readonly List<TextElement> _cells;
+    private readonly int _dRow, _dCol;
+    public ShiftTableCellsAction(List<TextElement> cells, int dRow, int dCol)
+    {
+        _cells = cells; _dRow = dRow; _dCol = dCol;
+    }
+    public string Description => "Reindex table cells";
+    public void Do(NotePage page) { foreach (var c in _cells) { c.TableRow += _dRow; c.TableCol += _dCol; } }
+    public void Undo(NotePage page) { foreach (var c in _cells) { c.TableRow -= _dRow; c.TableCol -= _dCol; } }
+}
+
 public class UndoRedoManager
 {
     private readonly Stack<IPageAction> _undo = new();

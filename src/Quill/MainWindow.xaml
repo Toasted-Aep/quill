@@ -180,12 +180,24 @@
                                 <StackPanel Width="280" Spacing="10">
                                     <Grid>
                                         <TextBlock Text="Background" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                                        <Button x:Name="BtnTheme" Click="Theme_Click" HorizontalAlignment="Right"
-                                                Width="34" Height="34" Padding="0"
-                                                Background="Transparent" BorderThickness="0"
-                                                ToolTipService.ToolTip="Switch light / dark mode">
-                                            <FontIcon x:Name="BtnThemeIcon" Glyph="&#xE708;" FontSize="14"/>
-                                        </Button>
+                                        <!-- Apple-style light/dark pill: sun on one side, moon on the other -->
+                                        <Grid x:Name="ThemeToggle" Width="62" Height="30" HorizontalAlignment="Right"
+                                              Background="Transparent" Tapped="ThemeToggle_Tapped"
+                                              ToolTipService.ToolTip="Switch light / dark mode">
+                                            <Border CornerRadius="15" Background="#30808080"
+                                                    BorderBrush="{ThemeResource HairlineBrush}" BorderThickness="1"/>
+                                            <FontIcon Glyph="&#xE706;" FontSize="13" HorizontalAlignment="Left"
+                                                      Margin="8,0,0,0" Opacity="0.85"/>
+                                            <FontIcon Glyph="&#xE708;" FontSize="12" HorizontalAlignment="Right"
+                                                      Margin="0,0,8,0" Opacity="0.85"/>
+                                            <Border Width="26" Height="26" CornerRadius="13" HorizontalAlignment="Left"
+                                                    Margin="2,0,0,0" Background="#FAF9F5"
+                                                    BorderBrush="#66808080" BorderThickness="1">
+                                                <Border.RenderTransform>
+                                                    <TranslateTransform x:Name="ThemeKnobTT"/>
+                                                </Border.RenderTransform>
+                                            </Border>
+                                        </Grid>
                                     </Grid>
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                         <Button Tag="#FAF9F5" Click="BgPreset_Click" ToolTipService.ToolTip="Ivory" Width="40" Height="28" Background="#FAF9F5" BorderBrush="Gray"/>
@@ -234,16 +246,15 @@
                         <FontIcon Glyph="&#xE74E;" FontSize="14"/>
                         <Button.Flyout>
                             <MenuFlyout>
-                                <MenuFlyoutItem Text="Export whole page as PDF" Click="ExportPdf_Click"/>
-                                <MenuFlyoutItem Text="Export whole page as PNG" Click="ExportPng_Click"/>
-                                <MenuFlyoutSeparator/>
-                                <MenuFlyoutItem Text="Export section as PDF (all pages)" Click="ExportSectionPdf_Click"/>
-                                <MenuFlyoutItem Text="Export notebook as PDF (all pages)" Click="ExportNotebookPdf_Click"/>
-                                <MenuFlyoutSeparator/>
-                                <MenuFlyoutSubItem Text="Vector PDF (crisp at any zoom)">
-                                    <MenuFlyoutItem Text="This page" Click="ExportVectorPdf_Click"/>
-                                    <MenuFlyoutItem Text="Whole section" Click="ExportSectionVectorPdf_Click"/>
-                                    <MenuFlyoutItem Text="Whole notebook" Click="ExportNotebookVectorPdf_Click"/>
+                                <MenuFlyoutSubItem Text="Export page">
+                                    <MenuFlyoutItem Text="PDF" Click="ExportVectorPdf_Click"/>
+                                    <MenuFlyoutItem Text="PNG" Click="ExportPng_Click"/>
+                                </MenuFlyoutSubItem>
+                                <MenuFlyoutSubItem Text="Export section">
+                                    <MenuFlyoutItem Text="PDF" Click="ExportSectionVectorPdf_Click"/>
+                                </MenuFlyoutSubItem>
+                                <MenuFlyoutSubItem Text="Export notebook">
+                                    <MenuFlyoutItem Text="PDF" Click="ExportNotebookVectorPdf_Click"/>
                                 </MenuFlyoutSubItem>
                             </MenuFlyout>
                         </Button.Flyout>
@@ -564,8 +575,17 @@
                     <ListView x:Name="CalcHistory" MaxHeight="110"
                               IsItemClickEnabled="True" ItemClick="CalcHistory_Click" SelectionMode="None"
                               FontSize="12"/>
-                    <TextBox x:Name="CalcInput" FontSize="17" PlaceholderText="2sin(45)+√(9)"
-                             KeyDown="CalcInput_KeyDown" TextWrapping="Wrap"/>
+                    <StackPanel x:Name="CalcVarsPanel" Orientation="Horizontal" Spacing="4" Visibility="Collapsed"/>
+                    <TextBox x:Name="CalcInput" FontSize="17" PlaceholderText="2sin(45)+√(9)  ·  x = 5"
+                             KeyDown="CalcInput_KeyDown" TextChanged="CalcInput_TextChanged" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="CalcPreview" FontSize="13" Opacity="0.65" IsTextSelectionEnabled="True"/>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button Content="Ans" FontSize="11" Click="CalcAns_Click" ToolTipService.ToolTip="Insert the last result"/>
+                        <Button Content="MC" FontSize="11" Click="CalcMemClear_Click" ToolTipService.ToolTip="Clear memory"/>
+                        <Button Content="MR" FontSize="11" Click="CalcMemRecall_Click" ToolTipService.ToolTip="Recall memory"/>
+                        <Button Content="M+" FontSize="11" Click="CalcMemPlus_Click" ToolTipService.ToolTip="Add to memory"/>
+                        <Button Content="M−" FontSize="11" Click="CalcMemMinus_Click" ToolTipService.ToolTip="Subtract from memory"/>
+                    </StackPanel>
                     <StackPanel x:Name="CalcToggles" Orientation="Horizontal" Spacing="6">
                         <ToggleButton x:Name="CalcDeg" Content="DEG" FontSize="11" IsChecked="True"
                                       ToolTipService.ToolTip="Degrees (off = radians)"/>

@@ -110,6 +110,7 @@ public sealed partial class MainWindow : Window
         ApplyCalcMode();
         BuildCalcButtons();
         FillConvUnits();
+        RefreshCalcHistory();   // history persists with the library (#47)
 
         Surface.TitleClicked += async () => await RenamePageFromTitleAsync();
         Surface.DateClicked += async () => await EditPageDateAsync();
@@ -150,47 +151,22 @@ public sealed partial class MainWindow : Window
 
         // pen panel dragging -> dock to an edge
         PenGrip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
-        PenGrip.ManipulationDelta += (_, e) =>
-        {
-            if (PenRow.RenderTransform is not TranslateTransform tt)
-            {
-                tt = new TranslateTransform();
-                PenRow.RenderTransform = tt;
-            }
-            tt.X += e.Delta.Translation.X;
-            tt.Y += e.Delta.Translation.Y;
-        };
-        PenGrip.ManipulationCompleted += (_, _) => DockPenRowFromPosition();
+        PenGrip.ManipulationDelta += (_, e) => JellyDrag(PenRow, e);
+        PenGrip.ManipulationCompleted += (_, _) => { JellyRelease(PenRow); DockPenRowFromPosition(); };
 
         // minimal-UI floating buttons: drag the cluster itself; snap to nearest corner (#30)
         MinimalButtons.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
-        MinimalButtons.ManipulationDelta += (_, e) =>
-        {
-            if (MinimalButtons.RenderTransform is not TranslateTransform mt)
-            {
-                mt = new TranslateTransform();
-                MinimalButtons.RenderTransform = mt;
-            }
-            mt.X += e.Delta.Translation.X;
-            mt.Y += e.Delta.Translation.Y;
-        };
+        MinimalButtons.ManipulationDelta += (_, e) => JellyDrag(MinimalButtons, e);
         MinimalButtons.ManipulationCompleted += (_, _) => SnapMinimalButtons();
 
-        // calculator window dragging
+        // calculator window dragging (with liquid jelly physics, #48)
         CalcHeader.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
-        CalcHeader.ManipulationDelta += (_, e) =>
-        {
-            if (CalcPanel.RenderTransform is not TranslateTransform tt)
-            {
-                tt = new TranslateTransform();
-                CalcPanel.RenderTransform = tt;
-            }
-            tt.X += e.Delta.Translation.X;
-            tt.Y += e.Delta.Translation.Y;
-        };
+        CalcHeader.ManipulationDelta += (_, e) => JellyDrag(CalcPanel, e);
+        CalcHeader.ManipulationCompleted += (_, _) => JellyRelease(CalcPanel);
 
         ApplyTheme();
         try { ApplyAccent(ColorUtil.Parse(_library.AccentColor), refreshTheme: true); } catch { }
+        ApplyLiquidness(_library.Liquidness);
         ApplyPenDock();
         BuildTree();
         BuildPenStrip();
@@ -276,10 +252,81 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void FadeIn(FrameworkElement el, int ms = 170)
+    // ---- liquid glass motion (#48) ----
+    private static CompositeTransform EnsureCT(FrameworkElement el)
     {
-        if (el.Visibility != Visibility.Visible) { el.Opacity = 0; el.Visibility = Visibility.Visible; }
+        if (el.RenderTransform is CompositeTransform ct) return ct;
+        var t = new CompositeTransform();
+        if (el.RenderTransform is TranslateTransform tt) { t.TranslateX = tt.X; t.TranslateY = tt.Y; }
+        el.RenderTransform = t;
+        return t;
+    }
+
+    // Dragging a floating window squashes and skews it with the momentum of
+    // the movement, like pulling something through water.
+    private static void JellyDrag(FrameworkElement el, ManipulationDeltaRoutedEventArgs e)
+    {
+        var ct = EnsureCT(el);
+        el.RenderTransformOrigin = new Point(0.5, 0.5);
+        ct.TranslateX += e.Delta.Translation.X;
+        ct.TranslateY += e.Delta.Translation.Y;
+        double vx = e.Velocities.Linear.X, vy = e.Velocities.Linear.Y;   // px/ms
+        ct.SkewX = Math.Clamp(vx * 4.5, -7, 7);
+        ct.SkewY = Math.Clamp(vy * 2.2, -4, 4);
+        ct.ScaleX = Math.Clamp(1 + Math.Abs(vx) * 0.02, 1.0, 1.045);
+        ct.ScaleY = Math.Clamp(1 + Math.Abs(vy) * 0.02, 1.0, 1.045);
+    }
+
+    // On release the window wobbles back into shape (elastic spring).
+    private void JellyRelease(FrameworkElement el)
+    {
+        if (el.RenderTransform is not CompositeTransform) return;
+        foreach (var (prop, to) in new[] { ("SkewX", 0.0), ("SkewY", 0.0), ("ScaleX", 1.0), ("ScaleY", 1.0) })
+        {
+            var a = new DoubleAnimation
+            {
+                To = to,
+                Duration = new Duration(TimeSpan.FromMilliseconds(560)),
+                EasingFunction = new ElasticEase { Oscillations = 2, Springiness = 5, EasingMode = EasingMode.EaseOut }
+            };
+            Storyboard.SetTarget(a, el);
+            Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
+            var sb = new Storyboard();
+            sb.Children.Add(a);
+            sb.Begin();
+        }
+    }
+
+    private void FadeIn(FrameworkElement el, int ms = 170, bool pop = true)
+    {
+        bool wasHidden = el.Visibility != Visibility.Visible;
+        if (wasHidden) { el.Opacity = 0; el.Visibility = Visibility.Visible; }
         FadeTo(el, 1, ms, collapseAtEnd: false);
+
+        // liquid pop: the panel swells into place with a soft overshoot
+        if (pop && wasHidden)
+        {
+            try
+            {
+                EnsureCT(el);
+                el.RenderTransformOrigin = new Point(0.5, 0.5);
+                foreach (var prop in new[] { "ScaleX", "ScaleY" })
+                {
+                    var a = new DoubleAnimation
+                    {
+                        From = 0.92, To = 1,
+                        Duration = new Duration(TimeSpan.FromMilliseconds(Math.Max(240, ms))),
+                        EasingFunction = new BackEase { Amplitude = 0.5, EasingMode = EasingMode.EaseOut }
+                    };
+                    Storyboard.SetTarget(a, el);
+                    Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
+                    var sb = new Storyboard();
+                    sb.Children.Add(a);
+                    sb.Begin();
+                }
+            }
+            catch { }
+        }
     }
 
     private void FadeOut(FrameworkElement el, int ms = 140)
@@ -325,8 +372,50 @@ public sealed partial class MainWindow : Window
     {
         bool dark = _library.Theme == "Dark";
         RootGrid.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
-        BtnThemeIcon.Glyph = dark ? "\uE706" : "\uE708";
+        UpdateThemeToggle(dark);
         ApplyTitleBarColors(dark);
+    }
+
+    // ---- Apple-style sun/moon theme pill (#48) ----
+    private void ThemeToggle_Tapped(object sender, TappedRoutedEventArgs e)
+        => Theme_Click(sender, new RoutedEventArgs());
+
+    private void UpdateThemeToggle(bool dark)
+    {
+        try
+        {
+            var a = new DoubleAnimation
+            {
+                To = dark ? 30.0 : 0.0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(280)),
+                EasingFunction = new BackEase { Amplitude = 0.4, EasingMode = EasingMode.EaseOut }
+            };
+            Storyboard.SetTarget(a, ThemeKnobTT);
+            Storyboard.SetTargetProperty(a, "X");
+            var sb = new Storyboard();
+            sb.Children.Add(a);
+            sb.Begin();
+        }
+        catch { }
+    }
+
+    // ---- liquid glass transparency (#48): retints the acrylic panels live ----
+    private void ApplyLiquidness(double v)
+    {
+        v = Math.Clamp(v, 0, 1);
+        try
+        {
+            foreach (var key in new object[] { "Light", "Default" })
+            {
+                if (Application.Current.Resources.ThemeDictionaries.TryGetValue(key, out var dict) &&
+                    dict is ResourceDictionary rd && rd["CardBrush"] is AcrylicBrush a)
+                {
+                    a.TintOpacity = 0.62 - v * 0.52;             // solid 0.62 \u2026 liquid 0.10
+                    a.TintLuminosityOpacity = 0.85 - v * 0.68;   // 0.85 \u2026 0.17
+                }
+            }
+        }
+        catch { }
     }
 
     // =======================================================================
@@ -1423,6 +1512,9 @@ public sealed partial class MainWindow : Window
         public Section Sec = null!;
         public NotePage Page = null!;
         public string Display = "";
+        public TextElement? TextHit;   // the text box that matched, if any
+        public bool OcrHit;            // matched recognised handwriting
+        public string Query = "";
         public override string ToString() => Display;
     }
 
@@ -1459,10 +1551,17 @@ public sealed partial class MainWindow : Window
                                 await IndexHandwritingAsync(pg);
                                 indexedSomething = true;
                             }
-                            string texts = string.Join(" ", pg.Texts.Select(t => RtfToText(t.Rtf)));
-                            string hay = ($"{nb.Name} {sec.Name} {pg.Name} {texts} {pg.OcrText}").ToLowerInvariant();
-                            if (hay.Contains(ql))
-                                hits.Add(new SearchHit { Nb = nb, Sec = sec, Page = pg, Display = $"{nb.Name} ▸ {sec.Name} ▸ {pg.Name}" });
+                            // remember WHERE the match is so clicking a result can jump there (#46)
+                            var textHit = pg.Texts.FirstOrDefault(t => RtfToText(t.Rtf).ToLowerInvariant().Contains(ql));
+                            bool ocrHit = (pg.OcrText ?? "").ToLowerInvariant().Contains(ql);
+                            string hay = ($"{nb.Name} {sec.Name} {pg.Name} {pg.OcrText}").ToLowerInvariant();
+                            if (textHit != null || ocrHit || hay.Contains(ql))
+                                hits.Add(new SearchHit
+                                {
+                                    Nb = nb, Sec = sec, Page = pg,
+                                    Display = $"{nb.Name} ▸ {sec.Name} ▸ {pg.Name}",
+                                    TextHit = textHit, OcrHit = ocrHit, Query = ql
+                                });
                         }
                         catch
                         {
@@ -1483,6 +1582,50 @@ public sealed partial class MainWindow : Window
         if (!await EnsureUnlockedAsync(hit.Nb)) return;
         BuildTree();
         SwitchToPage(hit.Nb, hit.Sec, hit.Page);
+
+        // jump to the exact spot the text was found (#46)
+        try
+        {
+            if (hit.TextHit != null)
+            {
+                Surface.CenterOnWorld(hit.TextHit.X + hit.TextHit.Width / 2, hit.TextHit.Y + 30);
+            }
+            else if (hit.OcrHit)
+            {
+                var rect = await FindInkWordRectAsync(hit.Page, hit.Query);
+                if (rect is Rect r)
+                    Surface.CenterOnWorld(r.X + r.Width / 2, r.Y + r.Height / 2);
+            }
+        }
+        catch { /* navigation is best-effort */ }
+    }
+
+    // Re-analyses the page's ink to locate the matched word's bounding box.
+    private static async Task<Rect?> FindInkWordRectAsync(NotePage page, string query)
+    {
+        try
+        {
+            if (_inkAnalysisBroken || page.Strokes.Count == 0) return null;
+            var analyzer = new Windows.UI.Input.Inking.Analysis.InkAnalyzer();
+            var builder = new Windows.UI.Input.Inking.InkStrokeBuilder();
+            foreach (var s in page.Strokes)
+            {
+                if (s.Points.Count < 2) continue;
+                var pts = s.Points.Select(p =>
+                    new Windows.UI.Input.Inking.InkPoint(new Windows.Foundation.Point(p.X, p.Y), p.Pressure));
+                analyzer.AddDataForStroke(builder.CreateStrokeFromInkPoints(pts, System.Numerics.Matrix3x2.Identity));
+            }
+            await analyzer.AnalyzeAsync();
+            var words = analyzer.AnalysisRoot.FindNodes(Windows.UI.Input.Inking.Analysis.InkAnalysisNodeKind.InkWord);
+            foreach (var w in words)
+            {
+                var word = (Windows.UI.Input.Inking.Analysis.InkAnalysisInkWord)w;
+                if (word.RecognizedText.ToLowerInvariant().Contains(query))
+                    return word.BoundingRect;
+            }
+        }
+        catch { }
+        return null;
     }
 
     // Recognise handwriting on a page with the Windows ink analyzer and cache it.
@@ -1708,7 +1851,7 @@ public sealed partial class MainWindow : Window
             : "Click a notebook to browse its sections and pages · right-click for colour, folder, rename, lock.";
 
         var (lnb, lsec, lpg) = FindPageById(_library.LastPageId);
-        if (_galleryLauncher && lpg != null)
+        if (lpg != null)   // launcher AND gallery: always offer the way back
         {
             GalleryContinueBtn.Content = new TextBlock
             {
@@ -2212,6 +2355,21 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(touchToggle);
 
+        // ---- liquid glass (#48) ----
+        var liquidSlider = new Slider
+        {
+            Minimum = 0, Maximum = 100, StepFrequency = 5,
+            Value = _library.Liquidness * 100,
+            Header = "Liquid glass — panel transparency"
+        };
+        liquidSlider.ValueChanged += (_, args) =>
+        {
+            _library.Liquidness = args.NewValue / 100.0;
+            ApplyLiquidness(_library.Liquidness);
+            ScheduleSave();
+        };
+        panel.Children.Add(liquidSlider);
+
         // ---- accent colour (#33) ----
         panel.Children.Add(new TextBlock { Text = "Accent colour", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
         panel.Children.Add(new TextBlock { Text = "Used for the glows, highlights, buttons and selection colours.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
@@ -2667,7 +2825,7 @@ public sealed partial class MainWindow : Window
     private void RestoreUi_Click(object sender, RoutedEventArgs e)
     {
         _uiHidden = false;
-        FadeIn(TopBar);
+        FadeIn(TopBar, pop: false);
         FadeOut(MinimalButtons);
         if (BtnSidebar.IsChecked == true) FadeIn(NotebookPanel);
         else FadeOut(NotebookPanel);
@@ -2782,7 +2940,7 @@ public sealed partial class MainWindow : Window
     private void UpdateFormatBarVisibility()
     {
         bool show = !_uiHidden && (Surface.Tool == ToolType.Text || Surface.ActiveTextBox != null);
-        if (show) FadeIn(FormatBar, 150); else FadeOut(FormatBar, 120);
+        if (show) FadeIn(FormatBar, 150, pop: false); else FadeOut(FormatBar, 120);
     }
 
     private ITextSelection? Sel()
@@ -3119,9 +3277,11 @@ public sealed partial class MainWindow : Window
         if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
         int r = double.IsNaN(rows.Value) ? 3 : (int)rows.Value;
         int c = double.IsNaN(cols.Value) ? 3 : (int)cols.Value;
-        Surface.InsertTable(r, c, 190, 64);
+        // cells sized from the default text size, like a fresh Word table (#49)
+        double fs = _library.DefaultFontSize;
+        Surface.InsertTable(r, c, Math.Max(120, fs * 11), Math.Max(44, fs * 2.4 + 14));
         SelectTool("Text");   // writing-first: tap any cell and type straight away
-        ShowStatus("Table inserted — tap a cell to type. Right-click the table for more rows or columns.");
+        ShowStatus("Table inserted — tap a cell to type. Use the + buttons or right-click for rows and columns; drag a grid line to resize.");
     }
 
     private const string EquationHtml = """
@@ -3339,64 +3499,8 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         return output.ToString();
     }
 
-    // ---- multi-page + vector PDF export ----
+    // ---- vector PDF export (the raster PDF path was retired in #45) ----
     private bool _suppressPageFade;
-
-    private async void ExportSectionPdf_Click(object sender, RoutedEventArgs e)
-    {
-        if (_curSec == null) return;
-        await ExportMultiPdfAsync(_curSec.Pages.ToList());
-    }
-
-    private async void ExportNotebookPdf_Click(object sender, RoutedEventArgs e)
-    {
-        if (_curNb == null) return;
-        await ExportMultiPdfAsync(_curNb.Sections.SelectMany(s => s.Pages).ToList());
-    }
-
-    private async Task ExportMultiPdfAsync(List<NotePage> pages)
-    {
-        if (pages.Count == 0 || _curNb == null || _curSec == null || _curPage == null)
-        {
-            ShowStatus("Nothing to export.");
-            return;
-        }
-        var file = await PickSaveFileAsync(".pdf", "PDF document");
-        if (file == null) return;
-
-        Surface.FlushTexts();
-        var (keepNb, keepSec, keepPage) = (_curNb, _curSec, _curPage);
-        var images = new List<PdfPageImage>();
-        _suppressPageFade = true;
-        try
-        {
-            foreach (var pg in pages)
-            {
-                var (nb, sec) = FindContext(pg);
-                if (nb == null || sec == null) continue;
-                SwitchToPage(nb, sec, pg);
-                ShowStatus($"Exporting page {images.Count + 1} of {pages.Count}…");
-                var cap = await CapturePageAsync();
-                if (cap != null)
-                    images.Add(new PdfPageImage(cap.Value.Width, cap.Value.Height, cap.Value.Pixels));
-            }
-        }
-        finally
-        {
-            SwitchToPage(keepNb, keepSec, keepPage);
-            _suppressPageFade = false;
-        }
-        if (images.Count == 0) { ShowStatus("Could not capture any pages."); return; }
-        try
-        {
-            await FileIO.WriteBytesAsync(file, PdfExporter.Create(images));
-            ShowStatus($"Exported {images.Count} page{(images.Count == 1 ? "" : "s")} to {file.Name}");
-        }
-        catch
-        {
-            ShowStatus("Could not save the PDF. Check the location and try again.");
-        }
-    }
 
     private async void ExportVectorPdf_Click(object sender, RoutedEventArgs e)
         => await ExportVectorAsync(_curPage != null ? new List<NotePage> { _curPage } : new List<NotePage>());
@@ -3450,45 +3554,33 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
     }
 
-    // ---- touch-screen mode (#36): larger ICONS (buttons grow to fit) ----
-    private readonly Dictionary<FrameworkElement, double> _touchOrigSize = new();
-
+    // ---- touch-screen mode (#36): larger tap targets on every toolbar ----
     private void ApplyTouchMode(bool on)
     {
-        void Bump(FrameworkElement el, double current, Action<double> set)
-        {
-            if (on)
-            {
-                if (!_touchOrigSize.ContainsKey(el)) _touchOrigSize[el] = current;
-                set(Math.Max(current, 21));
-            }
-            else if (_touchOrigSize.TryGetValue(el, out var orig))
-            {
-                set(orig);
-            }
-        }
-
-        void Walk(DependencyObject root, bool insideButton)
+        void Walk(DependencyObject root)
         {
             int n = VisualTreeHelper.GetChildrenCount(root);
             for (int i = 0; i < n; i++)
             {
                 var ch = VisualTreeHelper.GetChild(root, i);
-                bool inButton = insideButton || ch is Microsoft.UI.Xaml.Controls.Primitives.ButtonBase;
                 switch (ch)
                 {
-                    case FontIcon fi when insideButton || inButton:
-                        Bump(fi, fi.FontSize, v => fi.FontSize = v);
+                    case Microsoft.UI.Xaml.Controls.Primitives.ButtonBase bb:
+                        bb.MinWidth = on ? 44 : 0;
+                        bb.MinHeight = on ? 42 : 0;
                         break;
-                    case TextBlock tb when inButton && tb.FontSize <= 16:
-                        Bump(tb, tb.FontSize, v => tb.FontSize = v);
+                    case ComboBox cb:
+                        cb.MinHeight = on ? 42 : 0;
+                        break;
+                    case Slider sl:
+                        sl.MinHeight = on ? 42 : 0;
                         break;
                 }
-                Walk(ch, inButton);
+                Walk(ch);
             }
         }
         foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
-            try { Walk(root, false); } catch { }
+            try { Walk(root); } catch { }
     }
 
     private void ShowCanvasContextMenu(Point pos)
@@ -3532,16 +3624,35 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             menu.Items.Add(toMath);
         }
 
-        // Table grow actions when a table is selected (#40)
+        // Word-like table actions, positional to the clicked cell (#49)
         if (Surface.ActiveShape is { Kind: ShapeKind.Table } table)
         {
             menu.Items.Add(new MenuFlyoutSeparator());
-            var addRow = new MenuFlyoutItem { Text = "Table: add row" };
-            addRow.Click += (_, _) => Surface.TableAddRow(table);
-            menu.Items.Add(addRow);
-            var addCol = new MenuFlyoutItem { Text = "Table: add column" };
-            addCol.Click += (_, _) => Surface.TableAddColumn(table);
-            menu.Items.Add(addCol);
+            var cell = Surface.TableCellAt(table, world);
+            void AddItem(string txt, Action act, bool enabled = true)
+            {
+                var it = new MenuFlyoutItem { Text = txt, IsEnabled = enabled };
+                it.Click += (_, _) => act();
+                menu.Items.Add(it);
+            }
+            if (cell is (int cr, int cc))
+            {
+                AddItem("Add row above", () => Surface.TableInsertRow(table, cr));
+                AddItem("Add row below", () => Surface.TableInsertRow(table, cr + 1));
+                AddItem("Add column left", () => Surface.TableInsertColumn(table, cc));
+                AddItem("Add column right", () => Surface.TableInsertColumn(table, cc + 1));
+                menu.Items.Add(new MenuFlyoutSeparator());
+                AddItem("Select this row", () => Surface.SelectTableRow(table, cr));
+                AddItem("Select this column", () => Surface.SelectTableColumn(table, cc));
+                menu.Items.Add(new MenuFlyoutSeparator());
+                AddItem("Delete this row", () => Surface.TableDeleteRow(table, cr), table.TRows > 1);
+                AddItem("Delete this column", () => Surface.TableDeleteColumn(table, cc), table.TCols > 1);
+            }
+            else
+            {
+                AddItem("Add row below", () => Surface.TableInsertRow(table, Math.Max(1, table.TRows)));
+                AddItem("Add column right", () => Surface.TableInsertColumn(table, Math.Max(1, table.TCols)));
+            }
         }
 
         // Word-style formatting when text is selected: style, font, size (punto).
@@ -4120,25 +4231,181 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         if (token != "=") CalcInput.SelectionStart = CalcInput.Text.Length;
     }
 
+    // ---- calculator upgrades (#47): Ans, memory, variables, live preview,
+    //      persistent history with insert-onto-page ----
+    private double? _calcAns;
+    private double _calcMem;
+    private readonly Dictionary<string, double> _calcVars = new();
+
+    private static readonly HashSet<string> CalcReserved = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+        "log", "ln", "sqrt", "abs", "exp", "pi", "e", "ans", "mod", "floor", "ceil", "round"
+    };
+
+    // Substitutes Ans and user variables into the expression; a value directly
+    // after a digit or ')' gets an implicit multiply so "3x" works.
+    private string PrepCalcExpr(string expr)
+    {
+        if (_calcAns is double ans) expr = SubstIdent(expr, "Ans", ans);
+        foreach (var kv in _calcVars.OrderByDescending(k => k.Key.Length))
+            expr = SubstIdent(expr, kv.Key, kv.Value);
+        return expr;
+    }
+
+    private static string SubstIdent(string input, string name, double value)
+    {
+        var lit = value.ToString("G12", System.Globalization.CultureInfo.InvariantCulture);
+        return System.Text.RegularExpressions.Regex.Replace(input,
+            "(?<![A-Za-z_])" + System.Text.RegularExpressions.Regex.Escape(name) + "(?![A-Za-z0-9_])",
+            m => (m.Index > 0 && (char.IsDigit(input[m.Index - 1]) || input[m.Index - 1] == ')') ? "*(" : "(") + lit + ")",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
     private void CalcEvaluate()
     {
         var expr = CalcInput.Text.Trim();
         if (expr.Length == 0) return;
-        if (CalcEngine.TryEvaluate(expr, CalcDeg.IsChecked == true, out double result, out string error))
+
+        // variable assignment: name = expression
+        var m = System.Text.RegularExpressions.Regex.Match(expr, @"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$");
+        if (m.Success && !CalcReserved.Contains(m.Groups[1].Value))
+        {
+            if (CalcEngine.TryEvaluate(PrepCalcExpr(m.Groups[2].Value), CalcDeg.IsChecked == true, out double vv, out string verr))
+            {
+                _calcVars[m.Groups[1].Value] = vv;
+                _calcAns = vv;
+                AddCalcHistory($"{m.Groups[1].Value} = {vv.ToString("G12")}");
+                CalcInput.Text = "";
+                CalcPreview.Text = "";
+                RefreshCalcVars();
+            }
+            else CalcError.Text = verr;
+            return;
+        }
+
+        if (CalcEngine.TryEvaluate(PrepCalcExpr(expr), CalcDeg.IsChecked == true, out double result, out string error))
         {
             string res = result.ToString("G12");
-            var items = CalcHistory.ItemsSource as List<string> ?? new List<string>();
-            items.Insert(0, $"{expr} = {res}");
-            if (items.Count > 60) items.RemoveAt(items.Count - 1);
-            CalcHistory.ItemsSource = null;
-            CalcHistory.ItemsSource = items;
+            _calcAns = result;
+            AddCalcHistory($"{expr} = {res}");
             CalcInput.Text = res;
             CalcInput.SelectionStart = CalcInput.Text.Length;
+            CalcPreview.Text = "";
         }
         else
         {
             CalcError.Text = error;
         }
+    }
+
+    private void AddCalcHistory(string entry)
+    {
+        _library.CalcHistory.Insert(0, entry);
+        if (_library.CalcHistory.Count > 60) _library.CalcHistory.RemoveAt(_library.CalcHistory.Count - 1);
+        RefreshCalcHistory();
+        ScheduleSave();
+    }
+
+    private void RefreshCalcHistory()
+    {
+        CalcHistory.ItemsSource = null;
+        CalcHistory.Items.Clear();
+        foreach (var entry in _library.CalcHistory)
+        {
+            var g = new Grid { Tag = entry };
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var tbx = new TextBlock { Text = entry, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            var ins = new Button
+            {
+                Content = new TextBlock { Text = "↳", FontSize = 12 },
+                Padding = new Thickness(6, 0, 6, 0),
+                Background = new SolidColorBrush(Colors.Transparent),
+                BorderThickness = new Thickness(0)
+            };
+            ToolTipService.SetToolTip(ins, "Insert onto the page");
+            var entryCopy = entry;
+            ins.Click += (_, _) =>
+            {
+                var centre = Surface.ScreenToWorld(new Point(Surface.ActualWidth / 2, Surface.ActualHeight / 2));
+                Surface.AddTextElement(centre.X - 120, centre.Y - 14, 320,
+                    PlainToRtf(entryCopy, _library.DefaultFont, (float)_library.DefaultFontSize, ContrastHexForPage()));
+                ShowStatus("Inserted onto the page.");
+            };
+            Grid.SetColumn(tbx, 0);
+            Grid.SetColumn(ins, 1);
+            g.Children.Add(tbx);
+            g.Children.Add(ins);
+            CalcHistory.Items.Add(g);
+        }
+    }
+
+    private void RefreshCalcVars()
+    {
+        CalcVarsPanel.Children.Clear();
+        foreach (var kv in _calcVars.OrderBy(k => k.Key))
+        {
+            var chip = new Button { Content = $"{kv.Key} = {kv.Value:G6}", FontSize = 11, Padding = new Thickness(6, 2, 6, 2) };
+            ToolTipService.SetToolTip(chip, "Tap to insert into the expression · right-click to remove");
+            var name = kv.Key;
+            chip.Click += (_, _) =>
+            {
+                CalcInput.Text += name;
+                CalcInput.SelectionStart = CalcInput.Text.Length;
+            };
+            var fly = new MenuFlyout();
+            var rm = new MenuFlyoutItem { Text = "Remove " + name };
+            rm.Click += (_, _) => { _calcVars.Remove(name); RefreshCalcVars(); };
+            fly.Items.Add(rm);
+            chip.ContextFlyout = fly;
+            CalcVarsPanel.Children.Add(chip);
+        }
+        CalcVarsPanel.Visibility = _calcVars.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void CalcInput_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        CalcError.Text = "";
+        if (CalcModeName == "Programmer") { CalcPreview.Text = ""; return; }
+        var txt = CalcInput.Text.Trim();
+        if (txt.Length == 0) { CalcPreview.Text = ""; return; }
+        var m = System.Text.RegularExpressions.Regex.Match(txt, @"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$");
+        var expr = m.Success && !CalcReserved.Contains(m.Groups[1].Value) ? m.Groups[2].Value : txt;
+        CalcPreview.Text = CalcEngine.TryEvaluate(PrepCalcExpr(expr), CalcDeg.IsChecked == true, out double v, out _)
+            ? "= " + v.ToString("G12")
+            : "";
+    }
+
+    private void CalcAns_Click(object sender, RoutedEventArgs e)
+    {
+        CalcInput.Text += "Ans";
+        CalcInput.SelectionStart = CalcInput.Text.Length;
+    }
+
+    private void CalcMemClear_Click(object sender, RoutedEventArgs e) { _calcMem = 0; ShowStatus("Memory cleared."); }
+
+    private void CalcMemRecall_Click(object sender, RoutedEventArgs e)
+    {
+        CalcInput.Text += _calcMem.ToString("G12", System.Globalization.CultureInfo.InvariantCulture);
+        CalcInput.SelectionStart = CalcInput.Text.Length;
+    }
+
+    private void CalcMemPlus_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentCalcValue() is double v) { _calcMem += v; ShowStatus($"M = {_calcMem:G12}"); }
+    }
+
+    private void CalcMemMinus_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentCalcValue() is double v) { _calcMem -= v; ShowStatus($"M = {_calcMem:G12}"); }
+    }
+
+    private double? CurrentCalcValue()
+    {
+        var txt = CalcInput.Text.Trim();
+        if (txt.Length > 0 && CalcEngine.TryEvaluate(PrepCalcExpr(txt), CalcDeg.IsChecked == true, out double v, out _)) return v;
+        return _calcAns;
     }
 
     private void CalcInput_KeyDown(object sender, KeyRoutedEventArgs e)
@@ -4264,7 +4531,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
     private void CalcHistory_Click(object sender, ItemClickEventArgs e)
     {
-        if (e.ClickedItem is not string entry) return;
+        // rows are Grids carrying the entry text in Tag (#47)
+        var entry = (e.ClickedItem as FrameworkElement)?.Tag as string ?? e.ClickedItem as string;
+        if (entry == null) return;
         int idx = entry.LastIndexOf("= ", StringComparison.Ordinal);
         if (idx >= 0) CalcInput.Text += entry[(idx + 2)..];
         CalcInput.SelectionStart = CalcInput.Text.Length;
@@ -4346,26 +4615,4 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
     }
 
-    private async void ExportPdf_Click(object sender, RoutedEventArgs e)
-    {
-        Surface.FlushTexts();
-        var capture = await CapturePageAsync();
-        if (capture == null) return;
-        var file = await PickSaveFileAsync(".pdf", "PDF document");
-        if (file == null) return;
-
-        try
-        {
-            var pdf = PdfExporter.Create(new[]
-            {
-                new PdfPageImage(capture.Value.Width, capture.Value.Height, capture.Value.Pixels)
-            });
-            await FileIO.WriteBytesAsync(file, pdf);
-            ShowStatus($"Exported {file.Name}");
-        }
-        catch
-        {
-            ShowStatus("Could not save the PDF. Check the location and try again.");
-        }
-    }
 }

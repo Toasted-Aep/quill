@@ -104,9 +104,12 @@ public class ShapeElement
     public string? ImagePath { get; set; }
     // Rotation in degrees about the shape's centre (#20).
     public double Rotation { get; set; }
-    // Table shapes only: grid dimensions (#40).
+    // Table shapes only: grid dimensions (#40) and, Word-style, individual
+    // column widths / row heights (#49). Null lists = uniform grid.
     public int TRows { get; set; }
     public int TCols { get; set; }
+    public List<double>? TColW { get; set; }
+    public List<double>? TRowH { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
 }
 
@@ -207,4 +210,8 @@ public class Library
     public string AccentColor { get; set; } = "#D97757";
     // Touch-screen mode: larger tap targets across the toolbars (#36).
     public bool TouchMode { get; set; }
+    // Calculator history, kept across restarts (#47).
+    public List<string> CalcHistory { get; set; } = new();
+    // Liquid-glass panel transparency, 0 (solid) … 1 (fully liquid) (#48).
+    public double Liquidness { get; set; } = 0.35;
 }
