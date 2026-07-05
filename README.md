@@ -73,28 +73,35 @@ including text boxes, background and grid.
 Minimal-UI mode (everything hidden except a restore button); full-screen
 toggle; Mica backdrop; pen-first layout with tooltips everywhere.
 
-## Roadmap (phase 2) — and how to build each piece
+## Phase 2 — implemented
 
-- **Handwriting → text (OCR pen)**: feed stroke points into
-  `Windows.UI.Input.Inking.InkStrokeBuilder.CreateStrokeFromInkPoints`, then
-  `InkRecognizerContainer.RecognizeAsync` (or `InkAnalyzer` for layout-aware
-  results). These WinRT APIs are callable from a WinUI 3 desktop app; the model
-  here already stores every point, so it's a contained feature.
-- **Ink-to-Math**: no public OneNote-equivalent API. Options: MyScript iink SDK
-  (commercial, best quality), or recognize-to-text + a UnicodeMath parser for
-  simple expressions.
-- **Keyboard equation editor (Word-style)**: host the RichEdit math zone
-  (`SES_MATH` via custom RichEdit interop) or embed MathLive/KaTeX in a
-  WebView2 and rasterize the result onto the canvas as an equation object.
-- **Spreadsheet objects / photo paste**: image elements are a small extension
-  of the existing `TextElement` pattern (clipboard `Bitmap` → file →
-  `CanvasBitmap`); tables can start as a styled `Grid` of text boxes.
-- **Multi-page / whole-section PDF export**: `PdfExporter.Create` already
-  accepts a list of pages; iterate pages through the surface and capture each.
-- **Vector PDF export** (selectable text, infinite zoom): replace the
-  image-based writer with stroke → PDF path serialization.
-- **Performance at scale**: swap `CanvasControl` for `CanvasVirtualControl`
-  + incremental rendering once pages exceed a few thousand strokes.
+- **Handwriting → text (OCR pen)**: lasso-select ink, right-click →
+  *Convert handwriting to text* (Windows `InkAnalyzer`, line-aware). The ink
+  is replaced by an editable text box; fully undoable.
+- **Ink-to-Math**: right-click a lasso selection → *Convert handwriting to
+  maths (evaluate)* — recognised text is normalised and run through the
+  built-in `CalcEngine`, inserting `expression = result`.
+- **Equation editor (typed)**: Shapes menu → *Equation (typed)…* hosts
+  MathLive in a WebView2 dialog (LaTeX shortcuts); the rendered formula is
+  rasterised and inserted as a movable/resizable image object. Needs the
+  WebView2 runtime and internet access.
+- **Tables**: Shapes menu → *Table…* inserts an n×m grid of border shapes
+  with a text box per cell (single undo step). Photo paste already shipped.
+- **Multi-page PDF export**: Export menu → section or whole notebook as one
+  PDF (each page auto-fitted and captured in order).
+- **Vector PDF export**: Export menu → *vector PDF (ink & shapes)* — strokes,
+  shapes and the grid are written as true PDF paths (tiny files, crisp at any
+  zoom). Text boxes/images aren't vectorised; use the raster export for those.
+- **Touch-screen mode**: Settings toggle that enlarges every toolbar/panel
+  control to comfortable tap sizes.
+
+## Roadmap (phase 3)
+
+- **Performance at scale**: swap `CanvasControl` for `CanvasVirtualControl` +
+  a cached static-ink layer once pages exceed a few thousand strokes. (The
+  draw loop already culls to the viewport, which covers most real pages.)
+- **Vector PDF text**: embed fonts and serialise text boxes into the vector
+  exporter so vector pages match the raster export exactly.
 
 ## Project layout
 
