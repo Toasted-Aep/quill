@@ -49,6 +49,28 @@
             <SolidColorBrush x:Key="BrandBlueBrush" Color="#6A9BCC"/>
             <SolidColorBrush x:Key="BrandGreenBrush" Color="#788C5D"/>
 
+            <!-- liquid glass: white specular edge, like light catching the rim -->
+            <LinearGradientBrush x:Key="GlassEdgeBrush" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#B3FFFFFF" Offset="0"/>
+                <GradientStop Color="#26FFFFFF" Offset="0.45"/>
+                <GradientStop Color="#4DFFFFFF" Offset="0.72"/>
+                <GradientStop Color="#8CFFFFFF" Offset="1"/>
+            </LinearGradientBrush>
+
+            <!-- every flyout pane (edit history, background settings, menus…) is glass -->
+            <Style TargetType="FlyoutPresenter">
+                <Setter Property="Background" Value="{ThemeResource CardBrush}"/>
+                <Setter Property="CornerRadius" Value="14"/>
+                <Setter Property="BorderBrush" Value="{StaticResource GlassEdgeBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+            </Style>
+            <Style TargetType="MenuFlyoutPresenter">
+                <Setter Property="Background" Value="{ThemeResource CardBrush}"/>
+                <Setter Property="CornerRadius" Value="12"/>
+                <Setter Property="BorderBrush" Value="{StaticResource GlassEdgeBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+            </Style>
+
             <!-- Inter/Geist-style modern sans for chrome; falls back to the
                  Windows 11 variable font, then Poppins, then Segoe UI. -->
             <FontFamily x:Key="HeadingFont">Inter, Geist, Segoe UI Variable Display, Poppins, Segoe UI</FontFamily>

@@ -185,6 +185,14 @@ public sealed partial class MainWindow : Window
         // touch mode needs the visual tree, so apply it after first layout (#36)
         RootGrid.Loaded += (_, _) => { if (_library.TouchMode) ApplyTouchMode(true); };
 
+        // liquid pop for every flyout pane — history, search, page settings… (#50)
+        foreach (var fb in new FlyoutBase?[]
+                 { HistoryFlyout, SearchBtn.Flyout, PageSettingsBtn.Flyout, ZoomBtn.Flyout, RulerBtn.Flyout, MouseModeBtn.Flyout })
+        {
+            if (fb is Flyout fl)
+                fl.Opened += (_, _) => { if (fl.Content is FrameworkElement root) PopIn(root, 0.9, 280); };
+        }
+
         ShowStatus("Right-click a pen to edit its type, colour, size and pressure response. F11 toggles full screen.");
     }
 
@@ -192,7 +200,8 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            if (Application.Current.Resources["GlowBrush"] is not Brush glow) return;
+            // the pulse now breathes along the glass rim (#50)
+            if (Application.Current.Resources["GlassEdgeBrush"] is not Brush glow) return;
             var anim = new DoubleAnimation
             {
                 From = 0.35,
@@ -304,29 +313,33 @@ public sealed partial class MainWindow : Window
         FadeTo(el, 1, ms, collapseAtEnd: false);
 
         // liquid pop: the panel swells into place with a soft overshoot
-        if (pop && wasHidden)
+        if (pop && wasHidden) PopIn(el, 0.92, Math.Max(240, ms));
+    }
+
+    /// <summary>Liquid pop-in: scales the element from slightly small to full
+    /// size with a watery overshoot. Safe on elements that also drag.</summary>
+    private void PopIn(FrameworkElement el, double from = 0.9, int ms = 300)
+    {
+        try
         {
-            try
+            EnsureCT(el);
+            el.RenderTransformOrigin = new Point(0.5, 0.5);
+            foreach (var prop in new[] { "ScaleX", "ScaleY" })
             {
-                EnsureCT(el);
-                el.RenderTransformOrigin = new Point(0.5, 0.5);
-                foreach (var prop in new[] { "ScaleX", "ScaleY" })
+                var a = new DoubleAnimation
                 {
-                    var a = new DoubleAnimation
-                    {
-                        From = 0.92, To = 1,
-                        Duration = new Duration(TimeSpan.FromMilliseconds(Math.Max(240, ms))),
-                        EasingFunction = new BackEase { Amplitude = 0.5, EasingMode = EasingMode.EaseOut }
-                    };
-                    Storyboard.SetTarget(a, el);
-                    Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
-                    var sb = new Storyboard();
-                    sb.Children.Add(a);
-                    sb.Begin();
-                }
+                    From = from, To = 1,
+                    Duration = new Duration(TimeSpan.FromMilliseconds(ms)),
+                    EasingFunction = new BackEase { Amplitude = 0.5, EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(a, el);
+                Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
+                var sb = new Storyboard();
+                sb.Children.Add(a);
+                sb.Begin();
             }
-            catch { }
         }
+        catch { }
     }
 
     private void FadeOut(FrameworkElement el, int ms = 140)
@@ -410,8 +423,10 @@ public sealed partial class MainWindow : Window
                 if (Application.Current.Resources.ThemeDictionaries.TryGetValue(key, out var dict) &&
                     dict is ResourceDictionary rd && rd["CardBrush"] is AcrylicBrush a)
                 {
-                    a.TintOpacity = 0.62 - v * 0.52;             // solid 0.62 \u2026 liquid 0.10
-                    a.TintLuminosityOpacity = 0.85 - v * 0.68;   // 0.85 \u2026 0.17
+                    // aggressive curve so the glass genuinely reads as glass:
+                    // at full liquidness the pane is practically clear.
+                    a.TintOpacity = 0.50 - v * 0.48;             // solid 0.50 \u2026 liquid 0.02
+                    a.TintLuminosityOpacity = 0.60 - v * 0.58;   // 0.60 \u2026 0.02
                 }
             }
         }
@@ -1897,10 +1912,21 @@ public sealed partial class MainWindow : Window
         return gv;
     }
 
+    // Prefer the shared acrylic so cards read as liquid glass (#50).
+    private static Brush GlassBrush(Brush fallback)
+    {
+        try
+        {
+            if (Application.Current.Resources["CardBrush"] is Brush b) return b;
+        }
+        catch { }
+        return fallback;
+    }
+
     private Border MakeNotebookCard(Notebook nb)
     {
         bool dark = _library.Theme == "Dark";
-        var cardBg = new SolidColorBrush(dark ? Color.FromArgb(255, 0x22, 0x21, 0x1F) : Color.FromArgb(255, 0xFF, 0xFF, 0xFF));
+        var cardBg = GlassBrush(new SolidColorBrush(dark ? Color.FromArgb(255, 0x22, 0x21, 0x1F) : Color.FromArgb(255, 0xFF, 0xFF, 0xFF)));
         var inkBrush = new SolidColorBrush(dark ? Color.FromArgb(255, 0xF4, 0xF2, 0xEC) : Color.FromArgb(255, 0x1B, 0x1A, 0x18));
         var col = ColorUtil.Parse(nb.Color);
         var card = new Border
@@ -2057,8 +2083,8 @@ public sealed partial class MainWindow : Window
     {
         bool dark = _library.Theme == "Dark";
         var inkBrush = new SolidColorBrush(dark ? Color.FromArgb(255, 0xF4, 0xF2, 0xEC) : Color.FromArgb(255, 0x1B, 0x1A, 0x18));
-        var cardBg = new SolidColorBrush(dark ? Color.FromArgb(255, 0x1C, 0x1B, 0x20) : Color.FromArgb(255, 0xFF, 0xFF, 0xFF));
-        var chipBg = new SolidColorBrush(dark ? Color.FromArgb(255, 0x27, 0x26, 0x2C) : Color.FromArgb(255, 0xF3, 0xF1, 0xEA));
+        var cardBg = GlassBrush(new SolidColorBrush(dark ? Color.FromArgb(255, 0x1C, 0x1B, 0x20) : Color.FromArgb(255, 0xFF, 0xFF, 0xFF)));
+        var chipBg = GlassBrush(new SolidColorBrush(dark ? Color.FromArgb(255, 0x27, 0x26, 0x2C) : Color.FromArgb(255, 0xF3, 0xF1, 0xEA)));
         var hairline = new SolidColorBrush(Color.FromArgb(60, 128, 128, 128));
         var accent = new SolidColorBrush(ColorUtil.Parse(nb.Color));
 
