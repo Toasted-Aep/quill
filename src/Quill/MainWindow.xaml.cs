@@ -147,7 +147,7 @@ public sealed partial class MainWindow : Window
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusText.Text = ""; };
         _zoomTimer.Tick += (_, _) => { _zoomTimer.Stop(); ZoomBorder.Visibility = Visibility.Collapsed; };
-        Closed += (_, _) => SaveNow();
+        Closed += (_, _) => { SaveNow(); LibraryStore.Flush(); };
 
         // pen panel dragging -> dock to an edge
         PenGrip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
@@ -3017,6 +3017,12 @@ public sealed partial class MainWindow : Window
     // screen (unless a text box has focus — then let the control handle it).
     private void EscAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
+        if (ShortcutsPanel.Visibility == Visibility.Visible)
+        {
+            FadeOut(ShortcutsPanel, 140);
+            args.Handled = true;
+            return;
+        }
         if (GalleryPanel.Visibility == Visibility.Visible)
         {
             if (_galleryNb != null) { _galleryNb = null; BuildGallery(); }   // step back first
@@ -3033,6 +3039,15 @@ public sealed partial class MainWindow : Window
         }
         args.Handled = false;
     }
+
+    private void ShortcutsAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (ShortcutsPanel.Visibility == Visibility.Visible) FadeOut(ShortcutsPanel, 140);
+        else FadeIn(ShortcutsPanel, 200);
+        args.Handled = true;
+    }
+
+    private void Shortcuts_Close(object sender, TappedRoutedEventArgs e) => FadeOut(ShortcutsPanel, 140);
 
     private void SearchAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
@@ -3609,6 +3624,171 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             }
         }
         return output.ToString();
+    }
+
+    // ---- PDF import: render each page to an image and ink over it (#53) ----
+    private async void ImportPdf_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curNb == null) { ShowStatus("Open a notebook first."); return; }
+        try
+        {
+            var picker = new FileOpenPicker();
+            picker.FileTypeFilter.Add(".pdf");
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            var file = await picker.PickSingleFileAsync();
+            if (file == null) return;
+
+            ShowStatus("Importing PDF…");
+            var doc = await Windows.Data.Pdf.PdfDocument.LoadFromFileAsync(file);
+            int count = (int)Math.Min(doc.PageCount, 200);
+            var dir = System.IO.Path.Combine(LibraryStore.Dir, "assets");
+            Directory.CreateDirectory(dir);
+
+            var sec = new Section { Name = file.DisplayName };
+            for (int i = 0; i < count; i++)
+            {
+                using var pdfPage = doc.GetPage((uint)i);
+                double w = pdfPage.Size.Width, h = pdfPage.Size.Height;
+                var path = System.IO.Path.Combine(dir, $"{Guid.NewGuid():N}.png");
+                using (var fs = new FileStream(path, FileMode.Create, FileAccess.ReadWrite))
+                {
+                    await pdfPage.RenderToStreamAsync(fs.AsRandomAccessStream(),
+                        new Windows.Data.Pdf.PdfPageRenderOptions { DestinationWidth = (uint)Math.Clamp(w * 2, 600, 3200) });
+                }
+                var page = NewPage($"Page {i + 1}");
+                page.Background = "#FFFFFF";
+                const double scale = 1.4;   // comfortable writing size in world units
+                page.Shapes.Add(new ShapeElement
+                {
+                    Kind = ShapeKind.Image, ImagePath = path,
+                    X = 44, Y = 104, W = w * scale, H = h * scale
+                });
+                sec.Pages.Add(page);
+                ShowStatus($"Importing PDF… {i + 1}/{count}");
+            }
+            _curNb.Sections.Add(sec);
+            BuildTree();
+            ScheduleSave();
+            if (sec.Pages.Count > 0) SwitchToPage(_curNb, sec, sec.Pages[0]);
+            ShowStatus($"Imported {sec.Pages.Count} PDF pages into “{sec.Name}” — ink over them freely.");
+        }
+        catch
+        {
+            ShowStatus("Couldn't import that PDF.");
+        }
+    }
+
+    // ---- image exports (#53) ----
+    private static string Sanitize(string s) =>
+        string.Concat(s.Select(c => System.IO.Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+
+    private static async Task SavePngAsync(string path, byte[] bgra, int w, int h)
+    {
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.ReadWrite);
+        var enc = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, fs.AsRandomAccessStream());
+        enc.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, (uint)w, (uint)h, 96, 96, bgra);
+        await enc.FlushAsync();
+    }
+
+    private async void CopyPageImage_Click(object sender, RoutedEventArgs e)
+    {
+        Surface.FlushTexts();
+        var cap = await CapturePageAsync();
+        if (cap == null) return;
+        try
+        {
+            var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+            var enc = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+            enc.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+                (uint)cap.Value.Width, (uint)cap.Value.Height, 96, 96, cap.Value.Pixels);
+            await enc.FlushAsync();
+            var dp = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            dp.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(stream));
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+            ShowStatus("Page copied to the clipboard as an image.");
+        }
+        catch
+        {
+            ShowStatus("Couldn't copy the page.");
+        }
+    }
+
+    private async void ExportSectionPngs_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curSec == null || _curNb == null || _curPage == null) return;
+        var folder = await PickFolderAsync();
+        if (folder == null) return;
+        Surface.FlushTexts();
+        var keep = (_curNb, _curSec, _curPage);
+        int n = 0;
+        _suppressPageFade = true;
+        try
+        {
+            var pages = _curSec.Pages.ToList();
+            foreach (var pg in pages)
+            {
+                var (nb, sec) = FindContext(pg);
+                if (nb == null || sec == null) continue;
+                SwitchToPage(nb, sec, pg);
+                ShowStatus($"Exporting image {n + 1} of {pages.Count}…");
+                var cap = await CapturePageAsync();
+                if (cap == null) continue;
+                await SavePngAsync(System.IO.Path.Combine(folder, $"{++n:00} - {Sanitize(pg.Name)}.png"),
+                    cap.Value.Pixels, cap.Value.Width, cap.Value.Height);
+            }
+        }
+        finally
+        {
+            SwitchToPage(keep.Item1, keep.Item2, keep.Item3);
+            _suppressPageFade = false;
+        }
+        ShowStatus($"Exported {n} PNG{(n == 1 ? "" : "s")}.");
+    }
+
+    private async void ExportNotebookMarkdown_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curNb == null || _curSec == null || _curPage == null) return;
+        var folder = await PickFolderAsync();
+        if (folder == null) return;
+        Surface.FlushTexts();
+        var keep = (_curNb, _curSec, _curPage);
+        var nbDir = System.IO.Path.Combine(folder, Sanitize(_curNb.Name));
+        var imgDir = System.IO.Path.Combine(nbDir, "images");
+        Directory.CreateDirectory(imgDir);
+        var md = new System.Text.StringBuilder();
+        md.AppendLine($"# {_curNb.Name}");
+        int n = 0;
+        _suppressPageFade = true;
+        try
+        {
+            foreach (var sec in _curNb.Sections)
+            {
+                md.AppendLine().AppendLine($"## {sec.Name}");
+                foreach (var pg in sec.Pages)
+                {
+                    SwitchToPage(_curNb, sec, pg);
+                    ShowStatus($"Exporting page {++n}…");
+                    var cap = await CapturePageAsync();
+                    string img = $"images/{n:00}-{Sanitize(pg.Name)}.png";
+                    if (cap != null)
+                        await SavePngAsync(System.IO.Path.Combine(imgDir, $"{n:00}-{Sanitize(pg.Name)}.png"),
+                            cap.Value.Pixels, cap.Value.Width, cap.Value.Height);
+                    md.AppendLine().AppendLine($"### {pg.Name}");
+                    md.AppendLine($"![{pg.Name}]({img})");
+                    var texts = string.Join("\n\n",
+                        pg.Texts.Select(t => RtfToText(t.Rtf)).Where(t => !string.IsNullOrWhiteSpace(t)));
+                    if (!string.IsNullOrWhiteSpace(texts)) md.AppendLine().AppendLine(texts.Trim());
+                    if (!string.IsNullOrWhiteSpace(pg.OcrText)) md.AppendLine().AppendLine("> " + pg.OcrText.Trim());
+                }
+            }
+            File.WriteAllText(System.IO.Path.Combine(nbDir, $"{Sanitize(_curNb.Name)}.md"), md.ToString());
+        }
+        finally
+        {
+            SwitchToPage(keep.Item1, keep.Item2, keep.Item3);
+            _suppressPageFade = false;
+        }
+        ShowStatus($"Exported notebook as Markdown with {n} page images.");
     }
 
     // ---- vector PDF export (the raster PDF path was retired in #45) ----

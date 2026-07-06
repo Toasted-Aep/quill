@@ -362,6 +362,49 @@ public class ShiftTableCellsAction : IPageAction
     public void Undo(NotePage page) { foreach (var c in _cells) { c.TableRow -= _dRow; c.TableCol -= _dCol; } }
 }
 
+// Uniformly scales a mixed selection about an anchor point (#54).
+// Snapshots the original geometry, so Undo restores it exactly.
+public class ScaleMixedAction : IPageAction
+{
+    private readonly List<(PenStroke S, float[] Xs, float[] Ys)> _strokes;
+    private readonly List<(ShapeElement S, double X, double Y, double W, double H)> _shapes;
+    private readonly List<(TextElement T, double X, double Y, double W)> _texts;
+    private readonly float _ax, _ay, _factor;
+    public ScaleMixedAction(List<(PenStroke, float[], float[])> strokes,
+                            List<(ShapeElement, double, double, double, double)> shapes,
+                            List<(TextElement, double, double, double)> texts,
+                            float ax, float ay, float factor)
+    {
+        _strokes = strokes; _shapes = shapes; _texts = texts;
+        _ax = ax; _ay = ay; _factor = factor;
+    }
+    public string Description => "Scale selection";
+    public void Do(NotePage page) => Apply(_factor);
+    public void Undo(NotePage page) => Apply(1f);
+    private void Apply(float f)
+    {
+        foreach (var (s, xs, ys) in _strokes)
+            for (int i = 0; i < s.Points.Count && i < xs.Length; i++)
+            {
+                s.Points[i].X = _ax + (xs[i] - _ax) * f;
+                s.Points[i].Y = _ay + (ys[i] - _ay) * f;
+            }
+        foreach (var (s, x, y, w, h) in _shapes)
+        {
+            s.X = _ax + (x - _ax) * f;
+            s.Y = _ay + (y - _ay) * f;
+            s.W = w * f;
+            s.H = h * f;
+        }
+        foreach (var (t, x, y, w) in _texts)
+        {
+            t.X = _ax + (x - _ax) * f;
+            t.Y = _ay + (y - _ay) * f;
+            t.Width = Math.Max(60, w * f);
+        }
+    }
+}
+
 public class UndoRedoManager
 {
     private readonly Stack<IPageAction> _undo = new();

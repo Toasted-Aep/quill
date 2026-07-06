@@ -14,6 +14,7 @@
             <KeyboardAccelerator Key="X" Modifiers="Control" Invoked="CutAccel_Invoked"/>
             <KeyboardAccelerator Key="V" Modifiers="Control" Invoked="PasteAccel_Invoked"/>
             <KeyboardAccelerator Key="F11" Invoked="FullscreenAccel_Invoked"/>
+            <KeyboardAccelerator Key="F1" Invoked="ShortcutsAccel_Invoked"/>
             <KeyboardAccelerator Key="Escape" Invoked="EscAccel_Invoked"/>
             <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="SearchAccel_Invoked"/>
         </Grid.KeyboardAccelerators>
@@ -249,12 +250,15 @@
                                 <MenuFlyoutSubItem Text="Export page">
                                     <MenuFlyoutItem Text="PDF" Click="ExportVectorPdf_Click"/>
                                     <MenuFlyoutItem Text="PNG" Click="ExportPng_Click"/>
+                                    <MenuFlyoutItem Text="Copy as image" Click="CopyPageImage_Click"/>
                                 </MenuFlyoutSubItem>
                                 <MenuFlyoutSubItem Text="Export section">
                                     <MenuFlyoutItem Text="PDF" Click="ExportSectionVectorPdf_Click"/>
+                                    <MenuFlyoutItem Text="PNG images (folder)…" Click="ExportSectionPngs_Click"/>
                                 </MenuFlyoutSubItem>
                                 <MenuFlyoutSubItem Text="Export notebook">
                                     <MenuFlyoutItem Text="PDF" Click="ExportNotebookVectorPdf_Click"/>
+                                    <MenuFlyoutItem Text="Markdown + images…" Click="ExportNotebookMarkdown_Click"/>
                                 </MenuFlyoutSubItem>
                             </MenuFlyout>
                         </Button.Flyout>
@@ -460,6 +464,10 @@
                                     <MenuFlyoutItem Text="New notebook" Click="AddNotebook_Click">
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8F1;"/></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator/>
+                                    <MenuFlyoutItem Text="Import PDF as section…" Click="ImportPdf_Click">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8E5;"/></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
                                 </MenuFlyout>
                             </Button.Flyout>
                         </Button>
@@ -662,6 +670,30 @@
             </Border>
 
             <!-- ===================== NOTEBOOK GALLERY (#16) ===================== -->
+            <!-- F1: liquid-glass shortcut cheat-sheet (#53) -->
+            <Border x:Name="ShortcutsPanel" Visibility="Collapsed" Background="{ThemeResource CardBrush}"
+                    BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5"
+                    CornerRadius="{StaticResource CardCorner}" MaxWidth="620" Padding="24,18"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" Tapped="Shortcuts_Close">
+                <StackPanel Spacing="5">
+                    <TextBlock Text="Shortcuts" FontSize="18" FontWeight="SemiBold"
+                               FontFamily="{StaticResource HeadingFont}" Foreground="{ThemeResource InkBrush}"
+                               Margin="0,0,0,6"/>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="F11"/><Run Text="   Full screen"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Esc"/><Run Text="   Close picker / leave full screen"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Ctrl+F"/><Run Text="   Search all notes"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Ctrl+Z / Ctrl+Y"/><Run Text="   Undo / redo"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Ctrl+C / X / V"/><Run Text="   Copy, cut, paste (ink, images and text)"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Delete"/><Run Text="   Remove the selection"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Ctrl+wheel"/><Run Text="   Zoom · middle-drag pans"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Right-drag"/><Run Text="   Lasso select · right-tap opens the menu"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Pen barrel"/><Run Text="   Tap a selection for its menu · drag to lasso"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Hold after drawing"/><Run Text="   Snap the stroke to a perfect shape"/></TextBlock>
+                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Pen eraser tip"/><Run Text="   Erase · lasso-selected ink can be dragged with the pen"/></TextBlock>
+                    <TextBlock Text="Press F1 or tap to close" FontSize="11" Opacity="0.6" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Border>
+
             <Border x:Name="GalleryPanel" Visibility="Collapsed" Background="{ThemeResource CardBrush}">
                 <Grid Margin="26">
                     <Grid.RowDefinitions>

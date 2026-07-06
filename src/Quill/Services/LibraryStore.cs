@@ -190,12 +190,54 @@ public static class LibraryStore
         }
     }
 
+    // Last time WE wrote library.json — used to notice external changes (sync
+    // clients, other machines) before overwriting them (#52).
+    private static DateTime _lastOwnWriteUtc = DateTime.MinValue;
+    private static readonly object _writeLock = new();
+
+    private static Task _lastWrite = Task.CompletedTask;
+
     public static void Save(Library lib)
     {
+        // Serialise on the caller's (UI) thread so the model can't mutate
+        // mid-write, then push the actual file IO to a worker (#52).
         string json;
         try { json = JsonSerializer.Serialize(lib, Opts); }
         catch { return; } // unserializable model: never crash the app on save
+        _lastWrite = Task.Run(() => WriteAll(json));
+    }
 
+    /// <summary>Blocks briefly until the last queued write hits disk — called
+    /// on app close so a fire-and-forget save can't be lost.</summary>
+    public static void Flush()
+    {
+        try { _lastWrite.Wait(4000); } catch { }
+    }
+
+    private static void WriteAll(string json)
+    {
+        lock (_writeLock)
+        {
+            // Conflict guard: if another writer (sync client, second machine)
+            // touched library.json since our last save, preserve their version
+            // before overwriting it (#52).
+            try
+            {
+                if (_lastOwnWriteUtc != DateTime.MinValue && File.Exists(FilePath) &&
+                    File.GetLastWriteTimeUtc(FilePath) > _lastOwnWriteUtc.AddSeconds(2))
+                {
+                    File.Copy(FilePath,
+                        Path.Combine(Dir, $"library.conflict-{DateTime.Now:yyyyMMdd-HHmmss}.json"), true);
+                }
+            }
+            catch { }
+            WriteCore(json);
+            try { _lastOwnWriteUtc = File.GetLastWriteTimeUtc(FilePath); } catch { }
+        }
+    }
+
+    private static void WriteCore(string json)
+    {
         try
         {
             Directory.CreateDirectory(Dir);

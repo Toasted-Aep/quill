@@ -738,14 +738,15 @@ public sealed class InkSurface : UserControl
         {
             if (!isMouse)
             {
-                // touch can grab and move an existing lasso selection (#42)
+                // touch can grab, move or scale an existing lasso selection (#42/#54)
                 if (HasMultiSelection && !_selBounds.IsEmpty &&
-                    _selBounds.Contains(new Point(pos.X, pos.Y)))
+                    (TryBeginSelectionScale(pos, 14f / ViewZoom) ||
+                     _selBounds.Contains(new Point(pos.X, pos.Y))))
                 {
                     _activePointer = e.Pointer.PointerId;
                     _gestureTool = ToolType.Select;
                     _canvas.CapturePointer(e.Pointer);
-                    BeginSelectionMove(pos);
+                    if (!_scalingSel) BeginSelectionMove(pos);
                     e.Handled = true;
                     return;
                 }
@@ -800,13 +801,14 @@ public sealed class InkSurface : UserControl
         switch (tool)
         {
             case ToolType.Pen:
-                // The pen can grab and drag a lasso selection directly (#42):
-                // pressing inside the selection box moves it instead of drawing.
+                // The pen can grab, drag or SCALE a lasso selection directly (#42/#54):
+                // corner handles scale, anywhere inside moves; elsewhere draws.
                 if (HasMultiSelection && !_selBounds.IsEmpty &&
-                    _selBounds.Contains(new Point(pos.X, pos.Y)))
+                    (TryBeginSelectionScale(pos, 10f / ViewZoom) ||
+                     _selBounds.Contains(new Point(pos.X, pos.Y))))
                 {
                     _gestureTool = ToolType.Select;
-                    BeginSelectionMove(pos);
+                    if (!_scalingSel) BeginSelectionMove(pos);
                     break;
                 }
                 // A selected shape/image can be moved or resized with the pen:
@@ -964,6 +966,8 @@ public sealed class InkSurface : UserControl
             tab.TRowH = _tableOrigRowH.ToList();
             return true;
         }
+        // selection scale handles win over a plain grab (#54)
+        if (TryBeginSelectionScale(pos, tol)) return true;
         if (_activeShape != null)
         {
             if (HitRotateHandle(_activeShape, pos, tol))
@@ -1007,6 +1011,112 @@ public sealed class InkSurface : UserControl
             return true;
         }
         return false;
+    }
+
+    // ---- selection scaling (#54): corner handles resize the whole selection ----
+    private bool _scalingSel;
+    private Vector2 _scaleAnchor, _scaleStartPos;
+    private float _scaleFactor = 1f;
+    private List<(PenStroke S, float[] Xs, float[] Ys)>? _scaleStrokes;
+    private List<(ShapeElement S, double X, double Y, double W, double H)>? _scaleShapes;
+    private List<(TextElement T, double X, double Y, double W)>? _scaleTexts;
+    private Rect _scaleBoundsOrig;
+
+    private Vector2[] SelCorners() => new[]
+    {
+        new Vector2((float)_selBounds.Left, (float)_selBounds.Top),
+        new Vector2((float)_selBounds.Right, (float)_selBounds.Top),
+        new Vector2((float)_selBounds.Right, (float)_selBounds.Bottom),
+        new Vector2((float)_selBounds.Left, (float)_selBounds.Bottom)
+    };
+
+    private bool TryBeginSelectionScale(Vector2 pos, float tol)
+    {
+        if (!HasMultiSelection || _selBounds.IsEmpty) return false;
+        var corners = SelCorners();
+        for (int i = 0; i < 4; i++)
+        {
+            if (Vector2.Distance(pos, corners[i]) > Math.Max(tol, 9f / ViewZoom)) continue;
+            _scalingSel = true;
+            _scaleAnchor = corners[(i + 2) % 4];   // opposite corner stays put
+            _scaleStartPos = pos;
+            _scaleFactor = 1f;
+            _scaleBoundsOrig = _selBounds;
+            _scaleStrokes = _selected
+                .Select(s => (s, s.Points.Select(p => p.X).ToArray(), s.Points.Select(p => p.Y).ToArray()))
+                .ToList();
+            _scaleShapes = _selShapes.Select(s => (s, s.X, s.Y, s.W, s.H)).ToList();
+            _scaleTexts = _selTexts.Select(t => (t, t.X, t.Y, t.Width)).ToList();
+            return true;
+        }
+        return false;
+    }
+
+    private void ApplyScaleLive()
+    {
+        if (_scaleStrokes == null || _scaleShapes == null || _scaleTexts == null) return;
+        float f = _scaleFactor, ax = _scaleAnchor.X, ay = _scaleAnchor.Y;
+        foreach (var (s, xs, ys) in _scaleStrokes)
+            for (int i = 0; i < s.Points.Count && i < xs.Length; i++)
+            {
+                s.Points[i].X = ax + (xs[i] - ax) * f;
+                s.Points[i].Y = ay + (ys[i] - ay) * f;
+            }
+        foreach (var (s, x, y, w, h) in _scaleShapes)
+        {
+            s.X = ax + (x - ax) * f;
+            s.Y = ay + (y - ay) * f;
+            s.W = w * f;
+            s.H = h * f;
+        }
+        foreach (var (t, x, y, w) in _scaleTexts)
+        {
+            t.X = ax + (x - ax) * f;
+            t.Y = ay + (y - ay) * f;
+            t.Width = Math.Max(60, w * f);
+            if (_textUi.TryGetValue(t.Id, out var ui))
+            {
+                Canvas.SetLeft(ui.Container, t.X);
+                Canvas.SetTop(ui.Container, t.Y);
+                ui.Box.Width = t.Width;
+            }
+        }
+        // scale the visible selection box too
+        double nx = ax + (_scaleBoundsOrig.X - ax) * f;
+        double ny = ay + (_scaleBoundsOrig.Y - ay) * f;
+        _selBounds = new Rect(Math.Min(nx, ax), Math.Min(ny, ay),
+            _scaleBoundsOrig.Width * f, _scaleBoundsOrig.Height * f);
+        _inkCacheDirty = true;
+    }
+
+    // Preview which stroke the object eraser would remove (#53).
+    private PenStroke? FindStrokeNear(Vector2 p, float radius)
+    {
+        if (_page == null) return null;
+        static float DistSeg(Vector2 pt, Vector2 a, Vector2 b)
+        {
+            var ab = b - a;
+            float len2 = ab.LengthSquared();
+            if (len2 < 1e-6f) return Vector2.Distance(pt, a);
+            float t = Math.Clamp(Vector2.Dot(pt - a, ab) / len2, 0f, 1f);
+            return Vector2.Distance(pt, a + ab * t);
+        }
+        foreach (var s in _page.Strokes)
+        {
+            s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
+            float pad = radius + s.Size;
+            if (p.X < bx0 - pad || p.X > bx1 + pad || p.Y < by0 - pad || p.Y > by1 + pad) continue;
+            var pts = s.Points;
+            if (pts.Count == 1)
+            {
+                if (Vector2.Distance(p, new Vector2(pts[0].X, pts[0].Y)) <= pad) return s;
+                continue;
+            }
+            for (int i = 1; i < pts.Count; i++)
+                if (DistSeg(p, new Vector2(pts[i - 1].X, pts[i - 1].Y), new Vector2(pts[i].X, pts[i].Y)) <= pad)
+                    return s;
+        }
+        return null;
     }
 
     private void BeginSelectionMove(Vector2 pos)
@@ -1135,6 +1245,13 @@ public sealed class InkSurface : UserControl
                 {
                     _activeShape.X = _shapeOrig.X + (pos.X - _shapeStart.X);
                     _activeShape.Y = _shapeOrig.Y + (pos.Y - _shapeStart.Y);
+                }
+                else if (_scalingSel)
+                {
+                    float d0 = Vector2.Distance(_scaleStartPos, _scaleAnchor);
+                    float d1 = Vector2.Distance(pos, _scaleAnchor);
+                    _scaleFactor = Math.Clamp(d0 < 1f ? 1f : d1 / d0, 0.15f, 10f);
+                    ApplyScaleLive();
                 }
                 else if (_movingSel)
                 {
@@ -1346,6 +1463,23 @@ public sealed class InkSurface : UserControl
                         changed = true;
                     }
                     _movingShape = _resizingShape = false;
+                    break;
+                }
+                if (_scalingSel)
+                {
+                    if (Math.Abs(_scaleFactor - 1f) > 0.01f && _scaleStrokes != null && _page != null)
+                    {
+                        UndoManager.Push(new ScaleMixedAction(
+                            _scaleStrokes, _scaleShapes!, _scaleTexts!,
+                            _scaleAnchor.X, _scaleAnchor.Y, _scaleFactor), _page, alreadyDone: true);
+                        changed = true;
+                    }
+                    _scalingSel = false;
+                    _scaleStrokes = null;
+                    _scaleShapes = null;
+                    _scaleTexts = null;
+                    RebuildTextLayer();
+                    RecomputeSelectionBounds();
                     break;
                 }
                 if (_movingSel)
@@ -1976,6 +2110,17 @@ public sealed class InkSurface : UserControl
             var r = new Rect(_selBounds.X + _moveDx, _selBounds.Y + _moveDy, _selBounds.Width, _selBounds.Height);
             ds.FillRectangle(r, Color.FromArgb(26, 217, 119, 87));
             ds.DrawRectangle(r, accent, uiScale, _dashStyle);
+
+            // corner handles: drag to scale the whole selection (#54)
+            if (!_movingSel)
+            {
+                float hs = 5.5f / ViewZoom;
+                foreach (var cpt in SelCorners())
+                {
+                    ds.FillRectangle(new Rect(cpt.X - hs, cpt.Y - hs, hs * 2, hs * 2), Colors.White);
+                    ds.DrawRectangle(new Rect(cpt.X - hs, cpt.Y - hs, hs * 2, hs * 2), accent, uiScale);
+                }
+            }
         }
 
         if (!_replaying) DrawRuler(ds, bg);
@@ -1989,6 +2134,19 @@ public sealed class InkSurface : UserControl
             ds.DrawCircle(_hover.Value, EraserRadius, ring, uiScale, _dashStyle);
             // a small centre dot so the cursor clearly reads as "erase"
             ds.FillCircle(_hover.Value, Math.Max(1.5f, 2f / ViewZoom), ring);
+
+            // object-eraser preview: tint the stroke that would be removed (#53)
+            if (EraserMode == EraserMode.Object && _gestureTool != ToolType.Eraser)
+            {
+                var victim = FindStrokeNear(_hover.Value, EraserRadius);
+                if (victim != null)
+                {
+                    victim.GetBounds(out float vx0, out float vy0, out float vx1, out float vy1);
+                    var vr = new Rect(vx0 - 4, vy0 - 4, vx1 - vx0 + 8, vy1 - vy0 + 8);
+                    ds.FillRectangle(vr, Color.FromArgb(34, 220, 70, 60));
+                    ds.DrawRectangle(vr, Color.FromArgb(150, 220, 70, 60), uiScale, _dashStyle);
+                }
+            }
         }
 
         // Blinking text caret: where a Text-tool tap will start a box once typed.
