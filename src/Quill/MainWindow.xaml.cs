@@ -306,7 +306,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void FadeIn(FrameworkElement el, int ms = 170, bool pop = true)
+    private void FadeIn(FrameworkElement el, int ms = 170, bool pop = true, double slideX = 0, double slideY = 0)
     {
         bool wasHidden = el.Visibility != Visibility.Visible;
         if (wasHidden) { el.Opacity = 0; el.Visibility = Visibility.Visible; }
@@ -314,6 +314,34 @@ public sealed partial class MainWindow : Window
 
         // liquid pop: the panel swells into place with a soft overshoot
         if (pop && wasHidden) PopIn(el, 0.92, Math.Max(240, ms));
+        // slide-out: bars and panels glide in from their edge (#51)
+        if (wasHidden && (slideX != 0 || slideY != 0)) SlideNudge(el, slideX, slideY);
+    }
+
+    // Animates the element's translation from the given offset back to rest.
+    // Only used on elements that don't drag via their transform.
+    private void SlideNudge(FrameworkElement el, double fromX, double fromY)
+    {
+        try
+        {
+            EnsureCT(el);
+            foreach (var (prop, from) in new[] { ("TranslateX", fromX), ("TranslateY", fromY) })
+            {
+                if (from == 0) continue;
+                var a = new DoubleAnimation
+                {
+                    From = from, To = 0,
+                    Duration = new Duration(TimeSpan.FromMilliseconds(300)),
+                    EasingFunction = new BackEase { Amplitude = 0.35, EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(a, el);
+                Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
+                var sb = new Storyboard();
+                sb.Children.Add(a);
+                sb.Begin();
+            }
+        }
+        catch { }
     }
 
     /// <summary>Liquid pop-in: scales the element from slightly small to full
@@ -461,6 +489,13 @@ public sealed partial class MainWindow : Window
         if (res["GlowBrush"] is LinearGradientBrush glow)
             foreach (var stop in glow.GradientStops)
                 stop.Color = Color.FromArgb(stop.Color.A, c.R, c.G, c.B);
+        // the glass rim keeps the accent's colour — a light, luminous tint (#51)
+        if (res["GlassEdgeBrush"] is LinearGradientBrush glassEdge)
+        {
+            var tint = Mix(c, Colors.White, 0.45);
+            foreach (var stop in glassEdge.GradientStops)
+                stop.Color = Color.FromArgb(stop.Color.A, tint.R, tint.G, tint.B);
+        }
         res["SystemAccentColor"] = c;
         res["SystemAccentColorLight1"] = Mix(c, Colors.White, 0.15);
         res["SystemAccentColorLight2"] = Mix(c, Colors.White, 0.30);
@@ -1822,6 +1857,27 @@ public sealed partial class MainWindow : Window
 
     private void CloseGallery()
     {
+        // liquid dissolve: the glass swells slightly as it fades away (#51)
+        try
+        {
+            EnsureCT(GalleryPanel);
+            GalleryPanel.RenderTransformOrigin = new Point(0.5, 0.5);
+            foreach (var prop in new[] { "ScaleX", "ScaleY" })
+            {
+                var a = new DoubleAnimation
+                {
+                    To = 1.035,
+                    Duration = new Duration(TimeSpan.FromMilliseconds(180)),
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(a, GalleryPanel);
+                Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
+                var sb = new Storyboard();
+                sb.Children.Add(a);
+                sb.Begin();
+            }
+        }
+        catch { }
         FadeOut(GalleryPanel, 160);
         _galleryLauncher = false;
         _galleryNb = null;
@@ -1841,9 +1897,11 @@ public sealed partial class MainWindow : Window
     private void BuildGallery()
     {
         GalleryHost.Children.Clear();
-        // soft content transition when moving between the grid and a notebook
+        // liquid transition when moving between the grid and a notebook (#51):
+        // the content fades in while gliding up into place
         GalleryHost.Opacity = 0;
-        FadeTo(GalleryHost, 1, 160, collapseAtEnd: false);
+        FadeTo(GalleryHost, 1, 180, collapseAtEnd: false);
+        SlideNudge(GalleryHost, 0, 22);
 
         bool detail = _galleryNb != null;
         GalleryBackBtn.Visibility = detail ? Visibility.Visible : Visibility.Collapsed;
@@ -1912,6 +1970,16 @@ public sealed partial class MainWindow : Window
         return gv;
     }
 
+    // A glow gradient in an arbitrary colour (used per-notebook in the gallery).
+    private static LinearGradientBrush MakeColorGlowBrush(Color c)
+    {
+        var b = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+        foreach (var (alpha, offset) in new (byte, double)[]
+                 { (0xE6, 0), (0x59, 0.35), (0x26, 0.5), (0x59, 0.65), (0xE6, 1) })
+            b.GradientStops.Add(new GradientStop { Color = Color.FromArgb(alpha, c.R, c.G, c.B), Offset = offset });
+        return b;
+    }
+
     // Prefer the shared acrylic so cards read as liquid glass (#50).
     private static Brush GlassBrush(Brush fallback)
     {
@@ -1968,13 +2036,31 @@ public sealed partial class MainWindow : Window
             BuildGallery();
         };
 
-        // hover polish: brand glow + a gentle lift
+        // hover polish: the card glows in ITS OWN colour, easing in gently (#51)
         var restBrush = card.BorderBrush;
         card.PointerEntered += (_, _) =>
         {
-            if (Application.Current.Resources["GlowBrush"] is Brush glow) card.BorderBrush = glow;
-            card.BorderThickness = new Thickness(1.5);
+            var glow = MakeColorGlowBrush(col);
+            glow.Opacity = 0;
+            card.BorderBrush = glow;
+            card.BorderThickness = new Thickness(1.6);
             card.Translation = new System.Numerics.Vector3(0, -2, 0);
+            try
+            {
+                var a = new DoubleAnimation
+                {
+                    From = 0, To = 1,
+                    Duration = new Duration(TimeSpan.FromMilliseconds(220)),
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut },
+                    EnableDependentAnimation = true
+                };
+                Storyboard.SetTarget(a, glow);
+                Storyboard.SetTargetProperty(a, "Opacity");
+                var sb = new Storyboard();
+                sb.Children.Add(a);
+                sb.Begin();
+            }
+            catch { glow.Opacity = 1; }
         };
         card.PointerExited += (_, _) =>
         {
@@ -2490,7 +2576,7 @@ public sealed partial class MainWindow : Window
 
     private void Sidebar_Toggle(object sender, RoutedEventArgs e)
     {
-        if (BtnSidebar.IsChecked == true) FadeIn(NotebookPanel);
+        if (BtnSidebar.IsChecked == true) FadeIn(NotebookPanel, slideX: -18);
         else FadeOut(NotebookPanel);
     }
 
@@ -2851,9 +2937,9 @@ public sealed partial class MainWindow : Window
     private void RestoreUi_Click(object sender, RoutedEventArgs e)
     {
         _uiHidden = false;
-        FadeIn(TopBar, pop: false);
+        FadeIn(TopBar, pop: false, slideY: -14);
         FadeOut(MinimalButtons);
-        if (BtnSidebar.IsChecked == true) FadeIn(NotebookPanel);
+        if (BtnSidebar.IsChecked == true) FadeIn(NotebookPanel, slideX: -18);
         else FadeOut(NotebookPanel);
         UpdateFormatBarVisibility();
         ApplyPenRowVisibility();
@@ -2966,7 +3052,7 @@ public sealed partial class MainWindow : Window
     private void UpdateFormatBarVisibility()
     {
         bool show = !_uiHidden && (Surface.Tool == ToolType.Text || Surface.ActiveTextBox != null);
-        if (show) FadeIn(FormatBar, 150, pop: false); else FadeOut(FormatBar, 120);
+        if (show) FadeIn(FormatBar, 150, pop: false, slideY: -14); else FadeOut(FormatBar, 120);
     }
 
     private ITextSelection? Sel()
