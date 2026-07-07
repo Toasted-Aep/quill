@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="QuillNote.App"
+    Publisher="CN=Quill"
+    Version="1.0.0.0" />
+
+  <Properties>
+    <DisplayName>Quill</DisplayName>
+    <PublisherDisplayName>Quill team</PublisherDisplayName>
+    <Logo>Images\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="x-generate"/>
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+      Executable="$targetnametoken$.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Quill"
+        Description="Beautiful lecture note-taking app with inking, audio, and PDF features."
+        BackgroundColor="transparent"
+        Square150x150Logo="Images\Square150x150Logo.scale-200.png"
+        Square44x44Logo="Images\Square44x44Logo.scale-200.png">
+        <uap:DefaultTile Wide310x150Logo="Images\Wide310x150Logo.scale-200.png" />
+        <uap:SplashScreen Image="Images\Wide310x150Logo.scale-200.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="quillnote">
+            <uap:SupportedFileTypes>
+              <uap:FileType>.quill</uap:FileType>
+            </uap:SupportedFileTypes>
+            <uap:DisplayName>Quill Display Name</uap:DisplayName>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>

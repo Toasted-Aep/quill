@@ -64,6 +64,7 @@ public sealed class InkSurface : UserControl
     private CanvasRenderTarget? _inkCache;
     private Rect _inkCacheWorld;
     private float _inkCacheScale = 1f;
+    private float _inkCacheBuiltZoom = 1f;   // ViewZoom when the cache was rendered (#55)
     private bool _inkCacheDirty = true;
 
     // true while a pen is hovering with its eraser engaged (button/inverted) so
@@ -590,6 +591,28 @@ public sealed class InkSurface : UserControl
         ContentChanged?.Invoke();
     }
 
+    // Duplicating a table shape must also duplicate its cell text bubbles,
+    // re-linked to the clone's id (#55).
+    private void CloneTableCells(ShapeElement source, ShapeElement clone, float offset, List<TextElement> into)
+    {
+        if (_page == null || source.Kind != ShapeKind.Table) return;
+        foreach (var cell in _page.Texts)
+        {
+            if (cell.TableId != source.Id) continue;
+            into.Add(new TextElement
+            {
+                X = cell.X + offset,
+                Y = cell.Y + offset,
+                Width = cell.Width,
+                Rtf = cell.Rtf,
+                Rotation = cell.Rotation,
+                TableId = clone.Id,
+                TableRow = cell.TableRow,
+                TableCol = cell.TableCol
+            });
+        }
+    }
+
     public void DuplicateSelection()
     {
         if (_page == null) return;
@@ -621,6 +644,7 @@ public sealed class InkSurface : UserControl
                 TRowH = shape.TRowH != null ? new List<double>(shape.TRowH) : null
             };
             clonedShapes.Add(clone);
+            CloneTableCells(shape, clone, offset, clonedTexts);   // tables bring their cells (#55)
         }
         else if (HasMultiSelection)
         {
@@ -648,6 +672,7 @@ public sealed class InkSurface : UserControl
                     TRowH = shape.TRowH != null ? new List<double>(shape.TRowH) : null
                 };
                 clonedShapes.Add(clone);
+                CloneTableCells(shape, clone, offset, clonedTexts);   // tables bring their cells (#55)
             }
             foreach (var text in _selTexts)
             {
@@ -1953,6 +1978,7 @@ public sealed class InkSurface : UserControl
     /// <summary>Copies the current multi-selection (strokes, shapes, text) or active shape.</summary>
     public void CopySelection()
     {
+        CommitActiveSelection();
         FlushTexts();
         if (HasMultiSelection)
         {
@@ -1965,6 +1991,58 @@ public sealed class InkSurface : UserControl
             _clipShapes = new List<ShapeElement> { CloneShape(_activeShape) };
             _clipStrokes = null;
             _clipTexts = null;
+        }
+    }
+
+    /// <summary>Renders the current selection into an image buffer so it can be pasted elsewhere as an image.</summary>
+    public async Task<(byte[] Pixels, int Width, int Height)?> CaptureSelectionAsync()
+    {
+        if (!HasMultiSelection && _activeShape == null) return null;
+
+        Windows.Foundation.Rect bounds = _selBounds;
+        if (!HasMultiSelection && _activeShape != null)
+        {
+            bounds = ShapeBounds(_activeShape);
+        }
+
+        if (bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0) return null;
+
+        double pad = 10;
+        bounds.X -= pad; bounds.Y -= pad; bounds.Width += pad * 2; bounds.Height += pad * 2;
+
+        int width = (int)Math.Ceiling(bounds.Width);
+        int height = (int)Math.Ceiling(bounds.Height);
+
+        if (width <= 0 || height <= 0 || width > 4000 || height > 4000) return null;
+
+        var device = Microsoft.Graphics.Canvas.CanvasDevice.GetSharedDevice();
+        using var rt = new Microsoft.Graphics.Canvas.CanvasRenderTarget(device, width, height, 96);
+        using (var ds = rt.CreateDrawingSession())
+        {
+            ds.Clear(Windows.UI.Color.FromArgb(0, 0, 0, 0));
+            ds.Transform = System.Numerics.Matrix3x2.CreateTranslation((float)-bounds.X, (float)-bounds.Y);
+
+            if (_activeShape != null)
+            {
+                DrawShape(ds, _activeShape);
+            }
+            else
+            {
+                foreach (var sh in _selShapes) DrawShape(ds, sh);
+                foreach (var s in _selected) DrawStroke(ds, _canvas, s, System.Numerics.Vector2.Zero, null);
+            }
+        }
+        var pixels = rt.GetPixelBytes();
+        return (pixels, width, height);
+    }
+
+    public void CommitActiveSelection()
+    {
+        if (_lasso is { Count: > 2 })
+        {
+            SelectWithLasso(_lasso);
+            _lasso = null;
+            _canvas.Invalidate();
         }
     }
 
@@ -3147,6 +3225,7 @@ public sealed class InkSurface : UserControl
                 for (int i = 0; i < rh.Length; i++) py[i + 1] = py[i] + rh[i];
 
                 var cellMap = new TextElement[rh.Length, cw.Length];
+                if (_page == null) break;   // draw is only reachable with a page, but be safe
                 foreach (var t in _page.Texts)
                 {
                     if (t.TableId != s.Id) continue;
@@ -4702,7 +4781,11 @@ public sealed class InkSurface : UserControl
                 vx0 >= _inkCacheWorld.Left && vy0 >= _inkCacheWorld.Top &&
                 vx1 <= _inkCacheWorld.Right && vy1 <= _inkCacheWorld.Bottom;
 
-            bool zoomOk = _inkCache != null && ViewZoom / _inkCacheScale is > 0.50f and < 1.05f;
+            // Compare against the zoom the cache was BUILT at, not the render
+            // scale: on large windows the 4096px clamp lowers the render scale,
+            // and comparing against it made this false every frame — a
+            // permanent rebuild loop (#55).
+            bool zoomOk = _inkCache != null && ViewZoom / _inkCacheBuiltZoom is > 0.50f and < 1.05f;
 
             if (_inkCacheDirty || !zoomOk || !coversView)
             {
@@ -4737,6 +4820,7 @@ public sealed class InkSurface : UserControl
                 }
                 _inkCacheWorld = world;
                 _inkCacheScale = scale;
+                _inkCacheBuiltZoom = ViewZoom;
                 _inkCacheDirty = false;
             }
 

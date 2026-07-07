@@ -148,6 +148,15 @@ public sealed partial class MainWindow : Window
         Surface.RulerAngleChanged += OnRulerAngleChanged;
         Surface.StrokeTapped += stroke => SeekAudioToStroke(stroke);
         _audioRecorder.ElapsedChanged += elapsed => { DispatcherQueue.TryEnqueue(() => AudioTimeText.Text = elapsed.ToString(@"m\:ss")); };
+        // when playback finishes, restore the play icon and un-hide the ink (#55)
+        _audioPlayer.PlaybackEnded += () => DispatcherQueue.TryEnqueue(() =>
+        {
+            AudioPlayIcon.Glyph = "";   // back to the play icon
+            Surface.AudioPlayheadPosition = null;
+            Surface.Refresh();
+            AudioSlider.Value = 0;
+            AudioTimeText.Text = "0:00";
+        });
         _audioPlayer.PositionChanged += pos => { DispatcherQueue.TryEnqueue(() => UpdateAudioPlayerPosition(pos)); };
 
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
@@ -2966,6 +2975,7 @@ public sealed partial class MainWindow : Window
             args.Handled = false;
             return;
         }
+        Surface.CommitActiveSelection();
         Surface.DuplicateSelection();
         args.Handled = true;
     }
@@ -4334,30 +4344,40 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         return sel.StartPosition != sel.EndPosition;
     }
 
-    private void ContextCopy()
+    private async void ContextCopy()
     {
         var box = Surface.ActiveTextBox;
         if (box != null && box.FocusState != FocusState.Unfocused && HasTextSelection(box))
             box.Document.Selection.Copy();
-        else if (Surface.HasCanvasSelection)
+        else
         {
-            Surface.CopySelection();
-            ShowStatus("Copied — right-click where you want to paste.");
+            Surface.CommitActiveSelection();
+            if (Surface.HasCanvasSelection)
+            {
+                Surface.CopySelection();
+                await PushSelectionToClipboardAsync();
+                ShowStatus("Copied — right-click where you want to paste.");
+            }
         }
     }
 
-    private void ContextCut()
+    private async void ContextCut()
     {
         var box = Surface.ActiveTextBox;
         if (box != null && box.FocusState != FocusState.Unfocused && HasTextSelection(box))
         {
             box.Document.Selection.Cut();
         }
-        else if (Surface.HasCanvasSelection)
+        else
         {
-            Surface.CopySelection();
-            Surface.DeleteSelection();
-            ShowStatus("Cut — right-click where you want to paste.");
+            Surface.CommitActiveSelection();
+            if (Surface.HasCanvasSelection)
+            {
+                Surface.CopySelection();
+                await PushSelectionToClipboardAsync();
+                Surface.DeleteSelection();
+                ShowStatus("Cut — right-click where you want to paste.");
+            }
         }
     }
 
@@ -4379,6 +4399,24 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         if (hasBitmap) { await PasteImageAsync(world); return; }
         if (InkSurface.HasCanvasClipboard) { Surface.PasteCanvasAt(world); return; }
         ShowStatus("Nothing to paste.");
+    }
+
+    private async Task PushSelectionToClipboardAsync()
+    {
+        try
+        {
+            var cap = await Surface.CaptureSelectionAsync();
+            if (cap == null) return;
+            var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+            var enc = await Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId, stream);
+            enc.SetPixelData(Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8, Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied,
+                (uint)cap.Value.Width, (uint)cap.Value.Height, 96, 96, cap.Value.Pixels);
+            await enc.FlushAsync();
+            var dp = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            dp.SetBitmap(Windows.Storage.Streams.RandomAccessStreamReference.CreateFromStream(stream));
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+        }
+        catch { }
     }
 
     private void SetSelectionFont(string font)
@@ -5048,24 +5086,28 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     private bool TextBoxFocused =>
         Surface.ActiveTextBox != null && Surface.ActiveTextBox.FocusState != FocusState.Unfocused;
 
-    private void CopyAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    private async void CopyAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         if (TextBoxFocused) { args.Handled = false; return; } // text box keeps its own Ctrl+C
+        Surface.CommitActiveSelection();
         if (Surface.HasCanvasSelection)
         {
             Surface.CopySelection();
+            await PushSelectionToClipboardAsync();
             ShowStatus("Copied.");
             args.Handled = true;
         }
         else args.Handled = false;
     }
 
-    private void CutAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    private async void CutAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         if (TextBoxFocused) { args.Handled = false; return; }
+        Surface.CommitActiveSelection();
         if (Surface.HasCanvasSelection)
         {
             Surface.CopySelection();
+            await PushSelectionToClipboardAsync();
             Surface.DeleteSelection();
             ShowStatus("Cut.");
             args.Handled = true;
@@ -5479,7 +5521,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             // Start recording
             var dir = System.IO.Path.Combine(LibraryStore.Dir, "audio");
             Directory.CreateDirectory(dir);
-            var filePath = System.IO.Path.Combine(dir, $"{_curPage.Id}.mp3");
+            var filePath = System.IO.Path.Combine(dir, $"{_curPage.Id}.m4a");
 
             try
             {
@@ -5530,6 +5572,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         {
             _audioPlayer.Pause();
             AudioPlayIcon.Glyph = "\uE768"; // Play icon
+            // pausing must not leave later ink hidden by the playhead filter (#55)
+            Surface.AudioPlayheadPosition = null;
+            Surface.Refresh();
         }
     }
 
@@ -5571,7 +5616,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         try
         {
             var picker = new Windows.Storage.Pickers.FileSavePicker();
-            picker.FileTypeChoices.Add("MP3 Audio", new List<string> { ".mp3" });
+            picker.FileTypeChoices.Add("M4A audio", new List<string> { ".m4a" });
             picker.SuggestedFileName = $"{_curPage.Name}_audio";
             
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
