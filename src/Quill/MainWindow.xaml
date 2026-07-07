@@ -16,6 +16,8 @@
             <KeyboardAccelerator Key="F11" Invoked="FullscreenAccel_Invoked"/>
             <KeyboardAccelerator Key="F1" Invoked="ShortcutsAccel_Invoked"/>
             <KeyboardAccelerator Key="Escape" Invoked="EscAccel_Invoked"/>
+            <KeyboardAccelerator Key="D" Modifiers="Control" Invoked="DuplicateAccel_Invoked"/>
+            <KeyboardAccelerator Key="V" Modifiers="Control,Shift" Invoked="PastePlainTextAccel_Invoked"/>
             <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="SearchAccel_Invoked"/>
         </Grid.KeyboardAccelerators>
 
@@ -128,7 +130,7 @@
                             <Flyout x:Name="HistoryFlyout" Opening="HistoryFlyout_Opening">
                                 <StackPanel Width="240">
                                     <Grid Margin="0,0,0,8">
-                                        <TextBlock Text="Edit history" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        <TextBlock x:Uid="EditHistoryHeader" Text="Edit history" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                         <ToggleButton x:Name="BtnReplay" Click="Replay_Click" HorizontalAlignment="Right"
                                                       Width="34" Height="34" Padding="0"
                                                       Background="Transparent" BorderThickness="0"
@@ -141,6 +143,12 @@
                             </Flyout>
                         </Button.Flyout>
                     </Button>
+
+                    <AppBarSeparator/>
+
+                    <ToggleButton x:Name="BtnAudioRecording" Click="BtnAudioRecording_Click" ToolTipService.ToolTip="Toggle audio recording panel">
+                        <FontIcon Glyph="&#xE720;" FontSize="14"/>
+                    </ToggleButton>
 
                     <AppBarSeparator/>
 
@@ -167,6 +175,13 @@
                                             <TextBlock Text="Back to origin" FontSize="12"/>
                                         </StackPanel>
                                     </Button>
+                                    <Button Click="ZoomFit_Click" HorizontalAlignment="Stretch"
+                                            ToolTipService.ToolTip="Fit page content to window">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <FontIcon Glyph="&#xE9A6;" FontSize="14"/>
+                                            <TextBlock Text="Zoom to fit" FontSize="12"/>
+                                        </StackPanel>
+                                    </Button>
                                 </StackPanel>
                             </Flyout>
                         </DropDownButton.Flyout>
@@ -180,7 +195,7 @@
                             <Flyout>
                                 <StackPanel Width="280" Spacing="10">
                                     <Grid>
-                                        <TextBlock Text="Background" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        <TextBlock x:Uid="BackgroundHeader" Text="Background" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                         <!-- Apple-style light/dark pill: sun on one side, moon on the other -->
                                         <Grid x:Name="ThemeToggle" Width="62" Height="30" HorizontalAlignment="Right"
                                               Background="Transparent" Tapped="ThemeToggle_Tapped"
@@ -213,17 +228,21 @@
                                     </Expander>
                                     <Button Click="SetDefaultBg_Click" FontSize="12" HorizontalAlignment="Stretch"
                                             Content="Use this page's colour for all new pages"/>
+                                    <Button Click="SetNotebookDefaultBg_Click" FontSize="12" HorizontalAlignment="Stretch"
+                                            Content="Set as default colour for this notebook"/>
                                     <RadioButtons x:Name="GridRadios" Header="Gridlines" SelectionChanged="GridRadios_SelectionChanged">
                                         <x:String>None</x:String>
                                         <x:String>Dotted</x:String>
                                         <x:String>Squares</x:String>
                                         <x:String>Row lines</x:String>
                                     </RadioButtons>
-                                    <TextBlock Text="Grid spacing" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
+                                    <TextBlock x:Uid="GridSpacingHeader" Text="Grid spacing" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
                                     <Slider x:Name="SpacingSlider" Minimum="16" Maximum="96" StepFrequency="4"
                                             ValueChanged="SpacingSlider_ValueChanged"/>
                                     <Button Click="SetDefaultGrid_Click" FontSize="12" HorizontalAlignment="Stretch"
                                             Content="Use this grid for all new pages"/>
+                                    <Button Click="SetNotebookDefaultGrid_Click" FontSize="12" HorizontalAlignment="Stretch"
+                                            Content="Set as default grid for this notebook"/>
                                 </StackPanel>
                             </Flyout>
                         </Button.Flyout>
@@ -234,7 +253,7 @@
                         <Button.Flyout>
                             <Flyout>
                                 <StackPanel Width="340" Spacing="8">
-                                    <TextBox x:Name="SearchBox" PlaceholderText="Search notes…" KeyDown="SearchBox_KeyDown"/>
+                                    <TextBox x:Name="SearchBox" x:Uid="SearchBoxInput" PlaceholderText="Search notes…" KeyDown="SearchBox_KeyDown"/>
                                     <TextBlock x:Name="SearchStatus" FontSize="11" Opacity="0.7"/>
                                     <ListView x:Name="SearchResults" MaxHeight="380" SelectionMode="None"
                                               IsItemClickEnabled="True" ItemClick="SearchResult_Click"/>
@@ -289,7 +308,11 @@
                           PointerWheelChanged="BarScroll_Wheel">
                 <StackPanel Orientation="Horizontal" Spacing="4">
                     <ComboBox x:Name="StyleCombo" Width="130" SelectionChanged="StyleCombo_Changed"
-                              PlaceholderText="Styles" ToolTipService.ToolTip="Text styles (brand typography)"/>
+                               PlaceholderText="Styles" ToolTipService.ToolTip="Text styles (brand typography)"/>
+                    <Button Click="StyleChip_Click" Tag="Heading 1" Content="H1" FontSize="11" Padding="6,2" ToolTipService.ToolTip="Heading 1" AllowFocusOnInteraction="False"/>
+                    <Button Click="StyleChip_Click" Tag="Heading 2" Content="H2" FontSize="11" Padding="6,2" ToolTipService.ToolTip="Heading 2" AllowFocusOnInteraction="False"/>
+                    <Button Click="StyleChip_Click" Tag="Normal" Content="Normal" FontSize="11" Padding="6,2" ToolTipService.ToolTip="Normal text" AllowFocusOnInteraction="False"/>
+                    <Button Click="StyleChip_Click" Tag="Code" Content="Code" FontSize="11" Padding="6,2" ToolTipService.ToolTip="Code" AllowFocusOnInteraction="False"/>
                     <ComboBox x:Name="FontCombo" Width="150" SelectionChanged="FontCombo_Changed"
                               ToolTipService.ToolTip="Font family"/>
                     <ComboBox x:Name="SizeCombo" Width="74" IsEditable="True"
@@ -405,6 +428,44 @@
         <Grid x:Name="CanvasArea" Grid.Row="2">
             <ctrl:InkSurface x:Name="Surface"/>
 
+            <!-- Liquid-Glass Floating Audio Recording Panel -->
+            <Border x:Name="AudioFloatingPanel" HorizontalAlignment="Center" VerticalAlignment="Top" 
+                    Margin="0,14,0,0" Background="{ThemeResource CardBrush}" 
+                    BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5" 
+                    CornerRadius="18" Padding="12,6" Canvas.ZIndex="10" Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <TextBlock x:Name="AudioGrip" Text="🎙️" VerticalAlignment="Center" Margin="2,0,4,0" 
+                               ToolTipService.ToolTip="Drag to move"/>
+                    
+                    <ToggleButton x:Name="AudioRecordBtn" Click="AudioRecord_Click" ToolTipService.ToolTip="Record lecture audio" 
+                                  Width="36" Height="32" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+                        <Grid>
+                            <Ellipse x:Name="RecordDot" Width="10" Height="10" Fill="Red" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                    </ToggleButton>
+                    <TextBlock x:Name="AudioTimeText" Text="0:00" VerticalAlignment="Center" FontSize="12" Width="40" TextAlignment="Center" Opacity="0.8"/>
+                    
+                    <AppBarSeparator/>
+                    
+                    <Button x:Name="AudioPlayBtn" Click="AudioPlay_Click" ToolTipService.ToolTip="Play/Pause recording" 
+                            Width="32" Height="32" IsEnabled="False" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+                        <FontIcon x:Name="AudioPlayIcon" Glyph="&#xE768;" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Button>
+                    <Slider x:Name="AudioSlider" Minimum="0" Maximum="100" Value="0" Width="100" Height="32" VerticalAlignment="Center" Margin="4,0,4,0" IsEnabled="False"
+                            ValueChanged="AudioSlider_ValueChanged"/>
+                    <Button x:Name="AudioSpeedBtn" Click="AudioSpeed_Click" Content="1.0x" FontSize="11" 
+                            Width="40" Height="32" Padding="0" IsEnabled="False" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
+                    
+                    <AppBarSeparator/>
+
+                    <!-- Save/Export audio file -->
+                    <Button x:Name="AudioSaveBtn" Click="AudioSave_Click" ToolTipService.ToolTip="Save/Export audio file" 
+                            Width="32" Height="32" IsEnabled="False" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+                        <FontIcon Glyph="&#xE74E;" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Button>
+                </StackPanel>
+            </Border>
+
             <!-- Floating notebook panel -->
             <Border x:Name="NotebookPanel" HorizontalAlignment="Left" VerticalAlignment="Top"
                     Margin="14,14,0,0" Width="300" MaxHeight="940"
@@ -502,18 +563,20 @@
                               VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Disabled" MaxWidth="1280">
                     <StackPanel x:Name="PenStack" Orientation="Horizontal" Spacing="4">
                         <Border x:Name="PenGrip" Background="Transparent" Padding="2"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                 ToolTipService.ToolTip="Drag me — dock the pens to any side of the page">
                             <TextBlock Text="⠿" FontSize="13" Opacity="0.55"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
 
-                        <StackPanel x:Name="PresetPanel" Orientation="Horizontal" Spacing="2"/>
+                        <StackPanel x:Name="PresetPanel" Orientation="Horizontal" Spacing="2" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         <Button x:Name="BtnAddPreset" Click="AddPreset_Click" Padding="6,4"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                 ToolTipService.ToolTip="Save the current pen as a new pen (right-click any pen to edit it)">
                             <FontIcon Glyph="&#xE710;" FontSize="12"/>
                         </Button>
 
-                        <DropDownButton x:Name="RulerBtn" Padding="6,4" ToolTipService.ToolTip="Ruler — draw straight lines at any angle">
+                        <DropDownButton x:Name="RulerBtn" Padding="6,4" HorizontalAlignment="Center" VerticalAlignment="Center" ToolTipService.ToolTip="Ruler — draw straight lines at any angle">
                             <TextBlock Text="&#x1F4CF;" FontSize="13" VerticalAlignment="Center"/>
                             <DropDownButton.Flyout>
                                 <Flyout>
@@ -529,9 +592,10 @@
                             </DropDownButton.Flyout>
                         </DropDownButton>
 
-                        <AppBarSeparator/>
+                        <AppBarSeparator HorizontalAlignment="Center" VerticalAlignment="Center"/>
 
                         <Button x:Name="BtnPenRowCollapse" Click="PenRowCollapse_Click"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                 ToolTipService.ToolTip="Hide the pen panel for this page">
                             <FontIcon Glyph="&#xE70D;" FontSize="12"/>
                         </Button>
