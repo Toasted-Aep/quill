@@ -405,6 +405,67 @@ public class ScaleMixedAction : IPageAction
     }
 }
 
+// Changes per-cell fill colour and border styling (#roadmap: table enhancements).
+public class CellStyleAction : IPageAction
+{
+    private readonly TextElement _cell;
+    private readonly string? _fromFill, _toFill;
+    private readonly string? _fromBorder, _toBorder;
+    private readonly float? _fromBorderW, _toBorderW;
+    public CellStyleAction(TextElement cell,
+        string? fromFill, string? toFill,
+        string? fromBorder, string? toBorder,
+        float? fromBorderW, float? toBorderW)
+    {
+        _cell = cell;
+        _fromFill = fromFill; _toFill = toFill;
+        _fromBorder = fromBorder; _toBorder = toBorder;
+        _fromBorderW = fromBorderW; _toBorderW = toBorderW;
+    }
+    public string Description => "Cell style";
+    public void Do(NotePage page) { _cell.FillColor = _toFill; _cell.BorderColor = _toBorder; _cell.BorderWidth = _toBorderW; }
+    public void Undo(NotePage page) { _cell.FillColor = _fromFill; _cell.BorderColor = _fromBorder; _cell.BorderWidth = _fromBorderW; }
+}
+
+// Merges or splits table cells by adjusting span properties.
+public class CellMergeAction : IPageAction
+{
+    private readonly TextElement _cell;
+    private readonly int _fromColSpan, _toColSpan, _fromRowSpan, _toRowSpan;
+    private readonly List<TextElement> _hiddenTexts;    // texts removed on merge, restored on split
+    public CellMergeAction(TextElement cell, int fromColSpan, int fromRowSpan,
+        int toColSpan, int toRowSpan, List<TextElement> hiddenTexts)
+    {
+        _cell = cell;
+        _fromColSpan = fromColSpan; _toColSpan = toColSpan;
+        _fromRowSpan = fromRowSpan; _toRowSpan = toRowSpan;
+        _hiddenTexts = hiddenTexts;
+    }
+    public string Description => _toColSpan > 1 || _toRowSpan > 1 ? "Merge cells" : "Split cell";
+    public void Do(NotePage page)
+    {
+        _cell.CellColSpan = _toColSpan; _cell.CellRowSpan = _toRowSpan;
+        foreach (var t in _hiddenTexts) page.Texts.Remove(t);
+    }
+    public void Undo(NotePage page)
+    {
+        _cell.CellColSpan = _fromColSpan; _cell.CellRowSpan = _fromRowSpan;
+        page.Texts.AddRange(_hiddenTexts);
+    }
+}
+
+// Toggles bold header row on a table.
+public class HeaderRowAction : IPageAction
+{
+    private readonly ShapeElement _table;
+    private readonly bool _from, _to;
+    public HeaderRowAction(ShapeElement table, bool from, bool to)
+    { _table = table; _from = from; _to = to; }
+    public string Description => "Toggle header row";
+    public void Do(NotePage page) => _table.HeaderRow = _to;
+    public void Undo(NotePage page) => _table.HeaderRow = _from;
+}
+
 public class UndoRedoManager
 {
     private readonly Stack<IPageAction> _undo = new();

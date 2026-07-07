@@ -39,6 +39,7 @@ public class PenStroke
     public float Sens { get; set; } = 1f;
     public List<StrokePoint> Points { get; set; } = new();
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
+    public List<float>? PressureCurve { get; set; }
 
     [JsonIgnore]
     public float MinY
@@ -86,7 +87,7 @@ public class PenStroke
 
     public PenStroke CloneWithPoints(List<StrokePoint> pts) => new()
     {
-        Pen = Pen, Color = Color, Size = Size, Sens = Sens, Points = pts, CreatedTicks = CreatedTicks
+        Pen = Pen, Color = Color, Size = Size, Sens = Sens, Points = pts, CreatedTicks = CreatedTicks, PressureCurve = PressureCurve != null ? new List<float>(PressureCurve) : null
     };
 }
 
@@ -110,6 +111,15 @@ public class ShapeElement
     public int TCols { get; set; }
     public List<double>? TColW { get; set; }
     public List<double>? TRowH { get; set; }
+    // Per-cell fill/border styling (#roadmap: table enhancements).
+    public string? FillColor { get; set; }
+    public string? BorderColor { get; set; }
+    public float? BorderWidth { get; set; }
+    // Cell merge spans: 1 = no merge (default).
+    public int MergeColSpan { get; set; } = 1;
+    public int MergeRowSpan { get; set; } = 1;
+    // Whether this is a bold header row (table shapes only).
+    public bool HeaderRow { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
 }
 
@@ -125,6 +135,12 @@ public class TextElement
     public Guid? TableId { get; set; }
     public int TableRow { get; set; }
     public int TableCol { get; set; }
+    // Cell styling and spans (#roadmap: table enhancements)
+    public string? FillColor { get; set; }
+    public string? BorderColor { get; set; }
+    public float? BorderWidth { get; set; }
+    public int CellColSpan { get; set; } = 1;
+    public int CellRowSpan { get; set; } = 1;
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
 }
 
@@ -136,6 +152,11 @@ public class PenPreset
     public string Color { get; set; } = "#141413";
     public float Size { get; set; } = 3.5f;
     public float Sens { get; set; } = 1f;
+    // Wet-ink stabiliser: 0 = off, 1 = maximum smoothing.
+    public float Stabiliser { get; set; }
+    // Custom pressure response curve control points (0–1 range).
+    // null = linear (default). 3 floats = cubic Bézier mid-points.
+    public List<float>? PressureCurve { get; set; }
 }
 
 public class NotePage
@@ -157,6 +178,9 @@ public class NotePage
     public List<ShapeElement> Shapes { get; set; } = new();
     // Cached handwriting recognition text for search indexing (#18).
     public string OcrText { get; set; } = "";
+    // Audio recording: relative path to m4a file and UTC ticks when recording started.
+    public string? AudioFile { get; set; }
+    public long AudioStartTicks { get; set; }
 
     public override string ToString() => Name;
 }
@@ -182,6 +206,12 @@ public class Notebook
     public string? PasswordHash { get; set; }
     // Optional folder grouping for the gallery view (#16).
     public string? Folder { get; set; }
+    // Emoji/icon for gallery card (#roadmap: cover picker).
+    public string? CoverEmoji { get; set; }
+    // Per-notebook default page settings (overrides library defaults).
+    public string? DefaultBackground { get; set; }
+    public GridType? DefaultGrid { get; set; }
+    public double? DefaultGridSpacing { get; set; }
     public List<Section> Sections { get; set; } = new();
 
     public override string ToString() => Name;
@@ -214,4 +244,6 @@ public class Library
     public List<string> CalcHistory { get; set; } = new();
     // Liquid-glass panel transparency, 0 (solid) … 1 (fully liquid) (#48).
     public double Liquidness { get; set; } = 0.35;
+    // Recently used pen/highlight colours (newest first, max 16).
+    public List<string> RecentColors { get; set; } = new();
 }

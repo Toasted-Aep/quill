@@ -9,7 +9,7 @@ public record PdfPageImage(int PixelWidth, int PixelHeight, byte[] Bgra8Pixels);
 public record PdfVectorPath(List<(float X, float Y)> Points, string Color, float Width, bool Closed, float Alpha);
 public record PdfVectorDot(float X, float Y, float R, string Color);
 public record PdfVectorImage(double X, double Y, double W, double H, int PixW, int PixH, byte[] Bgra8);
-public record PdfVectorText(float X, float Y, float Size, string Color, string Text);
+public record PdfVectorText(float X, float Y, float Size, string Color, string Text, string Font);
 public record PdfVectorPage(double Width, double Height, double OffsetX, double OffsetY, string Background,
                             List<PdfVectorPath> Paths, List<PdfVectorDot> Dots,
                             List<PdfVectorImage> Images, List<PdfVectorText> Texts);
@@ -94,6 +94,18 @@ public static class PdfExporter
 
     /// <summary>True vector PDF: strokes, shapes and grid as scalable paths,
     /// with embedded images and text boxes as selectable Helvetica text.</summary>
+    private class PdfFontResource
+    {
+        public string Name { get; set; } = "";
+        public string ResName { get; set; } = "";
+        public int FontId { get; set; }
+        public int DescriptorId { get; set; }
+        public int WidthsId { get; set; }
+        public int TtfId { get; set; }
+        public byte[] TtfBytes { get; set; } = Array.Empty<byte>();
+        public Dictionary<char, int> Widths { get; set; } = new();
+    }
+
     public static byte[] CreateVector(IReadOnlyList<PdfVectorPage> pages)
     {
         const double k = 72.0 / 96.0;   // world px -> PDF points
@@ -106,38 +118,121 @@ public static class PdfExporter
         }
         void BeginObj() => offsets.Add(ms.Position);
 
-        // ---- object numbering: 1 catalog, 2 pages, 3 ExtGState, 4 font,
-        //      then per page: page, content, one object per image ----
-        int next = 5;
+        // 1. Find all unique fonts used across all pages
+        var fontFamilies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pg in pages)
+            foreach (var t in pg.Texts)
+                if (!string.IsNullOrEmpty(t.Font))
+                    fontFamilies.Add(t.Font);
+
+        var fontMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var fontObjectsList = new List<PdfFontResource>();
+
+        // We will assign object IDs sequentially:
+        // Catalog: 1
+        // Pages: 2
+        // ExtGState: 3
+        // Helvetica fallback: 4
+        int nextObjId = 5;
+
+        foreach (var fontName in fontFamilies)
+        {
+            var chars = new HashSet<char>();
+            foreach (var pg in pages)
+                foreach (var t in pg.Texts)
+                    if (string.Equals(t.Font, fontName, StringComparison.OrdinalIgnoreCase))
+                        foreach (var c in t.Text)
+                            chars.Add(c);
+
+            var ttfBytes = FontSubsetter.SubsetFont(fontName, chars);
+            if (ttfBytes != null)
+            {
+                var widths = FontSubsetter.GetGlyphWidths(fontName, chars);
+                var res = new PdfFontResource
+                {
+                    Name = fontName,
+                    ResName = $"F{fontObjectsList.Count + 1}",
+                    TtfId = nextObjId++,
+                    DescriptorId = nextObjId++,
+                    WidthsId = nextObjId++,
+                    FontId = nextObjId++,
+                    TtfBytes = ttfBytes,
+                    Widths = widths
+                };
+                fontObjectsList.Add(res);
+                fontMap[fontName] = res.FontId;
+            }
+            else
+            {
+                // Fallback to Helvetica
+                fontMap[fontName] = 4;
+            }
+        }
+
+        // ---- object numbering: Catalog 1, Pages 2, ExtGState 3, Helvetica 4,
+        //      then font objects, then per page: page, content, one object per image ----
         var pageIds = new int[pages.Count];
         var contentIds = new int[pages.Count];
         var imageIds = new int[pages.Count][];
         for (int i = 0; i < pages.Count; i++)
         {
-            pageIds[i] = next++;
-            contentIds[i] = next++;
+            pageIds[i] = nextObjId++;
+            contentIds[i] = nextObjId++;
             imageIds[i] = new int[pages[i].Images.Count];
-            for (int j = 0; j < imageIds[i].Length; j++) imageIds[i][j] = next++;
+            for (int j = 0; j < imageIds[i].Length; j++) imageIds[i][j] = nextObjId++;
         }
-        int total = next - 1;
+        int total = nextObjId - 1;
 
         WriteAscii("%PDF-1.4\n");
         ms.Write(new byte[] { 0x25, 0xE2, 0xE3, 0xCF, 0xD3, 0x0A }, 0, 6);
 
+        // Catalog
         BeginObj();
         WriteAscii("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
 
+        // Pages
         BeginObj();
         var kids = new StringBuilder();
         foreach (var id in pageIds) kids.Append($"{id} 0 R ");
         WriteAscii($"2 0 obj\n<< /Type /Pages /Kids [ {kids}] /Count {pages.Count} >>\nendobj\n");
 
+        // ExtGState
         BeginObj();
         WriteAscii("3 0 obj\n<< /Type /ExtGState /CA 0.35 /ca 0.35 >>\nendobj\n");
 
+        // Helvetica fallback
         BeginObj();
         WriteAscii("4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n");
 
+        // Write custom TTF font objects
+        foreach (var f in fontObjectsList)
+        {
+            byte[] compTtf = Deflate(f.TtfBytes);
+            BeginObj();
+            WriteAscii($"{f.TtfId} 0 obj\n<< /Length {compTtf.Length} /Length1 {f.TtfBytes.Length} /Filter /FlateDecode >>\nstream\n");
+            ms.Write(compTtf, 0, compTtf.Length);
+            WriteAscii("\nendstream\nendobj\n");
+
+            BeginObj();
+            WriteAscii($"{f.DescriptorId} 0 obj\n<< /Type /FontDescriptor /FontName /{f.Name.Replace(" ", "")} /Flags 32 /FontBBox [-1000 -1000 2000 2000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 800 /StemV 80 /FontFile2 {f.TtfId} 0 R >>\nendobj\n");
+
+            var wsb = new StringBuilder();
+            wsb.Append("[ ");
+            for (int charCode = 32; charCode <= 255; charCode++)
+            {
+                char c = (char)charCode;
+                int wVal = f.Widths.TryGetValue(c, out int width) ? width : 600;
+                wsb.Append(wVal).Append(' ');
+            }
+            wsb.Append("]");
+            BeginObj();
+            WriteAscii($"{f.WidthsId} 0 obj\n{wsb}\nendobj\n");
+
+            BeginObj();
+            WriteAscii($"{f.FontId} 0 obj\n<< /Type /Font /Subtype /TrueType /BaseFont /{f.Name.Replace(" ", "")} /FirstChar 32 /LastChar 255 /Widths {f.WidthsId} 0 R /FontDescriptor {f.DescriptorId} 0 R /Encoding /WinAnsiEncoding >>\nendobj\n");
+        }
+
+        // Write pages
         for (int i = 0; i < pages.Count; i++)
         {
             var pg = pages[i];
@@ -147,11 +242,18 @@ public static class PdfExporter
             for (int j = 0; j < pg.Images.Count; j++)
                 xobjects.Append($"/Im{j} {imageIds[i][j]} 0 R ");
 
+            var fontResList = new StringBuilder();
+            fontResList.Append("/F0 4 0 R ");
+            foreach (var f in fontObjectsList)
+            {
+                fontResList.Append($"/{f.ResName} {f.FontId} 0 R ");
+            }
+
             BeginObj();
             WriteAscii(
                 $"{pageIds[i]} 0 obj\n<< /Type /Page /Parent 2 0 R " +
                 $"/MediaBox [0 0 {Num(wPt)} {Num(hPt)}] " +
-                "/Resources << /ExtGState << /GHl 3 0 R >> /Font << /F1 4 0 R >> " +
+                $"/Resources << /ExtGState << /GHl 3 0 R >> /Font << {fontResList}>> " +
                 $"/XObject << {xobjects}>> >> " +
                 $"/Contents {contentIds[i]} 0 R >>\nendobj\n");
 
@@ -170,7 +272,6 @@ public static class PdfExporter
                 sb.Append($"{Num((d.X - pg.OffsetX) * k - r)} {Num(hPt - (d.Y - pg.OffsetY) * k - r)} {Num(r * 2)} {Num(r * 2)} re f\n");
             }
 
-            // images sit under the ink, matching on-screen ordering
             for (int j = 0; j < pg.Images.Count; j++)
             {
                 var im = pg.Images[j];
@@ -195,7 +296,14 @@ public static class PdfExporter
             foreach (var t in pg.Texts)
             {
                 if (string.IsNullOrWhiteSpace(t.Text)) continue;
-                sb.Append("BT /F1 ").Append(Num(t.Size * k)).Append(" Tf ")
+                string fRes = "F0";
+                if (!string.IsNullOrEmpty(t.Font) && fontMap.TryGetValue(t.Font, out int fId))
+                {
+                    var matching = fontObjectsList.FirstOrDefault(x => x.FontId == fId);
+                    if (matching != null) fRes = matching.ResName;
+                }
+
+                sb.Append($"BT /{fRes} ").Append(Num(t.Size * k)).Append(" Tf ")
                   .Append(Rgb(t.Color, "rg")).Append(' ')
                   .Append($"1 0 0 1 {X(t.X)} {Y(t.Y)} Tm (")
                   .Append(EscapePdfText(t.Text)).Append(") Tj ET\n");
@@ -206,7 +314,7 @@ public static class PdfExporter
             BeginObj();
             WriteAscii($"{contentIds[i]} 0 obj\n<< /Length {compressed.Length} /Filter /FlateDecode >>\nstream\n");
             ms.Write(compressed, 0, compressed.Length);
-            WriteAscii("\nendstream\nendobj\n");
+            WriteAscii("\nendstream\nobj\n");
 
             for (int j = 0; j < pg.Images.Count; j++)
             {

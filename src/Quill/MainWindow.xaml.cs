@@ -55,6 +55,9 @@ public sealed partial class MainWindow : Window
     // notebook grid) and whether the gallery is acting as the startup picker (#31).
     private Notebook? _galleryNb;
     private bool _galleryLauncher;
+    private readonly Quill.Services.AudioRecorder _audioRecorder = new Quill.Services.AudioRecorder();
+    private readonly Quill.Services.AudioPlayer _audioPlayer = new Quill.Services.AudioPlayer();
+    private bool _updatingAudioSlider = false;
 
     private static readonly string[] QuickColors =
         { "#141413", "#FAF9F5", "#D97757", "#D32F2F", "#FBC02D", "#788C5D", "#6A9BCC", "#7B1FA2" };
@@ -143,6 +146,9 @@ public sealed partial class MainWindow : Window
         Surface.UndoManager.Changed += UpdateUndoButtons;
         Surface.ViewChanged += OnViewChanged;
         Surface.RulerAngleChanged += OnRulerAngleChanged;
+        Surface.StrokeTapped += stroke => SeekAudioToStroke(stroke);
+        _audioRecorder.ElapsedChanged += elapsed => { DispatcherQueue.TryEnqueue(() => AudioTimeText.Text = elapsed.ToString(@"m\:ss")); };
+        _audioPlayer.PositionChanged += pos => { DispatcherQueue.TryEnqueue(() => UpdateAudioPlayerPosition(pos)); };
 
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusText.Text = ""; };
@@ -163,6 +169,15 @@ public sealed partial class MainWindow : Window
         CalcHeader.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
         CalcHeader.ManipulationDelta += (_, e) => JellyDrag(CalcPanel, e);
         CalcHeader.ManipulationCompleted += (_, _) => JellyRelease(CalcPanel);
+
+        // audio recording panel dragging (with liquid jelly physics)
+        AudioFloatingPanel.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        AudioFloatingPanel.ManipulationDelta += (_, e) => JellyDrag(AudioFloatingPanel, e);
+        AudioFloatingPanel.ManipulationCompleted += (_, _) => JellyRelease(AudioFloatingPanel);
+
+        AudioGrip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        AudioGrip.ManipulationDelta += (_, e) => JellyDrag(AudioFloatingPanel, e);
+        AudioGrip.ManipulationCompleted += (_, _) => JellyRelease(AudioFloatingPanel);
 
         ApplyTheme();
         try { ApplyAccent(ColorUtil.Parse(_library.AccentColor), refreshTheme: true); } catch { }
@@ -697,6 +712,10 @@ public sealed partial class MainWindow : Window
                 Padding = new Thickness(2),
                 CornerRadius = new CornerRadius(15),
                 BorderThickness = new Thickness(2),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
                 Background = new SolidColorBrush(Colors.Transparent),
                 BorderBrush = new SolidColorBrush(
                     p.Id == _activePresetId ? Color.FromArgb(255, 217, 119, 87) : Colors.Transparent)
@@ -727,6 +746,10 @@ public sealed partial class MainWindow : Window
             Padding = new Thickness(2),
             CornerRadius = new CornerRadius(15),
             BorderThickness = new Thickness(2),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
             Background = new SolidColorBrush(Colors.Transparent),
             BorderBrush = new SolidColorBrush(
                 Surface.Tool == ToolType.Eraser ? Color.FromArgb(255, 217, 119, 87) : Colors.Transparent)
@@ -798,9 +821,15 @@ public sealed partial class MainWindow : Window
             ColorPicker? pickerRef = null;
             void SetColor(Color c)
             {
-                p.Color = ColorUtil.ToHex(c);
+                var hex = ColorUtil.ToHex(c);
+                p.Color = hex;
                 ell.Fill = new SolidColorBrush(c);
                 if (_activePresetId == p.Id) Surface.PenColor = c;
+                
+                _library.RecentColors.Remove(hex);
+                _library.RecentColors.Insert(0, hex);
+                if (_library.RecentColors.Count > 16) _library.RecentColors.RemoveAt(16);
+                
                 ScheduleSave();
             }
 
@@ -832,6 +861,40 @@ public sealed partial class MainWindow : Window
                 swatches.Children.Add(sb);
             }
             panel.Children.Add(swatches);
+
+            panel.Children.Add(new TextBlock { Text = "Recent colours", FontSize = 11, Opacity = 0.7 });
+            var recents = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+            foreach (var hex in _library.RecentColors.Take(8))
+            {
+                var c = ColorUtil.Parse(hex);
+                var rb = new Button
+                {
+                    Padding = new Thickness(3),
+                    Content = new Ellipse
+                    {
+                        Width = 16, Height = 16,
+                        Fill = new SolidColorBrush(c),
+                        Stroke = new SolidColorBrush(Color.FromArgb(120, 128, 128, 128)),
+                        StrokeThickness = 1
+                    }
+                };
+                rb.Click += (_, _) =>
+                {
+                    SetColor(c);
+                    if (pickerRef != null)
+                    {
+                        _syncingUi = true;
+                        pickerRef.Color = c;
+                        _syncingUi = false;
+                    }
+                };
+                recents.Children.Add(rb);
+            }
+            if (_library.RecentColors.Count == 0)
+            {
+                recents.Children.Add(new TextBlock { Text = "None yet", FontSize = 11, Opacity = 0.5, Margin = new Thickness(4, 2, 0, 2) });
+            }
+            panel.Children.Add(recents);
 
             var picker = new ColorPicker
             {
@@ -876,9 +939,39 @@ public sealed partial class MainWindow : Window
             };
             panel.Children.Add(sensLabel);
             panel.Children.Add(sens);
+
+            var stabLabel = new TextBlock { Text = $"Stabiliser: {p.Stabiliser * 100:0}%", FontSize = 12 };
+            var stab = new Slider { Minimum = 0, Maximum = 100, StepFrequency = 5, Value = p.Stabiliser * 100 };
+            stab.ValueChanged += (_, args) =>
+            {
+                p.Stabiliser = (float)args.NewValue / 100f;
+                stabLabel.Text = $"Stabiliser: {p.Stabiliser * 100:0}%";
+                if (_activePresetId == p.Id) Surface.PenStabiliser = p.Stabiliser;
+                ScheduleSave();
+            };
+            panel.Children.Add(stabLabel);
+            panel.Children.Add(stab);
+
+            var curveCombo = new ComboBox
+            {
+                Header = "Pressure curve",
+                ItemsSource = new[] { "Linear (default)", "Soft (thickens easily)", "Hard (needs pressure)" },
+                SelectedIndex = p.PressureCurve == null ? 0 : (p.PressureCurve.Count > 1 && p.PressureCurve[1] > 0.5f ? 1 : 2),
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            curveCombo.SelectionChanged += (_, _) =>
+            {
+                if (curveCombo.SelectedIndex == 0) p.PressureCurve = null;
+                else if (curveCombo.SelectedIndex == 1) p.PressureCurve = new List<float> { 0f, 0.6f, 1f };
+                else p.PressureCurve = new List<float> { 0f, 0.2f, 1f };
+                if (_activePresetId == p.Id) Surface.PenPressureCurve = p.PressureCurve;
+                ScheduleSave();
+            };
+            panel.Children.Add(curveCombo);
+
             panel.Children.Add(new TextBlock
             {
-                Text = "Brush and fountain pens react most: press lightly for a hairline, hard for a broad stroke.",
+                Text = "Brush and fountain pens react most: press lightly for a hairline, hard for a broad stroke. Stabiliser smooths out pen jitter.",
                 FontSize = 11,
                 Opacity = 0.7,
                 TextWrapping = TextWrapping.Wrap
@@ -912,6 +1005,8 @@ public sealed partial class MainWindow : Window
         Surface.PenColor = ColorUtil.Parse(p.Color);
         Surface.PenSize = p.Size;
         Surface.PenSensitivity = p.Sens;
+        Surface.PenStabiliser = p.Stabiliser;
+        Surface.PenPressureCurve = p.PressureCurve;
         _activePresetId = p.Id;
         SelectTool("Pen");
         BuildPenStrip();
@@ -927,7 +1022,9 @@ public sealed partial class MainWindow : Window
             Pen = Surface.Pen,
             Color = ColorUtil.ToHex(Surface.PenColor),
             Size = Surface.PenSize,
-            Sens = Surface.PenSensitivity
+            Sens = Surface.PenSensitivity,
+            Stabiliser = Surface.PenStabiliser,
+            PressureCurve = Surface.PenPressureCurve
         };
         _library.Pens.Add(p);
         _activePresetId = p.Id;
@@ -939,13 +1036,17 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     // Notebook tree
     // =======================================================================
-    private NotePage NewPage(string name) => new()
+    private NotePage NewPage(string name, Notebook? parentNotebook = null)
     {
-        Name = name,
-        Background = _library.DefaultBackground,
-        Grid = _library.DefaultGrid,
-        GridSpacing = _library.DefaultGridSpacing
-    };
+        var nb = parentNotebook ?? _curNb ?? ResolveSelection().nb;
+        return new NotePage
+        {
+            Name = name,
+            Background = nb?.DefaultBackground ?? _library.DefaultBackground,
+            Grid = nb?.DefaultGrid ?? _library.DefaultGrid,
+            GridSpacing = nb?.DefaultGridSpacing ?? _library.DefaultGridSpacing
+        };
+    }
 
     private void BuildTree()
     {
@@ -1226,6 +1327,7 @@ public sealed partial class MainWindow : Window
         UpdateUndoButtons();
         UpdateFormatBarVisibility();
         ExpandCurrentInTree();
+        SyncAudioPlaybackStateForCurrentPage();
     }
 
     private async Task<string?> PromptAsync(string title, string initial)
@@ -2013,8 +2115,30 @@ public sealed partial class MainWindow : Window
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         var strip = new Border { Background = new SolidColorBrush(col), CornerRadius = new CornerRadius(12, 12, 0, 0) };
+        var stripGrid = new Grid();
+        strip.Child = stripGrid;
+        if (nb.CoverEmoji != null)
+        {
+            stripGrid.Children.Add(new TextBlock
+            {
+                Text = nb.CoverEmoji,
+                FontSize = 24,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+        }
         if (nb.PasswordHash != null)
-            strip.Child = new FontIcon { Glyph = "", FontSize = 16, Foreground = new SolidColorBrush(Colors.White), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 8, 8, 0) };
+        {
+            stripGrid.Children.Add(new FontIcon
+            {
+                Glyph = "",
+                FontSize = 16,
+                Foreground = new SolidColorBrush(Colors.White),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 8, 8, 0)
+            });
+        }
         Grid.SetRow(strip, 0);
 
         var name = new TextBlock { Text = nb.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, MaxLines = 2, Margin = new Thickness(12, 8, 12, 0), Foreground = inkBrush };
@@ -2142,6 +2266,19 @@ public sealed partial class MainWindow : Window
         };
         fly.Items.Add(rename);
 
+        var emojiItem = new MenuFlyoutItem { Text = "Cover emoji…" };
+        emojiItem.Click += async (_, _) =>
+        {
+            var e = await PromptAsync("Notebook Cover Emoji / Icon", nb.CoverEmoji ?? "📓");
+            if (e != null)
+            {
+                nb.CoverEmoji = string.IsNullOrWhiteSpace(e) ? null : e.Trim();
+                ScheduleSave();
+                BuildGallery();
+            }
+        };
+        fly.Items.Add(emojiItem);
+
         var lockItem = new MenuFlyoutItem { Text = nb.PasswordHash == null ? "Lock…" : "Remove lock…" };
         lockItem.Click += (_, _) => { _selNode = FindNode(nb); LockToggle_Click(this, new RoutedEventArgs()); };
         fly.Items.Add(lockItem);
@@ -2266,6 +2403,37 @@ public sealed partial class MainWindow : Window
     {
         bool current = ReferenceEquals(pg, _curPage);
         var inner = new StackPanel { Spacing = 2 };
+
+        var img = new Image { Width = 160, Height = 100, Stretch = Stretch.UniformToFill, Margin = new Thickness(0, 0, 0, 6) };
+        inner.Children.Add(img);
+
+        Task.Run(() =>
+        {
+            var bytes = Quill.Controls.InkSurface.RenderPageThumbnail(pg, 160, 100);
+            if (bytes != null)
+            {
+                DispatcherQueue.TryEnqueue(async () =>
+                {
+                    try
+                    {
+                        var bmi = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+                        using (var ms = new Windows.Storage.Streams.InMemoryRandomAccessStream())
+                        {
+                            using (var writer = new Windows.Storage.Streams.DataWriter(ms.GetOutputStreamAt(0)))
+                            {
+                                writer.WriteBytes(bytes);
+                                await writer.StoreAsync();
+                            }
+                            ms.Seek(0);
+                            await bmi.SetSourceAsync(ms);
+                        }
+                        img.Source = bmi;
+                    }
+                    catch { }
+                });
+            }
+        });
+
         inner.Children.Add(new TextBlock
         {
             Text = pg.Name, Foreground = ink, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
@@ -2791,6 +2959,49 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void DuplicateAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (Surface.ActiveTextBox != null && Surface.ActiveTextBox.FocusState != FocusState.Unfocused)
+        {
+            args.Handled = false;
+            return;
+        }
+        Surface.DuplicateSelection();
+        args.Handled = true;
+    }
+
+    private void PastePlainTextAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (Surface.ActiveTextBox != null && Surface.ActiveTextBox.FocusState != FocusState.Unfocused)
+        {
+            args.Handled = true;
+            PastePlainText();
+        }
+        else
+        {
+            args.Handled = false;
+        }
+    }
+
+    private async void PastePlainText()
+    {
+        var activeBox = Surface.ActiveTextBox;
+        if (activeBox == null) return;
+        try
+        {
+            var content = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+            if (content.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+            {
+                var text = await content.GetTextAsync();
+                activeBox.Document.Selection.TypeText(text);
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowStatus("Failed to paste plain text: " + ex.Message);
+        }
+    }
+
     // =======================================================================
     // Zoom / view
     // =======================================================================
@@ -2798,6 +3009,7 @@ public sealed partial class MainWindow : Window
     private void ZoomOut_Click(object sender, RoutedEventArgs e) => Surface.ZoomBy(1f / 1.25f);
     private void ZoomReset_Click(object sender, RoutedEventArgs e) => Surface.SetViewZoom(1f);
     private void HomeView_Click(object sender, RoutedEventArgs e) => Surface.ResetView();
+    private void ZoomFit_Click(object sender, RoutedEventArgs e) => Surface.FitToContent(28);
 
     private void OnViewChanged()
     {
@@ -2841,6 +3053,14 @@ public sealed partial class MainWindow : Window
         ShowStatus($"New pages will now start with {_library.DefaultBackground}.");
     }
 
+    private void SetNotebookDefaultBg_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curPage == null || _curNb == null) { ShowStatus("No active notebook."); return; }
+        _curNb.DefaultBackground = _curPage.Background;
+        ScheduleSave();
+        ShowStatus($"New pages in this notebook will start with {_curNb.DefaultBackground}.");
+    }
+
     private void SetDefaultGrid_Click(object sender, RoutedEventArgs e)
     {
         if (_curPage == null) return;
@@ -2848,6 +3068,15 @@ public sealed partial class MainWindow : Window
         _library.DefaultGridSpacing = _curPage.GridSpacing;
         ScheduleSave();
         ShowStatus("New pages will now start with this grid.");
+    }
+
+    private void SetNotebookDefaultGrid_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curPage == null || _curNb == null) { ShowStatus("No active notebook."); return; }
+        _curNb.DefaultGrid = _curPage.Grid;
+        _curNb.DefaultGridSpacing = _curPage.GridSpacing;
+        ScheduleSave();
+        ShowStatus("New pages in this notebook will start with this grid.");
     }
 
     private void GridRadios_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -3374,6 +3603,24 @@ public sealed partial class MainWindow : Window
         Surface.ActiveTextBox?.Focus(FocusState.Programmatic);
     }
 
+    private void StyleChip_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.Tag is string style)
+        {
+            var def = StyleDefs.FirstOrDefault(x => x.Name == style).Def;
+            if (def == null) return;
+            var s = Surface.ActiveTextBox?.Document.Selection;
+            if (s == null) return;
+            var cf = s.CharacterFormat;
+            cf.Name = def.Font;
+            cf.Size = def.Size;
+            cf.Weight = def.Weight;
+            cf.Italic = def.Italic ? FormatEffect.On : FormatEffect.Off;
+            if (def.Color is Color c) cf.ForegroundColor = c;
+            Surface.ActiveTextBox?.Focus(FocusState.Programmatic);
+        }
+    }
+
     // =======================================================================
     // Canvas context menu (right-click / pen barrel-tap / touch long-press)
     // =======================================================================
@@ -3482,11 +3729,34 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         latex ??= await PromptAsync("Equation (LaTeX)", @"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}");
         if (string.IsNullOrWhiteSpace(latex)) return;
 
+        try
+        {
+            var dir = System.IO.Path.Combine(LibraryStore.Dir, "images");
+            Directory.CreateDirectory(dir);
+            var filename = $"{Guid.NewGuid()}.png";
+            var filePath = System.IO.Path.Combine(dir, filename);
+
+            var device = Microsoft.Graphics.Canvas.CanvasDevice.GetSharedDevice();
+            var color = ColorUtil.Parse(ContrastHexForPage());
+            var bytes = await Quill.Services.EquationRenderer.RenderToPngBytesAsync(device, latex, 36f, "Cambria Math", color);
+            if (bytes != null)
+            {
+                await System.IO.File.WriteAllBytesAsync(filePath, bytes);
+                using (var bmp = await Microsoft.Graphics.Canvas.CanvasBitmap.LoadAsync(device, filePath))
+                {
+                    Surface.InsertImage(filePath, bmp.Size.Width, bmp.Size.Height);
+                }
+                ShowStatus("Equation inserted as a high-quality math element.");
+                return;
+            }
+        }
+        catch { }
+
         var unicode = LatexToUnicode(latex);
         var centre = Surface.ScreenToWorld(new Point(Surface.ActualWidth / 2, Surface.ActualHeight / 2));
         Surface.AddTextElement(centre.X - 160, centre.Y - 20, 360,
             PlainToRtf(unicode, "Cambria Math", 20f, ContrastHexForPage()));
-        ShowStatus("Equation inserted as editable text.");
+        ShowStatus("Equation inserted as text.");
     }
 
     // ---- LaTeX → Unicode maths text (#37): keeps equations editable ----
@@ -3640,32 +3910,75 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
             ShowStatus("Importing PDF…");
             var doc = await Windows.Data.Pdf.PdfDocument.LoadFromFileAsync(file);
-            int count = (int)Math.Min(doc.PageCount, 200);
+            int count = (int)Math.Min(doc.PageCount, 500);
             var dir = System.IO.Path.Combine(LibraryStore.Dir, "assets");
             Directory.CreateDirectory(dir);
 
-            var sec = new Section { Name = file.DisplayName };
-            for (int i = 0; i < count; i++)
+            var textBlock = new TextBlock { Text = $"Processing page 1 of {count}...", HorizontalAlignment = HorizontalAlignment.Center };
+            var progressBar = new Microsoft.UI.Xaml.Controls.ProgressBar { Minimum = 0, Maximum = count, Value = 0, Width = 300, Margin = new Thickness(0, 10, 0, 0) };
+            var panel = new StackPanel { Spacing = 10, Padding = new Thickness(10) };
+            panel.Children.Add(textBlock);
+            panel.Children.Add(progressBar);
+
+            var progressDlg = new ContentDialog
             {
-                using var pdfPage = doc.GetPage((uint)i);
-                double w = pdfPage.Size.Width, h = pdfPage.Size.Height;
-                var path = System.IO.Path.Combine(dir, $"{Guid.NewGuid():N}.png");
-                using (var fs = new FileStream(path, FileMode.Create, FileAccess.ReadWrite))
+                Title = "Importing PDF",
+                Content = panel,
+                XamlRoot = RootGrid.XamlRoot
+            };
+
+            var dlgTask = progressDlg.ShowAsync();
+
+            var sec = new Section { Name = file.DisplayName };
+            
+            await Task.Run(async () =>
+            {
+                for (int i = 0; i < count; i++)
                 {
-                    await pdfPage.RenderToStreamAsync(fs.AsRandomAccessStream(),
-                        new Windows.Data.Pdf.PdfPageRenderOptions { DestinationWidth = (uint)Math.Clamp(w * 2, 600, 3200) });
+                    using var pdfPage = doc.GetPage((uint)i);
+                    double w = pdfPage.Size.Width, h = pdfPage.Size.Height;
+                    var path = System.IO.Path.Combine(dir, $"{Guid.NewGuid():N}.png");
+                    using (var fs = new FileStream(path, FileMode.Create, FileAccess.ReadWrite))
+                    {
+                        await pdfPage.RenderToStreamAsync(fs.AsRandomAccessStream(),
+                            new Windows.Data.Pdf.PdfPageRenderOptions { DestinationWidth = (uint)Math.Clamp(w * 2, 600, 3200) });
+                    }
+
+                    var idx = i;
+                    var pagePath = path;
+                    var pageW = w;
+                    var pageH = h;
+                    
+                    var tcs = new TaskCompletionSource<bool>();
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        try
+                        {
+                            var page = NewPage($"Page {idx + 1}");
+                            page.Background = "#FFFFFF";
+                            const double scale = 1.4;
+                            page.Shapes.Add(new ShapeElement
+                            {
+                                Kind = ShapeKind.Image, ImagePath = pagePath,
+                                X = 44, Y = 104, W = pageW * scale, H = pageH * scale
+                            });
+                            sec.Pages.Add(page);
+                            
+                            progressBar.Value = idx + 1;
+                            textBlock.Text = $"Processing page {idx + 1} of {count}...";
+                            tcs.SetResult(true);
+                        }
+                        catch (Exception ex)
+                        {
+                            tcs.SetException(ex);
+                        }
+                    });
+                    await tcs.Task;
                 }
-                var page = NewPage($"Page {i + 1}");
-                page.Background = "#FFFFFF";
-                const double scale = 1.4;   // comfortable writing size in world units
-                page.Shapes.Add(new ShapeElement
-                {
-                    Kind = ShapeKind.Image, ImagePath = path,
-                    X = 44, Y = 104, W = w * scale, H = h * scale
-                });
-                sec.Pages.Add(page);
-                ShowStatus($"Importing PDF… {i + 1}/{count}");
-            }
+            });
+
+            progressDlg.Hide();
+
             _curNb.Sections.Add(sec);
             BuildTree();
             ScheduleSave();
@@ -3897,6 +4210,13 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         paste.Click += (_, _) => ContextPaste(world);
         menu.Items.Add(paste);
 
+        if (box != null && box.FocusState != FocusState.Unfocused)
+        {
+            var pastePlain = new MenuFlyoutItem { Text = "Paste as plain text" };
+            pastePlain.Click += (_, _) => PastePlainText();
+            menu.Items.Add(pastePlain);
+        }
+
         if (Surface.HasCanvasSelection)
         {
             var del = new MenuFlyoutItem { Text = "Delete", Icon = new FontIcon { Glyph = "" } };
@@ -3945,6 +4265,22 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                 AddItem("Add row below", () => Surface.TableInsertRow(table, Math.Max(1, table.TRows)));
                 AddItem("Add column right", () => Surface.TableInsertColumn(table, Math.Max(1, table.TCols)));
             }
+
+            var selectedCells = Surface.GetSelectedTableCells(table);
+            menu.Items.Add(new MenuFlyoutSeparator());
+            AddItem("Toggle header row", () => Surface.TableToggleHeaderRow(table));
+            AddItem("Merge selected cells", () => Surface.TableMergeSelectedCells(table), selectedCells.Count > 1);
+            AddItem("Split cell", () => Surface.TableSplitSelectedCell(table), selectedCells.Count == 1 && (selectedCells[0].CellColSpan > 1 || selectedCells[0].CellRowSpan > 1));
+            AddItem("Cell background…", async () =>
+            {
+                var picked = await PickColorAsync("Cell background fill", Colors.White);
+                if (picked is Color c) Surface.TableSetSelectedCellsFill(table, ColorUtil.ToHex(c));
+            }, selectedCells.Count > 0);
+            AddItem("Cell border…", async () =>
+            {
+                var picked = await PickColorAsync("Cell border colour", Colors.Black);
+                if (picked is Color c) Surface.TableSetSelectedCellsBorder(table, ColorUtil.ToHex(c), 2.5f);
+            }, selectedCells.Count > 0);
         }
 
         // Word-style formatting when text is selected: style, font, size (punto).
@@ -4756,7 +5092,8 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
         if (TextBoxFocused)
         {
-            args.Handled = false; // plain text: let the focused text box paste
+            args.Handled = true;
+            _ = HandleTextPasteAsync(args);
             return;
         }
         if (InkSurface.HasCanvasClipboard)
@@ -4767,6 +5104,146 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             return;
         }
         args.Handled = false;
+    }
+
+    private async Task HandleTextPasteAsync(KeyboardAcceleratorInvokedEventArgs args)
+    {
+        try
+        {
+            var content = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+            if (content.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+            {
+                var text = await content.GetTextAsync();
+                
+                // Check if it looks like markdown
+                bool isMarkdown = text.Contains("**") || text.Contains("~~") || text.Contains("`") ||
+                                  text.Split('\n').Any(l => l.StartsWith("#") || l.StartsWith("- ") || l.StartsWith("* "));
+                
+                if (isMarkdown && Surface.ActiveTextBox != null)
+                {
+                    string rtf = MarkdownToRtf(text);
+                    Surface.ActiveTextBox.Document.Selection.SetText(Microsoft.UI.Text.TextSetOptions.FormatRtf, rtf);
+                    ShowStatus("Markdown pasted as rich text.");
+                }
+                else
+                {
+                    Surface.ActiveTextBox?.Document.Selection.Paste(0);
+                }
+            }
+        }
+        catch { }
+    }
+
+    private string MarkdownToRtf(string md)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(@"{\rtf1\ansi\ansicpg1252\deff0\deflang1033{\fonttbl{\f0\fnil\fcharset0 " + _library.DefaultFont + @";}{\f1\fnil\fcharset0 Courier New;}}");
+        sb.Append(@"{\colortbl ;\red26\green26\blue26;}");
+        sb.Append(@"\viewkind4\uc1\pars ");
+
+        var lines = md.Split('\n');
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                sb.Append(@"\par ");
+                continue;
+            }
+
+            // Headings
+            if (line.StartsWith("# "))
+            {
+                sb.Append(@"\fs40\b ");
+                sb.Append(EscapeRtf(line[2..]));
+                sb.Append(@"\b0\fs" + (int)(_library.DefaultFontSize * 2) + @"\par ");
+                continue;
+            }
+            if (line.StartsWith("## "))
+            {
+                sb.Append(@"\fs32\b ");
+                sb.Append(EscapeRtf(line[3..]));
+                sb.Append(@"\b0\fs" + (int)(_library.DefaultFontSize * 2) + @"\par ");
+                continue;
+            }
+            if (line.StartsWith("### "))
+            {
+                sb.Append(@"\fs28\b ");
+                sb.Append(EscapeRtf(line[4..]));
+                sb.Append(@"\b0\fs" + (int)(_library.DefaultFontSize * 2) + @"\par ");
+                continue;
+            }
+
+            // List items
+            bool isList = false;
+            string content = line;
+            if (line.StartsWith("- "))
+            {
+                isList = true;
+                content = line[2..];
+            }
+            else if (line.StartsWith("* "))
+            {
+                isList = true;
+                content = line[2..];
+            }
+
+            if (isList)
+            {
+                sb.Append(@"{\pntext\f0\'B7\tab}{\*\pn\pnlvlblt\pnf0\pnindent0{\pntxtb\'B7}}\fi-360\li360 ");
+            }
+
+            string formatted = FormatInlineRtf(content);
+            sb.Append(formatted);
+            sb.Append(@"\par ");
+        }
+        sb.Append("}");
+        return sb.ToString();
+    }
+
+    private string EscapeRtf(string s)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in s)
+        {
+            if (c == '\\' || c == '{' || c == '}') sb.Append('\\').Append(c);
+            else if (c > 127) sb.Append(@"\u" + (int)c + "?");
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private string FormatInlineRtf(string s)
+    {
+        string r = EscapeRtf(s);
+        r = ReplacePattern(r, "**", @"\b ", @"\b0 ");
+        r = ReplacePattern(r, "__", @"\b ", @"\b0 ");
+        r = ReplacePattern(r, "*", @"\i ", @"\i0 ");
+        r = ReplacePattern(r, "_", @"\i ", @"\i0 ");
+        r = ReplacePattern(r, "~~", @"\strike ", @"\strike0 ");
+        r = ReplacePattern(r, "`", @"{\f1 ", @" }");
+        return r;
+    }
+
+    private string ReplacePattern(string text, string pattern, string startRtf, string endRtf)
+    {
+        var sb = new System.Text.StringBuilder();
+        int pos = 0;
+        bool state = false;
+        while (pos < text.Length)
+        {
+            int idx = text.IndexOf(pattern, pos);
+            if (idx < 0)
+            {
+                sb.Append(text[pos..]);
+                break;
+            }
+            sb.Append(text[pos..idx]);
+            sb.Append(state ? endRtf : startRtf);
+            state = !state;
+            pos = idx + pattern.Length;
+        }
+        return sb.ToString();
     }
 
     private async Task PasteImageAsync(System.Numerics.Vector2? worldTopLeft = null)
@@ -4904,6 +5381,224 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         catch
         {
             ShowStatus("Could not save the PNG. Check the location and try again.");
+        }
+    }
+
+    // =======================================================================
+    // Lecture audio recording and playback (#roadmap: audio recording)
+    // =======================================================================
+    private async void SyncAudioPlaybackStateForCurrentPage()
+    {
+        if (_audioRecorder.IsRecording)
+        {
+            await _audioRecorder.StopRecordingAsync();
+            AudioRecordBtn.IsChecked = false;
+            RecordDot.Fill = new SolidColorBrush(Colors.Red);
+        }
+        _audioPlayer.Pause();
+        _audioPlayer.Close();
+        
+        Surface.AudioPlayheadPosition = null;
+        Surface.RecordingStartTicks = null;
+
+        if (_curPage != null && !string.IsNullOrEmpty(_curPage.AudioFile) && System.IO.File.Exists(_curPage.AudioFile))
+        {
+            try
+            {
+                await _audioPlayer.OpenAsync(_curPage.AudioFile);
+                AudioPlayBtn.IsEnabled = true;
+                AudioSlider.IsEnabled = true;
+                AudioSpeedBtn.IsEnabled = true;
+                AudioSaveBtn.IsEnabled = true;
+                AudioTimeText.Text = "0:00";
+                Surface.RecordingStartTicks = _curPage.AudioStartTicks;
+            }
+            catch
+            {
+                AudioPlayBtn.IsEnabled = false;
+                AudioSlider.IsEnabled = false;
+                AudioSpeedBtn.IsEnabled = false;
+                AudioSaveBtn.IsEnabled = false;
+                AudioTimeText.Text = "0:00";
+            }
+        }
+        else
+        {
+            AudioPlayBtn.IsEnabled = false;
+            AudioSlider.IsEnabled = false;
+            AudioSpeedBtn.IsEnabled = false;
+            AudioSaveBtn.IsEnabled = false;
+            AudioTimeText.Text = "0:00";
+        }
+        AudioPlayIcon.Glyph = "\uE768"; // Play icon
+        AudioSlider.Value = 0;
+        AudioSpeedBtn.Content = "1.0x";
+    }
+
+    private void UpdateAudioPlayerPosition(TimeSpan position)
+    {
+        if (_updatingAudioSlider) return;
+        _updatingAudioSlider = true;
+        try
+        {
+            var duration = _audioPlayer.Duration;
+            if (duration.TotalSeconds > 0)
+            {
+                AudioSlider.Value = (position.TotalSeconds / duration.TotalSeconds) * 100.0;
+            }
+            AudioTimeText.Text = position.ToString(@"m\:ss");
+            
+            // Sync with InkSurface drawing!
+            Surface.AudioPlayheadPosition = position;
+            Surface.Refresh(); // Redraw canvas
+        }
+        finally
+        {
+            _updatingAudioSlider = false;
+        }
+    }
+
+    private void SeekAudioToStroke(PenStroke stroke)
+    {
+        if (_curPage == null || _curPage.AudioStartTicks == 0 || string.IsNullOrEmpty(_curPage.AudioFile)) return;
+        var pos = Quill.Services.AudioPlayer.StrokeTicksToAudioPosition(stroke.CreatedTicks, _curPage.AudioStartTicks);
+        _audioPlayer.SeekTo(pos);
+        if (!_audioPlayer.IsPlaying)
+        {
+            _audioPlayer.Play();
+            AudioPlayIcon.Glyph = "\uE71A"; // Pause icon
+        }
+    }
+
+    private async void AudioRecord_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curPage == null) return;
+
+        if (AudioRecordBtn.IsChecked == true)
+        {
+            // Start recording
+            var dir = System.IO.Path.Combine(LibraryStore.Dir, "audio");
+            Directory.CreateDirectory(dir);
+            var filePath = System.IO.Path.Combine(dir, $"{_curPage.Id}.mp3");
+
+            try
+            {
+                // Stop active player
+                _audioPlayer.Pause();
+                
+                await _audioRecorder.StartRecordingAsync(filePath);
+                _curPage.AudioFile = filePath;
+                _curPage.AudioStartTicks = _audioRecorder.RecordingStartTicks;
+                Surface.RecordingStartTicks = _curPage.AudioStartTicks;
+                ScheduleSave();
+
+                // Glow red dot animation
+                RecordDot.Fill = new SolidColorBrush(Colors.DarkRed);
+                ShowStatus("Recording started…");
+            }
+            catch (Exception ex)
+            {
+                AudioRecordBtn.IsChecked = false;
+                ShowStatus($"Failed to start recording: {ex.Message}");
+            }
+        }
+        else
+        {
+            // Stop recording
+            try
+            {
+                var duration = await _audioRecorder.StopRecordingAsync();
+                RecordDot.Fill = new SolidColorBrush(Colors.Red);
+                ShowStatus($"Recording saved ({duration.TotalSeconds:F0}s).");
+                SyncAudioPlaybackStateForCurrentPage();
+            }
+            catch (Exception ex)
+            {
+                ShowStatus($"Error saving recording: {ex.Message}");
+            }
+        }
+    }
+
+    private void AudioPlay_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_audioPlayer.IsPlaying)
+        {
+            _audioPlayer.Play();
+            AudioPlayIcon.Glyph = "\uE71A"; // Pause icon
+        }
+        else
+        {
+            _audioPlayer.Pause();
+            AudioPlayIcon.Glyph = "\uE768"; // Play icon
+        }
+    }
+
+    private void AudioSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        if (_updatingAudioSlider) return;
+        var duration = _audioPlayer.Duration;
+        if (duration.TotalSeconds > 0)
+        {
+            var targetPos = TimeSpan.FromSeconds((AudioSlider.Value / 100.0) * duration.TotalSeconds);
+            _audioPlayer.SeekTo(targetPos);
+            AudioTimeText.Text = targetPos.ToString(@"m\:ss");
+            Surface.AudioPlayheadPosition = targetPos;
+            Surface.Refresh();
+        }
+    }
+
+    private void AudioSpeed_Click(object sender, RoutedEventArgs e)
+    {
+        double currentRate = _audioPlayer.PlaybackRate;
+        double nextRate = 1.0;
+        if (currentRate == 1.0) nextRate = 1.5;
+        else if (currentRate == 1.5) nextRate = 2.0;
+        else if (currentRate == 2.0) nextRate = 0.5;
+        else nextRate = 1.0;
+
+        _audioPlayer.PlaybackRate = nextRate;
+        AudioSpeedBtn.Content = $"{nextRate:0.0}x";
+    }
+
+    private async void AudioSave_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curPage == null || string.IsNullOrEmpty(_curPage.AudioFile) || !System.IO.File.Exists(_curPage.AudioFile))
+        {
+            ShowStatus("No audio recording available for this page.");
+            return;
+        }
+
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FileSavePicker();
+            picker.FileTypeChoices.Add("MP3 Audio", new List<string> { ".mp3" });
+            picker.SuggestedFileName = $"{_curPage.Name}_audio";
+            
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            
+            var destFile = await picker.PickSaveFileAsync();
+            if (destFile != null)
+            {
+                var srcFile = await Windows.Storage.StorageFile.GetFileFromPathAsync(_curPage.AudioFile);
+                await srcFile.CopyAndReplaceAsync(destFile);
+                ShowStatus("Audio file saved successfully.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowStatus($"Failed to save audio file: {ex.Message}");
+        }
+    }
+
+    private void BtnAudioRecording_Click(object sender, RoutedEventArgs e)
+    {
+        if (BtnAudioRecording.IsChecked == true)
+        {
+            AudioFloatingPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            AudioFloatingPanel.Visibility = Visibility.Collapsed;
         }
     }
 
