@@ -4634,6 +4634,10 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             items.Insert(0, $"{expr} = {FormatBase(v, ProgBaseNum)}");
             if (items.Count > 60) items.RemoveAt(items.Count - 1);
             CalcHistory.ItemsSource = null;
+            // The scientific calculator (RefreshCalcHistory) populates Items
+            // directly; ItemsSource cannot be assigned while Items is non-empty,
+            // so clear it first or WinUI throws InvalidOperationException.
+            CalcHistory.Items.Clear();
             CalcHistory.ItemsSource = items;
             CalcInput.Text = FormatBase(v, ProgBaseNum);
         }
@@ -4952,7 +4956,10 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
         if (CalcEngine.TryEvaluate(PrepCalcExpr(expr), CalcDeg.IsChecked == true, out double result, out string error))
         {
-            string res = result.ToString("G12");
+            // Invariant culture: the result is written back into CalcInput and
+            // re-parsed by CalcEngine (which parses with '.'). On a tr-TR machine
+            // the default ToString yields "0,125", which then fails to re-evaluate.
+            string res = result.ToString("G12", System.Globalization.CultureInfo.InvariantCulture);
             _calcAns = result;
             AddCalcHistory($"{expr} = {res}");
             CalcInput.Text = res;

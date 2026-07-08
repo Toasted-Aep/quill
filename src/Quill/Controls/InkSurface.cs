@@ -1967,7 +1967,15 @@ public sealed class InkSurface : UserControl
     private static ShapeElement CloneShape(ShapeElement s) => new()
     {
         Kind = s.Kind, X = s.X, Y = s.Y, W = s.W, H = s.H,
-        Color = s.Color, Size = s.Size, ImagePath = s.ImagePath, Rotation = s.Rotation
+        Color = s.Color, Size = s.Size, ImagePath = s.ImagePath, Rotation = s.Rotation,
+        // Preserve table geometry and styling so clipboard copy/paste of a table
+        // keeps its grid (mirrors DuplicateSelection). Without these a pasted
+        // table collapsed to an empty 0x0 grid.
+        TRows = s.TRows, TCols = s.TCols,
+        TColW = s.TColW != null ? new List<double>(s.TColW) : null,
+        TRowH = s.TRowH != null ? new List<double>(s.TRowH) : null,
+        FillColor = s.FillColor, BorderColor = s.BorderColor, BorderWidth = s.BorderWidth,
+        MergeColSpan = s.MergeColSpan, MergeRowSpan = s.MergeRowSpan, HeaderRow = s.HeaderRow
     };
 
     private static TextElement CloneText(TextElement t) => new()

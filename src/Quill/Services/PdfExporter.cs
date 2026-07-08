@@ -314,7 +314,7 @@ public static class PdfExporter
             BeginObj();
             WriteAscii($"{contentIds[i]} 0 obj\n<< /Length {compressed.Length} /Filter /FlateDecode >>\nstream\n");
             ms.Write(compressed, 0, compressed.Length);
-            WriteAscii("\nendstream\nobj\n");
+            WriteAscii("\nendstream\nendobj\n");
 
             for (int j = 0; j < pg.Images.Count; j++)
             {
