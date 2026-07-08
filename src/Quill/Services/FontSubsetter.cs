@@ -99,6 +99,7 @@ public static class FontSubsetter
             uint hheaOffset = 0;
             uint hmtxOffset = 0;
             uint maxpOffset = 0;
+            uint headOffset = 0;
 
             for (int i = 0; i < numTables; i++)
             {
@@ -111,6 +112,7 @@ public static class FontSubsetter
                 else if (tag == "hhea") { hheaOffset = offset; }
                 else if (tag == "hmtx") { hmtxOffset = offset; }
                 else if (tag == "maxp") { maxpOffset = offset; }
+                else if (tag == "head") { headOffset = offset; }
             }
 
             if (cmapOffset == 0 || hheaOffset == 0 || hmtxOffset == 0)
@@ -118,8 +120,18 @@ public static class FontSubsetter
                 throw new Exception("Required tables missing");
             }
 
-            // Read unitsPerEm from 'head' table (if needed, but usually 2048)
-            ushort unitsPerEm = 2048; // default fallback
+            // Read unitsPerEm from the 'head' table (field at offset 18). It varies
+            // by font — most Windows TTFs use 2048, but many open fonts (e.g. Lora,
+            // the app's default) use 1000. Hardcoding 2048 skewed every glyph width
+            // for those fonts, mis-spacing exported PDF text. Fall back to 2048 only
+            // if the head table is somehow absent.
+            ushort unitsPerEm = 2048;
+            if (headOffset != 0)
+            {
+                fs.Position = headOffset + 18;
+                ushort upm = reader.ReadUInt16();
+                if (upm != 0) unitsPerEm = upm;
+            }
 
             // Read numberOfHMetrics from 'hhea'
             fs.Position = hheaOffset + 34;
