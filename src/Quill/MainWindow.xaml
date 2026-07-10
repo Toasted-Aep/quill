@@ -725,13 +725,15 @@
                         Width="42" Height="42" CornerRadius="21"
                         Background="{ThemeResource CardBrushFloat}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="2.25"
                         ToolTipService.ToolTip="Notebooks">
-                    <TextBlock Text="&#x1F4D2;" FontSize="15"/>
+                    <!-- original notebook silhouette (spine + rule lines), themed via Foreground -->
+                    <PathIcon Data="M3 1.5 H12 C13.1 1.5 14 2.4 14 3.5 V12.5 C14 13.6 13.1 14.5 12 14.5 H3 Z M4.7 1.5 H5.5 V14.5 H4.7 Z M7 5 H12 V6 H7 Z M7 8 H12 V9 H7 Z"/>
                 </Button>
                 <Button x:Name="BtnFloatPen" Click="FloatPen_Click"
                         Width="42" Height="42" CornerRadius="21"
                         Background="{ThemeResource CardBrushFloat}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="2.25"
                         ToolTipService.ToolTip="Pens">
-                    <TextBlock Text="&#x1F58A;" FontSize="15"/>
+                    <!-- original nib-pen silhouette, matches the pen-strip icon set -->
+                    <PathIcon Data="M3.5 12.5 L5 9 L11.5 2.5 L13.5 4.5 L7 11 Z M12.3 1.7 L14.3 3.7 L15 3 A1.4 1.4 0 0 0 13 1 Z"/>
                 </Button>
                 <Button x:Name="BtnRestoreUi" Click="RestoreUi_Click"
                         Width="42" Height="42" CornerRadius="21"
