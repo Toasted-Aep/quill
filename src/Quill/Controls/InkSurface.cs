@@ -3577,6 +3577,30 @@ public sealed class InkSurface : UserControl
         ContentChanged?.Invoke();
     }
 
+    /// <summary>[[Note Name]] links found in the text box under the world point,
+    /// in document order (#31-batch2). Empty when there is no text box there.</summary>
+    public IReadOnlyList<string> TextLinksAt(Vector2 pos)
+    {
+        if (_page == null) return Array.Empty<string>();
+        FlushTexts();
+        foreach (var (id, ui) in _textUi)
+        {
+            double l = Canvas.GetLeft(ui.Container), tp = Canvas.GetTop(ui.Container);
+            double w = ui.Container.ActualWidth, h = ui.Container.ActualHeight;
+            if (pos.X < l || pos.X > l + w || pos.Y < tp || pos.Y > tp + h) continue;
+            var model = _page.Texts.FirstOrDefault(t => t.Id == id);
+            if (model == null || string.IsNullOrEmpty(model.Rtf)) continue;
+            var plain = RtfToPlainText(model.Rtf, out _, out _);
+            return System.Text.RegularExpressions.Regex
+                .Matches(plain, @"\[\[([^\[\]\r\n]{1,64})\]\]")
+                .Select(m => m.Groups[1].Value.Trim())
+                .Where(s => s.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        return Array.Empty<string>();
+    }
+
     /// <summary>Topmost axes shape whose bounds contain the world point (#28-batch2).</summary>
     public ShapeElement? AxesShapeAt(Vector2 pos)
     {

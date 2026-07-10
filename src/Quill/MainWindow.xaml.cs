@@ -64,6 +64,7 @@ public sealed partial class MainWindow : Window
     private Notebook? _galleryNb;
     private bool _galleryLauncher;
     private readonly Quill.Services.AudioRecorder _audioRecorder = new Quill.Services.AudioRecorder();
+    private readonly Quill.Services.DictationService _dictation = new();
     private readonly Quill.Services.AudioPlayer _audioPlayer = new Quill.Services.AudioPlayer();
     private bool _updatingAudioSlider = false;
 
@@ -204,6 +205,29 @@ public sealed partial class MainWindow : Window
             AudioTimeText.Text = "0:00";
         });
         _audioPlayer.PositionChanged += pos => { DispatcherQueue.TryEnqueue(() => UpdateAudioPlayerPosition(pos)); };
+
+        // dictation (#26-batch2): finalised speech segments type into the focused
+        // text box, or a fresh text box is created at the view centre
+        _dictation.TextRecognized += text => DispatcherQueue.TryEnqueue(() =>
+        {
+            var box = Surface.ActiveTextBox;
+            if (box != null)
+            {
+                try { box.Document.Selection.TypeText(text + " "); } catch { }
+            }
+            else
+            {
+                var centre = Surface.ScreenToWorld(new Point(Surface.ActualWidth / 2, Surface.ActualHeight / 2));
+                var (df, ds2) = EffectiveTextDefaults();
+                Surface.AddTextElement(centre.X - 160, centre.Y - 20, 360,
+                    PlainToRtf(text, df, ds2, ContrastHexForPage()));
+            }
+        });
+        _dictation.Stopped += () => DispatcherQueue.TryEnqueue(() =>
+        {
+            BtnDictate.IsChecked = false;
+            ShowStatus("Dictation stopped.");
+        });
 
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); FadeOut(StatusText, 220); };
@@ -741,7 +765,7 @@ public sealed partial class MainWindow : Window
             var ui = new Windows.UI.ViewManagement.UISettings();
             _reduceTransparency = !ui.AdvancedEffectsEnabled;
             _reduceMotion = !ui.AnimationsEnabled;
-            // these callbacks arrive off the UI thread \u2014 marshal before touching brushes
+            // these callbacks arrive off the UI thread — marshal before touching brushes
             ui.AdvancedEffectsEnabledChanged += (s, _) => DispatcherQueue.TryEnqueue(() =>
             {
                 _reduceTransparency = !s.AdvancedEffectsEnabled;
@@ -783,8 +807,8 @@ public sealed partial class MainWindow : Window
                     {
                         // aggressive curve so the glass genuinely reads as glass:
                         // at full liquidness the pane is practically clear.
-                        a.TintOpacity = 0.50 - v * 0.48;             // solid 0.50 \u2026 liquid 0.02
-                        a.TintLuminosityOpacity = 0.60 - v * 0.58;   // 0.60 \u2026 0.02
+                        a.TintOpacity = 0.50 - v * 0.48;             // solid 0.50 … liquid 0.02
+                        a.TintLuminosityOpacity = 0.60 - v * 0.58;   // 0.60 … 0.02
                     }
                 }
                 if (rd["CardBrushFloat"] is AcrylicBrush f)
@@ -5185,6 +5209,29 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             try { Walk(root); } catch { }
     }
 
+    // Resolves a [[Note Name]] to a page by name across every notebook and
+    // opens it; ambiguity opens the first match and says how many exist (#31-batch2).
+    private void OpenLinkedPage(string name)
+    {
+        var matches = new List<(Notebook nb, Section sec, NotePage pg)>();
+        foreach (var nb in _library.Notebooks)
+            foreach (var sec in nb.Sections)
+                foreach (var pg in sec.Pages)
+                    if (string.Equals(pg.Name, name, StringComparison.OrdinalIgnoreCase))
+                        matches.Add((nb, sec, pg));
+        if (matches.Count == 0)
+        {
+            ShowStatus($"No page named “{name}” — create one and the link will work.");
+            return;
+        }
+        var (n0, s0, p0) = matches[0];
+        SwitchToPage(n0, s0, p0);
+        if (GalleryPanel.Visibility == Visibility.Visible) CloseGallery();
+        ShowStatus(matches.Count == 1
+            ? $"Opened “{p0.Name}”."
+            : $"{matches.Count} pages are named “{name}” — opened the one in “{n0.Name}”.");
+    }
+
     // =======================================================================
     // Command palette (Ctrl+K, #30-batch2): keyboard-driven hub to jump to any
     // page or run any common action without touching the mouse.
@@ -5288,6 +5335,28 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         await dlg.ShowAsync();
     }
 
+    // Voice-to-text (#26-batch2): Windows' built-in dictation engine.
+    private async void Dictate_Click(object sender, RoutedEventArgs e)
+    {
+        if (BtnDictate.IsChecked == true)
+        {
+            ShowStatus("Starting dictation…");
+            bool ok = await _dictation.StartAsync();
+            if (!ok)
+            {
+                BtnDictate.IsChecked = false;
+                ShowStatus("Dictation couldn't start. Check microphone access and enable online speech recognition in Windows privacy settings.");
+                return;
+            }
+            ShowStatus("Dictating — speak, and the text lands in the focused text box (or a new one).");
+        }
+        else
+        {
+            await _dictation.StopAsync();
+            ShowStatus("Dictation stopped.");
+        }
+    }
+
     private void ShowCanvasContextMenu(Point pos)
     {
         var menu = new MenuFlyout();
@@ -5324,6 +5393,16 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             var editEq = new MenuFlyoutItem { Text = "Edit equation…" };
             editEq.Click += async (_, _) => await InsertOrEditEquationAsync(eqShape);
             menu.Items.Add(editEq);
+        }
+
+        // [[Note Name]] links (#31-batch2): right-clicking a text box that
+        // contains link syntax offers to jump to each linked page
+        foreach (var linkName in Surface.TextLinksAt(world))
+        {
+            var ln = linkName;
+            var go = new MenuFlyoutItem { Text = $"Open [[{ln}]]" };
+            go.Click += (_, _) => OpenLinkedPage(ln);
+            menu.Items.Add(go);
         }
 
         // right-clicked an x-y / x-y-z axes shape -> rename its axis labels (#28-batch2)
