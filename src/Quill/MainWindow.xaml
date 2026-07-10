@@ -28,11 +28,18 @@
         </Grid.RowDefinitions>
 
         <!-- ===================== TOP BAR ===================== -->
-        <Border x:Name="TopBar" Grid.Row="0" Padding="8,5"
+        <!-- Canvas.ZIndex keeps the bar above anything that escapes the canvas row,
+             so unclipped text bubbles can never cover or block its buttons (#3-batch2) -->
+        <Border x:Name="TopBar" Grid.Row="0" Padding="8,5" Canvas.ZIndex="100"
                 Background="{ThemeResource CardBrush}"
                 BorderBrush="{ThemeResource HairlineBrush}"
                 BorderThickness="0,0,0,1">
-            <ScrollViewer x:Name="TopBarScroll" HorizontalScrollBarVisibility="Hidden" HorizontalScrollMode="Enabled"
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+            <ScrollViewer x:Name="TopBarScroll" Grid.Column="0" HorizontalScrollBarVisibility="Hidden" HorizontalScrollMode="Enabled"
                           VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Disabled"
                           PointerWheelChanged="BarScroll_Wheel">
                 <StackPanel Orientation="Horizontal" Spacing="4">
@@ -248,20 +255,6 @@
                         </Button.Flyout>
                     </Button>
 
-                    <Button x:Name="SearchBtn" ToolTipService.ToolTip="Search all notes — text and handwriting (Ctrl+F)">
-                        <FontIcon Glyph="&#xE721;" FontSize="14"/>
-                        <Button.Flyout>
-                            <Flyout>
-                                <StackPanel Width="340" Spacing="8">
-                                    <TextBox x:Name="SearchBox" x:Uid="SearchBoxInput" PlaceholderText="Search notes…" KeyDown="SearchBox_KeyDown"/>
-                                    <TextBlock x:Name="SearchStatus" FontSize="11" Opacity="0.7"/>
-                                    <ListView x:Name="SearchResults" MaxHeight="380" SelectionMode="None"
-                                              IsItemClickEnabled="True" ItemClick="SearchResult_Click"/>
-                                </StackPanel>
-                            </Flyout>
-                        </Button.Flyout>
-                    </Button>
-
                     <Button x:Name="ExportBtn" ToolTipService.ToolTip="Export the whole page">
                         <FontIcon Glyph="&#xE74E;" FontSize="14"/>
                         <Button.Flyout>
@@ -288,14 +281,19 @@
                     <ToggleButton x:Name="BtnCalc" Click="Calc_Toggle" ToolTipService.ToolTip="Calculator">
                         <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
                     </ToggleButton>
-                    <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
-                        <FontIcon Glyph="&#xE890;" FontSize="14"/>
-                    </Button>
-                    <Button x:Name="BtnFullscreen" Click="Fullscreen_Click" ToolTipService.ToolTip="Full screen (F11)">
-                        <FontIcon x:Name="BtnFullscreenIcon" Glyph="&#xE740;" FontSize="14"/>
-                    </Button>
                 </StackPanel>
             </ScrollViewer>
+            <!-- pinned at the far right, outside the scrolling row (#20-batch2) -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="8,0,0,0">
+                <AppBarSeparator/>
+                <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
+                    <FontIcon Glyph="&#xE890;" FontSize="14"/>
+                </Button>
+                <Button x:Name="BtnFullscreen" Click="Fullscreen_Click" ToolTipService.ToolTip="Full screen (F11)">
+                    <FontIcon x:Name="BtnFullscreenIcon" Glyph="&#xE740;" FontSize="14"/>
+                </Button>
+            </StackPanel>
+            </Grid>
         </Border>
 
         <!-- ===================== TEXT FORMAT BAR ===================== -->
@@ -434,8 +432,10 @@
                     BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5" 
                     CornerRadius="18" Padding="12,6" Canvas.ZIndex="10" Visibility="Collapsed">
                 <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <TextBlock x:Name="AudioGrip" Text="🎙️" VerticalAlignment="Center" Margin="2,0,4,0" 
-                               ToolTipService.ToolTip="Drag to move"/>
+                    <TextBlock x:Name="AudioGrip" Text="&#x283F;" FontSize="12" Opacity="0.55"
+                               VerticalAlignment="Center" Margin="2,0,0,0" Padding="4,6"
+                               ToolTipService.ToolTip="Drag to move this panel"/>
+                    <TextBlock Text="🎙️" VerticalAlignment="Center" Margin="0,0,4,0" IsHitTestVisible="False"/>
                     
                     <ToggleButton x:Name="AudioRecordBtn" Click="AudioRecord_Click" ToolTipService.ToolTip="Record lecture audio" 
                                   Width="36" Height="32" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
@@ -482,6 +482,20 @@
                         <TextBlock Text="Notebooks" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
                                    FontSize="14" Foreground="{ThemeResource InkBrush}" VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="2">
+                            <Button x:Name="SearchBtn" Padding="4,2" Background="Transparent" BorderThickness="0"
+                                    ToolTipService.ToolTip="Search all notes — text and handwriting (Ctrl+F)">
+                                <FontIcon Glyph="&#xE721;" FontSize="11"/>
+                                <Button.Flyout>
+                                    <Flyout>
+                                        <StackPanel Width="340" Spacing="8">
+                                            <TextBox x:Name="SearchBox" x:Uid="SearchBoxInput" PlaceholderText="Search notes…" KeyDown="SearchBox_KeyDown"/>
+                                            <TextBlock x:Name="SearchStatus" FontSize="11" Opacity="0.7"/>
+                                            <ListView x:Name="SearchResults" MaxHeight="380" SelectionMode="None"
+                                                      IsItemClickEnabled="True" ItemClick="SearchResult_Click"/>
+                                        </StackPanel>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
                             <Button Padding="4,2" Background="Transparent" BorderThickness="0"
                                     ToolTipService.ToolTip="Order notebooks, sections or pages by date">
                                 <FontIcon Glyph="&#xE8CB;" FontSize="11"/>
@@ -700,26 +714,38 @@
             <!-- Minimal-UI floating buttons -->
             <StackPanel x:Name="MinimalButtons" Orientation="Horizontal" Spacing="8" Visibility="Collapsed"
                         HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,14,14,0"
-                        ToolTipService.ToolTip="Drag to move — snaps to the nearest corner">
+                        ToolTipService.ToolTip="Drag to move — snaps to the nearest corner, or drag flush to the left/right edge to tuck it away">
                 <Button x:Name="BtnFloatNotebook" Click="FloatNotebook_Click"
                         Width="42" Height="42" CornerRadius="21"
-                        Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5"
+                        Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="2.25"
                         ToolTipService.ToolTip="Notebooks">
                     <TextBlock Text="&#x1F4D2;" FontSize="15"/>
                 </Button>
                 <Button x:Name="BtnFloatPen" Click="FloatPen_Click"
                         Width="42" Height="42" CornerRadius="21"
-                        Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5"
+                        Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="2.25"
                         ToolTipService.ToolTip="Pens">
                     <TextBlock Text="&#x1F58A;" FontSize="15"/>
                 </Button>
                 <Button x:Name="BtnRestoreUi" Click="RestoreUi_Click"
                         Width="42" Height="42" CornerRadius="21"
-                        Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5"
+                        Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="2.25"
                         ToolTipService.ToolTip="Show the interface again">
                     <FontIcon Glyph="&#xE890;" FontSize="14"/>
                 </Button>
             </StackPanel>
+
+            <!-- Minimal-UI docked tab: appears when the cluster above is dragged flush
+                 against a side edge, so it can be tucked away and pulled back out (#dock) -->
+            <Border x:Name="MinimalButtonsTab" Visibility="Collapsed"
+                    Width="20" Height="56" CornerRadius="10"
+                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,14,0,0"
+                    Background="{ThemeResource CardBrush}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="2"
+                    Tapped="MinimalButtonsTab_Tapped"
+                    ToolTipService.ToolTip="Tap or drag out to show the notebooks/pen/exit buttons">
+                <FontIcon x:Name="MinimalButtonsTabGlyph" Glyph="&#xE76B;" FontSize="11"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
 
             <TextBlock x:Name="StatusText" HorizontalAlignment="Left" VerticalAlignment="Bottom"
                        Margin="14,0,0,12" FontSize="12" Foreground="{ThemeResource InkBrush}"
@@ -779,6 +805,12 @@
                             </StackPanel>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <Button x:Name="GallerySearchBtn" Click="GallerySearch_Click"
+                                    ToolTipService.ToolTip="Search all notes — text and handwriting (Ctrl+F)">
+                                <FontIcon Glyph="&#xE721;" FontSize="14"/>
+                            </Button>
+                            <Button x:Name="GallerySaveBtn" Click="GallerySave_Click" Content="Save…" Visibility="Collapsed"
+                                    ToolTipService.ToolTip="Export this notebook, one section, or one page as PDF"/>
                             <Button x:Name="GalleryContinueBtn" Click="GalleryContinue_Click" Visibility="Collapsed"
                                     Style="{StaticResource AccentButtonStyle}"/>
                             <Button x:Name="GalleryNbBtn" Click="GalleryNewNotebook_Click" Content="New notebook"/>

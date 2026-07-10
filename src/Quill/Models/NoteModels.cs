@@ -246,4 +246,23 @@ public class Library
     public double Liquidness { get; set; } = 0.35;
     // Recently used pen/highlight colours (newest first, max 16).
     public List<string> RecentColors { get; set; } = new();
+    // User-curated custom accent colours shown as an extra swatch row in Settings.
+    public List<string> CustomColors { get; set; } = new();
+    // Last-selected eraser mode ("Point"/"Object"), restored on launch.
+    public string LastEraserMode { get; set; } = "Object";
+    // Glow animation on the glass rims: Off | Breathe | Circulate.
+    public string GlowMode { get; set; } = "Breathe";
+    // What drives the accent colour: Manual | Pen | Notebook.
+    public string AccentFollow { get; set; } = "Manual";
+    // Pure-black dark theme for OLED displays.
+    public bool OledBlack { get; set; }
+    // Autosave debounce in seconds.
+    public double AutosaveSeconds { get; set; } = 1.5;
+    // Last non-maximised window placement, so leaving fullscreen/maximise
+    // returns to the size the user actually had. 0 width = never saved.
+    public double WinX { get; set; }
+    public double WinY { get; set; }
+    public double WinW { get; set; }
+    public double WinH { get; set; }
+    public bool WinMaximized { get; set; } = true;
 }
