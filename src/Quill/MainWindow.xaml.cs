@@ -75,7 +75,7 @@ public sealed partial class MainWindow : Window
         "Calibri", "Cambria", "Cambria Math", "Georgia", "Times New Roman", "Garamond",
         "Arial", "Verdana", "Tahoma", "Trebuchet MS", "Comic Sans MS",
         "Consolas", "Cascadia Code", "Cascadia Mono", "Courier New", "JetBrains Mono",
-        "Space Mono", "Google Sans Mono", "Maple Mono", "Maple Mono NF CN", "Amsterdam"
+        "Space Mono", "Google Sans Mono", "Maple Mono", "Maple Mono NF CN", "Amsterdam Handwriting"
     };
 
     private static readonly string[] FontSizes =
@@ -148,6 +148,10 @@ public sealed partial class MainWindow : Window
 
         // restore the last-selected eraser mode (#13-batch2)
         Surface.EraserMode = _library.LastEraserMode == "Point" ? EraserMode.Point : EraserMode.Object;
+        Surface.PenRepair = _library.PenRepair;
+        // the font list used to say "Amsterdam"; the installed family is
+        // "Amsterdam Handwriting" — migrate saved settings (#9-batch2)
+        if (_library.DefaultFont == "Amsterdam") _library.DefaultFont = "Amsterdam Handwriting";
         // configurable autosave debounce
         _saveTimer.Interval = TimeSpan.FromSeconds(Math.Clamp(_library.AutosaveSeconds, 0.5, 10));
 
@@ -2911,6 +2915,17 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         };
         panel.Children.Add(autosaveSlider);
+
+        // ---- pen repair (#2-batch2) ----
+        var penFixToggle = new ToggleSwitch { Header = "Pen repair — for a faulty pen", IsOn = _library.PenRepair };
+        penFixToggle.Toggled += (_, _) =>
+        {
+            _library.PenRepair = penFixToggle.IsOn;
+            Surface.PenRepair = penFixToggle.IsOn;
+            ScheduleSave();
+        };
+        panel.Children.Add(penFixToggle);
+        panel.Children.Add(new TextBlock { Text = "Bridges strokes when the pen momentarily loses contact mid-line, and ignores the stray dot a bouncy pen tip leaves right where a stroke just ended. Deliberate dots (like dotting an i) still register.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- accent colour (#33) ----
         panel.Children.Add(new TextBlock { Text = "Accent colour", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });

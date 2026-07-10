@@ -13,6 +13,7 @@ public class AddStrokeAction : IPageAction
 {
     private readonly PenStroke _stroke;
     public AddStrokeAction(PenStroke stroke) => _stroke = stroke;
+    public PenStroke Stroke => _stroke;   // pen-repair needs to identify its stroke
     public string Description => "Draw stroke";
     public void Do(NotePage page) => page.Strokes.Add(_stroke);
     public void Undo(NotePage page) => page.Strokes.Remove(_stroke);
