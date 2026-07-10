@@ -3456,8 +3456,8 @@ public sealed class InkSurface : UserControl
                 var o = new Vector2((float)s.X, (float)(s.Y + s.H));
                 DrawArrow(ds, o, new Vector2((float)(s.X + s.W), o.Y), color, w);
                 DrawArrow(ds, o, new Vector2(o.X, (float)s.Y), color, w);
-                ds.DrawText("x", new Vector2((float)(s.X + s.W) - 4, o.Y + 6), color, _labelFormat);
-                ds.DrawText("y", new Vector2(o.X - 18, (float)s.Y - 4), color, _labelFormat);
+                ds.DrawText(s.AxisLabelX ?? "x", new Vector2((float)(s.X + s.W) - 4, o.Y + 6), color, _labelFormat);
+                ds.DrawText(s.AxisLabelY ?? "y", new Vector2(o.X - 18, (float)s.Y - 4), color, _labelFormat);
                 break;
             }
             case ShapeKind.AxesXYZ:
@@ -3466,9 +3466,9 @@ public sealed class InkSurface : UserControl
                 DrawArrow(ds, o, new Vector2((float)(s.X + s.W), o.Y), color, w);
                 DrawArrow(ds, o, new Vector2(o.X, (float)s.Y), color, w);
                 DrawArrow(ds, o, new Vector2((float)s.X, (float)(s.Y + s.H)), color, w);
-                ds.DrawText("x", new Vector2((float)(s.X + s.W) - 2, o.Y + 4), color, _labelFormat);
-                ds.DrawText("y", new Vector2(o.X + 8, (float)s.Y - 4), color, _labelFormat);
-                ds.DrawText("z", new Vector2((float)s.X - 2, (float)(s.Y + s.H) + 2), color, _labelFormat);
+                ds.DrawText(s.AxisLabelX ?? "x", new Vector2((float)(s.X + s.W) - 2, o.Y + 4), color, _labelFormat);
+                ds.DrawText(s.AxisLabelY ?? "y", new Vector2(o.X + 8, (float)s.Y - 4), color, _labelFormat);
+                ds.DrawText(s.AxisLabelZ ?? "z", new Vector2((float)s.X - 2, (float)(s.Y + s.H) + 2), color, _labelFormat);
                 break;
             }
         }
@@ -3546,7 +3546,7 @@ public sealed class InkSurface : UserControl
         _canvas.Invalidate();
     }
 
-    public void InsertImage(string path, double pixelW, double pixelH)
+    public void InsertImage(string path, double pixelW, double pixelH, string? equationLatex = null)
     {
         if (_page == null) return;
         double scale = Math.Min(1.0, 520.0 / Math.Max(1, Math.Max(pixelW, pixelH)));
@@ -3560,14 +3560,59 @@ public sealed class InkSurface : UserControl
         {
             Kind = ShapeKind.Image,
             ImagePath = path,
-            X = atCaret ? c.X : c.X - w / 2,
-            Y = atCaret ? c.Y : c.Y - h / 2,
+            EquationLatex = equationLatex,
+            // clamp out of NormalizeContent's trigger zone: an image dropped
+            // above/left of the origin used to make the next page load shift
+            // ALL content down-right — the "inserting an equation moved my
+            // notes" bug (#27-batch2)
+            X = Math.Max(44, atCaret ? c.X : c.X - w / 2),
+            Y = Math.Max(104, atCaret ? c.Y : c.Y - h / 2),
             W = w,
             H = h,
             Size = 0
         };
         UndoManager.Push(new AddShapeAction(s), _page);
         _activeShape = s;
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    /// <summary>Topmost axes shape whose bounds contain the world point (#28-batch2).</summary>
+    public ShapeElement? AxesShapeAt(Vector2 pos)
+    {
+        if (_page == null) return null;
+        for (int i = _page.Shapes.Count - 1; i >= 0; i--)
+        {
+            var s = _page.Shapes[i];
+            if (s.Kind is not (ShapeKind.AxesXY or ShapeKind.AxesXYZ)) continue;
+            var b = ShapeBounds(s);
+            if (pos.X >= b.Left && pos.X <= b.Right && pos.Y >= b.Top && pos.Y <= b.Bottom) return s;
+        }
+        return null;
+    }
+
+    /// <summary>Topmost equation image whose bounds contain the world point (#27-batch2).</summary>
+    public ShapeElement? EquationShapeAt(Vector2 pos)
+    {
+        if (_page == null) return null;
+        for (int i = _page.Shapes.Count - 1; i >= 0; i--)
+        {
+            var s = _page.Shapes[i];
+            if (s.Kind != ShapeKind.Image || s.EquationLatex == null) continue;
+            var b = ShapeBounds(s);
+            if (pos.X >= b.Left && pos.X <= b.Right && pos.Y >= b.Top && pos.Y <= b.Bottom) return s;
+        }
+        return null;
+    }
+
+    /// <summary>Swaps an equation image for a re-rendered one in place, keeping
+    /// its position and on-page width (#27-batch2).</summary>
+    public void UpdateEquationImage(ShapeElement s, string path, double pixW, double pixH, string latex)
+    {
+        if (_page == null || !_page.Shapes.Contains(s)) return;
+        s.ImagePath = path;
+        s.EquationLatex = latex;
+        s.H = Math.Max(24, Math.Abs(s.W) * (pixH / Math.Max(1, pixW)));
         _canvas.Invalidate();
         ContentChanged?.Invoke();
     }
