@@ -1010,18 +1010,47 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    private static string GlyphFor(PenType t) => t switch
+    // Original vector silhouettes for every pen type (#15-batch2) — no more
+    // generic emoji. 16x16 path data, filled with a contrast colour over the
+    // preset's own colour disc.
+    private static string PenIconData(PenType t) => t switch
     {
-        PenType.Brush => "\U0001F58C",
-        PenType.Fountain => "✒",
-        PenType.Highlighter => "\U0001F58D",
-        PenType.Pencil => "✏",
-        PenType.Marker => "❚",
-        PenType.Calligraphy => "\U0001FAB6",
-        PenType.Crayon => "\U0001F58D",
-        PenType.Watercolor => "\U0001F58C",
-        _ => "\U0001F58A"
+        PenType.Brush => "M3 13 C5.5 12.5 7 11 8 9.5 L12.5 3.5 L13.5 4.5 L8.5 10.5 C7 12 5 13 3 13 Z M11.5 2.5 L13.5 4.5 L14.5 3.5 A1.4 1.4 0 0 0 12.5 1.5 Z",
+        PenType.Fountain => "M3 13 L5.5 8.5 L11 3 L13 5 L7.5 10.5 Z M7.7 7.5 L8.5 8.3 L6.5 10.9 L6.1 10.5 Z M11.8 2.2 L13.8 4.2 L14.8 3.2 L12.8 1.2 Z",
+        PenType.Highlighter => "M3 10.5 L8.5 5 L11.5 8 L6 13.5 L3 13.5 Z M9.5 4 L12.5 7 L14 5.5 L11 2.5 Z M2 15 H10 V16 H2 Z",
+        PenType.Pencil => "M3 13 L4.2 9.8 L10.5 3.5 L12.5 5.5 L6.2 11.8 Z M11.2 2.8 L13.2 4.8 L14.2 3.8 A1.4 1.4 0 0 0 12.2 1.8 Z",
+        PenType.Marker => "M4 13.5 H7.5 L13.5 7.5 L10.5 4.5 L4.5 10.5 Z M11.5 3.5 L14.5 6.5 L15.2 5.8 A1.5 1.5 0 0 0 12.2 2.8 Z",
+        PenType.Calligraphy => "M3 13 L4.5 9 L10 3.5 L14 7.5 L8.5 13 L4.5 13 Z M10.8 2.6 L15 6.8 L15.8 6 L11.6 1.8 Z",
+        PenType.Crayon => "M4 13.5 L6.5 13.5 L13.5 6.5 L11 4 L4 11 Z M11.8 3.2 A1.8 1.8 0 0 1 13.8 5.2 L13.5 6.5 L11 4 Z",
+        PenType.Watercolor => "M3 13 C5.5 12.5 6.5 11 7.5 9.5 L11.5 4.5 L12.5 5.5 L8.5 10.5 C7.5 12 5.5 13 3 13 Z M13.4 9 C14.4 10.2 14.4 11.4 13.4 12 C12.4 11.4 12.4 10.2 13.4 9 Z",
+        PenType.Monoline => "M3.2 11.8 L11.8 3.2 L12.8 4.2 L4.2 12.8 Z",
+        PenType.Rollerball => "M4.5 11.5 L11 5 L12.5 6.5 L6 13 Z M12 4 L13.5 5.5 L14.5 4.5 A1.06 1.06 0 0 0 13 3 Z M2.4 13.2 a1.2 1.2 0 1 0 2.4 0 a1.2 1.2 0 1 0 -2.4 0",
+        PenType.Gel => "M4 12 L10.5 5.5 L12.5 7.5 L6 14 Z M12 1.5 L12.8 3.4 L14.7 4.2 L12.8 5 L12 6.9 L11.2 5 L9.3 4.2 L11.2 3.4 Z",
+        PenType.Ballpoint => "M4.5 12.5 L5.5 9.5 L11 4 L12 5 L6.5 10.5 Z",
+        PenType.FeltTip => "M4 13 L7 12.2 L13 6.2 L10.8 4 L4.8 10 Z M11.6 3.2 L13.8 5.4 L14.6 4.6 A1.55 1.55 0 0 0 12.4 2.4 Z",
+        _ => "M3.5 12.5 L5 9 L11.5 2.5 L13.5 4.5 L7 11 Z M12.3 1.7 L14.3 3.7 L15 3 A1.4 1.4 0 0 0 13 1 Z"
     };
+
+    private static Microsoft.UI.Xaml.Shapes.Path MakeIconPath(string data, Color fill, double size = 14)
+    {
+        var p = (Microsoft.UI.Xaml.Shapes.Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+            "<Path xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Data='" + data + "'/>");
+        p.Fill = new SolidColorBrush(fill);
+        p.Width = size;
+        p.Height = size;
+        p.Stretch = Stretch.Uniform;
+        p.HorizontalAlignment = HorizontalAlignment.Center;
+        p.VerticalAlignment = VerticalAlignment.Center;
+        return p;
+    }
+
+    private static void SetPenChipIcon(Grid host, PenType t, Color penColor)
+    {
+        host.Children.Clear();
+        var fg = ColorUtil.IsDark(penColor) ? Colors.White : Color.FromArgb(255, 0x14, 0x14, 0x13);
+        try { host.Children.Add(MakeIconPath(PenIconData(t), fg)); } catch { }
+    }
+
 
     private PenPreset? ActivePreset() => _library?.Pens.FirstOrDefault(x => x.Id == _activePresetId);
 
@@ -1044,16 +1073,11 @@ public sealed partial class MainWindow : Window
                 Stroke = new SolidColorBrush(Color.FromArgb(255, 176, 174, 165)),
                 StrokeThickness = 1
             };
-            var glyph = new TextBlock
-            {
-                Text = GlyphFor(p.Pen),
-                FontSize = 11,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
+            var iconHost = new Grid { Width = 26, Height = 26, IsHitTestVisible = false };
+            SetPenChipIcon(iconHost, p.Pen, color);
             var icon = new Grid { Width = 26, Height = 26 };
             icon.Children.Add(ell);
-            icon.Children.Add(glyph);
+            icon.Children.Add(iconHost);
 
             var btn = new Button
             {
@@ -1071,7 +1095,7 @@ public sealed partial class MainWindow : Window
             };
             ToolTipService.SetToolTip(btn, $"{p.Name} (right-click to edit)");
             btn.Click += (_, _) => ApplyPreset(p);
-            btn.ContextFlyout = CreatePresetFlyout(p, ell, glyph);
+            btn.ContextFlyout = CreatePresetFlyout(p, ell, iconHost);
 
             PresetPanel.Children.Add(btn);
         }
@@ -1130,7 +1154,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private Flyout CreatePresetFlyout(PenPreset p, Ellipse ell, TextBlock glyph)
+    private Flyout CreatePresetFlyout(PenPreset p, Ellipse ell, Grid iconHost)
     {
         var fly = new Flyout();
         bool built = false;
@@ -1152,16 +1176,24 @@ public sealed partial class MainWindow : Window
             var typeCombo = new ComboBox
             {
                 Header = "Pen type",
-                ItemsSource = new[] { "Standard pen", "Brush pen", "Fountain pen", "Highlighter", "Pencil", "Marker (chisel)", "Calligraphy",
-                                      "Crayon", "Watercolour", "Monoline", "Rollerball", "Gel pen", "Ballpoint", "Felt-tip" },
-                SelectedIndex = (int)p.Pen,
+                SelectedIndex = -1,
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
+            string[] penNames = { "Standard pen", "Brush pen", "Fountain pen", "Highlighter", "Pencil", "Marker (chisel)", "Calligraphy",
+                                  "Crayon", "Watercolour", "Monoline", "Rollerball", "Gel pen", "Ballpoint", "Felt-tip" };
+            for (int ti = 0; ti < penNames.Length; ti++)
+            {
+                var rowPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                try { rowPanel.Children.Add(MakeIconPath(PenIconData((PenType)ti), Color.FromArgb(255, 0x8a, 0x88, 0x82), 13)); } catch { }
+                rowPanel.Children.Add(new TextBlock { Text = penNames[ti], VerticalAlignment = VerticalAlignment.Center });
+                typeCombo.Items.Add(new ComboBoxItem { Content = rowPanel });
+            }
+            typeCombo.SelectedIndex = (int)p.Pen;
             typeCombo.SelectionChanged += (_, _) =>
             {
                 if (typeCombo.SelectedIndex < 0) return;
                 p.Pen = (PenType)typeCombo.SelectedIndex;
-                glyph.Text = GlyphFor(p.Pen);
+                SetPenChipIcon(iconHost, p.Pen, ColorUtil.Parse(p.Color));
                 if (_activePresetId == p.Id) Surface.Pen = p.Pen;
                 ScheduleSave();
             };
@@ -1173,6 +1205,7 @@ public sealed partial class MainWindow : Window
                 var hex = ColorUtil.ToHex(c);
                 p.Color = hex;
                 ell.Fill = new SolidColorBrush(c);
+                SetPenChipIcon(iconHost, p.Pen, c);   // keep the icon contrast-correct
                 if (_activePresetId == p.Id) Surface.PenColor = c;
                 
                 _library.RecentColors.Remove(hex);
