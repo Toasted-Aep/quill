@@ -103,6 +103,13 @@ public class ShapeElement
     public string Color { get; set; } = "#141413";
     public float Size { get; set; } = 3f;
     public string? ImagePath { get; set; }
+    // For equation images: the LaTeX source it was rendered from, so the
+    // equation can be reopened and edited instead of retyped (#27-batch2).
+    public string? EquationLatex { get; set; }
+    // Axes shapes only: custom axis labels; null = the default x/y/z (#28-batch2).
+    public string? AxisLabelX { get; set; }
+    public string? AxisLabelY { get; set; }
+    public string? AxisLabelZ { get; set; }
     // Rotation in degrees about the shape's centre (#20).
     public double Rotation { get; set; }
     // Table shapes only: grid dimensions (#40) and, Word-style, individual

@@ -2331,6 +2331,35 @@ public sealed partial class MainWindow : Window
 
     private void CloseGallery_Click(object sender, RoutedEventArgs e) => CloseGallery();
 
+    // Rename the labels on an x-y / x-y-z axes shape (#28-batch2).
+    private async Task EditAxisLabelsAsync(ShapeElement ax)
+    {
+        bool threeD = ax.Kind == ShapeKind.AxesXYZ;
+        var bx = new TextBox { Header = "Horizontal axis", Text = ax.AxisLabelX ?? "x" };
+        var by = new TextBox { Header = "Vertical axis", Text = ax.AxisLabelY ?? "y" };
+        var bz = new TextBox { Header = "Depth axis", Text = ax.AxisLabelZ ?? "z", Visibility = threeD ? Visibility.Visible : Visibility.Collapsed };
+        var panel = new StackPanel { Spacing = 8, Width = 320 };
+        panel.Children.Add(bx);
+        panel.Children.Add(by);
+        if (threeD) panel.Children.Add(bz);
+        panel.Children.Add(new TextBlock { Text = "Leave a field as x/y/z for the default label.", FontSize = 12, Opacity = 0.7 });
+        var dlg = new ContentDialog
+        {
+            Title = "Axis labels",
+            Content = panel,
+            PrimaryButtonText = "OK",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        ax.AxisLabelX = string.IsNullOrWhiteSpace(bx.Text) || bx.Text == "x" ? null : bx.Text.Trim();
+        ax.AxisLabelY = string.IsNullOrWhiteSpace(by.Text) || by.Text == "y" ? null : by.Text.Trim();
+        ax.AxisLabelZ = string.IsNullOrWhiteSpace(bz.Text) || bz.Text == "z" ? null : bz.Text.Trim();
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
     // Visual emoji picker for notebook covers (#cust-roadmap): a tappable grid of
     // common study/subject emoji plus a free-text field for anything else.
     // Returns null on cancel, "" to clear, or the chosen emoji.
@@ -4439,17 +4468,23 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 """;
 
     private async void InsertEquation_Click(object sender, RoutedEventArgs e)
+        => await InsertOrEditEquationAsync(null);
+
+    // Insert a new equation, or reopen an existing one with its LaTeX already
+    // in the editor so the user tweaks instead of retyping (#27-batch2).
+    private async Task InsertOrEditEquationAsync(ShapeElement? existing)
     {
         string? latex = null;
+        string? initial = existing?.EquationLatex;
         WebView2? web = null;
         try
         {
             web = new WebView2 { Width = 640, Height = 360 };
             var dlg = new ContentDialog
             {
-                Title = "Insert equation",
+                Title = existing == null ? "Insert equation" : "Edit equation",
                 Content = web,
-                PrimaryButtonText = "Insert",
+                PrimaryButtonText = existing == null ? "Insert" : "Update",
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Primary,
                 XamlRoot = RootGrid.XamlRoot
@@ -4462,6 +4497,15 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                     await web.EnsureCoreWebView2Async();
                     web.NavigateToString(EquationHtml);
                     webReady = true;
+                    if (!string.IsNullOrEmpty(initial))
+                    {
+                        // MathLive registers <math-field> asynchronously — poll
+                        // until setValue exists, then prefill the existing LaTeX
+                        string js = "window.__init=" + System.Text.Json.JsonSerializer.Serialize(initial) +
+                                    ";(function f(){var m=document.getElementById('mf');" +
+                                    "if(m&&m.setValue){m.setValue(window.__init);}else{setTimeout(f,120);}})();";
+                        await web.CoreWebView2.ExecuteScriptAsync(js);
+                    }
                 }
                 catch { /* fall through to the plain LaTeX prompt below */ }
             };
@@ -4486,7 +4530,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         finally { try { web?.Close(); } catch { } }
 
         // offline / no-WebView2 fallback: type LaTeX directly
-        latex ??= await PromptAsync("Equation (LaTeX)", @"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}");
+        latex ??= await PromptAsync("Equation (LaTeX)", initial ?? @"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}");
         if (string.IsNullOrWhiteSpace(latex)) return;
 
         try
@@ -4504,14 +4548,20 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                 await System.IO.File.WriteAllBytesAsync(filePath, bytes);
                 using (var bmp = await Microsoft.Graphics.Canvas.CanvasBitmap.LoadAsync(device, filePath))
                 {
-                    Surface.InsertImage(filePath, bmp.Size.Width, bmp.Size.Height);
+                    if (existing != null)
+                        Surface.UpdateEquationImage(existing, filePath, bmp.Size.Width, bmp.Size.Height, latex);
+                    else
+                        Surface.InsertImage(filePath, bmp.Size.Width, bmp.Size.Height, latex);
                 }
-                ShowStatus("Equation inserted as a high-quality math element.");
+                ShowStatus(existing == null
+                    ? "Equation inserted — right-click it any time to edit."
+                    : "Equation updated.");
                 return;
             }
         }
         catch { }
 
+        if (existing != null) { ShowStatus("Could not re-render the equation."); return; }
         var unicode = LatexToUnicode(latex);
         var centre = Surface.ScreenToWorld(new Point(Surface.ActualWidth / 2, Surface.ActualHeight / 2));
         Surface.AddTextElement(centre.X - 160, centre.Y - 20, 360,
@@ -5043,6 +5093,24 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             var pastePlain = new MenuFlyoutItem { Text = "Paste as plain text" };
             pastePlain.Click += (_, _) => PastePlainText();
             menu.Items.Add(pastePlain);
+        }
+        // right-clicked a typed equation -> reopen it in the editor with its
+        // LaTeX already loaded (#27-batch2)
+        var eqShape = Surface.EquationShapeAt(world);
+        if (eqShape != null)
+        {
+            var editEq = new MenuFlyoutItem { Text = "Edit equation…" };
+            editEq.Click += async (_, _) => await InsertOrEditEquationAsync(eqShape);
+            menu.Items.Add(editEq);
+        }
+
+        // right-clicked an x-y / x-y-z axes shape -> rename its axis labels (#28-batch2)
+        var axShape = Surface.AxesShapeAt(world);
+        if (axShape != null)
+        {
+            var editAx = new MenuFlyoutItem { Text = "Axis labels…" };
+            editAx.Click += async (_, _) => await EditAxisLabelsAsync(axShape);
+            menu.Items.Add(editAx);
         }
 
         if (Surface.HasCanvasSelection)
