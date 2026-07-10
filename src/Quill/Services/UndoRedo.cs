@@ -7,10 +7,16 @@ public interface IPageAction
     string Description { get; }
     void Do(NotePage page);
     void Undo(NotePage page);
+    // Whether Do/Undo can change the page's Texts (so the XAML text layer must
+    // be rebuilt). Defaults to true for safety; pure ink/shape actions say false
+    // so undoing a stroke no longer tears down every text box (#perf-roadmap).
+    bool TouchesText => true;
 }
 
 public class AddStrokeAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly PenStroke _stroke;
     public AddStrokeAction(PenStroke stroke) => _stroke = stroke;
     public PenStroke Stroke => _stroke;   // pen-repair needs to identify its stroke
@@ -21,6 +27,8 @@ public class AddStrokeAction : IPageAction
 
 public class AddStrokesAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly List<PenStroke> _strokes;
     public AddStrokesAction(List<PenStroke> strokes) => _strokes = strokes;
     public string Description => "Paste";
@@ -30,6 +38,8 @@ public class AddStrokesAction : IPageAction
 
 public class RemoveStrokesAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly List<(int Index, PenStroke Stroke)> _items;
     public RemoveStrokesAction(List<(int, PenStroke)> items, string description = "Erase strokes")
     {
@@ -50,6 +60,8 @@ public class RemoveStrokesAction : IPageAction
 
 public class ReplaceStrokesAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly List<(int Index, PenStroke Stroke)> _removed;
     private readonly List<PenStroke> _added;
     public ReplaceStrokesAction(List<(int, PenStroke)> removed, List<PenStroke> added)
@@ -73,6 +85,8 @@ public class ReplaceStrokesAction : IPageAction
 
 public class MoveStrokesAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly List<PenStroke> _strokes;
     private readonly float _dx, _dy;
     public MoveStrokesAction(List<PenStroke> strokes, float dx, float dy)
@@ -97,6 +111,7 @@ public class InsertSpaceAction : IPageAction
     private List<TextElement>? _texts;
     public InsertSpaceAction(double y, double delta) { _y = y; _delta = delta; }
     public string Description => _delta >= 0 ? "Insert space" : "Remove space";
+    public bool TouchesText => _texts == null || _texts.Count > 0;
     public void Do(NotePage page)
     {
         _strokes ??= page.Strokes.Where(s => s.Points.Count > 0 && s.MinY >= _y).ToList();
@@ -116,6 +131,8 @@ public class InsertSpaceAction : IPageAction
 
 public class AddShapeAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly ShapeElement _shape;
     public AddShapeAction(ShapeElement shape) => _shape = shape;
     public string Description => "Insert shape";
@@ -125,6 +142,8 @@ public class AddShapeAction : IPageAction
 
 public class RemoveShapesAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly List<(int Index, ShapeElement Shape)> _items;
     public RemoveShapesAction(List<(int, ShapeElement)> items) => _items = items;
     public string Description => "Delete shape";
@@ -141,6 +160,8 @@ public class RemoveShapesAction : IPageAction
 
 public class MoveResizeShapeAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly ShapeElement _shape;
     private readonly (double X, double Y, double W, double H) _from, _to;
     public MoveResizeShapeAction(ShapeElement shape,
@@ -159,6 +180,8 @@ public class MoveResizeShapeAction : IPageAction
 
 public class RotateShapeAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly ShapeElement _s;
     private readonly double _from, _to;
     public RotateShapeAction(ShapeElement s, double from, double to) { _s = s; _from = from; _to = to; }
@@ -216,6 +239,7 @@ public class CompositeAction : IPageAction
         Description = description;
     }
     public string Description { get; }
+    public bool TouchesText => _actions.Any(a => a.TouchesText);
     public void Do(NotePage page) { foreach (var a in _actions) a.Do(page); }
     public void Undo(NotePage page) { for (int i = _actions.Count - 1; i >= 0; i--) _actions[i].Undo(page); }
 }
@@ -223,6 +247,8 @@ public class CompositeAction : IPageAction
 // Moves a set of shapes by a delta (used in mixed-selection moves).
 public class MoveShapesAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly List<ShapeElement> _shapes;
     private readonly double _dx, _dy;
     public MoveShapesAction(List<ShapeElement> shapes, double dx, double dy)
@@ -267,6 +293,7 @@ public class AddMixedAction : IPageAction
         _strokes = strokes; _shapes = shapes; _texts = texts;
     }
     public string Description => "Paste";
+    public bool TouchesText => _texts.Count > 0;
     public void Do(NotePage page)
     {
         page.Strokes.AddRange(_strokes);
@@ -292,6 +319,7 @@ public class RemoveMixedAction : IPageAction
         _strokes = strokes; _shapes = shapes; _texts = texts;
     }
     public string Description => "Delete selection";
+    public bool TouchesText => _texts.Count > 0;
     public void Do(NotePage page)
     {
         foreach (var s in _strokes) page.Strokes.Remove(s);
@@ -380,6 +408,7 @@ public class ScaleMixedAction : IPageAction
         _ax = ax; _ay = ay; _factor = factor;
     }
     public string Description => "Scale selection";
+    public bool TouchesText => _texts.Count > 0;
     public void Do(NotePage page) => Apply(_factor);
     public void Undo(NotePage page) => Apply(1f);
     private void Apply(float f)
@@ -458,6 +487,8 @@ public class CellMergeAction : IPageAction
 // Toggles bold header row on a table.
 public class HeaderRowAction : IPageAction
 {
+    public bool TouchesText => false;
+
     private readonly ShapeElement _table;
     private readonly bool _from, _to;
     public HeaderRowAction(ShapeElement table, bool from, bool to)
@@ -476,6 +507,8 @@ public class UndoRedoManager
 
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
+    public IPageAction? PeekUndo => _undo.Count > 0 ? _undo.Peek() : null;
+    public IPageAction? PeekRedo => _redo.Count > 0 ? _redo.Peek() : null;
 
     /// <summary>Push an action. If alreadyDone, the page was mutated live and Do() is skipped.</summary>
     public void Push(IPageAction action, NotePage page, bool alreadyDone = false)

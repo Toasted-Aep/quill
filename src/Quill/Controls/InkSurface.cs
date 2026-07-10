@@ -440,6 +440,20 @@ public sealed class InkSurface : UserControl
         CancelPendingText();
         NormalizeContent(page);
         _page = page;
+        // Evict decoded image bitmaps the new page doesn't reference — the cache
+        // previously only ever grew, keeping every pasted image of the whole
+        // session resident in GPU memory (#perf-roadmap).
+        try
+        {
+            var live = new HashSet<string>(page.Shapes.Where(s => s.ImagePath != null).Select(s => s.ImagePath!));
+            foreach (var stale in _bitmaps.Keys.Where(k => !live.Contains(k)).ToList())
+            {
+                _bitmaps[stale]?.Dispose();
+                _bitmaps.Remove(stale);
+                _bitmapLoading.Remove(stale);
+            }
+        }
+        catch { }
         _inkCacheDirty = true;   // fresh page, fresh ink cache (#43)
         UndoManager.Clear();
         ClearSelection();
@@ -534,11 +548,14 @@ public sealed class InkSurface : UserControl
     public void Undo()
     {
         if (_page == null || _replaying) return;
+        bool touchesText = UndoManager.PeekUndo?.TouchesText ?? true;
         FlushTexts();
         UndoManager.Undo(_page);
         ClearSelection();
         _activeShape = null; // don't leave a removed shape's selection box behind
-        RebuildTextLayer();
+        // rebuilding every RichEditBox is expensive on text-heavy pages — only
+        // do it when the undone action could actually change the text layer
+        if (touchesText) RebuildTextLayer();
         _canvas.Invalidate();
         ContentChanged?.Invoke();
     }
@@ -546,11 +563,12 @@ public sealed class InkSurface : UserControl
     public void Redo()
     {
         if (_page == null || _replaying) return;
+        bool touchesText = UndoManager.PeekRedo?.TouchesText ?? true;
         FlushTexts();
         UndoManager.Redo(_page);
         ClearSelection();
         _activeShape = null;
-        RebuildTextLayer();
+        if (touchesText) RebuildTextLayer();
         _canvas.Invalidate();
         ContentChanged?.Invoke();
     }
@@ -1824,14 +1842,19 @@ public sealed class InkSurface : UserControl
         var br = new Rect(center.X - bw / 2, center.Y - bh / 2, bw, bh);
         ds.FillRoundedRectangle(br, 9f / ViewZoom, 9f / ViewZoom, Color.FromArgb(235, 28, 28, 32));
         ds.DrawRoundedRectangle(br, 9f / ViewZoom, 9f / ViewZoom, edgeColor, 1.5f / ViewZoom);
-        using var bf = new CanvasTextFormat
-        {
-            FontSize = 16f / ViewZoom,
-            HorizontalAlignment = CanvasHorizontalAlignment.Center,
-            VerticalAlignment = CanvasVerticalAlignment.Center
-        };
-        ds.DrawText(deg, br, Colors.White, bf);
+        // reuse one format across frames (DrawRuler runs every frame while the
+        // ruler is on; allocating a CanvasTextFormat per frame was the one spot
+        // that missed the cached-format pattern) — only the zoom-dependent size
+        // is updated per call.
+        _rulerFormat.FontSize = 16f / ViewZoom;
+        ds.DrawText(deg, br, Colors.White, _rulerFormat);
     }
+
+    private readonly CanvasTextFormat _rulerFormat = new()
+    {
+        HorizontalAlignment = CanvasHorizontalAlignment.Center,
+        VerticalAlignment = CanvasVerticalAlignment.Center
+    };
 
     /// <summary>
     /// Cleans a freshly drawn stroke so it doesn't leave a stray dot at either
@@ -2758,8 +2781,17 @@ public sealed class InkSurface : UserControl
         _adjustAnchor = FarthestAnchor(_adjustShape, _stablePos);
         _shapeAdjust = true;
         _wet = null;
+        // brief settle pulse so the squiggle->shape snap is visibly confirmed
+        // instead of an instant silent swap (#anim-roadmap)
+        _settleShape = _adjustShape;
+        _settleStartMs = Environment.TickCount64;
         _canvas.Invalidate();
     }
+
+    // shape-recognition settle pulse state (drawn on the Win2D canvas, so it's a
+    // per-frame ease rather than a XAML Storyboard)
+    private ShapeElement? _settleShape;
+    private long _settleStartMs;
 
     private (ShapeElement Shape, bool Constrain)? RecognizeShape(List<StrokePoint> pts)
     {
@@ -3294,6 +3326,20 @@ public sealed class InkSurface : UserControl
         bool rot = Math.Abs(s.Rotation) > 0.01;
         if (rot)
             ds.Transform = Matrix3x2.CreateRotation((float)(s.Rotation * Math.PI / 180.0), ShapeCenter(s)) * prevT;
+        // settle pulse: a freshly recognised shape eases in from a 6% overshoot
+        bool settling = ReferenceEquals(s, _settleShape);
+        if (settling)
+        {
+            float t = (Environment.TickCount64 - _settleStartMs) / 200f;
+            if (t >= 1f) _settleShape = null;
+            else
+            {
+                float ease = 1f - (1f - t) * (1f - t);           // quad ease-out
+                float sc = 1.06f - 0.06f * ease;
+                ds.Transform = Matrix3x2.CreateScale(sc, sc, ShapeCenter(s)) * ds.Transform;
+                _canvas.Invalidate();                            // keep animating
+            }
+        }
         var color = ColorUtil.Parse(s.Color);
         float w = Math.Max(1f, s.Size);
         switch (s.Kind)
@@ -3426,7 +3472,7 @@ public sealed class InkSurface : UserControl
                 break;
             }
         }
-        if (rot) ds.Transform = prevT;
+        if (rot || settling) ds.Transform = prevT;   // settle pulse also bends the transform
     }
 
     private void DrawPolygon(CanvasDrawingSession ds, Vector2[] v, Color color, float w)

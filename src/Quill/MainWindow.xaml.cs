@@ -163,6 +163,16 @@ public sealed partial class MainWindow : Window
         };
 
         Surface.ContentChanged += ScheduleSave;
+        // one-shot blank space (#7-batch2): after the free-space drag commits,
+        // hand the pen straight back.
+        Surface.ContentChanged += () =>
+        {
+            if (_blankSpaceOnce)
+            {
+                _blankSpaceOnce = false;
+                DispatcherQueue.TryEnqueue(() => SelectTool("Pen"));
+            }
+        };
         Surface.ActiveTextChanged += box => { UpdateFormatBarVisibility(); SyncSizeComboFromSelection(box); };
         Surface.ContextMenuRequested += ShowCanvasContextMenu;
         Surface.ReplayEnded += () => BtnReplay.IsChecked = false;
@@ -183,7 +193,7 @@ public sealed partial class MainWindow : Window
         _audioPlayer.PositionChanged += pos => { DispatcherQueue.TryEnqueue(() => UpdateAudioPlayerPosition(pos)); };
 
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
-        _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusText.Text = ""; };
+        _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); FadeOut(StatusText, 220); };
         _zoomTimer.Tick += (_, _) => { _zoomTimer.Stop(); ZoomBorder.Visibility = Visibility.Collapsed; };
         Closed += (_, _) => { CaptureWindowPlacement(); SaveNow(); LibraryStore.Flush(); };
 
@@ -593,6 +603,9 @@ public sealed partial class MainWindow : Window
     private void ShowStatus(string message)
     {
         StatusText.Text = message;
+        // slide-fade entrance instead of an instant text swap (#anim-roadmap)
+        if (StatusText.Visibility != Visibility.Visible || StatusText.Opacity < 0.99)
+            FadeIn(StatusText, 150, pop: false, slideY: 10);
         _statusTimer.Stop();
         _statusTimer.Start();
     }
@@ -2178,7 +2191,29 @@ public sealed partial class MainWindow : Window
         _galleryLauncher = launcher;
         _galleryNb = nb;
         BuildGallery();
-        FadeIn(GalleryPanel, 220);
+        // mirror of CloseGallery's dissolve: settle inward from 1.035 with the
+        // same Sine curve, so open and close read as one motion reversed
+        FadeIn(GalleryPanel, 220, pop: false);
+        try
+        {
+            EnsureCT(GalleryPanel);
+            GalleryPanel.RenderTransformOrigin = new Point(0.5, 0.5);
+            foreach (var prop in new[] { "ScaleX", "ScaleY" })
+            {
+                var a = new DoubleAnimation
+                {
+                    From = 1.035, To = 1.0,
+                    Duration = new Duration(TimeSpan.FromMilliseconds(180)),
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(a, GalleryPanel);
+                Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
+                var sb = new Storyboard();
+                sb.Children.Add(a);
+                sb.Begin();
+            }
+        }
+        catch { }
         // start-screen top bar: settings takes the hamburger's spot, crumb hides
         BtnSidebar.Visibility = Visibility.Collapsed;
         BtnSettings.Visibility = Visibility.Visible;
@@ -2217,6 +2252,49 @@ public sealed partial class MainWindow : Window
     }
 
     private void CloseGallery_Click(object sender, RoutedEventArgs e) => CloseGallery();
+
+    // Visual emoji picker for notebook covers (#cust-roadmap): a tappable grid of
+    // common study/subject emoji plus a free-text field for anything else.
+    // Returns null on cancel, "" to clear, or the chosen emoji.
+    private async Task<string?> PickEmojiAsync(string? current)
+    {
+        string[] choices =
+        {
+            "📓", "📔", "📕", "📗", "📘", "📙", "📚", "📝",
+            "🧮", "📐", "📏", "🧪", "🧬", "🔬", "🔭", "⚗️",
+            "💻", "⌨️", "🌍", "🗺️", "🏛️", "⚖️", "🎨", "🎵",
+            "🧠", "❤️", "⭐", "🔥", "🌱", "☕", "🏀", "✈️"
+        };
+        var box = new TextBox { Text = current ?? "", PlaceholderText = "…or type any emoji", Margin = new Thickness(0, 10, 0, 0) };
+        var grid = new GridView { MaxWidth = 380, SelectionMode = ListViewSelectionMode.None, IsItemClickEnabled = true };
+        foreach (var em in choices)
+            grid.Items.Add(new Border
+            {
+                Width = 40, Height = 40, Tag = em,
+                Child = new TextBlock { Text = em, FontSize = 22, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+            });
+        var panel = new StackPanel { Width = 400 };
+        panel.Children.Add(grid);
+        panel.Children.Add(box);
+        var dlg = new ContentDialog
+        {
+            Title = "Notebook cover",
+            Content = panel,
+            PrimaryButtonText = "OK",
+            SecondaryButtonText = "Remove emoji",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        grid.ItemClick += (_, e) =>
+        {
+            if (e.ClickedItem is Border b && b.Tag is string em) box.Text = em;
+        };
+        var res = await dlg.ShowAsync();
+        if (res == ContentDialogResult.Primary) return box.Text;
+        if (res == ContentDialogResult.Secondary) return "";
+        return null;
+    }
 
     private void GalleryBack_Click(object sender, RoutedEventArgs e)
     {
@@ -2299,6 +2377,47 @@ public sealed partial class MainWindow : Window
         var gv = new GridView { SelectionMode = ListViewSelectionMode.None, IsItemClickEnabled = false };
         foreach (var nb in notebooks) gv.Items.Add(MakeNotebookCard(nb));
         return gv;
+    }
+
+    // Animated per-instance hover glow shared by every gallery level — notebook
+    // cards, section cards and page chips — breathing while hovered (#8-batch2).
+    private static void AttachHoverGlow(FrameworkElement el, Color col, Brush? restBrush, Thickness restThickness, Thickness hoverThickness)
+    {
+        void SetBorder(Brush? b, Thickness th)
+        {
+            if (el is Border bd) { bd.BorderBrush = b; bd.BorderThickness = th; }
+            else if (el is Control c) { c.BorderBrush = b; c.BorderThickness = th; }
+        }
+        el.PointerEntered += (_, _) =>
+        {
+            var glow = MakeColorGlowBrush(col);
+            glow.Opacity = 0;
+            SetBorder(glow, hoverThickness);
+            el.Translation = new System.Numerics.Vector3(0, -2, 0);
+            try
+            {
+                var a = new DoubleAnimation
+                {
+                    From = 0.35, To = 1.0,
+                    Duration = new Duration(TimeSpan.FromSeconds(1.3)),
+                    AutoReverse = true,
+                    RepeatBehavior = RepeatBehavior.Forever,
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+                    EnableDependentAnimation = true
+                };
+                Storyboard.SetTarget(a, glow);
+                Storyboard.SetTargetProperty(a, "Opacity");
+                var sb = new Storyboard();
+                sb.Children.Add(a);
+                sb.Begin();
+            }
+            catch { glow.Opacity = 1; }
+        };
+        el.PointerExited += (_, _) =>
+        {
+            SetBorder(restBrush, restThickness);
+            el.Translation = new System.Numerics.Vector3(0, 0, 0);
+        };
     }
 
     // A glow gradient in an arbitrary colour (used per-notebook in the gallery).
@@ -2389,38 +2508,8 @@ public sealed partial class MainWindow : Window
             BuildGallery();
         };
 
-        // hover polish: the card glows in ITS OWN colour, easing in gently (#51)
-        var restBrush = card.BorderBrush;
-        card.PointerEntered += (_, _) =>
-        {
-            var glow = MakeColorGlowBrush(col);
-            glow.Opacity = 0;
-            card.BorderBrush = glow;
-            card.BorderThickness = new Thickness(1.6);
-            card.Translation = new System.Numerics.Vector3(0, -2, 0);
-            try
-            {
-                var a = new DoubleAnimation
-                {
-                    From = 0, To = 1,
-                    Duration = new Duration(TimeSpan.FromMilliseconds(220)),
-                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut },
-                    EnableDependentAnimation = true
-                };
-                Storyboard.SetTarget(a, glow);
-                Storyboard.SetTargetProperty(a, "Opacity");
-                var sb = new Storyboard();
-                sb.Children.Add(a);
-                sb.Begin();
-            }
-            catch { glow.Opacity = 1; }
-        };
-        card.PointerExited += (_, _) =>
-        {
-            card.BorderBrush = restBrush;
-            card.BorderThickness = new Thickness(1);
-            card.Translation = new System.Numerics.Vector3(0, 0, 0);
-        };
+        // hover polish: the card glows in ITS OWN colour and keeps breathing (#51, #8-batch2)
+        AttachHoverGlow(card, col, card.BorderBrush, new Thickness(1), new Thickness(1.6));
 
         card.ContextFlyout = BuildCardFlyout(nb);
         ToolTipService.SetToolTip(card, "Click to browse sections & pages · right-click for more");
@@ -2498,7 +2587,7 @@ public sealed partial class MainWindow : Window
         var emojiItem = new MenuFlyoutItem { Text = "Cover emoji…" };
         emojiItem.Click += async (_, _) =>
         {
-            var e = await PromptAsync("Notebook Cover Emoji / Icon", nb.CoverEmoji ?? "📓");
+            var e = await PickEmojiAsync(nb.CoverEmoji);
             if (e != null)
             {
                 nb.CoverEmoji = string.IsNullOrWhiteSpace(e) ? null : e.Trim();
@@ -2558,6 +2647,8 @@ public sealed partial class MainWindow : Window
                 CornerRadius = new CornerRadius(14),
                 Padding = new Thickness(16, 12, 16, 12)
             };
+            // section cards share the same breathing hover glow as the other levels (#8-batch2)
+            AttachHoverGlow(secCard, ColorUtil.Parse(nb.Color), hairline, new Thickness(1), new Thickness(1.6));
             var stack = new StackPanel { Spacing = 8 };
 
             var header = new Grid();
@@ -2688,6 +2779,9 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(chip, current
             ? "This page is open right now"
             : "Open this page · right-click to rename or delete");
+        // page chips glow in the notebook's colour on hover, like the cards (#8-batch2)
+        if (!current)
+            AttachHoverGlow(chip, ColorUtil.Parse(nb.Color), chip.BorderBrush, new Thickness(1), new Thickness(1.6));
 
         chip.Click += (_, _) =>
         {
@@ -2927,6 +3021,18 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(penFixToggle);
         panel.Children.Add(new TextBlock { Text = "Bridges strokes when the pen momentarily loses contact mid-line, and ignores the stray dot a bouncy pen tip leaves right where a stroke just ended. Deliberate dots (like dotting an i) still register.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
+        // ---- pen dock position (#cust-roadmap): the drag gesture already works;
+        //      this makes the four dock sides discoverable without dragging ----
+        var dockBox = new ComboBox { Header = "Pen toolbar docked to", Width = 220 };
+        foreach (var d in new[] { "Bottom", "Top", "Left", "Right" }) dockBox.Items.Add(d);
+        dockBox.SelectedItem = _library.PenDock is "Top" or "Left" or "Right" ? _library.PenDock : "Bottom";
+        dockBox.SelectionChanged += (_, _) =>
+        {
+            if (dockBox.SelectedItem is string d)
+            { _library.PenDock = d; ApplyPenDock(); ScheduleSave(); }
+        };
+        panel.Children.Add(dockBox);
+
         // ---- accent colour (#33) ----
         panel.Children.Add(new TextBlock { Text = "Accent colour", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
         panel.Children.Add(new TextBlock { Text = "Used for the glows, highlights, buttons and selection colours.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
@@ -3098,13 +3204,41 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     // Tools
     // =======================================================================
+    // Lasso button click-count mapping (#7-batch2): single click = lasso tool;
+    // double click = leave blank space ONCE then return to the pen; pressing the
+    // lasso button while in that one-shot mode backs out to the pen untouched.
+    private long _lassoClickMs;
+    private bool _blankSpaceOnce;
+
     private void ToolButton_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is ToggleButton tb && tb.Tag is string tag) SelectTool(tag);
+        if (sender is not ToggleButton tb || tb.Tag is not string tag) return;
+        if (tag == "Select")
+        {
+            long now = Environment.TickCount64;
+            if (_blankSpaceOnce)
+            {
+                // already in one-shot blank-space mode -> bail out to the pen
+                _blankSpaceOnce = false;
+                SelectTool("Pen");
+                return;
+            }
+            if (now - _lassoClickMs < 400)
+            {
+                _lassoClickMs = 0;
+                _blankSpaceOnce = true;
+                SelectTool("FreeSpace");
+                ShowStatus("Leave blank space once — drag on the page, then the pen comes back. Tap the lasso again to cancel.");
+                return;
+            }
+            _lassoClickMs = now;
+        }
+        SelectTool(tag);
     }
 
     private void SelectTool(string tag)
     {
+        if (tag != "FreeSpace") _blankSpaceOnce = false;   // any explicit tool pick cancels the one-shot
         ToolPen.IsChecked = tag == "Pen";
         ToolText.IsChecked = tag == "Text";
         ToolSelect.IsChecked = tag == "Select";
@@ -3482,7 +3616,8 @@ public sealed partial class MainWindow : Window
         bool rowOn = _curPage?.PenRowVisible ?? true;
         bool showRow = _uiHidden ? _floatPen : rowOn;
         bool showChip = !_uiHidden && !rowOn;
-        if (showRow) FadeIn(PenRow); else FadeOut(PenRow);
+        // slide in from the bottom edge the dock lives on, like the other bars
+        if (showRow) FadeIn(PenRow, slideY: 24); else FadeOut(PenRow);
         if (showChip) FadeIn(PenRowShowBtn); else FadeOut(PenRowShowBtn);
     }
 
