@@ -14,6 +14,10 @@
                     <!-- frosted glass: more translucent so the backdrop reads through -->
                     <AcrylicBrush x:Key="CardBrush" TintColor="#FBFAF6" TintOpacity="0.38"
                                   TintLuminosityOpacity="0.55" FallbackColor="#DCFBFAF6"/>
+                    <!-- floating tool docks sit a depth tier below the chrome:
+                         noticeably more see-through than toolbars/dialogs -->
+                    <AcrylicBrush x:Key="CardBrushFloat" TintColor="#FBFAF6" TintOpacity="0.26"
+                                  TintLuminosityOpacity="0.42" FallbackColor="#D0FBFAF6"/>
                     <SolidColorBrush x:Key="HairlineBrush" Color="#E5E2D8"/>
                     <SolidColorBrush x:Key="InkBrush" Color="#1B1A18"/>
                 </ResourceDictionary>
@@ -23,6 +27,8 @@
                     <!-- frosted dark glass panels — more see-through -->
                     <AcrylicBrush x:Key="CardBrush" TintColor="#1A191D" TintOpacity="0.28"
                                   TintLuminosityOpacity="0.38" FallbackColor="#CC15141A"/>
+                    <AcrylicBrush x:Key="CardBrushFloat" TintColor="#1A191D" TintOpacity="0.18"
+                                  TintLuminosityOpacity="0.26" FallbackColor="#C415141A"/>
                     <SolidColorBrush x:Key="HairlineBrush" Color="#2E2D33"/>
                     <SolidColorBrush x:Key="InkBrush" Color="#F4F2EC"/>
                 </ResourceDictionary>

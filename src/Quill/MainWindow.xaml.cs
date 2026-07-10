@@ -144,6 +144,7 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         };
 
+        HookAccessibilitySettings();
         ApplyGlowMode();
 
         // restore the last-selected eraser mode (#13-batch2)
@@ -302,7 +303,8 @@ public sealed partial class MainWindow : Window
         if (res["GlowBrush"] is Brush glowB) glowB.Opacity = 0.9;
         SetGradientAxis(0, 0, 1, 1);   // the default diagonal
 
-        switch (_library.GlowMode)
+        // the OS "Animation effects" preference wins over the app setting
+        switch (_reduceMotion ? "Off" : _library.GlowMode)
         {
             case "Off":
                 break;
@@ -655,6 +657,11 @@ public sealed partial class MainWindow : Window
                     a.TintColor = on ? Color.FromArgb(255, 0x08, 0x08, 0x0A) : Color.FromArgb(255, 0x1A, 0x19, 0x1D);
                     a.FallbackColor = on ? Color.FromArgb(0xE6, 0x02, 0x02, 0x03) : Color.FromArgb(0xCC, 0x15, 0x14, 0x1A);
                 }
+                if (rd["CardBrushFloat"] is AcrylicBrush f)
+                {
+                    f.TintColor = on ? Color.FromArgb(255, 0x06, 0x06, 0x08) : Color.FromArgb(255, 0x1A, 0x19, 0x1D);
+                    f.FallbackColor = on ? Color.FromArgb(0xE0, 0x02, 0x02, 0x03) : Color.FromArgb(0xC4, 0x15, 0x14, 0x1A);
+                }
             }
         }
         catch { }
@@ -685,7 +692,42 @@ public sealed partial class MainWindow : Window
         catch { }
     }
 
-    // ---- liquid glass transparency (#48): retints the acrylic panels live ----
+    // Windows accessibility preferences (#glass-roadmap): when the user turns
+    // off "Transparency effects" or "Animation effects" system-wide, the app
+    // respects that instead of overriding it.
+    private bool _reduceTransparency;
+    private bool _reduceMotion;
+    private Windows.UI.ViewManagement.UISettings? _uiSettings;
+
+    private void HookAccessibilitySettings()
+    {
+        try
+        {
+            var ui = new Windows.UI.ViewManagement.UISettings();
+            _reduceTransparency = !ui.AdvancedEffectsEnabled;
+            _reduceMotion = !ui.AnimationsEnabled;
+            // these callbacks arrive off the UI thread \u2014 marshal before touching brushes
+            ui.AdvancedEffectsEnabledChanged += (s, _) => DispatcherQueue.TryEnqueue(() =>
+            {
+                _reduceTransparency = !s.AdvancedEffectsEnabled;
+                ApplyLiquidness(_library.Liquidness);
+            });
+            // the changed-event only exists on Windows 10 2004+; older builds
+            // still get the startup snapshot above
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+                ui.AnimationsEnabledChanged += (s, _) => DispatcherQueue.TryEnqueue(() =>
+                {
+                    _reduceMotion = !s.AnimationsEnabled;
+                    ApplyGlowMode();
+                });
+            _uiSettings = ui;   // keep the subscription alive
+        }
+        catch { }
+    }
+
+    // ---- liquid glass transparency (#48): retints the acrylic panels live.
+    //      Two depth tiers: chrome (CardBrush) and floating docks (CardBrushFloat),
+    //      the latter noticeably clearer, both driven by the one Liquidness dial. ----
     private void ApplyLiquidness(double v)
     {
         v = Math.Clamp(v, 0, 1);
@@ -693,13 +735,27 @@ public sealed partial class MainWindow : Window
         {
             foreach (var key in new object[] { "Light", "Default" })
             {
-                if (Application.Current.Resources.ThemeDictionaries.TryGetValue(key, out var dict) &&
-                    dict is ResourceDictionary rd && rd["CardBrush"] is AcrylicBrush a)
+                if (!Application.Current.Resources.ThemeDictionaries.TryGetValue(key, out var dict) ||
+                    dict is not ResourceDictionary rd) continue;
+                if (rd["CardBrush"] is AcrylicBrush a)
                 {
-                    // aggressive curve so the glass genuinely reads as glass:
-                    // at full liquidness the pane is practically clear.
-                    a.TintOpacity = 0.50 - v * 0.48;             // solid 0.50 \u2026 liquid 0.02
-                    a.TintLuminosityOpacity = 0.60 - v * 0.58;   // 0.60 \u2026 0.02
+                    if (_reduceTransparency) { a.TintOpacity = 0.96; a.TintLuminosityOpacity = 0.92; }
+                    else
+                    {
+                        // aggressive curve so the glass genuinely reads as glass:
+                        // at full liquidness the pane is practically clear.
+                        a.TintOpacity = 0.50 - v * 0.48;             // solid 0.50 \u2026 liquid 0.02
+                        a.TintLuminosityOpacity = 0.60 - v * 0.58;   // 0.60 \u2026 0.02
+                    }
+                }
+                if (rd["CardBrushFloat"] is AcrylicBrush f)
+                {
+                    if (_reduceTransparency) { f.TintOpacity = 0.96; f.TintLuminosityOpacity = 0.92; }
+                    else
+                    {
+                        f.TintOpacity = 0.40 - v * 0.385;            // one tier clearer than chrome
+                        f.TintLuminosityOpacity = 0.48 - v * 0.465;
+                    }
                 }
             }
         }
@@ -765,6 +821,28 @@ public sealed partial class MainWindow : Window
             var cur = RootGrid.RequestedTheme;
             RootGrid.RequestedTheme = cur == ElementTheme.Dark ? ElementTheme.Light : ElementTheme.Dark;
             RootGrid.RequestedTheme = cur;
+        }
+        catch { }
+        // commit ripple (#glass-roadmap): the rim dips and re-brightens once when
+        // a new accent lands, instead of snapping. The pulse temporarily replaces
+        // the breathe loop, so re-arm the glow mode when it completes.
+        if (_reduceMotion) return;
+        try
+        {
+            if (Application.Current.Resources["GlassEdgeBrush"] is not Brush glow) return;
+            var a = new DoubleAnimation
+            {
+                From = 0.2, To = 1.0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(340)),
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut },
+                EnableDependentAnimation = true
+            };
+            Storyboard.SetTarget(a, glow);
+            Storyboard.SetTargetProperty(a, "Opacity");
+            var sb = new Storyboard();
+            sb.Children.Add(a);
+            sb.Completed += (_, _) => ApplyGlowMode();
+            sb.Begin();
         }
         catch { }
     }
@@ -4742,21 +4820,35 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
     private async void ExportNotebookMarkdown_Click(object sender, RoutedEventArgs e)
     {
+        if (_curNb == null) return;
+        await ExportMarkdownAsync(_curNb.Name, _curNb.Sections);
+    }
+
+    private async void ExportSectionMarkdown_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curNb == null || _curSec == null) return;
+        await ExportMarkdownAsync($"{_curNb.Name} — {_curSec.Name}", new List<Section> { _curSec });
+    }
+
+    // Markdown + page-image export for any scope: the whole notebook or one
+    // section (#24-batch2 extended the notebook-only export to sections).
+    private async Task ExportMarkdownAsync(string title, IReadOnlyList<Section> sections)
+    {
         if (_curNb == null || _curSec == null || _curPage == null) return;
         var folder = await PickFolderAsync();
         if (folder == null) return;
         Surface.FlushTexts();
         var keep = (_curNb, _curSec, _curPage);
-        var nbDir = System.IO.Path.Combine(folder, Sanitize(_curNb.Name));
+        var nbDir = System.IO.Path.Combine(folder, Sanitize(title));
         var imgDir = System.IO.Path.Combine(nbDir, "images");
         Directory.CreateDirectory(imgDir);
         var md = new System.Text.StringBuilder();
-        md.AppendLine($"# {_curNb.Name}");
+        md.AppendLine($"# {title}");
         int n = 0;
         _suppressPageFade = true;
         try
         {
-            foreach (var sec in _curNb.Sections)
+            foreach (var sec in sections)
             {
                 md.AppendLine().AppendLine($"## {sec.Name}");
                 foreach (var pg in sec.Pages)
@@ -4776,14 +4868,14 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                     if (!string.IsNullOrWhiteSpace(pg.OcrText)) md.AppendLine().AppendLine("> " + pg.OcrText.Trim());
                 }
             }
-            File.WriteAllText(System.IO.Path.Combine(nbDir, $"{Sanitize(_curNb.Name)}.md"), md.ToString());
+            File.WriteAllText(System.IO.Path.Combine(nbDir, $"{Sanitize(title)}.md"), md.ToString());
         }
         finally
         {
             SwitchToPage(keep.Item1, keep.Item2, keep.Item3);
             _suppressPageFade = false;
         }
-        ShowStatus($"Exported notebook as Markdown with {n} page images.");
+        ShowStatus($"Exported {n} page{(n == 1 ? "" : "s")} as Markdown with images.");
     }
 
     // ---- vector PDF export (the raster PDF path was retired in #45) ----
@@ -4808,8 +4900,25 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         var file = await PickSaveFileAsync(".pdf", "PDF document");
         if (file == null) return;
 
+        var vpages = await CollectVectorPagesAsync(pages);
+        if (vpages.Count == 0) { ShowStatus("Nothing to export."); return; }
+        try
+        {
+            await FileIO.WriteBytesAsync(file, PdfExporter.CreateVector(vpages));
+            ShowStatus($"Exported {vpages.Count} vector page{(vpages.Count == 1 ? "" : "s")} to {file.Name} — ink stays crisp, text stays selectable.");
+        }
+        catch
+        {
+            ShowStatus("Could not save the PDF. Check the location and try again.");
+        }
+    }
+
+    // Walks the given pages through the live surface and flattens each into the
+    // vector page model shared by the PDF, SVG and HTML exporters (#24-batch2).
+    private async Task<List<PdfVectorPage>> CollectVectorPagesAsync(List<NotePage> pages)
+    {
         Surface.FlushTexts();
-        var (keepNb, keepSec, keepPage) = (_curNb, _curSec, _curPage);
+        var (keepNb, keepSec, keepPage) = (_curNb!, _curSec!, _curPage!);
         var vpages = new List<PdfVectorPage>();
         _suppressPageFade = true;
         try
@@ -4829,16 +4938,53 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             SwitchToPage(keepNb, keepSec, keepPage);
             _suppressPageFade = false;
         }
+        return vpages;
+    }
+
+    // ---- SVG: the honest "vector PNG" (#18-batch2). PNG is raster by
+    //      definition; SVG is the vector image format, so that's what we offer. ----
+    private async void ExportSvg_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curPage == null || _curNb == null || _curSec == null) { ShowStatus("Nothing to export."); return; }
+        var file = await PickSaveFileAsync(".svg", "SVG vector image");
+        if (file == null) return;
+        var vpages = await CollectVectorPagesAsync(new List<NotePage> { _curPage });
         if (vpages.Count == 0) { ShowStatus("Nothing to export."); return; }
         try
         {
-            await FileIO.WriteBytesAsync(file, PdfExporter.CreateVector(vpages));
-            ShowStatus($"Exported {vpages.Count} vector page{(vpages.Count == 1 ? "" : "s")} to {file.Name} — ink stays crisp, text stays selectable.");
+            await FileIO.WriteTextAsync(file, HtmlSvgExporter.PageToSvg(vpages[0]));
+            ShowStatus($"Exported {file.Name} — a true vector image, crisp at any zoom.");
         }
-        catch
+        catch { ShowStatus("Could not save the SVG. Check the location and try again."); }
+    }
+
+    // ---- HTML with vector pages, for every scope (#24-batch2) ----
+    private async void ExportHtml_Click(object sender, RoutedEventArgs e)
+        => await ExportHtmlAsync(_curPage != null ? new List<NotePage> { _curPage } : new List<NotePage>(), _curPage?.Name ?? "Page");
+
+    private async void ExportSectionHtml_Click(object sender, RoutedEventArgs e)
+        => await ExportHtmlAsync(_curSec?.Pages.ToList() ?? new List<NotePage>(), _curSec?.Name ?? "Section");
+
+    private async void ExportNotebookHtml_Click(object sender, RoutedEventArgs e)
+        => await ExportHtmlAsync(_curNb?.Sections.SelectMany(s => s.Pages).ToList() ?? new List<NotePage>(), _curNb?.Name ?? "Notebook");
+
+    private async Task ExportHtmlAsync(List<NotePage> pages, string title)
+    {
+        if (pages.Count == 0 || _curNb == null || _curSec == null || _curPage == null)
         {
-            ShowStatus("Could not save the PDF. Check the location and try again.");
+            ShowStatus("Nothing to export.");
+            return;
         }
+        var file = await PickSaveFileAsync(".html", "HTML document");
+        if (file == null) return;
+        var vpages = await CollectVectorPagesAsync(pages);
+        if (vpages.Count == 0) { ShowStatus("Nothing to export."); return; }
+        try
+        {
+            await FileIO.WriteTextAsync(file, HtmlSvgExporter.BuildHtml(title, vpages));
+            ShowStatus($"Exported {vpages.Count} vector page{(vpages.Count == 1 ? "" : "s")} to {file.Name} — opens in any browser.");
+        }
+        catch { ShowStatus("Could not save the HTML. Check the location and try again."); }
     }
 
     // ---- touch-screen mode (#36): larger tap targets on every toolbar ----
