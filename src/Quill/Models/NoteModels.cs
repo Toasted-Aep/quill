@@ -271,6 +271,11 @@ public class Library
     // Pen repair: compensates for faulty pen hardware that drops contact
     // mid-stroke (gap bridging) or bounces on lift (stray-dot suppression).
     public bool PenRepair { get; set; }
+    // AI assistant (#25): provider + model + local endpoint. API keys are kept
+    // in the Windows Credential Locker, never in this file.
+    public string AiProvider { get; set; } = "None";
+    public string AiModel { get; set; } = "";
+    public string AiEndpoint { get; set; } = "";
     // Last non-maximised window placement, so leaving fullscreen/maximise
     // returns to the size the user actually had. 0 width = never saved.
     public double WinX { get; set; }

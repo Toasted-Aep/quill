@@ -3277,6 +3277,60 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(dockBox);
 
+        // ---- AI assistant (#25-batch2) ----
+        panel.Children.Add(new TextBlock { Text = "AI assistant", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = "Summaries, action items, smart tags, questions and a writing assistant over the open page. Your API key is stored in the Windows Credential Locker, never in your notes file.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        var aiProviderBox = new ComboBox { Header = "Provider", Width = 220 };
+        foreach (var prov in new[] { "None", "Claude", "OpenAI", "Gemini", "Local" }) aiProviderBox.Items.Add(prov);
+        aiProviderBox.SelectedItem = _library.AiProvider is "Claude" or "OpenAI" or "Gemini" or "Local" ? _library.AiProvider : "None";
+        var aiModelBox = new TextBox { Header = "Model (blank = default)", Text = _library.AiModel, Width = 300, HorizontalAlignment = HorizontalAlignment.Left };
+        var aiEndpointBox = new TextBox
+        {
+            Header = "Local server URL (OpenAI-compatible, e.g. Ollama / LM Studio)",
+            PlaceholderText = "http://localhost:11434/v1",
+            Text = _library.AiEndpoint,
+            Visibility = _library.AiProvider == "Local" ? Visibility.Visible : Visibility.Collapsed
+        };
+        var aiKeyBox = new PasswordBox { Header = "API key", Width = 300, HorizontalAlignment = HorizontalAlignment.Left };
+        var aiKeyState = new TextBlock { FontSize = 12, Opacity = 0.7 };
+        void RefreshKeyState()
+        {
+            var prov = aiProviderBox.SelectedItem as string ?? "None";
+            aiKeyState.Text = prov is "None" ? "" :
+                prov == "Local" ? "Local servers usually need no key." :
+                AiService.GetKey(prov) != null ? "A key is saved for " + prov + "." : "No key saved for " + prov + " yet.";
+        }
+        RefreshKeyState();
+        aiProviderBox.SelectionChanged += (_, _) =>
+        {
+            var prov = aiProviderBox.SelectedItem as string ?? "None";
+            _library.AiProvider = prov;
+            aiEndpointBox.Visibility = prov == "Local" ? Visibility.Visible : Visibility.Collapsed;
+            aiModelBox.PlaceholderText = AiService.DefaultModel(prov);
+            RefreshKeyState();
+            ScheduleSave();
+        };
+        aiModelBox.TextChanged += (_, _) => { _library.AiModel = aiModelBox.Text.Trim(); ScheduleSave(); };
+        aiEndpointBox.TextChanged += (_, _) => { _library.AiEndpoint = aiEndpointBox.Text.Trim(); ScheduleSave(); };
+        var aiKeySave = new Button { Content = "Save key", FontSize = 12 };
+        aiKeySave.Click += (_, _) =>
+        {
+            var prov = aiProviderBox.SelectedItem as string ?? "None";
+            if (prov is "None") { ShowStatus("Pick a provider first."); return; }
+            AiService.SetKey(prov, aiKeyBox.Password);
+            aiKeyBox.Password = "";
+            RefreshKeyState();
+            ShowStatus("API key saved securely.");
+        };
+        var aiKeyRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        aiKeyRow.Children.Add(aiKeyBox);
+        aiKeyRow.Children.Add(aiKeySave);
+        panel.Children.Add(aiProviderBox);
+        panel.Children.Add(aiModelBox);
+        panel.Children.Add(aiEndpointBox);
+        panel.Children.Add(aiKeyRow);
+        panel.Children.Add(aiKeyState);
+
         // ---- accent colour (#33) ----
         panel.Children.Add(new TextBlock { Text = "Accent colour", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
         panel.Children.Add(new TextBlock { Text = "Used for the glows, highlights, buttons and selection colours.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
@@ -5207,6 +5261,123 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
         foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
             try { Walk(root); } catch { }
+    }
+
+    // =======================================================================
+    // AI assistant (#25-batch2): summaries, action items, smart tags, Q&A and
+    // a writing assistant over the current page, via the provider configured
+    // in Settings (Claude / OpenAI / Gemini / local OpenAI-compatible server).
+    // =======================================================================
+    private string PageContextText()
+    {
+        if (_curPage == null) return "";
+        Surface.FlushTexts();
+        var texts = string.Join("\n\n",
+            _curPage.Texts.Select(t => RtfToText(t.Rtf)).Where(s => !string.IsNullOrWhiteSpace(s)));
+        var ocr = string.IsNullOrWhiteSpace(_curPage.OcrText) ? "" : "\n\n[Handwriting]: " + _curPage.OcrText.Trim();
+        return (texts + ocr).Trim();
+    }
+
+    private async Task<string?> RunAiAsync(string system, string user)
+    {
+        if (_library.AiProvider is null or "" or "None")
+        {
+            ShowStatus("Pick an AI provider in Settings first.");
+            return null;
+        }
+        var key = AiService.GetKey(_library.AiProvider);
+        if (string.IsNullOrEmpty(key) && _library.AiProvider != "Local")
+        {
+            ShowStatus("Add your API key in Settings — AI assistant.");
+            return null;
+        }
+        ShowStatus("Asking the AI…");
+        try
+        {
+            var result = await AiService.CompleteAsync(_library.AiProvider, _library.AiModel, _library.AiEndpoint, key, system, user);
+            ShowStatus("Done.");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            ShowStatus("AI request failed: " + ex.Message);
+            return null;
+        }
+    }
+
+    private async Task ShowAiResultAsync(string title, string text)
+    {
+        var body = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
+        var scroller = new ScrollViewer { Content = body, MaxHeight = 420, MaxWidth = 520 };
+        var dlg = new ContentDialog
+        {
+            Title = title,
+            Content = scroller,
+            PrimaryButtonText = "Insert onto page",
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        if (await dlg.ShowAsync() == ContentDialogResult.Primary && _curPage != null)
+        {
+            var centre = Surface.ScreenToWorld(new Point(Surface.ActualWidth / 2, Surface.ActualHeight / 2));
+            var (df, ds2) = EffectiveTextDefaults();
+            Surface.AddTextElement(centre.X - 180, centre.Y - 40, 400,
+                PlainToRtf(text, df, ds2, ContrastHexForPage()));
+        }
+    }
+
+    private const string AiSystem = "You are a study assistant inside Quill, a pen-first lecture notes app. Be concise and concrete. Use plain text (no markdown syntax).";
+
+    private async void AiSummarize_Click(object sender, RoutedEventArgs e)
+    {
+        var ctx = PageContextText();
+        if (ctx.Length == 0) { ShowStatus("This page has no text to summarise (handwriting needs OCR first: lasso it and convert)."); return; }
+        var r = await RunAiAsync(AiSystem, "Summarise these lecture notes in a short paragraph followed by 3-6 bullet points:\n\n" + ctx);
+        if (r != null) await ShowAiResultAsync("Summary", r);
+    }
+
+    private async void AiActions_Click(object sender, RoutedEventArgs e)
+    {
+        var ctx = PageContextText();
+        if (ctx.Length == 0) { ShowStatus("This page has no text to scan for action items."); return; }
+        var r = await RunAiAsync(AiSystem, "List every action item, task, deadline or follow-up implied by these notes, one per line starting with '- ':\n\n" + ctx);
+        if (r != null) await ShowAiResultAsync("Action items", r);
+    }
+
+    private async void AiTags_Click(object sender, RoutedEventArgs e)
+    {
+        var ctx = PageContextText();
+        if (ctx.Length == 0) { ShowStatus("This page has no text to tag."); return; }
+        var r = await RunAiAsync(AiSystem, "Suggest 3-8 short topic tags for these notes, comma-separated, lowercase:\n\n" + ctx);
+        if (r != null) await ShowAiResultAsync("Smart tags", r);
+    }
+
+    private async void AiAsk_Click(object sender, RoutedEventArgs e)
+    {
+        var q = await PromptAsync("Ask about this page", "");
+        if (string.IsNullOrWhiteSpace(q)) return;
+        var ctx = PageContextText();
+        var r = await RunAiAsync(AiSystem, "Notes:\n" + ctx + "\n\nQuestion: " + q + "\nAnswer using the notes where possible.");
+        if (r != null) await ShowAiResultAsync(q, r);
+    }
+
+    private async void AiImprove_Click(object sender, RoutedEventArgs e)
+    {
+        var box = Surface.ActiveTextBox;
+        if (box == null || box.FocusState == FocusState.Unfocused || !HasTextSelection(box))
+        {
+            ShowStatus("Select some text in a text box first.");
+            return;
+        }
+        box.Document.Selection.GetText(Microsoft.UI.Text.TextGetOptions.None, out string selected);
+        if (string.IsNullOrWhiteSpace(selected)) { ShowStatus("Select some text in a text box first."); return; }
+        var r = await RunAiAsync(AiSystem, "Rewrite this text to be clearer and better written, keeping its meaning and language. Return ONLY the rewritten text:\n\n" + selected);
+        if (r != null)
+        {
+            try { box.Document.Selection.TypeText(r.Trim()); ShowStatus("Rewritten."); }
+            catch { await ShowAiResultAsync("Rewritten text", r); }
+        }
     }
 
     // Resolves a [[Note Name]] to a page by name across every notebook and
