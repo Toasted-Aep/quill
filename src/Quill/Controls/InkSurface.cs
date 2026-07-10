@@ -105,6 +105,15 @@ public sealed class InkSurface : UserControl
     private bool _touchPanActive;
 
     private List<StrokePoint>? _wet;
+
+    // Pen repair (#2-batch2): compensates for faulty pen hardware. When on, a
+    // pen-down right where a stroke just ended resumes that stroke (bridging a
+    // momentary contact drop-out), and a tiny stroke at a fresh stroke's end is
+    // discarded as lift-bounce.
+    public bool PenRepair { get; set; }
+    private PenStroke? _lastCommitted;
+    private long _lastCommitMs;
+    private Vector2 _lastCommitEnd;
     private Vector2 _wetStart, _wetEnd;
 
     private Vector2 _eraseLast;
@@ -154,6 +163,9 @@ public sealed class InkSurface : UserControl
     private bool _rotatingShape;
     private double _rotateStartPointerDeg, _rotateStartShapeDeg;
     private Vector2 _rotateCenter;
+    // rotation centre frozen at resize-drag start: converting the live pointer
+    // against the CURRENT centre made rotated shapes drift while resizing (#17-batch2)
+    private Vector2 _resizeCenter;
     private double _resizeAspect;
     private Vector2 _shapeStart, _resizeAnchor;
     private (double X, double Y, double W, double H) _shapeOrig;
@@ -906,6 +918,7 @@ public sealed class InkSurface : UserControl
                         {
                             _resizingShape = true;
                             _resizeAnchor = handle.Value;
+                            _resizeCenter = ShapeCenter(_activeShape);
                             _shapeOrig = Snapshot(_activeShape);
                             _adjustConstrain = false;
                             _resizeAspect = _activeShape.Kind == ShapeKind.Image && Math.Abs(_shapeOrig.H) > 1
@@ -978,6 +991,7 @@ public sealed class InkSurface : UserControl
                             {
                                 _resizingShape = true;
                                 _resizeAnchor = handleP.Value;
+                                _resizeCenter = ShapeCenter(_activeShape);
                                 _shapeOrig = Snapshot(_activeShape);
                                 _adjustConstrain = false;
                                 _resizeAspect = 0;
@@ -994,7 +1008,25 @@ public sealed class InkSurface : UserControl
                     if (hitHandled) break;
                     _activeShape = null;
                 }
-                _wet = new List<StrokePoint> { new(pos.X, pos.Y, props.Pressure) };
+                // Pen repair (#2-batch2): a faulty pen that momentarily loses
+                // contact ends the stroke and instantly starts a new one. If a
+                // pen-down lands right where a stroke just finished, pick that
+                // stroke back up and keep drawing as if nothing happened.
+                if (PenRepair && !RulerMode && _lastCommitted != null && _page != null &&
+                    Environment.TickCount64 - _lastCommitMs < 320 &&
+                    Vector2.Distance(pos, _lastCommitEnd) < 30f / ViewZoom &&
+                    _page.Strokes.Count > 0 && ReferenceEquals(_page.Strokes[^1], _lastCommitted))
+                {
+                    var resume = _lastCommitted;
+                    UndoManager.TryDiscardTop(a => a is AddStrokeAction asa && ReferenceEquals(asa.Stroke, resume));
+                    _page.Strokes.Remove(resume);
+                    _wet = new List<StrokePoint>(resume.Points) { new(pos.X, pos.Y, props.Pressure) };
+                    _lastCommitted = null;
+                }
+                else
+                {
+                    _wet = new List<StrokePoint> { new(pos.X, pos.Y, props.Pressure) };
+                }
                 _wetStart = pos;
                 _wetEnd = pos;
                 _stablePos = pos;
@@ -1135,6 +1167,7 @@ public sealed class InkSurface : UserControl
             {
                 _resizingShape = true;
                 _resizeAnchor = handle.Value;
+                _resizeCenter = ShapeCenter(_activeShape);
                 _shapeOrig = Snapshot(_activeShape);
                 _adjustConstrain = false;
                 _resizeAspect = _activeShape.Kind == ShapeKind.Image && Math.Abs(_shapeOrig.H) > 1
@@ -1401,7 +1434,7 @@ public sealed class InkSurface : UserControl
                 }
                 else if (_resizingShape && _activeShape != null)
                 {
-                    ResizeShape(_activeShape, _resizeAnchor, ToShapeLocal(_activeShape, pos), false, _resizeAspect);
+                    ResizeShape(_activeShape, _resizeAnchor, ToShapeLocalAt(_activeShape, pos, _resizeCenter), false, _resizeAspect);
                 }
                 else if (_movingShape && _activeShape != null)
                 {
@@ -1515,17 +1548,38 @@ public sealed class InkSurface : UserControl
                 var pts = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : FinalizeStroke(_wet ?? new List<StrokePoint>());
                 if (pts.Count >= 1)
                 {
-                    var stroke = new PenStroke
+                    // Pen repair (#2-batch2): a tiny stroke that lands where the
+                    // previous one just ended is lift-bounce from a faulty pen —
+                    // discard it. Deliberate dots (i-dots, full stops) land away
+                    // from a stroke end or after a pause, so they still register.
+                    bool bounceDot = false;
+                    if (PenRepair && !RulerMode && _lastCommitted != null &&
+                        Environment.TickCount64 - _lastCommitMs < 260 && pts.Count <= 3)
                     {
-                        Pen = Pen,
-                        Color = ColorUtil.ToHex(PenColor),
-                        Size = PenSize,
-                        Sens = PenSensitivity,
-                        Points = pts,
-                        PressureCurve = PenPressureCurve != null ? new List<float>(PenPressureCurve) : null
-                    };
-                    UndoManager.Push(new AddStrokeAction(stroke), _page);
-                    changed = true;
+                        float span = 0;
+                        for (int i = 1; i < pts.Count; i++)
+                            span += Math.Abs(pts[i].X - pts[i - 1].X) + Math.Abs(pts[i].Y - pts[i - 1].Y);
+                        var first = new Vector2(pts[0].X, pts[0].Y);
+                        bounceDot = span < 6f / ViewZoom &&
+                                    Vector2.Distance(first, _lastCommitEnd) < 24f / ViewZoom;
+                    }
+                    if (!bounceDot)
+                    {
+                        var stroke = new PenStroke
+                        {
+                            Pen = Pen,
+                            Color = ColorUtil.ToHex(PenColor),
+                            Size = PenSize,
+                            Sens = PenSensitivity,
+                            Points = pts,
+                            PressureCurve = PenPressureCurve != null ? new List<float>(PenPressureCurve) : null
+                        };
+                        UndoManager.Push(new AddStrokeAction(stroke), _page);
+                        changed = true;
+                        _lastCommitted = stroke;
+                        _lastCommitMs = Environment.TickCount64;
+                        _lastCommitEnd = new Vector2(pts[^1].X, pts[^1].Y);
+                    }
                 }
                 break;
             }
@@ -3019,6 +3073,10 @@ public sealed class InkSurface : UserControl
         return new Vector2(c.X + d.X * cos - d.Y * sin, c.Y + d.X * sin + d.Y * cos);
     }
 
+    // Same, but about an explicitly frozen centre (used while resizing, #17-batch2).
+    private static Vector2 ToShapeLocalAt(ShapeElement s, Vector2 p, Vector2 center)
+        => Math.Abs(s.Rotation) < 0.001 ? p : RotatePoint(p, center, -s.Rotation);
+
     // World point -> the shape's un-rotated local frame (for hit-testing).
     private static Vector2 ToShapeLocal(ShapeElement s, Vector2 p)
         => Math.Abs(s.Rotation) < 0.001 ? p : RotatePoint(p, ShapeCenter(s), -s.Rotation);
@@ -3032,7 +3090,7 @@ public sealed class InkSurface : UserControl
     }
 
     private bool HitRotateHandle(ShapeElement s, Vector2 pos, float tol)
-        => s.Kind != ShapeKind.Table && Vector2.Distance(RotateHandlePos(s), pos) <= tol + 4f / ViewZoom;
+        => s.Kind != ShapeKind.Table && Vector2.Distance(RotateHandlePos(s), pos) <= tol + 8f / ViewZoom;
 
     private static bool OnShapeBody(ShapeElement s, Vector2 pos, float tol)
     {
@@ -3216,14 +3274,15 @@ public sealed class InkSurface : UserControl
         {
             if (Vector2.Distance(hpt, lp) <= tol)
             {
-                // resize the bbox from the corner diagonally opposite the grabbed vertex
-                int nearest = 0; float bd = float.MaxValue;
+                // resize anchored at the bbox corner farthest from the grabbed
+                // vertex — robust for true polygon vertices, not just bbox corners
+                int far = 0; float bd = -1;
                 for (int i = 0; i < bbox.Length; i++)
                 {
                     float d = Vector2.Distance(bbox[i], hpt);
-                    if (d < bd) { bd = d; nearest = i; }
+                    if (d > bd) { bd = d; far = i; }
                 }
-                return bbox[bbox.Length - 1 - nearest];
+                return bbox[far];
             }
         }
         return null;
@@ -4469,12 +4528,17 @@ public sealed class InkSurface : UserControl
             BorderThickness = new Thickness(0),
             Visibility = Visibility.Collapsed
         };
-        // rotate handle: drag left/right to spin the box, like image rotation (#38)
+        // rotate handle: drag left/right to spin the box, like image rotation (#38).
+        // A real-sized hit target (the old bare 11px glyph was nearly impossible
+        // to grab — misses fell through to the grip and moved the box, #11-batch2).
         var rotate = new TextBlock
         {
             Text = "⟳",
             FontSize = 11,
-            Margin = new Thickness(0, 0, 28, 0),
+            Width = 34,
+            Height = 16,
+            TextAlignment = TextAlignment.Center,
+            Margin = new Thickness(0, 0, 24, 0),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             Opacity = 0.75,
@@ -4638,13 +4702,15 @@ public sealed class InkSurface : UserControl
 
         double startX = 0, startY = 0;
         grip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
-        grip.ManipulationStarted += (_, _) =>
+        grip.ManipulationStarted += (_, e) =>
         {
+            if (rotating) { e.Complete(); return; }   // rotate wins; never also move (#11-batch2)
             startX = Canvas.GetLeft(container);
             startY = Canvas.GetTop(container);
         };
         grip.ManipulationDelta += (_, e) =>
         {
+            if (rotating) return;
             // deltas are reported in the grip's local space, which is already
             // world units (the text layer's RenderTransform maps screen->world)
             Canvas.SetLeft(container, Canvas.GetLeft(container) + e.Delta.Translation.X);
@@ -4652,7 +4718,7 @@ public sealed class InkSurface : UserControl
         };
         grip.ManipulationCompleted += (_, _) =>
         {
-            if (_page == null) return;
+            if (rotating || _page == null) return;
             double nx = Canvas.GetLeft(container), ny = Canvas.GetTop(container);
             if (Math.Abs(nx - startX) > 0.5 || Math.Abs(ny - startY) > 0.5)
             {

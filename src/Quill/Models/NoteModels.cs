@@ -258,6 +258,9 @@ public class Library
     public bool OledBlack { get; set; }
     // Autosave debounce in seconds.
     public double AutosaveSeconds { get; set; } = 1.5;
+    // Pen repair: compensates for faulty pen hardware that drops contact
+    // mid-stroke (gap bridging) or bounces on lift (stray-dot suppression).
+    public bool PenRepair { get; set; }
     // Last non-maximised window placement, so leaving fullscreen/maximise
     // returns to the size the user actually had. 0 width = never saved.
     public double WinX { get; set; }

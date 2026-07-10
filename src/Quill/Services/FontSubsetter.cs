@@ -22,28 +22,41 @@ public static class FontSubsetter
 
     public static string? ResolveFontPath(string fontFamily)
     {
-        string systemFonts = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Fonts");
-        
-        if (FontNameToFileName.TryGetValue(fontFamily, out var fileName))
+        // Per-user fonts (installed "for me only", e.g. Amsterdam Handwriting)
+        // live under LocalAppData, not C:\Windows\Fonts — search both.
+        string[] fontDirs =
         {
-            var p = Path.Combine(systemFonts, fileName);
-            if (File.Exists(p)) return p;
-        }
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Fonts"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                         "Microsoft", "Windows", "Fonts")
+        };
 
-        // Try exact name match
-        var tryPath = Path.Combine(systemFonts, fontFamily + ".ttf");
-        if (File.Exists(tryPath)) return tryPath;
-
-        // Try searching directory
-        try
+        foreach (var dir in fontDirs)
         {
-            foreach (var f in Directory.GetFiles(systemFonts, "*.ttf"))
+            if (FontNameToFileName.TryGetValue(fontFamily, out var fileName))
             {
-                var name = Path.GetFileNameWithoutExtension(f);
-                if (name.Contains(fontFamily, StringComparison.OrdinalIgnoreCase)) return f;
+                var p = Path.Combine(dir, fileName);
+                if (File.Exists(p)) return p;
             }
+
+            // Try exact name match
+            var tryPath = Path.Combine(dir, fontFamily + ".ttf");
+            if (File.Exists(tryPath)) return tryPath;
         }
-        catch { }
+
+        // Try searching the directories
+        foreach (var dir in fontDirs)
+        {
+            try
+            {
+                foreach (var f in Directory.GetFiles(dir, "*.ttf"))
+                {
+                    var name = Path.GetFileNameWithoutExtension(f);
+                    if (name.Contains(fontFamily, StringComparison.OrdinalIgnoreCase)) return f;
+                }
+            }
+            catch { }
+        }
 
         return null;
     }
