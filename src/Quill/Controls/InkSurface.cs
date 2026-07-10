@@ -2033,15 +2033,74 @@ public sealed class InkSurface : UserControl
             if (_activeShape != null)
             {
                 DrawShape(ds, _activeShape);
+                // A single-selected table draws only its grid above; its cell text
+                // lives in separate TextElements Win2D never sees, so rasterise those
+                // too or "copy as image" silently drops every cell's words.
+                if (_activeShape.Kind == ShapeKind.Table && _page != null)
+                    foreach (var t in _page.Texts)
+                        if (t.TableId == _activeShape.Id) DrawTextElement(ds, t);
             }
             else
             {
                 foreach (var sh in _selShapes) DrawShape(ds, sh);
                 foreach (var s in _selected) DrawStroke(ds, _canvas, s, System.Numerics.Vector2.Zero, null);
+                // Text boxes and table cells are XAML RichEditBox overlays the
+                // drawing session can't reach; draw them last (on top of shapes)
+                // so a copied selection keeps its text. _selTexts already holds
+                // both free boxes and any lassoed table cells.
+                foreach (var t in _selTexts) DrawTextElement(ds, t);
             }
         }
         var pixels = rt.GetPixelBytes();
         return (pixels, width, height);
+    }
+
+    /// <summary>Rasterises a text element (free text box or table cell) into the
+    /// drawing session so "copy as image" captures its words. The live text is a
+    /// XAML RichEditBox overlay Win2D can't render, so this draws the plain text
+    /// pulled from the RTF — mirroring the vector PDF exporter's RtfToPlainText
+    /// path — honouring position, wrap width, font size and rotation.</summary>
+    private void DrawTextElement(CanvasDrawingSession ds, TextElement t)
+    {
+        var plain = RtfToPlainText(t.Rtf, out float size, out string font);
+        if (string.IsNullOrWhiteSpace(plain)) return;
+
+        // Per-run colour doesn't survive RtfToPlainText, so fall back to the page's
+        // ink convention (dark ink on light paper and vice-versa), like the exporter.
+        var bg = _page != null ? ColorUtil.Parse(_page.Background) : Colors.White;
+        var ink = ColorUtil.IsDark(bg)
+            ? Color.FromArgb(255, 0xFA, 0xF9, 0xF5)
+            : Color.FromArgb(255, 0x14, 0x14, 0x13);
+
+        using var format = new CanvasTextFormat
+        {
+            FontFamily = font,
+            FontSize = size,
+            WordWrapping = CanvasWordWrapping.Wrap
+        };
+        using var layout = new CanvasTextLayout(ds, plain, format, (float)Math.Max(60, t.Width), 0f);
+
+        Matrix3x2 prevT = ds.Transform;
+        bool rot = Math.Abs(t.Rotation) > 0.01;
+        if (rot)
+        {
+            // The overlay rotates about its container centre (RenderTransformOrigin
+            // 0.5,0.5); mirror that so rotated text lands where the user sees it.
+            double w = t.Width, h = 40;
+            if (_textUi.TryGetValue(t.Id, out var ui))
+            {
+                if (ui.Container.ActualWidth > 0) w = ui.Container.ActualWidth;
+                if (ui.Container.ActualHeight > 0) h = ui.Container.ActualHeight;
+            }
+            var center = new Vector2((float)(t.X + w / 2), (float)(t.Y + h / 2));
+            ds.Transform = Matrix3x2.CreateRotation((float)(t.Rotation * Math.PI / 180.0), center) * prevT;
+        }
+
+        // +4 inset and +16 below the fixed 16px grip bar match where the RichEditBox
+        // renders its text inside the container (same offsets as the PDF exporter).
+        ds.DrawTextLayout(layout, (float)t.X + 4, (float)t.Y + 16, ink);
+
+        if (rot) ds.Transform = prevT;
     }
 
     public void CommitActiveSelection()

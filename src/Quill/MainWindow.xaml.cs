@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices.WindowsRuntime;
+﻿using System.Runtime.InteropServices.WindowsRuntime;
 using Quill.Controls;
 using Quill.Helpers;
 using Quill.Models;
@@ -48,6 +48,13 @@ public sealed partial class MainWindow : Window
     private bool _syncingSize;
     private bool _uiHidden;
     private bool _floatPen;
+    // true right after a drag on the minimal-UI cluster/tab, so the Button.Click
+    // that a WinUI manipulation gesture leaves behind on release doesn't also fire.
+    private bool _minimalButtonsDragged;
+    // true while the minimal-UI cluster is tucked away as a small edge tab.
+    private bool _minimalDocked;
+    private bool _minimalDockedLeft;
+    private bool _minimalDockedTop = true;
     // true only when the hide-all button is what entered full screen, so restore
     // won't pull the user out of a full screen they set up themselves.
     private bool _hideEnteredFullscreen;
@@ -137,7 +144,19 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         };
 
-        StartGlowPulse();
+        ApplyGlowMode();
+
+        // restore the last-selected eraser mode (#13-batch2)
+        Surface.EraserMode = _library.LastEraserMode == "Point" ? EraserMode.Point : EraserMode.Object;
+        // configurable autosave debounce
+        _saveTimer.Interval = TimeSpan.FromSeconds(Math.Clamp(_library.AutosaveSeconds, 0.5, 10));
+
+        // nothing that escapes the canvas row (unclipped text-box overlays) may
+        // paint over or steal clicks from the top bar (#3-batch2)
+        CanvasArea.SizeChanged += (_, _) =>
+        {
+            CanvasArea.Clip = new RectangleGeometry { Rect = new Rect(0, 0, CanvasArea.ActualWidth, CanvasArea.ActualHeight) };
+        };
 
         Surface.ContentChanged += ScheduleSave;
         Surface.ActiveTextChanged += box => { UpdateFormatBarVisibility(); SyncSizeComboFromSelection(box); };
@@ -162,31 +181,48 @@ public sealed partial class MainWindow : Window
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); StatusText.Text = ""; };
         _zoomTimer.Tick += (_, _) => { _zoomTimer.Stop(); ZoomBorder.Visibility = Visibility.Collapsed; };
-        Closed += (_, _) => { SaveNow(); LibraryStore.Flush(); };
+        Closed += (_, _) => { CaptureWindowPlacement(); SaveNow(); LibraryStore.Flush(); };
 
         // pen panel dragging -> dock to an edge
         PenGrip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        PenGrip.ManipulationStarted += (_, _) => BeginCheapDrag(PenRow);
         PenGrip.ManipulationDelta += (_, e) => JellyDrag(PenRow, e);
-        PenGrip.ManipulationCompleted += (_, _) => { JellyRelease(PenRow); DockPenRowFromPosition(); };
+        PenGrip.ManipulationCompleted += (_, _) => { EndCheapDrag(PenRow); JellyRelease(PenRow); DockPenRowFromPosition(); };
 
-        // minimal-UI floating buttons: drag the cluster itself; snap to nearest corner (#30)
+        // minimal-UI floating buttons: drag the cluster itself; snap to nearest corner,
+        // or dock to a side edge as a small pull-out tab (#30, #dock). A manipulation
+        // and the inner Button's own Click are separate WinUI gesture pipelines, so
+        // dragging over a button still let its Click fire on release; guard it with a
+        // flag that's only cleared at the START of the next press (handledEventsToo:
+        // true so it still resets even though Button marks PointerPressed handled).
+        MinimalButtons.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler((_, _) => _minimalButtonsDragged = false), true);
         MinimalButtons.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        MinimalButtons.ManipulationStarted += (_, _) => { _minimalButtonsDragged = true; BeginCheapDrag(MinimalButtons); };
         MinimalButtons.ManipulationDelta += (_, e) => JellyDrag(MinimalButtons, e);
-        MinimalButtons.ManipulationCompleted += (_, _) => SnapMinimalButtons();
+        MinimalButtons.ManipulationCompleted += (_, _) => { EndCheapDrag(MinimalButtons); SnapMinimalButtons(); };
+
+        MinimalButtonsTab.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        MinimalButtonsTab.ManipulationStarted += (_, _) => BeginCheapDrag(MinimalButtonsTab);
+        MinimalButtonsTab.ManipulationDelta += (_, e) => JellyDrag(MinimalButtonsTab, e);
+        MinimalButtonsTab.ManipulationCompleted += (_, _) => { EndCheapDrag(MinimalButtonsTab); TryUndockFromDrag(); };
 
         // calculator window dragging (with liquid jelly physics, #48)
         CalcHeader.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        CalcHeader.ManipulationStarted += (_, _) => BeginCheapDrag(CalcPanel);
         CalcHeader.ManipulationDelta += (_, e) => JellyDrag(CalcPanel, e);
-        CalcHeader.ManipulationCompleted += (_, _) => JellyRelease(CalcPanel);
+        CalcHeader.ManipulationCompleted += (_, _) => { EndCheapDrag(CalcPanel); JellyRelease(CalcPanel); };
 
         // audio recording panel dragging (with liquid jelly physics)
         AudioFloatingPanel.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        AudioFloatingPanel.ManipulationStarted += (_, _) => BeginCheapDrag(AudioFloatingPanel);
         AudioFloatingPanel.ManipulationDelta += (_, e) => JellyDrag(AudioFloatingPanel, e);
-        AudioFloatingPanel.ManipulationCompleted += (_, _) => JellyRelease(AudioFloatingPanel);
+        AudioFloatingPanel.ManipulationCompleted += (_, _) => { EndCheapDrag(AudioFloatingPanel); JellyRelease(AudioFloatingPanel); };
 
         AudioGrip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        AudioGrip.ManipulationStarted += (_, _) => BeginCheapDrag(AudioFloatingPanel);
         AudioGrip.ManipulationDelta += (_, e) => JellyDrag(AudioFloatingPanel, e);
-        AudioGrip.ManipulationCompleted += (_, _) => JellyRelease(AudioFloatingPanel);
+        AudioGrip.ManipulationCompleted += (_, _) => { EndCheapDrag(AudioFloatingPanel); JellyRelease(AudioFloatingPanel); };
 
         ApplyTheme();
         try { ApplyAccent(ColorUtil.Parse(_library.AccentColor), refreshTheme: true); } catch { }
@@ -198,6 +234,19 @@ public sealed partial class MainWindow : Window
         SelectTool("Pen");
         if (_library.Pens.Count > 0) ApplyPreset(_library.Pens[0]);
         UpdateUndoButtons();
+
+        // Restore the last window placement BEFORE any fullscreen presenter, so
+        // leaving fullscreen/maximise lands on the size the user actually had
+        // last session instead of the small first-run default (#14-batch2).
+        try
+        {
+            if (_library.WinW >= 400 && _library.WinH >= 300)
+                AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(
+                    (int)_library.WinX, (int)_library.WinY, (int)_library.WinW, (int)_library.WinH));
+            if (_library.WinMaximized && AppWindow.Presenter is OverlappedPresenter op)
+                op.Maximize();
+        }
+        catch { }
 
         // Startup experience: full screen + the notebook/section/page picker,
         // with the last-used page already loaded behind it (#31).
@@ -218,19 +267,76 @@ public sealed partial class MainWindow : Window
         }
 
         ShowStatus("Right-click a pen to edit its type, colour, size and pressure response. F11 toggles full screen.");
+        _uiReady = true;
     }
 
-    private void StartGlowPulse()
+    // ---- glow animation modes (#4-batch2): Off / Breathe / Circulate ----
+    private Storyboard? _pulseSbEdge, _pulseSbGlow;
+    private DispatcherTimer? _circulateTimer;
+    private double _circAngle;
+
+    private void ApplyGlowMode()
+    {
+        try { _pulseSbEdge?.Stop(); } catch { }
+        try { _pulseSbGlow?.Stop(); } catch { }
+        _pulseSbEdge = _pulseSbGlow = null;
+        _circulateTimer?.Stop();
+        _circulateTimer = null;
+
+        var res = Application.Current.Resources;
+        if (res["GlassEdgeBrush"] is Brush edge) edge.Opacity = 0.85;
+        if (res["GlowBrush"] is Brush glowB) glowB.Opacity = 0.9;
+        SetGradientAxis(0, 0, 1, 1);   // the default diagonal
+
+        switch (_library.GlowMode)
+        {
+            case "Off":
+                break;
+            case "Circulate":
+                // the highlight travels around the rim: rotate the gradient axis
+                _circulateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+                _circulateTimer.Tick += (_, _) =>
+                {
+                    _circAngle = (_circAngle + 2.6) % 360;
+                    double rad = _circAngle * Math.PI / 180.0;
+                    const double r = 0.7071;
+                    double cx = 0.5 + r * Math.Cos(rad), cy = 0.5 + r * Math.Sin(rad);
+                    SetGradientAxis(cx, cy, 1 - cx, 1 - cy);
+                };
+                _circulateTimer.Start();
+                break;
+            default:   // "Breathe" — the original soft pulse
+                _pulseSbEdge = PulseBrushOpacity("GlassEdgeBrush", 0.35, 1.0, 2.4);
+                _pulseSbGlow = PulseBrushOpacity("GlowBrush", 0.55, 1.0, 2.6);
+                break;
+        }
+    }
+
+    private static void SetGradientAxis(double sx, double sy, double ex, double ey)
     {
         try
         {
-            // the pulse now breathes along the glass rim (#50)
-            if (Application.Current.Resources["GlassEdgeBrush"] is not Brush glow) return;
+            var res = Application.Current.Resources;
+            foreach (var key in new[] { "GlassEdgeBrush", "GlowBrush" })
+                if (res[key] is LinearGradientBrush lg)
+                {
+                    lg.StartPoint = new Point(sx, sy);
+                    lg.EndPoint = new Point(ex, ey);
+                }
+        }
+        catch { }
+    }
+
+    private static Storyboard? PulseBrushOpacity(string resourceKey, double from, double to, double seconds)
+    {
+        try
+        {
+            if (Application.Current.Resources[resourceKey] is not Brush glow) return null;
             var anim = new DoubleAnimation
             {
-                From = 0.35,
-                To = 1.0,
-                Duration = new Duration(TimeSpan.FromSeconds(2.4)),
+                From = from,
+                To = to,
+                Duration = new Duration(TimeSpan.FromSeconds(seconds)),
                 AutoReverse = true,
                 RepeatBehavior = RepeatBehavior.Forever,
                 EnableDependentAnimation = true,
@@ -241,11 +347,68 @@ public sealed partial class MainWindow : Window
             var sb = new Storyboard();
             sb.Children.Add(anim);
             sb.Begin();
+            return sb;
         }
         catch
         {
-            // glow stays static if the animation can't run
+            return null;   // glow stays static if the animation can't run
         }
+    }
+
+    // ---- drag-time render cost control (#12-batch2) ----
+    // The glow pulse is a dependent animation: every tick invalidates every
+    // glass panel. And dragging an acrylic panel re-blurs it per frame. Both
+    // together are what tanked drag framerate — pause the pulse and swap the
+    // dragged panel's acrylic for its cheap fallback colour while dragging.
+    private readonly Dictionary<FrameworkElement, Brush> _dragAcrylicSwap = new();
+
+    private void BeginCheapDrag(FrameworkElement el)
+    {
+        try { _pulseSbEdge?.Pause(); } catch { }
+        try { _pulseSbGlow?.Pause(); } catch { }
+        _circulateTimer?.Stop();
+        if (el is Border b && b.Background is AcrylicBrush a && !_dragAcrylicSwap.ContainsKey(el))
+        {
+            _dragAcrylicSwap[el] = b.Background;
+            b.Background = new SolidColorBrush(a.FallbackColor);
+        }
+    }
+
+    private void EndCheapDrag(FrameworkElement el)
+    {
+        if (el is Border b && _dragAcrylicSwap.TryGetValue(el, out var orig))
+        {
+            b.Background = orig;
+            _dragAcrylicSwap.Remove(el);
+        }
+        if (_library.GlowMode == "Circulate") _circulateTimer?.Start();
+        else
+        {
+            try { _pulseSbEdge?.Resume(); } catch { }
+            try { _pulseSbGlow?.Resume(); } catch { }
+        }
+    }
+
+    // Remembers the window's real (non-maximised) placement on close so the
+    // next launch can restore it (#14-batch2).
+    private void CaptureWindowPlacement()
+    {
+        try
+        {
+            if (AppWindow.Presenter is OverlappedPresenter op)
+            {
+                _library.WinMaximized = op.State == OverlappedPresenterState.Maximized;
+                if (op.State == OverlappedPresenterState.Restored)
+                {
+                    _library.WinX = AppWindow.Position.X;
+                    _library.WinY = AppWindow.Position.Y;
+                    _library.WinW = AppWindow.Size.Width;
+                    _library.WinH = AppWindow.Size.Height;
+                }
+            }
+            // full-screen at close: keep the previously stored placement as-is
+        }
+        catch { }
     }
 
     // =======================================================================
@@ -433,12 +596,51 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     // Theme
     // =======================================================================
+    private bool _uiReady;
+
     private void ApplyTheme()
     {
         bool dark = _library.Theme == "Dark";
+        ApplyOledBlack(dark && _library.OledBlack);
         RootGrid.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
         UpdateThemeToggle(dark);
         ApplyTitleBarColors(dark);
+        // Code-built UI (gallery cards, tree, pen strip, calc history) captures
+        // theme colours at build time and doesn't react to RequestedTheme — the
+        // "half the UI stays in the old theme" bug. Rebuild those surfaces.
+        if (_uiReady)
+        {
+            try
+            {
+                BuildTree();
+                BuildPenStrip();
+                RefreshCalcHistory();
+                if (GalleryPanel.Visibility == Visibility.Visible) BuildGallery();
+                Surface.Refresh();
+            }
+            catch { }
+        }
+    }
+
+    // Pure-black dark theme for OLED displays (#32-batch2): mutates the Default
+    // (dark) theme dictionary's brushes in place, the same trick ApplyLiquidness uses.
+    private void ApplyOledBlack(bool on)
+    {
+        try
+        {
+            if (Application.Current.Resources.ThemeDictionaries.TryGetValue("Default", out var d) &&
+                d is ResourceDictionary rd)
+            {
+                if (rd["SurfaceBrush"] is SolidColorBrush s)
+                    s.Color = on ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 0x0F, 0x0E, 0x10);
+                if (rd["CardBrush"] is AcrylicBrush a)
+                {
+                    a.TintColor = on ? Color.FromArgb(255, 0x08, 0x08, 0x0A) : Color.FromArgb(255, 0x1A, 0x19, 0x1D);
+                    a.FallbackColor = on ? Color.FromArgb(0xE6, 0x02, 0x02, 0x03) : Color.FromArgb(0xCC, 0x15, 0x14, 0x1A);
+                }
+            }
+        }
+        catch { }
     }
 
     // ---- Apple-style sun/moon theme pill (#48) ----
@@ -449,9 +651,11 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            // the knob covers the INACTIVE side: light mode shows the sun
+            // (knob sits right, over the moon), dark mode shows the moon.
             var a = new DoubleAnimation
             {
-                To = dark ? 30.0 : 0.0,
+                To = dark ? 0.0 : 30.0,
                 Duration = new Duration(TimeSpan.FromMilliseconds(280)),
                 EasingFunction = new BackEase { Amplitude = 0.4, EasingMode = EasingMode.EaseOut }
             };
@@ -554,7 +758,9 @@ public sealed partial class MainWindow : Window
         {
             if (!Microsoft.UI.Windowing.AppWindowTitleBar.IsCustomizationSupported()) return;
             var tb = AppWindow.TitleBar;
-            var bg = dark ? Color.FromArgb(255, 0x0F, 0x0E, 0x10) : Color.FromArgb(255, 0xF7, 0xF6, 0xF1);
+            var bg = dark
+                ? (_library.OledBlack ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 0x0F, 0x0E, 0x10))
+                : Color.FromArgb(255, 0xF7, 0xF6, 0xF1);
             var fg = dark ? Color.FromArgb(255, 0xF4, 0xF2, 0xEC) : Color.FromArgb(255, 0x1B, 0x1A, 0x18);
             var hover = dark ? Color.FromArgb(40, 255, 255, 255) : Color.FromArgb(28, 0, 0, 0);
             var press = dark ? Color.FromArgb(70, 255, 255, 255) : Color.FromArgb(48, 0, 0, 0);
@@ -770,8 +976,8 @@ public sealed partial class MainWindow : Window
         var panel = new StackPanel { Spacing = 6, Width = 220 };
         var rbPoint = new RadioButton { Content = "Point eraser — erases only what you touch", FontSize = 12, IsChecked = Surface.EraserMode == EraserMode.Point };
         var rbObject = new RadioButton { Content = "Stroke eraser — removes whole strokes", FontSize = 12, IsChecked = Surface.EraserMode == EraserMode.Object };
-        rbPoint.Checked += (_, _) => { Surface.EraserMode = EraserMode.Point; SelectTool("Eraser"); };
-        rbObject.Checked += (_, _) => { Surface.EraserMode = EraserMode.Object; SelectTool("Eraser"); };
+        rbPoint.Checked += (_, _) => { Surface.EraserMode = EraserMode.Point; _library.LastEraserMode = "Point"; ScheduleSave(); SelectTool("Eraser"); };
+        rbObject.Checked += (_, _) => { Surface.EraserMode = EraserMode.Object; _library.LastEraserMode = "Object"; ScheduleSave(); SelectTool("Eraser"); };
         panel.Children.Add(rbPoint);
         panel.Children.Add(rbObject);
         fly.Content = panel;
@@ -1019,6 +1225,11 @@ public sealed partial class MainWindow : Window
         _activePresetId = p.Id;
         SelectTool("Pen");
         BuildPenStrip();
+        // accent-follow (#6-batch2): the app tints itself to the active pen.
+        // Applied visually only — the stored manual AccentColor is untouched,
+        // so switching back to Manual restores the user's own pick.
+        if (_library.AccentFollow == "Pen")
+            try { ApplyAccent(ColorUtil.Parse(p.Color), refreshTheme: false); } catch { }
     }
 
     private async void AddPreset_Click(object sender, RoutedEventArgs e)
@@ -1325,6 +1536,10 @@ public sealed partial class MainWindow : Window
             FadeTo(Surface, 1, 200, collapseAtEnd: false);
         }
         CrumbText.Text = $"{nb.Name} ▸ {sec.Name} ▸ {page.Name}";
+
+        // accent-follow (#6-batch2): tint the app to the notebook's colour
+        if (_library.AccentFollow == "Notebook")
+            try { ApplyAccent(ColorUtil.Parse(nb.Color), refreshTheme: false); } catch { }
 
         _syncingUi = true;
         GridRadios.SelectedIndex = (int)page.Grid;
@@ -2019,6 +2234,7 @@ public sealed partial class MainWindow : Window
         GalleryNbBtn.Visibility = detail ? Visibility.Collapsed : Visibility.Visible;
         GalleryFolderBtn.Visibility = detail ? Visibility.Collapsed : Visibility.Visible;
         GallerySecBtn.Visibility = detail ? Visibility.Visible : Visibility.Collapsed;
+        GallerySaveBtn.Visibility = detail ? Visibility.Visible : Visibility.Collapsed;
 
         if (detail)
         {
@@ -2659,6 +2875,43 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(liquidSlider);
 
+        // ---- glow animation (#4-batch2) ----
+        var glowBox = new ComboBox { Header = "Glow animation", Width = 220 };
+        foreach (var mode in new[] { "Off", "Breathe", "Circulate" }) glowBox.Items.Add(mode);
+        glowBox.SelectedItem = _library.GlowMode is "Off" or "Circulate" ? _library.GlowMode : "Breathe";
+        glowBox.SelectionChanged += (_, _) =>
+        {
+            if (glowBox.SelectedItem is string gm)
+            { _library.GlowMode = gm; ApplyGlowMode(); ScheduleSave(); }
+        };
+        panel.Children.Add(glowBox);
+        panel.Children.Add(new TextBlock { Text = "Circulate makes the highlight travel around the panel rims instead of fading in and out.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- true black for OLED (#32-batch2) ----
+        var oledToggle = new ToggleSwitch { Header = "True black dark theme (OLED)", IsOn = _library.OledBlack };
+        oledToggle.Toggled += (_, _) =>
+        {
+            _library.OledBlack = oledToggle.IsOn;
+            ApplyTheme();
+            ScheduleSave();
+        };
+        panel.Children.Add(oledToggle);
+
+        // ---- autosave interval ----
+        var autosaveSlider = new Slider
+        {
+            Minimum = 0.5, Maximum = 10, StepFrequency = 0.5,
+            Value = Math.Clamp(_library.AutosaveSeconds, 0.5, 10),
+            Header = "Autosave delay (seconds after you stop editing)"
+        };
+        autosaveSlider.ValueChanged += (_, args) =>
+        {
+            _library.AutosaveSeconds = args.NewValue;
+            _saveTimer.Interval = TimeSpan.FromSeconds(args.NewValue);
+            ScheduleSave();
+        };
+        panel.Children.Add(autosaveSlider);
+
         // ---- accent colour (#33) ----
         panel.Children.Add(new TextBlock { Text = "Accent colour", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
         panel.Children.Add(new TextBlock { Text = "Used for the glows, highlights, buttons and selection colours.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
@@ -2688,6 +2941,70 @@ public sealed partial class MainWindow : Window
         var accentExp = new Expander { Header = "Custom colour (RGB)", Content = accentPicker, HorizontalAlignment = HorizontalAlignment.Stretch };
         panel.Children.Add(accentExp);
         accentPicker.ColorChanged += (_, args) => SetAccent(args.NewColor);
+
+        // ---- user-saved custom colours (#5-batch2): a second, user-curated row ----
+        panel.Children.Add(new TextBlock { Text = "My colours", FontSize = 12, Opacity = 0.8, Margin = new Thickness(0, 6, 0, 0) });
+        var customRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        void RebuildCustomRow()
+        {
+            customRow.Children.Clear();
+            foreach (var hex in _library.CustomColors)
+            {
+                var h = hex;
+                var sw = new Button
+                {
+                    Width = 36, Height = 26,
+                    Background = new SolidColorBrush(ColorUtil.Parse(h)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(90, 128, 128, 128))
+                };
+                ToolTipService.SetToolTip(sw, h + " — tap to use, right-click to remove");
+                sw.Click += (_, _) => accentPicker.Color = ColorUtil.Parse(h);
+                sw.RightTapped += (_, _) => { _library.CustomColors.Remove(h); ScheduleSave(); RebuildCustomRow(); };
+                customRow.Children.Add(sw);
+            }
+            var add = new Button { Width = 36, Height = 26, Content = new TextBlock { Text = "+", FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center }, Padding = new Thickness(0) };
+            ToolTipService.SetToolTip(add, "Save the current accent colour as one of my colours");
+            add.Click += (_, _) =>
+            {
+                var hex = $"#{accentPicker.Color.R:X2}{accentPicker.Color.G:X2}{accentPicker.Color.B:X2}";
+                if (!_library.CustomColors.Contains(hex))
+                {
+                    _library.CustomColors.Add(hex);
+                    if (_library.CustomColors.Count > 12) _library.CustomColors.RemoveAt(0);
+                    ScheduleSave();
+                    RebuildCustomRow();
+                }
+            };
+            customRow.Children.Add(add);
+        }
+        RebuildCustomRow();
+        panel.Children.Add(customRow);
+
+        // ---- accent follows pen / notebook (#6-batch2) ----
+        var followBox = new ComboBox { Header = "Accent colour follows", Width = 220 };
+        foreach (var (tag, label) in new[] { ("Manual", "My chosen colour"), ("Pen", "The active pen's colour"), ("Notebook", "The open notebook's colour") })
+            followBox.Items.Add(new ComboBoxItem { Content = label, Tag = tag });
+        foreach (ComboBoxItem it in followBox.Items)
+            if ((string)it.Tag == _library.AccentFollow) { followBox.SelectedItem = it; break; }
+        if (followBox.SelectedItem == null) followBox.SelectedIndex = 0;
+        followBox.SelectionChanged += (_, _) =>
+        {
+            if (followBox.SelectedItem is not ComboBoxItem ci || ci.Tag is not string mode) return;
+            _library.AccentFollow = mode;
+            ScheduleSave();
+            try
+            {
+                // apply the new source immediately
+                if (mode == "Pen" && _library.Pens.FirstOrDefault(p => p.Id == _activePresetId) is PenPreset ap)
+                    ApplyAccent(ColorUtil.Parse(ap.Color), refreshTheme: true);
+                else if (mode == "Notebook" && _curNb != null)
+                    ApplyAccent(ColorUtil.Parse(_curNb.Color), refreshTheme: true);
+                else
+                    ApplyAccent(ColorUtil.Parse(_library.AccentColor), refreshTheme: true);
+            }
+            catch { }
+        };
+        panel.Children.Add(followBox);
 
         panel.Children.Add(new TextBlock { Text = "Recover / import notebooks", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
         var recoverBtn = new Button { Content = "Recover my old notebooks (previous location)", HorizontalAlignment = HorizontalAlignment.Left };
@@ -3042,17 +3359,54 @@ public sealed partial class MainWindow : Window
     private void BgPreset_Click(object sender, RoutedEventArgs e)
     {
         if (_curPage == null || sender is not Button b || b.Tag is not string hex) return;
-        _curPage.Background = hex;
-        Surface.Refresh();
-        ScheduleSave();
+        SetPageBackground(hex);
     }
 
     private void BgPicker_ColorChanged(ColorPicker sender, ColorChangedEventArgs args)
     {
         if (_syncingUi || _curPage == null) return;
-        _curPage.Background = ColorUtil.ToHex(args.NewColor);
+        SetPageBackground(ColorUtil.ToHex(args.NewColor));
+    }
+
+    // Applies a page background and, when the page flips between light and dark,
+    // flips near-black/near-white text with it so notes stay readable (#10-batch2).
+    private void SetPageBackground(string hex)
+    {
+        if (_curPage == null) return;
+        bool wasDark = ColorUtil.IsDark(ColorUtil.Parse(_curPage.Background));
+        bool nowDark = ColorUtil.IsDark(ColorUtil.Parse(hex));
+        _curPage.Background = hex;
+        if (wasDark != nowDark && _curPage.Texts.Count > 0)
+        {
+            FlipTextContrast(_curPage, nowDark);
+            Surface.FlushTexts();
+            Surface.RebuildTextLayer();
+        }
         Surface.Refresh();
         ScheduleSave();
+    }
+
+    // Rewrites each text box's RTF colour table: near-black ink turns ivory on a
+    // dark page and near-white ink turns near-black on a light page. Colours with
+    // real hue (reds, blues, highlights) are left alone.
+    private static void FlipTextContrast(NotePage page, bool nowDark)
+    {
+        foreach (var t in page.Texts)
+        {
+            if (string.IsNullOrEmpty(t.Rtf)) continue;
+            t.Rtf = System.Text.RegularExpressions.Regex.Replace(t.Rtf,
+                @"\\red(\d{1,3})\\green(\d{1,3})\\blue(\d{1,3})",
+                m =>
+                {
+                    int r = int.Parse(m.Groups[1].Value), g = int.Parse(m.Groups[2].Value), b = int.Parse(m.Groups[3].Value);
+                    int max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
+                    bool greyish = max - min < 40;   // only flip near-neutral colours
+                    int lum = (r * 299 + g * 587 + b * 114) / 1000;
+                    if (greyish && nowDark && lum < 100) return @"\red250\green249\blue245";   // ivory
+                    if (greyish && !nowDark && lum > 180) return @"\red20\green20\blue19";     // near-black
+                    return m.Value;
+                });
+        }
     }
 
     private void SetDefaultBg_Click(object sender, RoutedEventArgs e)
@@ -3153,7 +3507,10 @@ public sealed partial class MainWindow : Window
         FadeOut(NotebookPanel);
         FadeOut(CalcPanel);
         BtnCalc.IsChecked = false;
-        FadeIn(MinimalButtons);
+        // if the cluster was left tucked away as an edge tab, keep it tucked
+        // (rather than popping the full 3-button cluster back over it).
+        if (_minimalDocked) { PositionDockedTab(); FadeIn(MinimalButtonsTab, pop: false); }
+        else FadeIn(MinimalButtons);
         ApplyPenRowVisibility();
         // hiding everything also goes full screen — but only take credit for it
         // if we weren't already full screen, so restore won't yank the user out.
@@ -3175,9 +3532,11 @@ public sealed partial class MainWindow : Window
 
     private void RestoreUi_Click(object sender, RoutedEventArgs e)
     {
+        if (_minimalButtonsDragged) return;
         _uiHidden = false;
         FadeIn(TopBar, pop: false, slideY: -14);
         FadeOut(MinimalButtons);
+        FadeOut(MinimalButtonsTab);
         if (BtnSidebar.IsChecked == true) FadeIn(NotebookPanel, slideX: -18);
         else FadeOut(NotebookPanel);
         UpdateFormatBarVisibility();
@@ -3200,26 +3559,128 @@ public sealed partial class MainWindow : Window
         {
             var t = MinimalButtons.TransformToVisual(CanvasArea);
             var tl = t.TransformPoint(new Point(0, 0));
-            double cx = tl.X + MinimalButtons.ActualWidth / 2.0;
-            double cy = tl.Y + MinimalButtons.ActualHeight / 2.0;
+            double bw = MinimalButtons.ActualWidth, bh = MinimalButtons.ActualHeight;
+            double cx = tl.X + bw / 2.0, cy = tl.Y + bh / 2.0;
             double w = CanvasArea.ActualWidth, h = CanvasArea.ActualHeight;
-            bool left = cx < w / 2, top = cy < h / 2;
-            MinimalButtons.HorizontalAlignment = left ? HorizontalAlignment.Left : HorizontalAlignment.Right;
-            MinimalButtons.VerticalAlignment = top ? VerticalAlignment.Top : VerticalAlignment.Bottom;
-            MinimalButtons.Margin = new Thickness(left ? 14 : 0, top ? 14 : 0, left ? 0 : 14, top ? 0 : 14);
+
+            // dragged flush against a side edge -> tuck away as a pull-out tab
+            const double dockZone = 34;
+            if (cx < dockZone || cx > w - dockZone)
+            {
+                CollapseMinimalButtons(left: cx < dockZone, top: cy < h / 2);
+                return;
+            }
+
+            const double pad = 14;
+            // snap to the NEAREST edge; near an edge's middle, magnetise to centre (#16-batch2)
+            double dL = cx, dR = w - cx, dT = cy, dB = h - cy;
+            double m = Math.Min(Math.Min(dL, dR), Math.Min(dT, dB));
+            if (m == dT || m == dB)
+            {
+                bool top = m == dT;
+                MinimalButtons.VerticalAlignment = top ? VerticalAlignment.Top : VerticalAlignment.Bottom;
+                if (Math.Abs(cx - w / 2) < w / 6)
+                {
+                    MinimalButtons.HorizontalAlignment = HorizontalAlignment.Center;
+                    MinimalButtons.Margin = new Thickness(0, top ? pad : 0, 0, top ? 0 : pad);
+                }
+                else
+                {
+                    bool left = cx < w / 2;
+                    MinimalButtons.HorizontalAlignment = left ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+                    double off = Math.Clamp(left ? cx - bw / 2 : w - cx - bw / 2, pad, Math.Max(pad, w - bw - pad));
+                    MinimalButtons.Margin = new Thickness(left ? off : 0, top ? pad : 0, left ? 0 : off, top ? 0 : pad);
+                }
+            }
+            else
+            {
+                bool left = m == dL;
+                MinimalButtons.HorizontalAlignment = left ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+                if (Math.Abs(cy - h / 2) < h / 6)
+                {
+                    MinimalButtons.VerticalAlignment = VerticalAlignment.Center;
+                    MinimalButtons.Margin = new Thickness(left ? pad : 0, 0, left ? 0 : pad, 0);
+                }
+                else
+                {
+                    bool top = cy < h / 2;
+                    MinimalButtons.VerticalAlignment = top ? VerticalAlignment.Top : VerticalAlignment.Bottom;
+                    double off = Math.Clamp(top ? cy - bh / 2 : h - cy - bh / 2, pad, Math.Max(pad, h - bh - pad));
+                    MinimalButtons.Margin = new Thickness(left ? pad : 0, top ? off : 0, left ? 0 : pad, top ? 0 : off);
+                }
+            }
             MinimalButtons.RenderTransform = null;
+            PopIn(MinimalButtons, 0.96, 240);   // settle wobble on snap
+        }
+        catch { }
+    }
+
+    // Tucks the 3-button cluster away as a small tab flush in the nearest corner
+    // of that edge -- exactly in the corner, never a pixel off-screen (#16-batch2).
+    private void CollapseMinimalButtons(bool left, bool top)
+    {
+        _minimalDocked = true;
+        _minimalDockedLeft = left;
+        _minimalDockedTop = top;
+        MinimalButtons.RenderTransform = null;
+        FadeOut(MinimalButtons, 130);
+
+        MinimalButtonsTabGlyph.Glyph = left ? "" : "";  // chevron points inward, toward the canvas
+        MinimalButtonsTab.RenderTransform = null;
+        PositionDockedTab();
+        FadeIn(MinimalButtonsTab, pop: false);
+    }
+
+    private void PositionDockedTab()
+    {
+        MinimalButtonsTab.HorizontalAlignment = _minimalDockedLeft ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+        MinimalButtonsTab.VerticalAlignment = _minimalDockedTop ? VerticalAlignment.Top : VerticalAlignment.Bottom;
+        MinimalButtonsTab.Margin = new Thickness(0);
+    }
+
+    // Restores the full 3-button cluster near the corner the tab was docked in.
+    private void ExpandMinimalButtons()
+    {
+        _minimalDocked = false;
+        FadeOut(MinimalButtonsTab, 110);
+        MinimalButtons.HorizontalAlignment = _minimalDockedLeft ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+        MinimalButtons.VerticalAlignment = _minimalDockedTop ? VerticalAlignment.Top : VerticalAlignment.Bottom;
+        MinimalButtons.Margin = new Thickness(
+            _minimalDockedLeft ? 14 : 0, _minimalDockedTop ? 14 : 0,
+            _minimalDockedLeft ? 0 : 14, _minimalDockedTop ? 0 : 14);
+        MinimalButtons.RenderTransform = null;
+        FadeIn(MinimalButtons);
+    }
+
+    private void MinimalButtonsTab_Tapped(object sender, TappedRoutedEventArgs e) => ExpandMinimalButtons();
+
+    // Dragging the tab far enough away from its edge undocks it back to the full
+    // cluster; a small nudge that doesn't clear the edge just snaps back into place.
+    private void TryUndockFromDrag()
+    {
+        try
+        {
+            var t = MinimalButtonsTab.TransformToVisual(CanvasArea);
+            var tl = t.TransformPoint(new Point(0, 0));
+            double cx = tl.X + MinimalButtonsTab.ActualWidth / 2.0;
+            double w = CanvasArea.ActualWidth;
+            double distFromEdge = _minimalDockedLeft ? cx : w - cx;
+            if (distFromEdge > 46) ExpandMinimalButtons();
+            else MinimalButtonsTab.RenderTransform = null;
         }
         catch { }
     }
 
     private void FloatPen_Click(object sender, RoutedEventArgs e)
     {
+        if (_minimalButtonsDragged) return;
         _floatPen = !_floatPen;
         ApplyPenRowVisibility();
     }
 
     private void FloatNotebook_Click(object sender, RoutedEventArgs e)
     {
+        if (_minimalButtonsDragged) return;
         NotebookPanel.Visibility = NotebookPanel.Visibility == Visibility.Visible
             ? Visibility.Collapsed
             : Visibility.Visible;
@@ -3288,12 +3749,73 @@ public sealed partial class MainWindow : Window
 
     private void Shortcuts_Close(object sender, TappedRoutedEventArgs e) => FadeOut(ShortcutsPanel, 140);
 
+    // Search entry point on the gallery (#19-batch2) — reuses the one search flyout.
+    private void GallerySearch_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SearchBtn.Flyout?.ShowAt(GallerySearchBtn);
+            SearchBox.Focus(FocusState.Programmatic);
+        }
+        catch { }
+    }
+
+    // Save button on the notebook gallery (#21-batch2): export the whole notebook,
+    // one section, or one page — built as a menu from the browsed notebook.
+    private void GallerySave_Click(object sender, RoutedEventArgs e)
+    {
+        var nb = _galleryNb;
+        if (nb == null) return;
+        var menu = new MenuFlyout();
+
+        var whole = new MenuFlyoutItem { Text = $"Whole notebook “{nb.Name}” (PDF)" };
+        whole.Click += (_, _) => ExportFromGallery(nb, null, null);
+        menu.Items.Add(whole);
+        menu.Items.Add(new MenuFlyoutSeparator());
+
+        foreach (var sec in nb.Sections)
+        {
+            var s = sec;
+            var sub = new MenuFlyoutSubItem { Text = $"Section “{s.Name}”" };
+            var secPdf = new MenuFlyoutItem { Text = "Whole section (PDF)" };
+            secPdf.Click += (_, _) => ExportFromGallery(nb, s, null);
+            sub.Items.Add(secPdf);
+            if (s.Pages.Count > 0) sub.Items.Add(new MenuFlyoutSeparator());
+            foreach (var pg in s.Pages)
+            {
+                var p = pg;
+                var pageItem = new MenuFlyoutItem { Text = $"Page “{p.Name}” (PDF)" };
+                pageItem.Click += (_, _) => ExportFromGallery(nb, s, p);
+                sub.Items.Add(pageItem);
+            }
+            menu.Items.Add(sub);
+        }
+        menu.ShowAt(GallerySaveBtn);
+    }
+
+    // Navigates to the chosen scope, then drives the existing export pipeline.
+    private void ExportFromGallery(Notebook nb, Section? sec, NotePage? page)
+    {
+        var targetSec = sec ?? nb.Sections.FirstOrDefault();
+        var targetPage = page ?? targetSec?.Pages.FirstOrDefault();
+        if (targetSec == null || targetPage == null) { ShowStatus("Nothing to export — this notebook has no pages."); return; }
+        SwitchToPage(nb, targetSec, targetPage);
+        if (page != null) ExportVectorPdf_Click(GallerySaveBtn, new RoutedEventArgs());
+        else if (sec != null) ExportSectionVectorPdf_Click(GallerySaveBtn, new RoutedEventArgs());
+        else ExportNotebookVectorPdf_Click(GallerySaveBtn, new RoutedEventArgs());
+    }
+
     private void SearchAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         try
         {
             if (_uiHidden || SearchBtn.Flyout == null) { args.Handled = false; return; }
-            SearchBtn.Flyout.ShowAt(SearchBtn);
+            // the search button lives in the notebook panel now (#19-batch2);
+            // anchor the flyout to whichever search entry point is on screen.
+            FrameworkElement anchor =
+                GalleryPanel.Visibility == Visibility.Visible ? GallerySearchBtn :
+                NotebookPanel.Visibility == Visibility.Visible ? SearchBtn : TopBar;
+            SearchBtn.Flyout.ShowAt(anchor);
             SearchBox.Focus(FocusState.Programmatic);
             args.Handled = true;
         }
