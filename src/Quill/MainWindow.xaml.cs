@@ -44,6 +44,7 @@ public sealed partial class MainWindow : Window
     private double _gxMin = -10, _gxMax = 10;
     private readonly Microsoft.Graphics.Canvas.Text.CanvasTextFormat _graphLabelFormat = new() { FontSize = 10 };
 
+    private bool _backdropActive;
     private bool _syncingUi;
     private bool _syncingSize;
     private bool _uiHidden;
@@ -100,6 +101,17 @@ public sealed partial class MainWindow : Window
             if (System.IO.File.Exists(icon)) AppWindow.SetIcon(icon);
         }
         catch { /* icon is best-effort */ }
+
+        // real window-level glass on Windows 11 (Mica preferred, acrylic next);
+        // Windows 10 silently keeps the opaque surface (#glass-roadmap)
+        try
+        {
+            if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
+            { SystemBackdrop = new MicaBackdrop(); _backdropActive = true; }
+            else if (Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController.IsSupported())
+            { SystemBackdrop = new DesktopAcrylicBackdrop(); _backdropActive = true; }
+        }
+        catch { }
 
         _library = LibraryStore.Load();
         SeedPens();
@@ -617,10 +629,33 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     private bool _uiReady;
 
+    // "System" theme follows Windows' light/dark preference; there is no direct
+    // boolean API at this OS floor, so use the well-known background-luminance check.
+    private bool SystemPrefersDark()
+    {
+        try
+        {
+            var bg = (_uiSettings ?? new Windows.UI.ViewManagement.UISettings())
+                .GetColorValue(Windows.UI.ViewManagement.UIColorType.Background);
+            return bg.R + (int)bg.G + bg.B < 384;
+        }
+        catch { return true; }
+    }
+
+    private bool ResolvedDark() =>
+        _library.Theme == "System" ? SystemPrefersDark() : _library.Theme == "Dark";
+
     private void ApplyTheme()
     {
-        bool dark = _library.Theme == "Dark";
+        bool dark = ResolvedDark();
         ApplyOledBlack(dark && _library.OledBlack);
+        // with a live Mica/acrylic backdrop the root goes translucent so the
+        // desktop reads through; OLED black and reduced transparency stay opaque
+        bool translucentRoot = _backdropActive && !_reduceTransparency && !(dark && _library.OledBlack);
+        RootGrid.Background = new SolidColorBrush(dark
+            ? (translucentRoot ? Color.FromArgb(0xD0, 0x0F, 0x0E, 0x10)
+               : _library.OledBlack ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 0x0F, 0x0E, 0x10))
+            : (translucentRoot ? Color.FromArgb(0xD0, 0xF7, 0xF6, 0xF1) : Color.FromArgb(255, 0xF7, 0xF6, 0xF1)));
         RootGrid.RequestedTheme = dark ? ElementTheme.Dark : ElementTheme.Light;
         UpdateThemeToggle(dark);
         ApplyTitleBarColors(dark);
@@ -720,6 +755,10 @@ public sealed partial class MainWindow : Window
                     _reduceMotion = !s.AnimationsEnabled;
                     ApplyGlowMode();
                 });
+            ui.ColorValuesChanged += (s, _) => DispatcherQueue.TryEnqueue(() =>
+            {
+                if (_library.Theme == "System") ApplyTheme();
+            });
             _uiSettings = ui;   // keep the subscription alive
         }
         catch { }
@@ -877,7 +916,7 @@ public sealed partial class MainWindow : Window
 
     private void Theme_Click(object sender, RoutedEventArgs e)
     {
-        _library.Theme = _library.Theme == "Dark" ? "Light" : "Dark";
+        _library.Theme = ResolvedDark() ? "Light" : "Dark";
         ApplyTheme();
         ScheduleSave();
         ShowStatus(_library.Theme == "Dark" ? "Dark mode on." : "Light mode on.");
@@ -1635,6 +1674,11 @@ public sealed partial class MainWindow : Window
         // accent-follow (#6-batch2): tint the app to the notebook's colour
         if (_library.AccentFollow == "Notebook")
             try { ApplyAccent(ColorUtil.Parse(nb.Color), refreshTheme: false); } catch { }
+
+        // per-notebook text defaults (#10-roadmap)
+        var (efFont, efSize) = EffectiveTextDefaults();
+        Surface.PendingFontFamily = efFont;
+        Surface.PendingFontSize = efSize;
 
         _syncingUi = true;
         GridRadios.SelectedIndex = (int)page.Grid;
@@ -2550,7 +2594,7 @@ public sealed partial class MainWindow : Window
 
     private Border MakeNotebookCard(Notebook nb)
     {
-        bool dark = _library.Theme == "Dark";
+        bool dark = ResolvedDark();
         var cardBg = GlassBrush(new SolidColorBrush(dark ? Color.FromArgb(255, 0x22, 0x21, 0x1F) : Color.FromArgb(255, 0xFF, 0xFF, 0xFF)));
         var inkBrush = new SolidColorBrush(dark ? Color.FromArgb(255, 0xF4, 0xF2, 0xEC) : Color.FromArgb(255, 0x1B, 0x1A, 0x18));
         var col = ColorUtil.Parse(nb.Color);
@@ -2729,7 +2773,7 @@ public sealed partial class MainWindow : Window
     // ---- notebook detail: sections with page chips (start-screen drill-down) ----
     private void BuildNotebookDetail(Notebook nb)
     {
-        bool dark = _library.Theme == "Dark";
+        bool dark = ResolvedDark();
         var inkBrush = new SolidColorBrush(dark ? Color.FromArgb(255, 0xF4, 0xF2, 0xEC) : Color.FromArgb(255, 0x1B, 0x1A, 0x18));
         var cardBg = GlassBrush(new SolidColorBrush(dark ? Color.FromArgb(255, 0x1C, 0x1B, 0x20) : Color.FromArgb(255, 0xFF, 0xFF, 0xFF)));
         var chipBg = GlassBrush(new SolidColorBrush(dark ? Color.FromArgb(255, 0x27, 0x26, 0x2C) : Color.FromArgb(255, 0xF3, 0xF1, 0xEA)));
@@ -3044,6 +3088,28 @@ public sealed partial class MainWindow : Window
         row.Children.Add(defSize);
         panel.Children.Add(row);
         panel.Children.Add(new TextBlock { Text = "New text boxes start with this font and size.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        var nbFontRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var nbFontBtn = new Button { Content = "Use as default for the open notebook", FontSize = 12 };
+        nbFontBtn.Click += (_, _) =>
+        {
+            if (_curNb == null) { ShowStatus("No notebook is open."); return; }
+            _curNb.DefaultFont = _library.DefaultFont;
+            _curNb.DefaultFontSize = _library.DefaultFontSize;
+            ScheduleSave();
+            ShowStatus($"Text in “{_curNb.Name}” now defaults to {_curNb.DefaultFont} {(int)_curNb.DefaultFontSize.GetValueOrDefault()}.");
+        };
+        var nbFontClear = new Button { Content = "Clear notebook override", FontSize = 12 };
+        nbFontClear.Click += (_, _) =>
+        {
+            if (_curNb == null) { ShowStatus("No notebook is open."); return; }
+            _curNb.DefaultFont = null;
+            _curNb.DefaultFontSize = null;
+            ScheduleSave();
+            ShowStatus($"“{_curNb.Name}” follows the library-wide font again.");
+        };
+        nbFontRow.Children.Add(nbFontBtn);
+        nbFontRow.Children.Add(nbFontClear);
+        panel.Children.Add(nbFontRow);
 
         // ---- startup behaviour ----
         panel.Children.Add(new TextBlock { Text = "Startup", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
@@ -3091,6 +3157,20 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(glowBox);
         panel.Children.Add(new TextBlock { Text = "Circulate makes the highlight travel around the panel rims instead of fading in and out.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- theme mode (#10-roadmap) ----
+        var themeBox = new ComboBox { Header = "Theme", Width = 220 };
+        foreach (var (tag, label) in new[] { ("Light", "Light"), ("Dark", "Dark"), ("System", "Follow Windows") })
+            themeBox.Items.Add(new ComboBoxItem { Content = label, Tag = tag });
+        foreach (ComboBoxItem it in themeBox.Items)
+            if ((string)it.Tag == _library.Theme) { themeBox.SelectedItem = it; break; }
+        if (themeBox.SelectedItem == null) themeBox.SelectedIndex = 1;
+        themeBox.SelectionChanged += (_, _) =>
+        {
+            if (themeBox.SelectedItem is ComboBoxItem ci && ci.Tag is string t)
+            { _library.Theme = t; ApplyTheme(); ScheduleSave(); }
+        };
+        panel.Children.Add(themeBox);
 
         // ---- true black for OLED (#32-batch2) ----
         var oledToggle = new ToggleSwitch { Header = "True black dark theme (OLED)", IsOn = _library.OledBlack };
@@ -3343,6 +3423,11 @@ public sealed partial class MainWindow : Window
         SelectTool(tag);
     }
 
+    // Text defaults resolve per-notebook first, then library-wide (#10-roadmap).
+    private (string Font, float Size) EffectiveTextDefaults() => (
+        _curNb?.DefaultFont ?? _library.DefaultFont,
+        (float)(_curNb?.DefaultFontSize ?? _library.DefaultFontSize));
+
     private void SelectTool(string tag)
     {
         if (tag != "FreeSpace") _blankSpaceOnce = false;   // any explicit tool pick cancels the one-shot
@@ -3355,8 +3440,9 @@ public sealed partial class MainWindow : Window
         // Leaving writing mode reverts the chosen size/font to the saved defaults (#8).
         if (tool != ToolType.Text)
         {
-            Surface.PendingFontSize = (float)_library.DefaultFontSize;
-            Surface.PendingFontFamily = _library.DefaultFont;
+            var (df, ds) = EffectiveTextDefaults();
+            Surface.PendingFontSize = ds;
+            Surface.PendingFontFamily = df;
         }
         Surface.SetTool(tool);
         UpdateFormatBarVisibility();
@@ -5064,6 +5150,109 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
         foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
             try { Walk(root); } catch { }
+    }
+
+    // =======================================================================
+    // Command palette (Ctrl+K, #30-batch2): keyboard-driven hub to jump to any
+    // page or run any common action without touching the mouse.
+    // =======================================================================
+    private sealed record PaletteCmd(string Label, Action Run);
+
+    private void PaletteAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        _ = ShowCommandPaletteAsync();
+    }
+
+    private async Task ShowCommandPaletteAsync()
+    {
+        var cmds = new List<PaletteCmd>();
+        void Add(string label, Action run) => cmds.Add(new PaletteCmd(label, run));
+
+        Add("New page", () => AddPage_Click(this, new RoutedEventArgs()));
+        Add("New section", () => AddSection_Click(this, new RoutedEventArgs()));
+        Add("New notebook", () => AddNotebook_Click(this, new RoutedEventArgs()));
+        Add("Notebook gallery", () => ShowGallery(launcher: false));
+        Add("Settings", () => Settings_Click(this, new RoutedEventArgs()));
+        Add("Toggle light / dark theme", () => Theme_Click(this, new RoutedEventArgs()));
+        Add("Toggle full screen", () => Fullscreen_Click(this, new RoutedEventArgs()));
+        Add("Minimal UI (hide all panels)", () => HideUi_Click(this, new RoutedEventArgs()));
+        Add("Undo", () => Surface.Undo());
+        Add("Redo", () => Surface.Redo());
+        Add("Zoom to fit", () => ZoomFit_Click(this, new RoutedEventArgs()));
+        Add("Reset zoom to 100%", () => ZoomReset_Click(this, new RoutedEventArgs()));
+        Add("Export page as PDF", () => ExportVectorPdf_Click(this, new RoutedEventArgs()));
+        Add("Export page as PNG", () => ExportPng_Click(this, new RoutedEventArgs()));
+        Add("Export page as SVG (vector)", () => ExportSvg_Click(this, new RoutedEventArgs()));
+        Add("Export page as HTML (vector)", () => ExportHtml_Click(this, new RoutedEventArgs()));
+        Add("Import PDF as section", () => ImportPdf_Click(this, new RoutedEventArgs()));
+        Add("Search all notes", () =>
+        {
+            try
+            {
+                FrameworkElement anchorEl =
+                    GalleryPanel.Visibility == Visibility.Visible ? GallerySearchBtn :
+                    NotebookPanel.Visibility == Visibility.Visible ? SearchBtn : TopBar;
+                SearchBtn.Flyout?.ShowAt(anchorEl);
+                SearchBox.Focus(FocusState.Programmatic);
+            }
+            catch { }
+        });
+        Add("Tool: Pen", () => SelectTool("Pen"));
+        Add("Tool: Text", () => SelectTool("Text"));
+        Add("Tool: Lasso select", () => SelectTool("Select"));
+        Add("Tool: Insert free space", () => SelectTool("FreeSpace"));
+        foreach (var nb in _library.Notebooks)
+            foreach (var sec in nb.Sections)
+                foreach (var pg in sec.Pages)
+                {
+                    var (n0, s0, p0) = (nb, sec, pg);
+                    Add($"Open: {n0.Name} ▸ {s0.Name} ▸ {p0.Name}", () =>
+                    {
+                        SwitchToPage(n0, s0, p0);
+                        if (GalleryPanel.Visibility == Visibility.Visible) CloseGallery();
+                    });
+                }
+
+        var box = new TextBox { PlaceholderText = "Type a command or page name…" };
+        var list = new ListView { MaxHeight = 320, IsItemClickEnabled = true, SelectionMode = ListViewSelectionMode.Single };
+        void Refill()
+        {
+            var words = box.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var hits = cmds.Where(c => words.All(w => c.Label.Contains(w, StringComparison.OrdinalIgnoreCase))).Take(12).ToList();
+            list.Items.Clear();
+            foreach (var c in hits)
+                list.Items.Add(new ListViewItem { Content = new TextBlock { Text = c.Label, TextTrimming = TextTrimming.CharacterEllipsis }, Tag = c });
+            if (list.Items.Count > 0) list.SelectedIndex = 0;
+        }
+        Refill();
+        box.TextChanged += (_, _) => Refill();
+
+        var panel = new StackPanel { Width = 480, Spacing = 8 };
+        panel.Children.Add(box);
+        panel.Children.Add(list);
+        var dlg = new ContentDialog { Title = "Command palette", Content = panel, CloseButtonText = "Cancel", XamlRoot = RootGrid.XamlRoot };
+
+        void Run(object? item)
+        {
+            if (item is ListViewItem lvi && lvi.Tag is PaletteCmd c)
+            {
+                dlg.Hide();
+                try { c.Run(); } catch { }
+            }
+        }
+        list.ItemClick += (_, e) => Run(e.ClickedItem);
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter)
+            { Run(list.SelectedItem ?? (list.Items.Count > 0 ? list.Items[0] : null)); e.Handled = true; }
+            else if (e.Key == Windows.System.VirtualKey.Down && list.Items.Count > 0)
+            { list.SelectedIndex = Math.Min(list.SelectedIndex + 1, list.Items.Count - 1); e.Handled = true; }
+            else if (e.Key == Windows.System.VirtualKey.Up && list.SelectedIndex > 0)
+            { list.SelectedIndex--; e.Handled = true; }
+        };
+        dlg.Opened += (_, _) => box.Focus(FocusState.Programmatic);
+        await dlg.ShowAsync();
     }
 
     private void ShowCanvasContextMenu(Point pos)

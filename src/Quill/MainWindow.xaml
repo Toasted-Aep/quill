@@ -19,6 +19,7 @@
             <KeyboardAccelerator Key="D" Modifiers="Control" Invoked="DuplicateAccel_Invoked"/>
             <KeyboardAccelerator Key="V" Modifiers="Control,Shift" Invoked="PastePlainTextAccel_Invoked"/>
             <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="SearchAccel_Invoked"/>
+            <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="PaletteAccel_Invoked"/>
         </Grid.KeyboardAccelerators>
 
         <Grid.RowDefinitions>

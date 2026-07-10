@@ -4827,6 +4827,10 @@ public sealed class InkSurface : UserControl
         if (_page == null) return null;
         foreach (var s in _page.Strokes)
         {
+            // cheap bbox reject before the per-point scan (FindStrokeNear has
+            // always done this; HitStroke was the one path that didn't)
+            s.GetBounds(out float mnX, out float mnY, out float mxX, out float mxY);
+            if (pos.X < mnX - tol || pos.X > mxX + tol || pos.Y < mnY - tol || pos.Y > mxY + tol) continue;
             for (int i = 0; i < s.Points.Count - 1; i++)
             {
                 var from = new Vector2(s.Points[i].X, s.Points[i].Y);

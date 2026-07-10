@@ -219,6 +219,9 @@ public class Notebook
     public string? DefaultBackground { get; set; }
     public GridType? DefaultGrid { get; set; }
     public double? DefaultGridSpacing { get; set; }
+    // Per-notebook default text font/size (null = the library-wide default).
+    public string? DefaultFont { get; set; }
+    public double? DefaultFontSize { get; set; }
     public List<Section> Sections { get; set; } = new();
 
     public override string ToString() => Name;
