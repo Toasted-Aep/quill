@@ -2505,7 +2505,6 @@ public sealed partial class MainWindow : Window
     private void BuildGallery()
     {
         GalleryHost.Children.Clear();
-        if (_library.TouchMode) DispatcherQueue.TryEnqueue(() => ApplyTouchMode(true));
         // liquid transition when moving between the grid and a notebook (#51):
         // the content fades in while gliding up into place
         GalleryHost.Opacity = 0;
@@ -5334,7 +5333,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                 Walk(ch);
             }
         }
-        foreach (var root in new FrameworkElement[] { TopBarScroll, TopBarPinned, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel, GalleryHeaderRow })
+        // reverted to the original coverage on request — touch mode behaves
+        // exactly as it did before the batch-10 changes
+        foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
             try { Walk(root); } catch { }
     }
 
