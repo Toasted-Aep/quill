@@ -1,58 +1,81 @@
 # Quill — roadmap
 
-## Shipped in the last release
+## Shipped recently
 
-- PDF import: any PDF becomes a section (one inkable page per PDF page).
-- Selection scaling: corner handles on lasso selections resize ink, shapes
-  and text together, fully undoable — pen, touch and mouse.
-- Object-eraser preview: hover highlights the stroke that would be deleted.
-- F1 shortcut cheat-sheet on liquid glass.
-- Exports: copy page as image, section → PNG folder, notebook → Markdown +
-  images (Obsidian-friendly).
-- Safer saves: file IO off the UI thread, close-time flush, and a conflict
-  guard that preserves externally-changed libraries (`library.conflict-*.json`).
-- Shape recognition already existed: hold the pen still after drawing to snap
-  the stroke to a clean shape.
+**Ink & input**
+- Pen repair mode (Settings): bridges mid-stroke drop-outs from a faulty pen
+  and suppresses lift-bounce dots; deliberate dots still register.
+- Shape resize overhaul: rotated shapes resize about a pinned anchor (no more
+  drifting), polygon vertices anchor sensibly, bigger rotate-handle hit areas.
+- Lasso double-click = leave blank space once, then the pen comes back.
+- Shape recognition settle pulse; custom axis labels on x-y / x-y-z shapes.
+
+**Look & feel**
+- Window-level Mica (Windows 11) with translucent root; liquid-glass depth
+  tiers (floating docks clearer than chrome); glow engine with Off / Breathe /
+  Circulate modes shared by every glow in the app; accent unified everywhere,
+  with optional accent-follow (active pen or notebook colour).
+- Follow-Windows theme mode; true-black OLED dark theme; text ink follows the
+  page background, not the app theme.
+- Original vector icon set for pen types, minimal-UI buttons and tools.
+- Honours Windows' "Transparency effects" and "Animation effects" settings.
+- Minimal-UI cluster snaps to any edge (middle magnetism) and tucks into a
+  corner pull-out tab; touch mode scales glyphs, not just hit targets.
+
+**Features**
+- AI assistant: floating chat with history that SEES the page (PNG snapshot of
+  the actual ink) plus one-shot summarise / action items / smart tags / ask /
+  improve-selection. Providers: Claude, OpenAI, Gemini, or a local
+  OpenAI-compatible server; keys live in the Windows Credential Locker.
+- Ctrl+K command palette (jump to any page, run any common action).
+- Voice dictation via Windows speech into the focused text box.
+- [[Note Name]] links between pages; bare URLs auto-link (Ctrl+Click opens).
+- Typed equations: pixel-perfect MathLive capture tinted to the page,
+  editable in place (right-click → Edit equation).
+- Exports: vector PDF, SVG, HTML (vectors + selectable text) at page /
+  section / notebook scope; per-section Markdown + images; gallery Save… menu.
+- Calculator constants page (g, R, N_A, c, h, k_B… + user-defined).
+- Per-notebook default font/size; custom accent swatches; pen-dock position
+  picker; visual emoji cover picker; configurable autosave; window placement
+  and eraser mode remembered.
 
 ## Next release — big rocks
 
-- **Lecture audio recording**: record audio while inking; every stroke gets a
-  timestamp so tapping ink replays that moment. (MediaCapture → m4a per page,
-  stroke `CreatedTicks` already exists — needs a playback bar UI.)
 - **CanvasVirtualControl swap**: true region invalidation for huge pages;
-  removes the ink-cache ceiling and rebuild hitches.
-- **Native equation layout**: bundle KaTeX (offline WebView asset) or write a
-  stacked-layout renderer so fractions render properly instead of Unicode.
-- **Vector PDF fonts**: TTF subsetting so exported text matches the page,
-  including maths glyphs.
+  removes the ink-cache ceiling and rebuild hitches. (Tracked, 0% built.)
+- **Spatial index** (grid buckets) for hit-testing/erasing at high stroke
+  counts — needs stroke/shape mutation centralised first (~27 call sites).
+- **Async library load**: show the window before deserialising every
+  notebook; most of startup becomes a post-load continuation.
 
 ## Next release — medium
 
-- Cell merge/split and per-cell fill/border styling for tables; bold header
-  row toggle.
-- Wet-ink stabiliser slider + per-pen pressure curves.
-- Markdown paste → rich text; text style presets (named font/size/colour chips).
-- Recent colours row in the pen colour picker.
-- Page thumbnails in the start-screen chips (background-rendered, cached).
-- MSIX packaging with auto-update and `.quill` file association.
-- Localisation groundwork (string extraction; Turkish + English).
+- Comments on pages (pins + resolve), then an operation log — the staged
+  path to collaboration (see docs/COLLABORATION-PLAN.md).
+- Gallery card → page connected animation (needs a XAML placeholder target
+  over the Win2D canvas).
+- Undo/redo flash-highlight of the affected element (bounds reporting across
+  the ~26 undo action types).
+- Pressure-curve editor (single draggable control point — the engine reads
+  one midpoint today); toolbar hide/show customisation.
+- Alternate keyboard preset layouts (full remapping is deliberately out of
+  scope; the command palette covers most of it).
 
 ## Next release — small
 
 - Ctrl+D duplicate selection in place.
 - Double-tap a table divider to auto-fit the column to its content.
-- "Paste as plain text" option in text boxes.
-- Notebook cover emoji/icon picker for gallery cards.
-- Zoom-to-fit button (fit page content to window).
-- Per-notebook default page background and grid.
+- Notebook cover thumbnails in gallery cards (background-rendered, cached).
+- MSIX packaging with auto-update and `.quill` file association.
+- Finish string extraction so the language picker can ship (en/tr/it groundwork
+  exists; most UI text is still code-built English).
 
 ## Known rough edges
 
-- Table rotation doesn't rotate cell text (rotation on tables should likely
-  be disabled).
-- Ink cache softens slightly between zoom rebuild thresholds (0.75–1.35×).
+- Ink cache softens slightly between zoom rebuild thresholds (0.50–1.05×).
 - Vector-export text uses the first font size found per box.
 - The MathLive equation editor needs internet; the LaTeX prompt fallback works
   offline but without preview.
-- PDF import caps at 200 pages and rasterises (text in imported PDFs isn't
-  selectable — it's a drawing surface).
+- PDF import caps at 200 pages and rasterises (imported text isn't selectable).
+- Table rotation doesn't rotate cell text (rotation on tables should likely be
+  disabled).
