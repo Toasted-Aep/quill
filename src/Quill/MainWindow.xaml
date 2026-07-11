@@ -700,6 +700,8 @@
                         <Button Content="MR" FontSize="11" Click="CalcMemRecall_Click" ToolTipService.ToolTip="Recall memory"/>
                         <Button Content="M+" FontSize="11" Click="CalcMemPlus_Click" ToolTipService.ToolTip="Add to memory"/>
                         <Button Content="M−" FontSize="11" Click="CalcMemMinus_Click" ToolTipService.ToolTip="Subtract from memory"/>
+                        <Button x:Name="CalcConstBtn" Content="Const" FontSize="11" Click="CalcConst_Click"
+                                ToolTipService.ToolTip="Physical constants — tap to insert; add your own"/>
                     </StackPanel>
                     <StackPanel x:Name="CalcToggles" Orientation="Horizontal" Spacing="6">
                         <ToggleButton x:Name="CalcDeg" Content="DEG" FontSize="11" IsChecked="True"
