@@ -4647,6 +4647,8 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     {
         string? latex = null;
         string? initial = existing?.EquationLatex;
+        byte[]? webShot = null;
+        double[]? webRect = null;
         WebView2? web = null;
         try
         {
@@ -4668,6 +4670,18 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                     await web.EnsureCoreWebView2Async();
                     web.NavigateToString(EquationHtml);
                     webReady = true;
+                    // tint the preview to match the page, so the captured image
+                    // blends seamlessly instead of arriving as a white card
+                    try
+                    {
+                        string bgHex = _curPage?.Background ?? "#FFFFFF";
+                        string inkHex = ContrastHexForPage();
+                        await web.CoreWebView2.ExecuteScriptAsync(
+                            "document.body.style.background='" + bgHex + "';" +
+                            "var o=document.getElementById('out');" +
+                            "o.style.background='" + bgHex + "';o.style.color='" + inkHex + "';");
+                    }
+                    catch { }
                     if (!string.IsNullOrEmpty(initial))
                     {
                         // MathLive registers <math-field> asynchronously — poll
@@ -4689,6 +4703,33 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                     {
                         string raw = await web.CoreWebView2.ExecuteScriptAsync("document.getElementById('mf').value");
                         latex = System.Text.Json.JsonSerializer.Deserialize<string>(raw);
+                        // capture MathLive's own preview: pixel-perfect layout,
+                        // no re-rendering bugs (#14-batch3). Must happen while
+                        // the WebView is still on screen.
+                        try
+                        {
+                            string rectRaw = await web.CoreWebView2.ExecuteScriptAsync("getFormulaRect()");
+                            var rectJson = System.Text.Json.JsonSerializer.Deserialize<string>(rectRaw);
+                            if (!string.IsNullOrEmpty(rectJson))
+                            {
+                                using var doc = System.Text.Json.JsonDocument.Parse(rectJson);
+                                var r = doc.RootElement;
+                                webRect = new[]
+                                {
+                                    r.GetProperty("x").GetDouble(), r.GetProperty("y").GetDouble(),
+                                    r.GetProperty("w").GetDouble(), r.GetProperty("h").GetDouble(),
+                                    r.GetProperty("s").GetDouble()
+                                };
+                                using var shotStream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+                                await web.CoreWebView2.CapturePreviewAsync(
+                                    Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png, shotStream);
+                                webShot = new byte[shotStream.Size];
+                                using var reader = new Windows.Storage.Streams.DataReader(shotStream.GetInputStreamAt(0));
+                                await reader.LoadAsync((uint)shotStream.Size);
+                                reader.ReadBytes(webShot);
+                            }
+                        }
+                        catch { webShot = null; }
                     }
                 }
                 catch { }
@@ -4703,6 +4744,55 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         // offline / no-WebView2 fallback: type LaTeX directly
         latex ??= await PromptAsync("Equation (LaTeX)", initial ?? @"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}");
         if (string.IsNullOrWhiteSpace(latex)) return;
+
+        // Preferred path: crop the MathLive screenshot to the formula (#14-batch3)
+        try
+        {
+            if (webShot != null && webRect is { Length: 5 } && webRect[2] > 4 && webRect[3] > 4)
+            {
+                var device0 = Microsoft.Graphics.Canvas.CanvasDevice.GetSharedDevice();
+                using var msIn = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+                using (var writer = new Windows.Storage.Streams.DataWriter(msIn.GetOutputStreamAt(0)))
+                {
+                    writer.WriteBytes(webShot);
+                    await writer.StoreAsync();
+                }
+                using var full = await Microsoft.Graphics.Canvas.CanvasBitmap.LoadAsync(device0, msIn);
+                double s = Math.Max(0.5, webRect[4]);
+                double pad = 6 * s;
+                double px = Math.Max(0, webRect[0] * s - pad);
+                double py = Math.Max(0, webRect[1] * s - pad);
+                double pw = Math.Min(full.SizeInPixels.Width - px, webRect[2] * s + 2 * pad);
+                double ph = Math.Min(full.SizeInPixels.Height - py, webRect[3] * s + 2 * pad);
+                if (pw > 8 && ph > 8)
+                {
+                    using var rt = new Microsoft.Graphics.Canvas.CanvasRenderTarget(device0, (float)pw, (float)ph, 96);
+                    using (var ds0 = rt.CreateDrawingSession())
+                        ds0.DrawImage(full, new Rect(0, 0, pw, ph), new Rect(px, py, pw, ph));
+                    var dir0 = System.IO.Path.Combine(LibraryStore.Dir, "images");
+                    Directory.CreateDirectory(dir0);
+                    var shotPath = System.IO.Path.Combine(dir0, $"{Guid.NewGuid()}.png");
+                    using (var outStream = new Windows.Storage.Streams.InMemoryRandomAccessStream())
+                    {
+                        await rt.SaveAsync(outStream, Microsoft.Graphics.Canvas.CanvasBitmapFileFormat.Png);
+                        var outBytes = new byte[outStream.Size];
+                        using var r2 = new Windows.Storage.Streams.DataReader(outStream.GetInputStreamAt(0));
+                        await r2.LoadAsync((uint)outStream.Size);
+                        r2.ReadBytes(outBytes);
+                        await System.IO.File.WriteAllBytesAsync(shotPath, outBytes);
+                    }
+                    if (existing != null)
+                        Surface.UpdateEquationImage(existing, shotPath, pw / s, ph / s, latex);
+                    else
+                        Surface.InsertImage(shotPath, pw / s, ph / s, latex);
+                    ShowStatus(existing == null
+                        ? "Equation inserted — right-click it any time to edit."
+                        : "Equation updated.");
+                    return;
+                }
+            }
+        }
+        catch { /* fall back to the built-in renderer below */ }
 
         try
         {
@@ -5954,6 +6044,82 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             "C" => true,
             _ => DigitOk(label)
         });
+    }
+
+    // Physical constants page (#18-batch3): tap to insert at the caret; users
+    // can save their own. Values avoid bare e-notation because the calc parser
+    // would read "6.02e23" as 6.02*euler*23 — powers of ten are written as 10^n.
+    private static readonly (string Name, string Value, string Hint)[] BuiltinConstants =
+    {
+        ("g",    "9.80665",              "standard gravity (m/s^2)"),
+        ("R",    "8.314462618",          "gas constant (J/(mol*K))"),
+        ("N_A",  "6.02214076*10^23",     "Avogadro (1/mol)"),
+        ("c",    "2.99792458*10^8",      "speed of light (m/s)"),
+        ("h",    "6.62607015*10^-34",    "Planck (J*s)"),
+        ("k_B",  "1.380649*10^-23",      "Boltzmann (J/K)"),
+        ("G",    "6.6743*10^-11",        "gravitation (N*m^2/kg^2)"),
+        ("eps0", "8.8541878128*10^-12",  "vacuum permittivity (F/m)"),
+        ("m_e",  "9.1093837015*10^-31",  "electron mass (kg)"),
+        ("q_e",  "1.602176634*10^-19",   "elementary charge (C)"),
+    };
+
+    private void CalcConst_Click(object sender, RoutedEventArgs e)
+    {
+        void InsertIntoInput(string val)
+        {
+            int p = Math.Clamp(CalcInput.SelectionStart, 0, CalcInput.Text.Length);
+            CalcInput.Text = CalcInput.Text.Insert(p, val);
+            CalcInput.SelectionStart = p + val.Length;
+            CalcInput.Focus(FocusState.Programmatic);
+        }
+
+        var menu = new MenuFlyout();
+        foreach (var (name, value, hint) in BuiltinConstants)
+        {
+            var item = new MenuFlyoutItem { Text = $"{name} = {value}   ({hint})" };
+            item.Click += (_, _) => InsertIntoInput(value);
+            menu.Items.Add(item);
+        }
+        if (_library.CalcConstants.Count > 0)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            foreach (var entry in _library.CalcConstants)
+            {
+                var parts = entry.Split('=', 2);
+                if (parts.Length != 2) continue;
+                var val = parts[1];
+                var item = new MenuFlyoutItem { Text = $"{parts[0]} = {val}" };
+                item.Click += (_, _) => InsertIntoInput(val);
+                menu.Items.Add(item);
+            }
+        }
+        menu.Items.Add(new MenuFlyoutSeparator());
+        var add = new MenuFlyoutItem { Text = "Save current input as a constant…" };
+        add.Click += async (_, _) =>
+        {
+            var val = CalcInput.Text.Trim();
+            if (val.Length == 0) { ShowStatus("Type the value into the calculator first."); return; }
+            var name = await PromptAsync("Constant name", "");
+            if (string.IsNullOrWhiteSpace(name)) return;
+            _library.CalcConstants.RemoveAll(x => x.StartsWith(name.Trim() + "=", StringComparison.OrdinalIgnoreCase));
+            _library.CalcConstants.Add($"{name.Trim()}={val}");
+            ScheduleSave();
+            ShowStatus($"Saved constant {name.Trim()} = {val}.");
+        };
+        menu.Items.Add(add);
+        if (_library.CalcConstants.Count > 0)
+        {
+            var removeSub = new MenuFlyoutSubItem { Text = "Remove a constant" };
+            foreach (var entry in _library.CalcConstants.ToList())
+            {
+                var en = entry;
+                var rem = new MenuFlyoutItem { Text = en };
+                rem.Click += (_, _) => { _library.CalcConstants.Remove(en); ScheduleSave(); };
+                removeSub.Items.Add(rem);
+            }
+            menu.Items.Add(removeSub);
+        }
+        menu.ShowAt(CalcConstBtn);
     }
 
     private static string FormatBase(long v, int b)

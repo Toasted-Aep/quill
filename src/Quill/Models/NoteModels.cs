@@ -252,6 +252,8 @@ public class Library
     public bool TouchMode { get; set; }
     // Calculator history, kept across restarts (#47).
     public List<string> CalcHistory { get; set; } = new();
+    // User-defined calculator constants, "name=value" (#18-batch3).
+    public List<string> CalcConstants { get; set; } = new();
     // Liquid-glass panel transparency, 0 (solid) … 1 (fully liquid) (#48).
     public double Liquidness { get; set; } = 0.35;
     // Recently used pen/highlight colours (newest first, max 16).
