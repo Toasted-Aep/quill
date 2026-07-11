@@ -264,6 +264,12 @@ public sealed partial class MainWindow : Window
         CalcHeader.ManipulationDelta += (_, e) => JellyDrag(CalcPanel, e);
         CalcHeader.ManipulationCompleted += (_, _) => { EndCheapDrag(CalcPanel); JellyRelease(CalcPanel); };
 
+        // AI chat panel dragging
+        AiHeader.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
+        AiHeader.ManipulationStarted += (_, _) => BeginCheapDrag(AiPanel);
+        AiHeader.ManipulationDelta += (_, e) => JellyDrag(AiPanel, e);
+        AiHeader.ManipulationCompleted += (_, _) => { EndCheapDrag(AiPanel); JellyRelease(AiPanel); };
+
         // audio recording panel dragging (with liquid jelly physics)
         AudioFloatingPanel.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
         AudioFloatingPanel.ManipulationStarted += (_, _) => BeginCheapDrag(AudioFloatingPanel);
@@ -5408,6 +5414,132 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             var (df, ds2) = EffectiveTextDefaults();
             Surface.AddTextElement(centre.X - 180, centre.Y - 40, 400,
                 PlainToRtf(text, df, ds2, ContrastHexForPage()));
+        }
+    }
+
+    // =======================================================================
+    // AI chat window (#22-batch3): a floating conversation with history that
+    // can SEE the page — each message optionally attaches a PNG snapshot of
+    // the canvas (ink included), not an OCR/text approximation.
+    // =======================================================================
+    private readonly List<(string Role, string Text)> _aiChat = new();
+    private bool _aiBusy;
+
+    private void AiChat_Click(object sender, RoutedEventArgs e)
+    {
+        if (AiPanel.Visibility == Visibility.Visible) { FadeOut(AiPanel); return; }
+        FadeIn(AiPanel, slideX: 18);
+        RebuildAiMessages();
+        AiInput.Focus(FocusState.Programmatic);
+    }
+
+    private void AiClose_Click(object sender, RoutedEventArgs e) => FadeOut(AiPanel);
+
+    private void AiClear_Click(object sender, RoutedEventArgs e)
+    {
+        _aiChat.Clear();
+        RebuildAiMessages();
+    }
+
+    private void AiInput_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter &&
+            !Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift)
+                .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+        {
+            e.Handled = true;
+            _ = SendAiChatAsync();
+        }
+    }
+
+    private void AiSend_Click(object sender, RoutedEventArgs e) => _ = SendAiChatAsync();
+
+    private void AddAiBubble(string role, string text)
+    {
+        bool user = role == "user";
+        var accent = ColorUtil.Parse(_library.AccentColor);
+        var bubble = new Border
+        {
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(10, 6, 10, 6),
+            MaxWidth = 300,
+            HorizontalAlignment = user ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+            Background = user
+                ? new SolidColorBrush(Color.FromArgb(60, accent.R, accent.G, accent.B))
+                : new SolidColorBrush(Color.FromArgb(28, 128, 128, 128)),
+            Child = new TextBlock
+            {
+                Text = text,
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 13,
+                IsTextSelectionEnabled = true
+                // Foreground inherits the theme ink
+            }
+        };
+        AiMessages.Children.Add(bubble);
+    }
+
+    private void RebuildAiMessages()
+    {
+        AiMessages.Children.Clear();
+        if (_aiChat.Count == 0)
+            AiMessages.Children.Add(new TextBlock
+            {
+                Text = "Ask anything about this page. With the eye toggled on, the AI sees your actual ink and drawings.",
+                FontSize = 12, Opacity = 0.65, TextWrapping = TextWrapping.Wrap
+            });
+        foreach (var (role, text) in _aiChat) AddAiBubble(role, text);
+        AiScroll.UpdateLayout();
+        AiScroll.ChangeView(null, AiScroll.ScrollableHeight, null, true);
+    }
+
+    private async Task SendAiChatAsync()
+    {
+        if (_aiBusy) return;
+        var q = AiInput.Text.Trim();
+        if (q.Length == 0) return;
+        if (_library.AiProvider is null or "" or "None")
+        { ShowStatus("Pick an AI provider in Settings first."); return; }
+        var key = AiService.GetKey(_library.AiProvider);
+        if (string.IsNullOrEmpty(key) && _library.AiProvider != "Local")
+        { ShowStatus("Add your API key in Settings first."); return; }
+
+        AiInput.Text = "";
+        _aiChat.Add(("user", q));
+        RebuildAiMessages();
+        AddAiBubble("assistant", "thinking…");
+        AiScroll.UpdateLayout();
+        AiScroll.ChangeView(null, AiScroll.ScrollableHeight, null, true);
+
+        byte[]? png = null;
+        if (AiSeePage.IsChecked == true)
+        {
+            try
+            {
+                var cap = await CapturePageAsync();
+                if (cap != null) png = MiniPng.FromBgra(cap.Value.Pixels, cap.Value.Width, cap.Value.Height);
+            }
+            catch { }
+        }
+
+        _aiBusy = true;
+        try
+        {
+            var history = _aiChat.Count > 12 ? _aiChat.GetRange(_aiChat.Count - 12, 12) : _aiChat;
+            var reply = await AiService.ChatAsync(
+                _library.AiProvider, _library.AiModel, _library.AiEndpoint, key,
+                AiSystem + " You may be shown a snapshot of the user's handwritten page - read the ink directly.",
+                history, png);
+            _aiChat.Add(("assistant", reply.Trim()));
+        }
+        catch (Exception ex)
+        {
+            _aiChat.Add(("assistant", "[request failed] " + ex.Message));
+        }
+        finally
+        {
+            _aiBusy = false;
+            RebuildAiMessages();
         }
     }
 

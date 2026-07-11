@@ -124,6 +124,146 @@ public static class AiService
             .GetProperty("message").GetProperty("content").GetString() ?? "";
     }
 
+    /// <summary>Multi-turn chat, optionally attaching a PNG of the page to the
+    /// last user message so the model sees the actual ink (#22-batch3).</summary>
+    public static async Task<string> ChatAsync(
+        string provider, string? model, string? endpoint, string? apiKey,
+        string system, IReadOnlyList<(string Role, string Text)> messages, byte[]? pagePng)
+    {
+        model = string.IsNullOrWhiteSpace(model) ? DefaultModel(provider) : model.Trim();
+        string? b64 = pagePng != null ? Convert.ToBase64String(pagePng) : null;
+        return provider switch
+        {
+            "Claude" => await ClaudeChatAsync(model, apiKey!, system, messages, b64),
+            "Gemini" => await GeminiChatAsync(model, apiKey!, system, messages, b64),
+            "OpenAI" => await OpenAiChatAsync("https://api.openai.com/v1", model, apiKey, system, messages, b64),
+            "Local" => await OpenAiChatAsync(
+                string.IsNullOrWhiteSpace(endpoint) ? "http://localhost:11434/v1" : endpoint.TrimEnd('/'),
+                model, apiKey, system, messages, b64),
+            _ => throw new InvalidOperationException("No AI provider selected.")
+        };
+    }
+
+    private static async Task<string> ClaudeChatAsync(
+        string model, string apiKey, string system,
+        IReadOnlyList<(string Role, string Text)> messages, string? pngB64)
+    {
+        var msgs = new List<object>();
+        for (int i = 0; i < messages.Count; i++)
+        {
+            var (role, text) = messages[i];
+            bool last = i == messages.Count - 1;
+            if (last && role == "user" && pngB64 != null)
+                msgs.Add(new Dictionary<string, object>
+                {
+                    ["role"] = "user",
+                    ["content"] = new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            ["type"] = "image",
+                            ["source"] = new Dictionary<string, object>
+                            { ["type"] = "base64", ["media_type"] = "image/png", ["data"] = pngB64 }
+                        },
+                        new Dictionary<string, object> { ["type"] = "text", ["text"] = text }
+                    }
+                });
+            else
+                msgs.Add(new Dictionary<string, object> { ["role"] = role, ["content"] = text });
+        }
+        var body = JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["model"] = model,
+            ["max_tokens"] = 1500,
+            ["system"] = system,
+            ["messages"] = msgs
+        });
+        using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages");
+        req.Headers.Add("x-api-key", apiKey);
+        req.Headers.Add("anthropic-version", "2023-06-01");
+        req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var resp = await Http.SendAsync(req);
+        var json = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode) throw new Exception(ShortError(json, resp.StatusCode.ToString()));
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("content")[0].GetProperty("text").GetString() ?? "";
+    }
+
+    private static async Task<string> OpenAiChatAsync(
+        string baseUrl, string model, string? apiKey, string system,
+        IReadOnlyList<(string Role, string Text)> messages, string? pngB64)
+    {
+        var msgs = new List<object> { new Dictionary<string, object> { ["role"] = "system", ["content"] = system } };
+        for (int i = 0; i < messages.Count; i++)
+        {
+            var (role, text) = messages[i];
+            bool last = i == messages.Count - 1;
+            if (last && role == "user" && pngB64 != null)
+                msgs.Add(new Dictionary<string, object>
+                {
+                    ["role"] = "user",
+                    ["content"] = new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            ["type"] = "image_url",
+                            ["image_url"] = new Dictionary<string, object> { ["url"] = "data:image/png;base64," + pngB64 }
+                        },
+                        new Dictionary<string, object> { ["type"] = "text", ["text"] = text }
+                    }
+                });
+            else
+                msgs.Add(new Dictionary<string, object> { ["role"] = role, ["content"] = text });
+        }
+        var body = JsonSerializer.Serialize(new Dictionary<string, object> { ["model"] = model, ["messages"] = msgs });
+        using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl + "/chat/completions");
+        if (!string.IsNullOrWhiteSpace(apiKey))
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var resp = await Http.SendAsync(req);
+        var json = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode) throw new Exception(ShortError(json, resp.StatusCode.ToString()));
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
+    }
+
+    private static async Task<string> GeminiChatAsync(
+        string model, string apiKey, string system,
+        IReadOnlyList<(string Role, string Text)> messages, string? pngB64)
+    {
+        var contents = new List<object>();
+        for (int i = 0; i < messages.Count; i++)
+        {
+            var (role, text) = messages[i];
+            bool last = i == messages.Count - 1;
+            var parts = new List<object>();
+            if (last && role == "user" && pngB64 != null)
+                parts.Add(new Dictionary<string, object>
+                {
+                    ["inline_data"] = new Dictionary<string, object> { ["mime_type"] = "image/png", ["data"] = pngB64 }
+                });
+            parts.Add(new Dictionary<string, object> { ["text"] = text });
+            contents.Add(new Dictionary<string, object>
+            {
+                ["role"] = role == "assistant" ? "model" : "user",
+                ["parts"] = parts
+            });
+        }
+        var body = JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["systemInstruction"] = new Dictionary<string, object>
+            { ["parts"] = new object[] { new Dictionary<string, object> { ["text"] = system } } },
+            ["contents"] = contents
+        });
+        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
+        using var resp = await Http.PostAsync(url, new StringContent(body, Encoding.UTF8, "application/json"));
+        var json = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode) throw new Exception(ShortError(json, resp.StatusCode.ToString()));
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("candidates")[0]
+            .GetProperty("content").GetProperty("parts")[0].GetProperty("text").GetString() ?? "";
+    }
+
     private static string ShortError(string json, string fallback)
     {
         try
