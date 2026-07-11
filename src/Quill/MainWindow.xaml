@@ -70,14 +70,16 @@
                         <FontIcon Glyph="&#xE8B3;" FontSize="14"/>
                     </ToggleButton>
                     <ToggleButton x:Name="ToolSpace" Tag="FreeSpace" Click="ToolButton_Click" ToolTipService.ToolTip="Insert free space (drag down to push content apart)">
-                        <TextBlock Text="&#x2195;" FontSize="14"/>
+                        <!-- approved icon set: two content lines + double arrow -->
+                        <PathIcon Data="M3 4.4 H21 V6 H3 Z M3 18 H21 V19.6 H3 Z M12 7.2 15 10.6 13 10.6 13 13.4 15 13.4 12 16.8 9 13.4 11 13.4 11 10.6 9 10.6 Z"/>
                     </ToggleButton>
                     <ToggleButton x:Name="TouchDrawToggle" Click="TouchDraw_Click"
                                   ToolTipService.ToolTip="Touch draw: draw with finger or mouse (otherwise touch pans)">
                         <TextBlock Text="&#x261D;" FontSize="13"/>
                     </ToggleButton>
                     <Button x:Name="ShapeBtn" ToolTipService.ToolTip="Insert a perfect shape (or draw one and hold the pen still!)">
-                        <TextBlock Text="&#x25A2;" FontSize="14"/>
+                        <!-- approved icon set: outlined square + triangle -->
+                        <PathIcon Data="M3.6 6 H14 V16.4 H3.6 Z M5.2 7.6 V14.8 H12.4 V7.6 Z M15 10.2 21.4 20.4 8.6 20.4 Z M11.5 18.8 H18.5 L15 13.2 Z"/>
                         <Button.Flyout>
                             <MenuFlyout>
                                 <MenuFlyoutItem Text="Straight line" Tag="Line" Click="InsertShape_Click"/>
@@ -621,7 +623,8 @@
                         </Button>
 
                         <DropDownButton x:Name="RulerBtn" Padding="6,4" HorizontalAlignment="Center" VerticalAlignment="Center" ToolTipService.ToolTip="Ruler — draw straight lines at any angle">
-                            <TextBlock Text="&#x1F4CF;" FontSize="13" VerticalAlignment="Center"/>
+                            <!-- new diagonal ruler with tick cutouts (approved icon set) -->
+                            <PathIcon Data="M3 17.4 L17.4 3 21 6.6 6.6 21 Z M7.4 14.2 9 15.8 8.2 16.6 6.6 15 Z M10.6 11 12.2 12.6 11.4 13.4 9.8 11.8 Z M13.8 7.8 15.4 9.4 14.6 10.2 13 8.6 Z"/>
                             <DropDownButton.Flyout>
                                 <Flyout>
                                     <StackPanel Spacing="8" Width="230">
@@ -807,8 +810,8 @@
                         Width="42" Height="42" CornerRadius="21"
                         Background="{ThemeResource CardBrushFloat}" BorderBrush="{StaticResource GlowBrush}" BorderThickness="2.25"
                         ToolTipService.ToolTip="Notebooks">
-                    <!-- original notebook silhouette (spine + rule lines), themed via Foreground -->
-                    <PathIcon Data="M3 1.5 H12 C13.1 1.5 14 2.4 14 3.5 V12.5 C14 13.6 13.1 14.5 12 14.5 H3 Z M4.7 1.5 H5.5 V14.5 H4.7 Z M7 5 H12 V6 H7 Z M7 8 H12 V9 H7 Z"/>
+                    <!-- approved v2 notebook silhouette (spine + rule lines) -->
+                    <PathIcon Data="M4.5 2.2 H17 C19 2.2 20.6 3.8 20.6 5.8 V18.2 C20.6 20.2 19 21.8 17 21.8 H4.5 Z M7 2.2 H8.2 V21.8 H7 Z M10.4 7.2 H17.6 V8.7 H10.4 Z M10.4 11.2 H17.6 V12.7 H10.4 Z"/>
                 </Button>
                 <Button x:Name="BtnFloatPen" Click="FloatPen_Click"
                         Width="42" Height="42" CornerRadius="21"
