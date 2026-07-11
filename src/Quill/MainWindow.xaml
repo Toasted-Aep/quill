@@ -162,17 +162,20 @@
                         <!-- original mic-with-caret silhouette -->
                         <PathIcon Data="M8 1.2 A2.3 2.3 0 0 1 10.3 3.5 V7.2 A2.3 2.3 0 0 1 5.7 7.2 V3.5 A2.3 2.3 0 0 1 8 1.2 Z M3.8 7.2 H5 A3 3 0 0 0 11 7.2 H12.2 A4.2 4.2 0 0 1 8.6 11.3 V13 H10.4 V14.2 H5.6 V13 H7.4 V11.3 A4.2 4.2 0 0 1 3.8 7.2 Z M13 12 H16 V13 H13 Z"/>
                     </ToggleButton>
-                    <Button x:Name="BtnAi" ToolTipService.ToolTip="AI assistant — summarise, tag, ask, improve (configure in Settings)">
+                    <!-- AllowFocusOnInteraction=False everywhere so opening this menu
+                         doesn't destroy the text selection the AI is about to use (#9-batch3) -->
+                    <Button x:Name="BtnAi" AllowFocusOnInteraction="False"
+                            ToolTipService.ToolTip="AI assistant — summarise, tag, ask, improve (configure in Settings)">
                         <!-- original four-point spark silhouette -->
                         <PathIcon Data="M8 1 L9.6 6.4 L15 8 L9.6 9.6 L8 15 L6.4 9.6 L1 8 L6.4 6.4 Z M13 1.5 L13.6 3.4 L15.5 4 L13.6 4.6 L13 6.5 L12.4 4.6 L10.5 4 L12.4 3.4 Z"/>
                         <Button.Flyout>
                             <MenuFlyout>
-                                <MenuFlyoutItem Text="Summarise this page" Click="AiSummarize_Click"/>
-                                <MenuFlyoutItem Text="Action items from this page" Click="AiActions_Click"/>
-                                <MenuFlyoutItem Text="Smart tags for this page" Click="AiTags_Click"/>
-                                <MenuFlyoutItem Text="Ask about this page…" Click="AiAsk_Click"/>
+                                <MenuFlyoutItem Text="Summarise this page" Click="AiSummarize_Click" AllowFocusOnInteraction="False"/>
+                                <MenuFlyoutItem Text="Action items from this page" Click="AiActions_Click" AllowFocusOnInteraction="False"/>
+                                <MenuFlyoutItem Text="Smart tags for this page" Click="AiTags_Click" AllowFocusOnInteraction="False"/>
+                                <MenuFlyoutItem Text="Ask about this page…" Click="AiAsk_Click" AllowFocusOnInteraction="False"/>
                                 <MenuFlyoutSeparator/>
-                                <MenuFlyoutItem Text="Improve selected text" Click="AiImprove_Click"/>
+                                <MenuFlyoutItem Text="Improve selected text" Click="AiImprove_Click" AllowFocusOnInteraction="False"/>
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>
@@ -309,7 +312,7 @@
                 </StackPanel>
             </ScrollViewer>
             <!-- pinned at the far right, outside the scrolling row (#20-batch2) -->
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="8,0,0,0">
+            <StackPanel x:Name="TopBarPinned" Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="8,0,0,0">
                 <AppBarSeparator/>
                 <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
                     <FontIcon Glyph="&#xE890;" FontSize="14"/>
@@ -649,7 +652,8 @@
                     Background="{ThemeResource CardBrush}"
                     BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5"
                     ToolTipService.ToolTip="Show the pen panel">
-                <TextBlock Text="&#x1F58A;" FontSize="16"/>
+                <!-- the nib-pen silhouette from the icon set, replacing the emoji (#15-batch3) -->
+                <PathIcon Data="M3.5 12.5 L5 9 L11.5 2.5 L13.5 4.5 L7 11 Z M12.3 1.7 L14.3 3.7 L15 3 A1.4 1.4 0 0 0 13 1 Z"/>
             </Button>
 
             <!-- Floating calculator -->
@@ -831,7 +835,7 @@
                                            Foreground="{ThemeResource InkBrush}"/>
                             </StackPanel>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <StackPanel x:Name="GalleryHeaderRow" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center">
                             <Button x:Name="GallerySearchBtn" Click="GallerySearch_Click"
                                     ToolTipService.ToolTip="Search all notes — text and handwriting (Ctrl+F)">
                                 <FontIcon Glyph="&#xE721;" FontSize="14"/>

@@ -111,6 +111,10 @@ public sealed class InkSurface : UserControl
     // momentary contact drop-out), and a tiny stroke at a fresh stroke's end is
     // discarded as lift-bounce.
     public bool PenRepair { get; set; }
+
+    // the app accent, pushed from MainWindow so selection chrome, handles and
+    // table adorners match the rest of the app instead of a hardcoded orange
+    public Color Accent { get; set; } = Color.FromArgb(255, 217, 119, 87);
     private PenStroke? _lastCommitted;
     private long _lastCommitMs;
     private Vector2 _lastCommitEnd;
@@ -1452,7 +1456,20 @@ public sealed class InkSurface : UserControl
                 }
                 else if (_resizingShape && _activeShape != null)
                 {
-                    ResizeShape(_activeShape, _resizeAnchor, ToShapeLocalAt(_activeShape, pos, _resizeCenter), false, _resizeAspect);
+                    var sR = _activeShape;
+                    ResizeShape(sR, _resizeAnchor, ToShapeLocalAt(sR, pos, _resizeCenter), false, _resizeAspect);
+                    // Resizing moves the centre, and rotation pivots about the
+                    // centre — so a rotated shape used to swim away from the
+                    // pointer. Translate so the grabbed anchor stays pinned at
+                    // its original world position (#13-batch3).
+                    if (Math.Abs(sR.Rotation) > 0.01)
+                    {
+                        var cNew = ShapeCenter(sR);
+                        var wBefore = RotatePoint(_resizeAnchor, _resizeCenter, sR.Rotation);
+                        var wAfter = RotatePoint(_resizeAnchor, cNew, sR.Rotation);
+                        sR.X += wBefore.X - wAfter.X;
+                        sR.Y += wBefore.Y - wAfter.Y;
+                    }
                 }
                 else if (_movingShape && _activeShape != null)
                 {
@@ -2384,7 +2401,7 @@ public sealed class InkSurface : UserControl
             DrawStroke(ds, sender, temp, Vector2.Zero, null);
         }
 
-        var accent = Color.FromArgb(255, 217, 119, 87); // brand orange
+        var accent = Accent;   // follows the app accent (#6-batch3)
         float uiScale = 1.5f / ViewZoom;
 
         if (_shapeAdjust && _adjustShape != null)
@@ -4606,6 +4623,29 @@ public sealed class InkSurface : UserControl
             BuildTextUi(t);
     }
 
+    private static readonly System.Text.RegularExpressions.Regex UrlRx = new(
+        @"(?i)\b(?:https?://|www\.)[^\s""]+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|edu|gov|io|dev|app|co|me|de|it|tr|uk|fr|ai)(?:/[^\s]*)?\b",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Turns bare URLs into real, Ctrl+Click-able links (#20-batch3).
+    private static void LinkifyBox(RichEditBox box)
+    {
+        try
+        {
+            box.Document.GetText(TextGetOptions.None, out string plain);
+            if (plain.Length < 4) return;
+            foreach (System.Text.RegularExpressions.Match m in UrlRx.Matches(plain))
+            {
+                var range = box.Document.GetRange(m.Index, m.Index + m.Length);
+                if (!string.IsNullOrEmpty(range.Link)) continue;
+                string url = m.Value.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                    ? m.Value : "https://" + m.Value;
+                try { range.Link = "\"" + url + "\""; } catch { }
+            }
+        }
+        catch { }
+    }
+
     private void BuildTextUi(TextElement t)
     {
         var container = new Grid();
@@ -4720,10 +4760,77 @@ public sealed class InkSurface : UserControl
             Background = new SolidColorBrush(Colors.Transparent),
             BorderThickness = new Thickness(0)
         };
+        // Ink colour follows the PAGE background, not the app theme, so flipping
+        // light/dark mode no longer recolours notes and new text is readable on
+        // any page (#8/#16-batch3).
+        var pageInk = ColorUtil.IsDark(ColorUtil.Parse(_page?.Background ?? "#FFFFFF"))
+            ? Color.FromArgb(255, 0xFA, 0xF9, 0xF5)
+            : Color.FromArgb(255, 0x14, 0x14, 0x13);
+        box.Foreground = new SolidColorBrush(pageInk);
+        try
+        {
+            var dcf = box.Document.GetDefaultCharacterFormat();
+            dcf.ForegroundColor = pageInk;
+            box.Document.SetDefaultCharacterFormat(dcf);
+            // headroom for script fonts whose swashes overshoot the em box —
+            // Amsterdam-style faces were getting clipped (#17-batch3)
+            var dpf = box.Document.GetDefaultParagraphFormat();
+            dpf.SetLineSpacing(Microsoft.UI.Text.LineSpacingRule.Multiple, 1.25f);
+            box.Document.SetDefaultParagraphFormat(dpf);
+        }
+        catch { }
+        box.Padding = new Thickness(6, 8, 6, 10);
+
         if (!string.IsNullOrEmpty(t.Rtf))
         {
             try { box.Document.SetText(TextSetOptions.FormatRtf, t.Rtf); } catch { }
         }
+
+        // table cells: no drag grip, and the box must not spill past its row (#24-batch3)
+        bool isCell = t.TableId != null;
+        if (isCell)
+        {
+            grip.Height = 0;
+            box.MinHeight = 20;
+            var cellTable = _page?.Shapes.FirstOrDefault(sh => sh.Id == t.TableId);
+            if (cellTable != null)
+            {
+                var rhs = TableRowHeights(cellTable);
+                int rr = Math.Clamp(t.TableRow, 0, rhs.Length - 1);
+                box.MaxHeight = Math.Max(22, rhs[rr] - 4);
+            }
+        }
+
+        // an unfocused bubble must not dead-end the wheel: forward to the canvas
+        // so scroll/zoom keeps working over text (#12-batch3)
+        container.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, we) =>
+        {
+            if (!ReferenceEquals(ActiveTextBox, box))
+            {
+                OnPointerWheel(_canvas, we);
+                we.Handled = true;
+            }
+        }), true);
+
+        // Ctrl+Click opens links (#20-batch3)
+        box.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, pe) =>
+        {
+            if (!pe.KeyModifiers.HasFlag(Windows.System.VirtualKeyModifiers.Control)) return;
+            try
+            {
+                var pt = pe.GetCurrentPoint(box).Position;
+                var linkRange = box.Document.GetRangeFromPoint(pt, Microsoft.UI.Text.PointOptions.ClientCoordinates);
+                linkRange.Expand(Microsoft.UI.Text.TextRangeUnit.Link);
+                var link = linkRange.Link;
+                if (!string.IsNullOrEmpty(link))
+                {
+                    _ = Windows.System.Launcher.LaunchUriAsync(new Uri(link.Trim('"')));
+                    pe.Handled = true;
+                }
+            }
+            catch { }
+        }), true);
+
         Grid.SetRow(box, 1);
 
         container.Children.Add(grip);
@@ -4782,7 +4889,7 @@ public sealed class InkSurface : UserControl
             dots.Visibility = Visibility.Visible;
             rotate.Visibility = Visibility.Visible;
             close.Visibility = Visibility.Visible;
-            rGrip.Visibility = Visibility.Visible;
+            rGrip.Visibility = t.TableId == null ? Visibility.Visible : Visibility.Collapsed;
         };
         box.LostFocus += (_, _) =>
         {
@@ -4791,6 +4898,18 @@ public sealed class InkSurface : UserControl
             rotate.Visibility = Visibility.Collapsed;
             close.Visibility = Visibility.Collapsed;
             rGrip.Visibility = Visibility.Collapsed;
+            LinkifyBox(box);   // bare URLs become real links on commit (#20-batch3)
+            // release active status once focus has truly left, so the format
+            // bar stops lingering (#19-batch3). Format-bar buttons don't steal
+            // focus, so this only fires for real focus moves.
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (ReferenceEquals(ActiveTextBox, box) && box.FocusState == FocusState.Unfocused)
+                {
+                    ActiveTextBox = null;
+                    ActiveTextChanged?.Invoke(null);
+                }
+            });
         };
         rGrip.ManipulationMode = ManipulationModes.TranslateX;
         rGrip.ManipulationDelta += (_, e) =>
