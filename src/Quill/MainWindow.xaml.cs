@@ -1037,11 +1037,12 @@ public sealed partial class MainWindow : Window
         PenType.Highlighter => "M14 4.6 L19.4 10 L12.6 16.8 L7.2 11.4 Z M7.2 11.4 L12.6 16.8 L10.2 17.6 5.6 17.6 6.4 13.2 Z M3 20.4 H14.6 V22.6 H3 Z",
         // kept v1 by request (16-grid)
         PenType.Watercolor => "M3 13 C5.5 12.5 6.5 11 7.5 9.5 L11.5 4.5 L12.5 5.5 L8.5 10.5 C7.5 12 5.5 13 3 13 Z M13.4 9 C14.4 10.2 14.4 11.4 13.4 12 C12.4 11.4 12.4 10.2 13.4 9 Z",
-        // v1 placeholders until the detailed redesigns are approved (16-grid)
-        PenType.Fountain => "M3 13 L5.5 8.5 L11 3 L13 5 L7.5 10.5 Z M7.7 7.5 L8.5 8.3 L6.5 10.9 L6.1 10.5 Z M11.8 2.2 L13.8 4.2 L14.8 3.2 L12.8 1.2 Z",
-        PenType.Calligraphy => "M3 13 L4.5 9 L10 3.5 L14 7.5 L8.5 13 L4.5 13 Z M10.8 2.6 L15 6.8 L15.8 6 L11.6 1.8 Z",
-        PenType.Marker => "M4 13.5 H7.5 L13.5 7.5 L10.5 4.5 L4.5 10.5 Z M11.5 3.5 L14.5 6.5 L15.2 5.8 A1.5 1.5 0 0 0 12.2 2.8 Z",
-        PenType.FeltTip => "M4 13 L7 12.2 L13 6.2 L10.8 4 L4.8 10 Z M11.6 3.2 L13.8 5.4 L14.6 4.6 A1.55 1.55 0 0 0 12.4 2.4 Z",
+        // detailed redesigns (24-grid); fountain matches the user's reference:
+        // a classic vertical nib — grip, band, flared nib, breather hole, slit
+        PenType.Fountain => "M8.6 2 H15.4 L14.6 6.2 H9.4 Z M7.8 7 H16.2 A1.4 1.4 0 0 1 16.2 9.8 H7.8 A1.4 1.4 0 0 1 7.8 7 Z M9.3 10.6 H14.7 C14.9 12.3 16.3 13.5 17.4 14.5 L12 22 6.6 14.5 C7.7 13.5 9.1 12.3 9.3 10.6 Z M12 13.4 a1.2 1.2 0 1 0 0.01 0 Z M11.65 15.9 H12.35 V20.1 L12 20.7 11.65 20.1 Z",
+        PenType.Calligraphy => "M4 20 C5.6 14.6 8.8 9.6 13.6 5.4 C15.6 3.7 17.6 2.7 19.6 2.3 C19.3 4 18.6 5.8 17.6 7.6 L15.8 7.5 L16.8 9 C16 10.3 15 11.6 13.9 12.8 L12.1 12.7 L13.1 14.2 C11.9 15.4 10.5 16.5 9 17.5 L7.3 17.3 L8.2 18.6 C6.9 19.3 5.5 19.8 4 20 Z M5.4 18.6 C7.6 13.9 10.8 9.5 16.9 4.5 L17.4 5 C11.6 10 8.4 14.4 6 19 Z",
+        PenType.Marker => "M12.4 3.2 20.8 11.6 15.6 16.8 7.2 8.4 Z M13.9 4.7 19.3 10.1 18.5 10.9 13.1 5.5 Z M12.8 8.6 15.4 11.2 13.6 13 11 10.4 Z M7.2 8.4 15.6 16.8 11 18.2 5.8 18.2 5.8 13 Z M7.9 12.6 11.4 16.1 10.6 16.9 7.1 13.4 Z",
+        PenType.FeltTip => "M14.6 3 21 9.4 17.2 13.2 10.8 6.8 Z M15.9 4.3 19.7 8.1 19 8.8 15.2 5 Z M10.8 6.8 17.2 13.2 15.6 14.8 9.2 8.4 Z M9.2 8.4 15.6 14.8 7.3 18.1 5.9 16.7 Z M7.3 18.1 5.9 16.7 4 20 Z M12.2 10 13.6 11.4 6.9 16.5 6.3 15.9 Z",
         // Standard: kept v1 by request (16-grid)
         _ => "M3.5 12.5 L5 9 L11.5 2.5 L13.5 4.5 L7 11 Z M12.3 1.7 L14.3 3.7 L15 3 A1.4 1.4 0 0 0 13 1 Z"
     };
@@ -5329,23 +5330,6 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                     case Slider sl:
                         sl.MinHeight = on ? 42 : 0;
                         break;
-                    // glyphs inside buttons must grow too, not just the hit target (#23-batch3)
-                    case TextBlock tb2:
-                        if (on)
-                        {
-                            if (!_touchTbOrig.ContainsKey(tb2)) _touchTbOrig[tb2] = tb2.FontSize;
-                            tb2.FontSize = Math.Max(tb2.FontSize, 19);
-                        }
-                        else if (_touchTbOrig.TryGetValue(tb2, out var tbOrig)) tb2.FontSize = tbOrig;
-                        break;
-                    case FontIcon fi2:
-                        if (on)
-                        {
-                            if (!_touchFiOrig.ContainsKey(fi2)) _touchFiOrig[fi2] = fi2.FontSize;
-                            fi2.FontSize = Math.Max(fi2.FontSize, 18);
-                        }
-                        else if (_touchFiOrig.TryGetValue(fi2, out var fiOrig)) fi2.FontSize = fiOrig;
-                        break;
                 }
                 Walk(ch);
             }
@@ -5354,8 +5338,6 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             try { Walk(root); } catch { }
     }
 
-    private readonly Dictionary<TextBlock, double> _touchTbOrig = new();
-    private readonly Dictionary<FontIcon, double> _touchFiOrig = new();
 
     // =======================================================================
     // AI assistant (#25-batch2): summaries, action items, smart tags, Q&A and
