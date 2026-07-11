@@ -39,12 +39,13 @@ public static class AiService
         catch { }
     }
 
+    // Current-generation defaults (#11-batch3) — override in Settings any time.
     public static string DefaultModel(string provider) => provider switch
     {
         "Claude" => "claude-sonnet-5",
-        "OpenAI" => "gpt-4o-mini",
-        "Gemini" => "gemini-2.0-flash",
-        "Local" => "llama3",
+        "OpenAI" => "gpt-5.1",
+        "Gemini" => "gemini-3-flash-preview",
+        "Local" => "llama3.3",
         _ => ""
     };
 

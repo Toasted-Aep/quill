@@ -13,19 +13,28 @@ public sealed class DictationService : IDisposable
     private SpeechRecognizer? _rec;
 
     public bool IsRunning { get; private set; }
+    public string? LastError { get; private set; }
     public event Action<string>? TextRecognized;
     public event Action? Stopped;
 
     public async Task<bool> StartAsync()
     {
         if (IsRunning) return true;
+        LastError = null;
         try
         {
-            _rec = new SpeechRecognizer();
-            _rec.Constraints.Add(new SpeechRecognitionTopicConstraint(
-                SpeechRecognitionScenario.Dictation, "dictation"));
+            // no explicit constraint: the recognizer's built-in default IS the
+            // dictation grammar, and the topic constraint was one more thing
+            // that could fail offline. Prefer the system speech language.
+            try { _rec = new SpeechRecognizer(SpeechRecognizer.SystemSpeechLanguage); }
+            catch { _rec = new SpeechRecognizer(); }
             var compile = await _rec.CompileConstraintsAsync();
-            if (compile.Status != SpeechRecognitionResultStatus.Success) { Cleanup(); return false; }
+            if (compile.Status != SpeechRecognitionResultStatus.Success)
+            {
+                LastError = "the speech engine rejected its grammar (" + compile.Status + "). Is a speech language pack installed for your display language?";
+                Cleanup();
+                return false;
+            }
 
             _rec.ContinuousRecognitionSession.ResultGenerated += (_, e) =>
             {
@@ -42,10 +51,11 @@ public sealed class DictationService : IDisposable
             IsRunning = true;
             return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // no mic, mic denied, or "online speech recognition" disabled in
-            // Windows privacy settings
+            LastError = (uint)ex.HResult == 0x80045509
+                ? "Windows' speech consent is off. Turn ON 'Online speech recognition' under Settings > Privacy & security > Speech, then try again."
+                : ex.Message + " (check Settings > Privacy & security > Speech and > Microphone)";
             Cleanup();
             return false;
         }

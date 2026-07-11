@@ -321,89 +321,86 @@ public sealed partial class MainWindow : Window
         _uiReady = true;
     }
 
-    // ---- glow animation modes (#4-batch2): Off / Breathe / Circulate ----
-    private Storyboard? _pulseSbEdge, _pulseSbGlow;
-    private DispatcherTimer? _circulateTimer;
-    private double _circAngle;
+    // ---- unified glow engine (#1/#4-batch3): ONE timer drives every glow
+    // brush (shared rims + per-card hover glows), so Breathe is a pure sine
+    // (no stacked easing curves) and Circulate rotates the gradient axis at a
+    // constant rate for ALL glows, not just the shared ones. ----
+    private DispatcherTimer? _glowTimer;
+    private double _glowT;
+    private long _rippleStartMs = -1;
+    private static readonly List<WeakReference<LinearGradientBrush>> _glowClients = new();
+
+    // per-instance glow brushes (gallery hover glows) opt in here
+    public static void RegisterGlowBrush(LinearGradientBrush b)
+    {
+        lock (_glowClients) _glowClients.Add(new WeakReference<LinearGradientBrush>(b));
+    }
+
+    private static IEnumerable<LinearGradientBrush> GlowBrushes()
+    {
+        var res = Application.Current.Resources;
+        if (res["GlassEdgeBrush"] is LinearGradientBrush e) yield return e;
+        if (res["GlowBrush"] is LinearGradientBrush g) yield return g;
+        lock (_glowClients)
+            for (int i = _glowClients.Count - 1; i >= 0; i--)
+            {
+                if (_glowClients[i].TryGetTarget(out var b)) { }
+                else { _glowClients.RemoveAt(i); continue; }
+            }
+        List<LinearGradientBrush> live;
+        lock (_glowClients)
+            live = _glowClients.Select(w => w.TryGetTarget(out var b) ? b : null)
+                               .Where(b => b != null).Cast<LinearGradientBrush>().ToList();
+        foreach (var b in live) yield return b;
+    }
 
     private void ApplyGlowMode()
     {
-        try { _pulseSbEdge?.Stop(); } catch { }
-        try { _pulseSbGlow?.Stop(); } catch { }
-        _pulseSbEdge = _pulseSbGlow = null;
-        _circulateTimer?.Stop();
-        _circulateTimer = null;
-
-        var res = Application.Current.Resources;
-        if (res["GlassEdgeBrush"] is Brush edge) edge.Opacity = 0.85;
-        if (res["GlowBrush"] is Brush glowB) glowB.Opacity = 0.9;
-        SetGradientAxis(0, 0, 1, 1);   // the default diagonal
-
-        // the OS "Animation effects" preference wins over the app setting
-        switch (_reduceMotion ? "Off" : _library.GlowMode)
+        if (_glowTimer == null)
         {
-            case "Off":
-                break;
-            case "Circulate":
-                // the highlight travels around the rim: rotate the gradient axis
-                _circulateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
-                _circulateTimer.Tick += (_, _) =>
-                {
-                    _circAngle = (_circAngle + 2.6) % 360;
-                    double rad = _circAngle * Math.PI / 180.0;
-                    const double r = 0.7071;
-                    double cx = 0.5 + r * Math.Cos(rad), cy = 0.5 + r * Math.Sin(rad);
-                    SetGradientAxis(cx, cy, 1 - cx, 1 - cy);
-                };
-                _circulateTimer.Start();
-                break;
-            default:   // "Breathe" — the original soft pulse
-                _pulseSbEdge = PulseBrushOpacity("GlassEdgeBrush", 0.35, 1.0, 2.4);
-                _pulseSbGlow = PulseBrushOpacity("GlowBrush", 0.55, 1.0, 2.6);
-                break;
+            _glowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+            _glowTimer.Tick += (_, _) => GlowTick();
         }
+        foreach (var b in GlowBrushes()) b.Opacity = 0.9;
+        SetGradientAxes(0, 0, 1, 1);
+        if (_reduceMotion || _library.GlowMode == "Off") _glowTimer.Stop();
+        else _glowTimer.Start();
     }
 
-    private static void SetGradientAxis(double sx, double sy, double ex, double ey)
+    private void GlowTick()
     {
-        try
+        _glowT += 0.04;
+        string mode = _reduceMotion ? "Off" : _library.GlowMode;
+        double opacity = 0.9;
+        if (mode == "Breathe")
         {
-            var res = Application.Current.Resources;
-            foreach (var key in new[] { "GlassEdgeBrush", "GlowBrush" })
-                if (res[key] is LinearGradientBrush lg)
-                {
-                    lg.StartPoint = new Point(sx, sy);
-                    lg.EndPoint = new Point(ex, ey);
-                }
+            // pure sinusoid: perfectly even rise and fall
+            opacity = 0.675 + 0.325 * Math.Sin(_glowT * (2 * Math.PI / 5.0));
         }
-        catch { }
+        else if (mode == "Circulate")
+        {
+            opacity = 0.95;
+            double ang = _glowT * (2 * Math.PI / 6.0);   // one lap / 6 s, constant rate
+            const double r = 0.7071;
+            double cx = 0.5 + r * Math.Cos(ang), cy = 0.5 + r * Math.Sin(ang);
+            SetGradientAxes(cx, cy, 1 - cx, 1 - cy);
+        }
+        if (_rippleStartMs >= 0)
+        {
+            double rt = (Environment.TickCount64 - _rippleStartMs) / 340.0;
+            if (rt >= 1) _rippleStartMs = -1;
+            else opacity *= 0.25 + 0.75 * rt;
+        }
+        foreach (var b in GlowBrushes()) b.Opacity = opacity;
+        if (mode == "Off" && _rippleStartMs < 0) _glowTimer!.Stop();
     }
 
-    private static Storyboard? PulseBrushOpacity(string resourceKey, double from, double to, double seconds)
+    private static void SetGradientAxes(double sx, double sy, double ex, double ey)
     {
-        try
+        foreach (var b in GlowBrushes())
         {
-            if (Application.Current.Resources[resourceKey] is not Brush glow) return null;
-            var anim = new DoubleAnimation
-            {
-                From = from,
-                To = to,
-                Duration = new Duration(TimeSpan.FromSeconds(seconds)),
-                AutoReverse = true,
-                RepeatBehavior = RepeatBehavior.Forever,
-                EnableDependentAnimation = true,
-                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
-            };
-            Storyboard.SetTarget(anim, glow);
-            Storyboard.SetTargetProperty(anim, "Opacity");
-            var sb = new Storyboard();
-            sb.Children.Add(anim);
-            sb.Begin();
-            return sb;
-        }
-        catch
-        {
-            return null;   // glow stays static if the animation can't run
+            b.StartPoint = new Point(sx, sy);
+            b.EndPoint = new Point(ex, ey);
         }
     }
 
@@ -416,9 +413,7 @@ public sealed partial class MainWindow : Window
 
     private void BeginCheapDrag(FrameworkElement el)
     {
-        try { _pulseSbEdge?.Pause(); } catch { }
-        try { _pulseSbGlow?.Pause(); } catch { }
-        _circulateTimer?.Stop();
+        _glowTimer?.Stop();
         if (el is Border b && b.Background is AcrylicBrush a && !_dragAcrylicSwap.ContainsKey(el))
         {
             _dragAcrylicSwap[el] = b.Background;
@@ -433,12 +428,7 @@ public sealed partial class MainWindow : Window
             b.Background = orig;
             _dragAcrylicSwap.Remove(el);
         }
-        if (_library.GlowMode == "Circulate") _circulateTimer?.Start();
-        else
-        {
-            try { _pulseSbEdge?.Resume(); } catch { }
-            try { _pulseSbGlow?.Resume(); } catch { }
-        }
+        if (!_reduceMotion && _library.GlowMode != "Off") _glowTimer?.Start();
     }
 
     // Remembers the window's real (non-maximised) placement on close so the
@@ -835,19 +825,27 @@ public sealed partial class MainWindow : Window
     private void SetAccent(Color c)
     {
         _library.AccentColor = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
-        ApplyAccent(c, refreshTheme: false);   // brushes update live while dragging
+        ApplyAccentLive(c);
+        ScheduleSave();
+    }
+
+    // Immediate retint + debounced theme refresh — shared by manual picking AND
+    // accent-follow, so following the pen retints EVERYTHING too (#3-batch3).
+    private void ApplyAccentLive(Color c)
+    {
+        ApplyAccent(c, refreshTheme: false);
         if (!_accentTimerHooked)
         {
             _accentTimerHooked = true;
             _accentTimer.Tick += (_, _) => { _accentTimer.Stop(); RefreshThemeForAccent(); };
         }
         _accentTimer.Stop();
-        _accentTimer.Start();                  // debounce the (heavier) theme refresh
-        ScheduleSave();
+        _accentTimer.Start();
     }
 
     private void ApplyAccent(Color c, bool refreshTheme)
     {
+        try { Surface.Accent = c; Surface.Refresh(); } catch { }
         var res = Application.Current.Resources;
         if (res["BrandOrangeBrush"] is SolidColorBrush brand) brand.Color = c;
         if (res["GlowBrush"] is LinearGradientBrush glow)
@@ -886,28 +884,11 @@ public sealed partial class MainWindow : Window
             RootGrid.RequestedTheme = cur;
         }
         catch { }
-        // commit ripple (#glass-roadmap): the rim dips and re-brightens once when
-        // a new accent lands, instead of snapping. The pulse temporarily replaces
-        // the breathe loop, so re-arm the glow mode when it completes.
+        // commit ripple: the rim dips and re-brightens once when a new accent
+        // lands — driven by the glow engine so it composes with any mode.
         if (_reduceMotion) return;
-        try
-        {
-            if (Application.Current.Resources["GlassEdgeBrush"] is not Brush glow) return;
-            var a = new DoubleAnimation
-            {
-                From = 0.2, To = 1.0,
-                Duration = new Duration(TimeSpan.FromMilliseconds(340)),
-                EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut },
-                EnableDependentAnimation = true
-            };
-            Storyboard.SetTarget(a, glow);
-            Storyboard.SetTargetProperty(a, "Opacity");
-            var sb = new Storyboard();
-            sb.Children.Add(a);
-            sb.Completed += (_, _) => ApplyGlowMode();
-            sb.Begin();
-        }
-        catch { }
+        _rippleStartMs = Environment.TickCount64;
+        _glowTimer?.Start();
     }
 
     private void ApplyTitleBarColors(bool dark)
@@ -1420,7 +1401,7 @@ public sealed partial class MainWindow : Window
         // Applied visually only — the stored manual AccentColor is untouched,
         // so switching back to Manual restores the user's own pick.
         if (_library.AccentFollow == "Pen")
-            try { ApplyAccent(ColorUtil.Parse(p.Color), refreshTheme: false); } catch { }
+            try { ApplyAccentLive(ColorUtil.Parse(p.Color)); } catch { }
     }
 
     private async void AddPreset_Click(object sender, RoutedEventArgs e)
@@ -1730,7 +1711,7 @@ public sealed partial class MainWindow : Window
 
         // accent-follow (#6-batch2): tint the app to the notebook's colour
         if (_library.AccentFollow == "Notebook")
-            try { ApplyAccent(ColorUtil.Parse(nb.Color), refreshTheme: false); } catch { }
+            try { ApplyAccentLive(ColorUtil.Parse(nb.Color)); } catch { }
 
         // per-notebook text defaults (#10-roadmap)
         var (efFont, efSize) = EffectiveTextDefaults();
@@ -2513,6 +2494,7 @@ public sealed partial class MainWindow : Window
     private void BuildGallery()
     {
         GalleryHost.Children.Clear();
+        if (_library.TouchMode) DispatcherQueue.TryEnqueue(() => ApplyTouchMode(true));
         // liquid transition when moving between the grid and a notebook (#51):
         // the content fades in while gliding up into place
         GalleryHost.Opacity = 0;
@@ -2599,27 +2581,10 @@ public sealed partial class MainWindow : Window
         el.PointerEntered += (_, _) =>
         {
             var glow = MakeColorGlowBrush(col);
-            glow.Opacity = 0;
+            glow.Opacity = 1;
+            RegisterGlowBrush(glow);   // breathes / circulates with the glow engine
             SetBorder(glow, hoverThickness);
             el.Translation = new System.Numerics.Vector3(0, -2, 0);
-            try
-            {
-                var a = new DoubleAnimation
-                {
-                    From = 0.35, To = 1.0,
-                    Duration = new Duration(TimeSpan.FromSeconds(1.3)),
-                    AutoReverse = true,
-                    RepeatBehavior = RepeatBehavior.Forever,
-                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
-                    EnableDependentAnimation = true
-                };
-                Storyboard.SetTarget(a, glow);
-                Storyboard.SetTargetProperty(a, "Opacity");
-                var sb = new Storyboard();
-                sb.Children.Add(a);
-                sb.Begin();
-            }
-            catch { glow.Opacity = 1; }
         };
         el.PointerExited += (_, _) =>
         {
@@ -2927,7 +2892,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private Button MakePageChip(Notebook nb, Section sec, NotePage pg, Brush bg, Brush ink)
+    private FrameworkElement MakePageChip(Notebook nb, Section sec, NotePage pg, Brush bg, Brush ink)
     {
         bool current = ReferenceEquals(pg, _curPage);
         var inner = new StackPanel { Spacing = 2 };
@@ -2987,9 +2952,6 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(chip, current
             ? "This page is open right now"
             : "Open this page · right-click to rename or delete");
-        // page chips glow in the notebook's colour on hover, like the cards (#8-batch2)
-        if (!current)
-            AttachHoverGlow(chip, ColorUtil.Parse(nb.Color), chip.BorderBrush, new Thickness(1), new Thickness(1.6));
 
         chip.Click += (_, _) =>
         {
@@ -3024,7 +2986,19 @@ public sealed partial class MainWindow : Window
         };
         fly.Items.Add(del);
         chip.ContextFlyout = fly;
-        return chip;
+
+        // glow lives on a wrapper Border: Button visual states overwrite the
+        // chip's own BorderBrush on hover, which is why unselected pages never
+        // glowed (#25-batch3)
+        var glowWrap = new Border
+        {
+            CornerRadius = new CornerRadius(12),
+            BorderThickness = new Thickness(1.6),
+            BorderBrush = new SolidColorBrush(Colors.Transparent),
+            Child = chip
+        };
+        AttachHoverGlow(glowWrap, ColorUtil.Parse(nb.Color), glowWrap.BorderBrush, new Thickness(1.6), new Thickness(1.6));
+        return glowWrap;
     }
 
     private async Task GalleryNewPageAsync(Notebook nb, Section sec)
@@ -5255,13 +5229,33 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                     case Slider sl:
                         sl.MinHeight = on ? 42 : 0;
                         break;
+                    // glyphs inside buttons must grow too, not just the hit target (#23-batch3)
+                    case TextBlock tb2:
+                        if (on)
+                        {
+                            if (!_touchTbOrig.ContainsKey(tb2)) _touchTbOrig[tb2] = tb2.FontSize;
+                            tb2.FontSize = Math.Max(tb2.FontSize, 19);
+                        }
+                        else if (_touchTbOrig.TryGetValue(tb2, out var tbOrig)) tb2.FontSize = tbOrig;
+                        break;
+                    case FontIcon fi2:
+                        if (on)
+                        {
+                            if (!_touchFiOrig.ContainsKey(fi2)) _touchFiOrig[fi2] = fi2.FontSize;
+                            fi2.FontSize = Math.Max(fi2.FontSize, 18);
+                        }
+                        else if (_touchFiOrig.TryGetValue(fi2, out var fiOrig)) fi2.FontSize = fiOrig;
+                        break;
                 }
                 Walk(ch);
             }
         }
-        foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
+        foreach (var root in new FrameworkElement[] { TopBarScroll, TopBarPinned, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel, GalleryHeaderRow })
             try { Walk(root); } catch { }
     }
+
+    private readonly Dictionary<TextBlock, double> _touchTbOrig = new();
+    private readonly Dictionary<FontIcon, double> _touchFiOrig = new();
 
     // =======================================================================
     // AI assistant (#25-batch2): summaries, action items, smart tags, Q&A and
@@ -5516,7 +5510,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             if (!ok)
             {
                 BtnDictate.IsChecked = false;
-                ShowStatus("Dictation couldn't start. Check microphone access and enable online speech recognition in Windows privacy settings.");
+                ShowStatus("Dictation couldn't start: " + (_dictation.LastError ?? "unknown error."));
                 return;
             }
             ShowStatus("Dictating — speak, and the text lands in the focused text box (or a new one).");
