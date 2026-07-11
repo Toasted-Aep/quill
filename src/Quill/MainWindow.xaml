@@ -170,6 +170,8 @@
                         <PathIcon Data="M8 1 L9.6 6.4 L15 8 L9.6 9.6 L8 15 L6.4 9.6 L1 8 L6.4 6.4 Z M13 1.5 L13.6 3.4 L15.5 4 L13.6 4.6 L13 6.5 L12.4 4.6 L10.5 4 L12.4 3.4 Z"/>
                         <Button.Flyout>
                             <MenuFlyout>
+                                <MenuFlyoutItem Text="Chat with AI… (sees the page)" Click="AiChat_Click" AllowFocusOnInteraction="False"/>
+                                <MenuFlyoutSeparator/>
                                 <MenuFlyoutItem Text="Summarise this page" Click="AiSummarize_Click" AllowFocusOnInteraction="False"/>
                                 <MenuFlyoutItem Text="Action items from this page" Click="AiActions_Click" AllowFocusOnInteraction="False"/>
                                 <MenuFlyoutItem Text="Smart tags for this page" Click="AiTags_Click" AllowFocusOnInteraction="False"/>
@@ -740,6 +742,61 @@
                                    Foreground="{ThemeResource InkBrush}" IsTextSelectionEnabled="True"/>
                     </StackPanel>
                 </StackPanel>
+            </Border>
+
+            <!-- Floating AI chat (#22-batch3) -->
+            <Border x:Name="AiPanel" Visibility="Collapsed"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,14,60,0" Width="370"
+                    Background="{ThemeResource CardBrushFloat}"
+                    BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5"
+                    CornerRadius="{StaticResource CardCorner}" Padding="10" Canvas.ZIndex="12">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid x:Name="AiHeader" Background="Transparent"
+                          ToolTipService.ToolTip="Drag to move the AI chat">
+                        <TextBlock Text="&#x22EE;&#x22EE;  AI chat" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
+                                   FontSize="14" Foreground="{ThemeResource InkBrush}" VerticalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="2">
+                            <Button Click="AiClear_Click" Padding="4,2" Background="Transparent" BorderThickness="0"
+                                    ToolTipService.ToolTip="Clear this conversation">
+                                <FontIcon Glyph="&#xE74D;" FontSize="11"/>
+                            </Button>
+                            <Button Click="AiClose_Click" Padding="4,2" Background="Transparent" BorderThickness="0"
+                                    ToolTipService.ToolTip="Close the AI chat">
+                                <FontIcon Glyph="&#xE711;" FontSize="11"/>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+                    <ScrollViewer x:Name="AiScroll" Grid.Row="1" MaxHeight="430" Margin="0,8,0,8"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
+                        <StackPanel x:Name="AiMessages" Spacing="6"/>
+                    </ScrollViewer>
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="AiInput" PlaceholderText="Ask about this page…" FontSize="13"
+                                 TextWrapping="Wrap" MaxHeight="90" KeyDown="AiInput_KeyDown"/>
+                        <ToggleButton x:Name="AiSeePage" Grid.Column="1" IsChecked="True" Margin="4,0,0,0"
+                                      VerticalAlignment="Bottom"
+                                      ToolTipService.ToolTip="Attach a snapshot of the page — the AI sees your actual ink">
+                            <!-- original eye silhouette -->
+                            <PathIcon Data="M8 3.5 C11.6 3.5 14.4 6 15.5 8 C14.4 10 11.6 12.5 8 12.5 C4.4 12.5 1.6 10 0.5 8 C1.6 6 4.4 3.5 8 3.5 Z M8 5.4 A2.6 2.6 0 1 0 8 10.6 A2.6 2.6 0 1 0 8 5.4 Z M8 6.7 A1.3 1.3 0 1 1 7.99 6.7 Z"/>
+                        </ToggleButton>
+                        <Button x:Name="AiSendBtn" Grid.Column="2" Click="AiSend_Click" Margin="4,0,0,0"
+                                VerticalAlignment="Bottom" Style="{StaticResource AccentButtonStyle}"
+                                ToolTipService.ToolTip="Send (Enter)">
+                            <FontIcon Glyph="&#xE724;" FontSize="13"/>
+                        </Button>
+                    </Grid>
+                </Grid>
             </Border>
 
             <!-- Minimal-UI floating buttons -->
