@@ -4069,7 +4069,7 @@ public sealed class InkSurface : UserControl
     {
         if (_page == null) return null;
         FlushTexts(); // save other boxes' live edits before adding a new one
-        var t = new TextElement { X = worldPos.X - 4, Y = worldPos.Y - 10 };
+        var t = new TextElement { X = worldPos.X - 4, Y = worldPos.Y - 10, AutoWidth = true };
         UndoManager.Push(new AddTextAction(t), _page);
         BuildTextUi(t); // add ONLY the new box so existing boxes keep their formatting
         if (_textUi.TryGetValue(t.Id, out var ui))
@@ -4086,6 +4086,33 @@ public sealed class InkSurface : UserControl
         return null;
     }
 
+    // Measures the bubble's text (at its typing font size, so bigger characters
+    // widen it faster) and sets the width explicitly: starts at the familiar
+    // width, grows with content, hard-capped at the box's snapshotted ceiling
+    // (#15). Grip-dragged (pinned) boxes and table cells never come through here.
+    private void AutoGrowBubble(TextElement t, RichEditBox box)
+    {
+        if (t.WidthPinned) return;
+        try
+        {
+            box.Document.GetText(Microsoft.UI.Text.TextGetOptions.None, out string txt);
+            txt = txt.TrimEnd('\r', '\n');
+            float fs;
+            try { fs = box.Document.Selection.CharacterFormat.Size; } catch { fs = (float)box.FontSize; }
+            if (fs <= 1 || float.IsNaN(fs)) fs = (float)box.FontSize;
+            double natural = 0;
+            if (txt.Length > 0)
+            {
+                using var fmt = new CanvasTextFormat { FontSize = fs, FontFamily = box.FontFamily?.Source ?? "Segoe UI" };
+                using var tl = new CanvasTextLayout(CanvasDevice.GetSharedDevice(), txt, fmt, float.MaxValue, float.MaxValue);
+                natural = tl.LayoutBounds.Width;
+            }
+            double w = Math.Clamp(natural + box.Padding.Left + box.Padding.Right + 18, 260, Math.Max(260, t.MaxWidth));
+            if (double.IsNaN(box.Width) || Math.Abs(box.Width - w) > 1.5) box.Width = w;
+        }
+        catch { }
+    }
+
     // Ceiling for an auto-growing text box, in world units (#15): half the real
     // screen, but clamped so the box never spills past the app-window's right
     // edge. Snapshotted per box at first build; a later window resize won't move
@@ -4097,9 +4124,12 @@ public sealed class InkSurface : UserControl
         double screenDip = ScreenWidthDip > 40 ? ScreenWidthDip : windowDip;
         double halfScreenDip = screenDip * 0.5;
         double boxScreenLeft = worldLeft * zoom + ViewOffset.X;   // text layer maps world->screen
-        double toWindowEdgeDip = Math.Max(0, windowDip - boxScreenLeft - 24);   // keep a small margin
-        double capDip = Math.Min(halfScreenDip, toWindowEdgeDip);
-        return Math.Max(160, capDip / zoom);
+        double capDip = halfScreenDip;
+        // clamp to the window edge only for boxes actually visible right now —
+        // a box built while scrolled far away must not inherit a nonsense cap
+        if (boxScreenLeft >= 0 && boxScreenLeft < windowDip - 60)
+            capDip = Math.Min(capDip, windowDip - boxScreenLeft - 24);
+        return Math.Max(260, capDip / zoom);
     }
 
     public bool HasPendingText => _pendingTextPos != null;
@@ -5156,15 +5186,24 @@ public sealed class InkSurface : UserControl
         }
         else
         {
-            // Free bubbles start at the familiar width and grow with the text
-            // (bigger font => wider content => wider box), up to a ceiling of
-            // half the physical screen, but never past the app-window edge. The
-            // ceiling is snapshotted once, so resizing the window later leaves
-            // existing boxes alone and only affects new ones (#15).
-            if (t.MaxWidth <= 0) t.MaxWidth = ComputeBubbleMaxWidth(t.X);
-            box.MaxWidth = t.MaxWidth;
-            box.MinWidth = Math.Min(t.MaxWidth, 260);   // "starts as current length"
-            box.Width = double.NaN;                     // auto-grow with the text
+            // Free bubbles start at the familiar width and GROW WITH THE TEXT,
+            // up to a ceiling of half the physical screen but never past the
+            // app-window edge. The ceiling is snapshotted once per box, so a
+            // later window resize only affects NEW boxes (#15). RichEditBox
+            // does not reliably auto-size horizontally in wrap mode, so the
+            // width is measured explicitly from the text on every change.
+            if (t.AutoWidth)
+            {
+                if (t.MaxWidth <= 0) t.MaxWidth = ComputeBubbleMaxWidth(t.X);
+                box.MaxWidth = t.MaxWidth;
+                box.MinWidth = Math.Min(t.MaxWidth, 200);
+                AutoGrowBubble(t, box);                   // size to current content
+                box.TextChanged += (_, _) => AutoGrowBubble(t, box);
+            }
+            else
+            {
+                box.Width = t.Width;   // pre-feature boxes never re-wrap (#15)
+            }
         }
 
         // The RichEditBox's inner ScrollViewer grabbed the wheel through direct
@@ -5298,6 +5337,7 @@ public sealed class InkSurface : UserControl
         {
             t.Width = box.Width;
             t.WidthPinned = true;   // an explicit drag opts out of auto-sizing (#15-batch4)
+            t.AutoWidth = false;
             ContentChanged?.Invoke();
         };
         container.Children.Add(rGrip);

@@ -142,6 +142,9 @@ public class TextElement
     // (half the physical screen, capped at the window edge) so a later window
     // resize never changes an existing box's ceiling (#15). 0 = not yet computed.
     public double MaxWidth { get; set; }
+    // Only boxes created after the auto-grow feature opt in — pre-existing
+    // boxes keep their saved width so old notes never re-wrap (#15).
+    public bool AutoWidth { get; set; }
     public string Rtf { get; set; } = "";
     public double Rotation { get; set; }
     // Cell membership for table shapes (#40): null = a free text box.
