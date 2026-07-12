@@ -60,7 +60,7 @@ public sealed class InkSurface : UserControl
     public bool HandDrawMode { get; set; }
     public MouseMode MouseMode { get; set; } = MouseMode.Auto;
 
-    private const int InkCacheThreshold = 600;   // static ink kicks in early (#16-batch4)
+    private const int InkCacheThreshold = 2500;   // static ink only for very large pages (the aggressive 600 + per-stroke cache-append dropped just-drawn ink, #hotfix)
     private CanvasRenderTarget? _inkCache;
     private Rect _inkCacheWorld;
     private float _inkCacheScale = 1f;
@@ -275,10 +275,11 @@ public sealed class InkSurface : UserControl
 
         ContentChanged += () =>
         {
-            // a just-committed stroke was painted straight into the cache and
-            // text-box keystrokes never touch ink — neither needs a rebuild
-            if (_inkCacheAppendFresh || _inkCacheTextOnly) { _inkCacheAppendFresh = false; return; }
-            _inkCacheDirty = true;   // any other edit invalidates the ink cache (#43)
+            // text-box keystrokes never touch ink, so they leave the static-ink
+            // cache valid; every other edit invalidates it (#43). The per-stroke
+            // cache-append optimisation was removed — it dropped just-drawn ink.
+            if (_inkCacheTextOnly) return;
+            _inkCacheDirty = true;
         };
         Unloaded += (_, _) => _canvas.RemoveFromVisualTree();
     }
@@ -1695,7 +1696,6 @@ public sealed class InkSurface : UserControl
                             PressureCurve = PenPressureCurve != null ? new List<float>(PenPressureCurve) : null
                         };
                         UndoManager.Push(new AddStrokeAction(stroke), _page);
-                        AppendStrokeToInkCache(stroke);   // static ink stays valid (#16-batch4)
                         changed = true;
                         _lastCommitted = stroke;
                         _lastCommitMs = Environment.TickCount64;
@@ -5380,22 +5380,5 @@ public sealed class InkSurface : UserControl
         }
     }
 
-    // Paints a freshly committed stroke straight into the static-ink cache so
-    // big pages never rebuild the whole cache per stroke (#16-batch4).
-    private bool _inkCacheAppendFresh;
     private bool _inkCacheTextOnly;
-    private void AppendStrokeToInkCache(PenStroke s)
-    {
-        if (_inkCache == null || _inkCacheDirty || _page == null) return;
-        if (_page.Strokes.Count < InkCacheThreshold) return;
-        try
-        {
-            using var cds = _inkCache.CreateDrawingSession();
-            cds.Transform = Matrix3x2.CreateTranslation((float)-_inkCacheWorld.X, (float)-_inkCacheWorld.Y) *
-                            Matrix3x2.CreateScale(_inkCacheScale);
-            DrawStroke(cds, _canvas, s, Vector2.Zero, null);
-            _inkCacheAppendFresh = true;
-        }
-        catch { _inkCacheDirty = true; }
-    }
 }
