@@ -321,7 +321,11 @@ public sealed partial class MainWindow : Window
         if (_library.StartOnGallery) ShowGallery(launcher: true);
 
         // touch mode needs the visual tree, so apply it after first layout (#36)
-        RootGrid.Loaded += (_, _) => { if (_library.TouchMode) ApplyTouchMode(true); };
+        RootGrid.Loaded += (_, _) => { if (_library.TouchMode) ApplyTouchMode(true); UpdateScreenMetrics(); };
+        // keep the real monitor width current so a NEW text box caps at half the
+        // physical screen; existing boxes snapshot their own cap at creation and
+        // are left untouched by a later resize (#15)
+        this.SizeChanged += (_, _) => UpdateScreenMetrics();
 
         // liquid pop for every flyout pane — history, search, page settings… (#50)
         foreach (var fb in new FlyoutBase?[]
@@ -397,14 +401,14 @@ public sealed partial class MainWindow : Window
         else if (mode == "Circulate")
         {
             opacity = 0.95;
-            // Glide the highlight straight along the diagonal at a CONSTANT rate
-            // and let SpreadMethod=Repeat wrap it seamlessly. The old perimeter
-            // walk gave each edge equal TIME but not equal length, so on the wide
-            // pen row the shine crawled the short sides and raced across the top —
-            // the "exponential" dwell-then-whip. A translating repeat has no
-            // rotation, so the band never balloons and its speed is even (#4).
+            // One highlight gliding along the LONG axis at a constant rate,
+            // wrapping seamlessly (Repeat). The glow gradients are symmetric
+            // (bright at both ends), so a DIAGONAL axis put the top-edge and
+            // bottom-edge bright bands at different x — they read as two sliders
+            // closing in. A horizontal axis keeps the band vertical so the top
+            // and bottom light together as a single, even sweep (#4).
             double s = (_glowT / 4.0) % 1.0;   // one seamless loop / 4 s
-            SetGradientAxes(s, s, s + 1.0, s + 1.0);
+            SetGradientAxes(s, 0.5, s + 1.0, 0.5);
         }
         if (_rippleStartMs >= 0)
         {
@@ -1453,15 +1457,26 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(stabLabel);
             panel.Children.Add(stab);
 
-            // Pressure-curve editor (#roadmap): drag the midpoint to shape how
-            // input pressure maps to stroke width. Endpoints are pinned at
-            // (0,0) and (1,1); the engine reads the single midpoint.
-            const double cvW = 240, cvH = 92, cvPad = 12;
+            // Pressure response (#curve): Soft / Hard presets, or a Custom
+            // curve with THREE draggable points — all move vertically, the
+            // outer two move sideways as well. The engine interpolates
+            // piecewise-linearly through (0,0), the three points, and (1,1).
+            const double cvW = 240, cvH = 116, cvPad = 12;
             double plotW = cvW - 2 * cvPad, plotH = cvH - 2 * cvPad;
-            double CurMid() => p.PressureCurve is { Count: > 1 } ? p.PressureCurve[1] : 0.5;
 
-            panel.Children.Add(new TextBlock { Text = "Pressure curve — drag the dot", FontSize = 12 });
-            var curveHost = new Grid { Width = cvW, Height = cvH };
+            double[] cpts = p.PressureCurve is { Count: >= 6 } pc6
+                ? new[] { (double)pc6[0], pc6[1], pc6[2], pc6[3], pc6[4], pc6[5] }
+                : p.PressureCurve is { Count: >= 3 } pc3
+                    ? new[] { 0.25, Math.Clamp(pc3[1] - 0.15, 0.02, 0.98), 0.5, (double)pc3[1], 0.75, Math.Clamp(pc3[1] + 0.35, 0.02, 0.98) }
+                    : new[] { 0.25, 0.25, 0.5, 0.5, 0.75, 0.75 };   // identity diagonal
+
+            var modeCombo = new ComboBox
+            {
+                Header = "Pressure response",
+                ItemsSource = new[] { "Soft (thickens easily)", "Hard (needs pressure)", "Custom curve" },
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            var curveHost = new Grid { Width = cvW, Height = cvH, HorizontalAlignment = HorizontalAlignment.Left };
             curveHost.Children.Add(new Border
             {
                 Background = new SolidColorBrush(Color.FromArgb(24, 128, 128, 128)),
@@ -1482,49 +1497,106 @@ public sealed partial class MainWindow : Window
                 Stroke = new SolidColorBrush(Surface.Accent), StrokeThickness = 2.5
             };
             curveCanvas.Children.Add(poly);
-            var knob = new Microsoft.UI.Xaml.Shapes.Ellipse
+            var knobs = new Microsoft.UI.Xaml.Shapes.Ellipse[3];
+            for (int ki = 0; ki < 3; ki++)
             {
-                Width = 16, Height = 16,
-                Fill = new SolidColorBrush(Surface.Accent),
-                Stroke = new SolidColorBrush(Colors.White), StrokeThickness = 2
+                knobs[ki] = new Microsoft.UI.Xaml.Shapes.Ellipse
+                {
+                    Width = 15, Height = 15,
+                    Fill = new SolidColorBrush(Surface.Accent),
+                    Stroke = new SolidColorBrush(Colors.White), StrokeThickness = 2
+                };
+                curveCanvas.Children.Add(knobs[ki]);
+            }
+            var curveCaption = new TextBlock
+            {
+                Text = "Drag the dots — the outer two slide sideways too.",
+                FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap
             };
-            curveCanvas.Children.Add(knob);
-            var curveCaption = new TextBlock { FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap };
-            void RedrawCurve(double mid)
+
+            double PxX(double x) => cvPad + x * plotW;
+            double PxY(double y) => cvPad + (1 - y) * plotH;
+            void RedrawCurve()
             {
-                double my = cvPad + (1 - mid) * plotH;
                 poly.Points = new PointCollection
                 {
-                    new Point(cvPad, cvPad + plotH),
-                    new Point(cvPad + plotW / 2, my),
-                    new Point(cvPad + plotW, cvPad)
+                    new Point(PxX(0), PxY(0)),
+                    new Point(PxX(cpts[0]), PxY(cpts[1])),
+                    new Point(PxX(cpts[2]), PxY(cpts[3])),
+                    new Point(PxX(cpts[4]), PxY(cpts[5])),
+                    new Point(PxX(1), PxY(1))
                 };
-                Canvas.SetLeft(knob, cvPad + plotW / 2 - 8);
-                Canvas.SetTop(knob, my - 8);
-                curveCaption.Text = mid > 0.55 ? "Soft — light pressure already thickens the line."
-                    : mid < 0.45 ? "Hard — needs firm pressure to thicken."
-                    : "Linear — width tracks pressure evenly.";
+                for (int ki = 0; ki < 3; ki++)
+                {
+                    Canvas.SetLeft(knobs[ki], PxX(cpts[ki * 2]) - 7.5);
+                    Canvas.SetTop(knobs[ki], PxY(cpts[ki * 2 + 1]) - 7.5);
+                }
             }
-            void SetMidFromY(double y)
+            void CommitCurve()
             {
-                double mid = Math.Clamp(1 - (y - cvPad) / plotH, 0, 1);
-                p.PressureCurve = Math.Abs(mid - 0.5) < 0.02 ? null : new List<float> { 0f, (float)mid, 1f };
+                p.PressureCurve = new List<float>
+                {
+                    (float)cpts[0], (float)cpts[1], (float)cpts[2],
+                    (float)cpts[3], (float)cpts[4], (float)cpts[5]
+                };
                 if (_activePresetId == p.Id) Surface.PenPressureCurve = p.PressureCurve;
-                RedrawCurve(mid);
                 ScheduleSave();
             }
-            bool curveDrag = false;
+            int dragKnob = -1;
             curveHost.PointerPressed += (s2, e2) =>
             {
-                curveDrag = true; curveHost.CapturePointer(e2.Pointer);
-                SetMidFromY(e2.GetCurrentPoint(curveHost).Position.Y);
+                var pt = e2.GetCurrentPoint(curveHost).Position;
+                double best = 24 * 24; dragKnob = -1;
+                for (int ki = 0; ki < 3; ki++)
+                {
+                    double dx = pt.X - PxX(cpts[ki * 2]), dy = pt.Y - PxY(cpts[ki * 2 + 1]);
+                    double d2 = dx * dx + dy * dy;
+                    if (d2 < best) { best = d2; dragKnob = ki; }
+                }
+                if (dragKnob >= 0) curveHost.CapturePointer(e2.Pointer);
             };
             curveHost.PointerMoved += (s2, e2) =>
             {
-                if (curveDrag) SetMidFromY(e2.GetCurrentPoint(curveHost).Position.Y);
+                if (dragKnob < 0) return;
+                var pt = e2.GetCurrentPoint(curveHost).Position;
+                double ny = Math.Clamp(1 - (pt.Y - cvPad) / plotH, 0, 1);
+                cpts[dragKnob * 2 + 1] = ny;
+                if (dragKnob != 1)   // the middle point keeps its x; the outer two slide
+                {
+                    double nx = Math.Clamp((pt.X - cvPad) / plotW, 0.02, 0.98);
+                    if (dragKnob == 0) nx = Math.Min(nx, cpts[2] - 0.05);
+                    else nx = Math.Max(nx, cpts[2] + 0.05);
+                    cpts[dragKnob * 2] = Math.Clamp(nx, 0.02, 0.98);
+                }
+                RedrawCurve();
+                CommitCurve();
             };
-            curveHost.PointerReleased += (s2, e2) => { curveDrag = false; curveHost.ReleasePointerCaptures(); };
-            RedrawCurve(CurMid());
+            curveHost.PointerReleased += (s2, e2) => { dragKnob = -1; curveHost.ReleasePointerCaptures(); };
+
+            bool syncingCurve = true;
+            modeCombo.SelectedIndex = p.PressureCurve is { Count: >= 6 } ? 2
+                : p.PressureCurve is { Count: >= 3 } lm ? (lm[1] > 0.5f ? 0 : 1)
+                : 2;   // null (linear) shows Custom with the identity diagonal, untouched until dragged
+            curveHost.Visibility = modeCombo.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+            curveCaption.Visibility = curveHost.Visibility;
+            modeCombo.SelectionChanged += (_, _) =>
+            {
+                if (syncingCurve) return;
+                switch (modeCombo.SelectedIndex)
+                {
+                    case 0: p.PressureCurve = new List<float> { 0f, 0.6f, 1f }; break;
+                    case 1: p.PressureCurve = new List<float> { 0f, 0.2f, 1f }; break;
+                    case 2: CommitCurve(); break;   // adopt the drawn points
+                }
+                if (_activePresetId == p.Id) Surface.PenPressureCurve = p.PressureCurve;
+                curveHost.Visibility = modeCombo.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+                curveCaption.Visibility = curveHost.Visibility;
+                ScheduleSave();
+            };
+            syncingCurve = false;
+
+            RedrawCurve();
+            panel.Children.Add(modeCombo);
             panel.Children.Add(curveHost);
             panel.Children.Add(curveCaption);
 
@@ -5551,6 +5623,21 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             ShowStatus($"Exported {vpages.Count} vector page{(vpages.Count == 1 ? "" : "s")} to {file.Name} — opens in any browser.");
         }
         catch { ShowStatus("Could not save the HTML. Check the location and try again."); }
+    }
+
+    // Pushes the real monitor width (in DIPs, DPI-corrected) to the surface so
+    // new text boxes can cap their growth at half the physical screen (#15).
+    private void UpdateScreenMetrics()
+    {
+        try
+        {
+            var area = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest);
+            double scale = RootGrid?.XamlRoot?.RasterizationScale ?? 1.0;
+            if (scale <= 0) scale = 1.0;
+            Surface.ScreenWidthDip = area.OuterBounds.Width / scale;
+        }
+        catch { }
     }
 
     // ---- touch-screen mode (#36): larger tap targets on every toolbar ----

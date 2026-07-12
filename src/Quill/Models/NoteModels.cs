@@ -138,6 +138,10 @@ public class TextElement
     public double Width { get; set; } = 280;
     // true once the user drags the width grip — opts out of auto-sizing (#15-batch4)
     public bool WidthPinned { get; set; }
+    // Auto-grow ceiling in world units, snapshotted when the box is first built
+    // (half the physical screen, capped at the window edge) so a later window
+    // resize never changes an existing box's ceiling (#15). 0 = not yet computed.
+    public double MaxWidth { get; set; }
     public string Rtf { get; set; } = "";
     public double Rotation { get; set; }
     // Cell membership for table shapes (#40): null = a free text box.
