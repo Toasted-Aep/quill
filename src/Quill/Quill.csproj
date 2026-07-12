@@ -11,7 +11,8 @@
     <UseWinUI>true</UseWinUI>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <WindowsPackageType>None</WindowsPackageType>
+    <!-- unpackaged for day-to-day dev; `-p:Msix=true` builds the signed MSIX -->
+    <WindowsPackageType Condition="'$(Msix)'!='true'">None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <EnableMsixTooling>true</EnableMsixTooling>
     <AssemblyName>Quill</AssemblyName>
@@ -29,6 +30,20 @@
     <Content Include="Assets\app.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+
+  <!-- MSIX packaging (#roadmap): dotnet build -p:Msix=true -p:Platform=x64
+       -c Release -p:QuillCertThumbprint=<thumbprint>. See docs/PACKAGING.md. -->
+  <PropertyGroup Condition="'$(Msix)'=='true'">
+    <GenerateAppxPackageOnBuild>true</GenerateAppxPackageOnBuild>
+    <AppxPackageSigningEnabled Condition="'$(QuillCertThumbprint)'!=''">true</AppxPackageSigningEnabled>
+    <PackageCertificateThumbprint Condition="'$(QuillCertThumbprint)'!=''">$(QuillCertThumbprint)</PackageCertificateThumbprint>
+    <AppxBundle>Never</AppxBundle>
+    <AppxPackageDir>$(MSBuildThisFileDirectory)..\..\dist\msix\</AppxPackageDir>
+    <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(Msix)'=='true'">
+    <Content Include="Assets\Square150x150Logo.png;Assets\Square44x44Logo.png;Assets\StoreLogo.png;Assets\Wide310x150Logo.png;Assets\SplashScreen.png" />
   </ItemGroup>
 
   <ItemGroup>

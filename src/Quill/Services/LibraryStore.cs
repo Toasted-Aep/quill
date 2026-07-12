@@ -76,6 +76,19 @@ public static class LibraryStore
     public static string FilePath => Path.Combine(Dir, "library.json");
     private static string LegacyFilePath => Path.Combine(LegacyDir, "library.json");
 
+    // Async library load (#roadmap): App.OnLaunched starts deserialising on a
+    // worker thread BEFORE the window is constructed, so JSON parsing overlaps
+    // the XAML build instead of running after it. The window then joins the
+    // already-running task instead of loading again.
+    private static Task<Library>? _pending;
+    public static void BeginLoad() { _pending ??= Task.Run(Load); }
+    public static Library LoadOrJoin()
+    {
+        var t = _pending;
+        _pending = null;
+        return t != null ? t.GetAwaiter().GetResult() : Load();
+    }
+
     public static Library Load()
     {
         MigrateFromLegacyIfNeeded();

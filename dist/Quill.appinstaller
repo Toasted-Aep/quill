@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AppInstaller
+  xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
+  Uri="https://github.com/Toasted-Aep/quill/releases/download/msix-latest/Quill.appinstaller"
+  Version="1.0.0.0">
+
+  <MainPackage
+    Name="ToastedAep.Quill"
+    Publisher="CN=QuillDev"
+    Version="1.0.0.0"
+    ProcessorArchitecture="x64"
+    Uri="https://github.com/Toasted-Aep/quill/releases/download/msix-latest/Quill_x64.msix" />
+
+  <UpdateSettings>
+    <OnLaunch HoursBetweenUpdateChecks="0" />
+  </UpdateSettings>
+</AppInstaller>
