@@ -125,6 +125,9 @@ public sealed class InkSurface : UserControl
     // the app accent, pushed from MainWindow so selection chrome, handles and
     // table adorners match the rest of the app instead of a hardcoded orange
     public Color Accent { get; set; } = Color.FromArgb(255, 217, 119, 87);
+    // Real monitor width in DIPs, pushed by MainWindow, for the text-box growth
+    // ceiling (half the physical screen); 0 falls back to the window width (#15).
+    public double ScreenWidthDip { get; set; }
     private PenStroke? _lastCommitted;
     private long _lastCommitMs;
     private Vector2 _lastCommitEnd;
@@ -2846,11 +2849,29 @@ public sealed class InkSurface : UserControl
     {
         float pr = (a.Pressure + b.Pressure) * 0.5f;
         if (pr <= 0.01f) pr = 0.5f;
-        if (s.PressureCurve != null && s.PressureCurve.Count >= 3)
+        if (s.PressureCurve is { Count: >= 3 } pc)
         {
             float t = Math.Clamp(pr, 0f, 1f);
-            float mid = s.PressureCurve[1];
-            pr = 2f * (1f - t) * t * mid + t * t;
+            if (pc.Count >= 6)
+            {
+                // custom curve: piecewise-linear through (0,0), three user
+                // points (x,y pairs), and (1,1) (#curve)
+                Span<float> xs = stackalloc float[5] { 0f, pc[0], pc[2], pc[4], 1f };
+                Span<float> ys = stackalloc float[5] { 0f, pc[1], pc[3], pc[5], 1f };
+                pr = ys[4];
+                for (int k = 1; k < 5; k++)
+                    if (t <= xs[k])
+                    {
+                        float dx = Math.Max(1e-4f, xs[k] - xs[k - 1]);
+                        pr = ys[k - 1] + (ys[k] - ys[k - 1]) * (t - xs[k - 1]) / dx;
+                        break;
+                    }
+            }
+            else
+            {
+                float mid = pc[1];   // legacy single-midpoint quadratic
+                pr = 2f * (1f - t) * t * mid + t * t;
+            }
         }
         float sens = s.Sens <= 0.01f ? 1f : s.Sens;
         switch (s.Pen)
@@ -3911,6 +3932,22 @@ public sealed class InkSurface : UserControl
         return null;
     }
 
+    // Ceiling for an auto-growing text box, in world units (#15): half the real
+    // screen, but clamped so the box never spills past the app-window's right
+    // edge. Snapshotted per box at first build; a later window resize won't move
+    // it (only new boxes pick up the new measurements).
+    private double ComputeBubbleMaxWidth(double worldLeft)
+    {
+        double zoom = Math.Max(0.1, ViewZoom);
+        double windowDip = ActualWidth > 40 ? ActualWidth : 1280;
+        double screenDip = ScreenWidthDip > 40 ? ScreenWidthDip : windowDip;
+        double halfScreenDip = screenDip * 0.5;
+        double boxScreenLeft = worldLeft * zoom + ViewOffset.X;   // text layer maps world->screen
+        double toWindowEdgeDip = Math.Max(0, windowDip - boxScreenLeft - 24);   // keep a small margin
+        double capDip = Math.Min(halfScreenDip, toWindowEdgeDip);
+        return Math.Max(160, capDip / zoom);
+    }
+
     public bool HasPendingText => _pendingTextPos != null;
 
     /// <summary>Turns a pending Text-tool caret into a real empty box so
@@ -4952,14 +4989,15 @@ public sealed class InkSurface : UserControl
         }
         else
         {
-            // free bubbles auto-size: start at the familiar width, grow with
-            // the text, cap at half the visible page at the current zoom
-            // (#15-batch4)
-            double maxW = ActualWidth > 40
-                ? Math.Max(280, ActualWidth * 0.5 / Math.Max(0.1f, ViewZoom))
-                : 640;
-            box.MaxWidth = maxW;
-            box.Width = double.NaN;
+            // Free bubbles start at the familiar width and grow with the text
+            // (bigger font => wider content => wider box), up to a ceiling of
+            // half the physical screen, but never past the app-window edge. The
+            // ceiling is snapshotted once, so resizing the window later leaves
+            // existing boxes alone and only affects new ones (#15).
+            if (t.MaxWidth <= 0) t.MaxWidth = ComputeBubbleMaxWidth(t.X);
+            box.MaxWidth = t.MaxWidth;
+            box.MinWidth = Math.Min(t.MaxWidth, 260);   // "starts as current length"
+            box.Width = double.NaN;                     // auto-grow with the text
         }
 
         // The RichEditBox's inner ScrollViewer grabbed the wheel through direct
