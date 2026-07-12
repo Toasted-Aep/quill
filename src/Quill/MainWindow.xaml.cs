@@ -379,11 +379,10 @@ public sealed partial class MainWindow : Window
             _glowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
             _glowTimer.Tick += (_, _) => GlowTick();
         }
-        // Repeat lets Circulate translate the gradient and wrap seamlessly; for
-        // the static axis (0,0)-(1,1) every element still projects onto [0,1], so
-        // Breathe / Off look unchanged (#4).
-        foreach (var b in GlowBrushes()) { b.Opacity = 0.9; b.SpreadMethod = GradientSpreadMethod.Repeat; }
+        foreach (var b in GlowBrushes()) b.Opacity = 0.9;
         SetGradientAxes(0, 0, 1, 1);
+        // leaving Circulate restores every brush's own artistic stops (#4)
+        if (_reduceMotion || _library.GlowMode != "Circulate") RestoreCirculateStops();
         if (_reduceMotion || _library.GlowMode == "Off") _glowTimer.Stop();
         else _glowTimer.Start();
     }
@@ -401,14 +400,19 @@ public sealed partial class MainWindow : Window
         else if (mode == "Circulate")
         {
             opacity = 0.95;
-            // One highlight gliding along the LONG axis at a constant rate,
-            // wrapping seamlessly (Repeat). The glow gradients are symmetric
-            // (bright at both ends), so a DIAGONAL axis put the top-edge and
-            // bottom-edge bright bands at different x — they read as two sliders
-            // closing in. A horizontal axis keeps the band vertical so the top
-            // and bottom light together as a single, even sweep (#4).
-            double s = (_glowT / 4.0) % 1.0;   // one seamless loop / 4 s
-            SetGradientAxes(s, 0.5, s + 1.0, 0.5);
+            // A single bright band travelling at a constant rate, done by
+            // animating the gradient STOPS on a fixed 0..1 axis. Moving the
+            // axis itself washed out any brush that registered after startup
+            // (Pad spread painted the whole element with one end colour — the
+            // white fog over the gallery, and the washed "disabled-looking"
+            // chrome). Stops stay in [0,1], so nothing can wash out (#4).
+            double band = (_glowT / 5.0) % 1.0;
+            var seen = new HashSet<LinearGradientBrush>();
+            foreach (var b in GlowBrushes()) { seen.Add(b); CirculateStops(b, band); }
+            // hover glows come and go — drop snapshots of brushes that left the
+            // engine so the dictionary can't pin them alive forever
+            foreach (var dead in _circSnapshot.Keys.Where(k => !seen.Contains(k)).ToList())
+                _circSnapshot.Remove(dead);
         }
         if (_rippleStartMs >= 0)
         {
@@ -418,6 +422,73 @@ public sealed partial class MainWindow : Window
         }
         foreach (var b in GlowBrushes()) b.Opacity = opacity;
         if (mode == "Off" && _rippleStartMs < 0) _glowTimer!.Stop();
+    }
+
+    // ---- Circulate via gradient stops (#4): each managed brush gets 12
+    // fixed-offset stops whose alphas form one travelling peak; the brush's
+    // original stops are snapshotted and restored when the mode changes. ----
+    private static readonly Dictionary<LinearGradientBrush, List<(double O, Color C)>> _circSnapshot = new();
+
+    private static void CirculateStops(LinearGradientBrush b, double band)
+    {
+        // Modulate each brush's OWN designed alpha profile with one travelling
+        // peak — imposing a flat bright band washed large glassy surfaces into
+        // a white fog. Dim floor 0.35x, peak up to 1.0x of the original (#4).
+        const int N = 12;
+        if (!_circSnapshot.ContainsKey(b))
+            _circSnapshot[b] = b.GradientStops.OrderBy(gs => gs.Offset)
+                                              .Select(gs => (gs.Offset, gs.Color)).ToList();
+        var snap = _circSnapshot[b];
+        if (snap.Count == 0) return;
+        if (b.GradientStops.Count != N)
+        {
+            b.GradientStops.Clear();
+            for (int i = 0; i < N; i++)
+                b.GradientStops.Add(new GradientStop { Offset = i / (double)(N - 1) });
+        }
+        for (int i = 0; i < N; i++)
+        {
+            double off = i / (double)(N - 1);
+            var orig = SampleStops(snap, off);
+            double d = Math.Abs(off - band);
+            d = Math.Min(d, 1 - d);                       // circular distance -> ONE peak
+            double peak = Math.Max(0, 1 - d / 0.18);
+            peak = peak * peak * (3 - 2 * peak);          // smoothstep shoulders
+            byte a = (byte)Math.Clamp(orig.A * (0.35 + 0.65 * peak), 0, 255);
+            b.GradientStops[i].Color = Color.FromArgb(a, orig.R, orig.G, orig.B);
+        }
+    }
+
+    // Piecewise-linear sample of a brush's snapshotted stops at a given offset.
+    private static Color SampleStops(List<(double O, Color C)> snap, double off)
+    {
+        if (off <= snap[0].O) return snap[0].C;
+        for (int i = 1; i < snap.Count; i++)
+        {
+            if (off > snap[i].O) continue;
+            double span = Math.Max(1e-6, snap[i].O - snap[i - 1].O);
+            double f = (off - snap[i - 1].O) / span;
+            Color a = snap[i - 1].C, c = snap[i].C;
+            return Color.FromArgb(
+                (byte)(a.A + (c.A - a.A) * f), (byte)(a.R + (c.R - a.R) * f),
+                (byte)(a.G + (c.G - a.G) * f), (byte)(a.B + (c.B - a.B) * f));
+        }
+        return snap[^1].C;
+    }
+
+    private static void RestoreCirculateStops()
+    {
+        foreach (var kv in _circSnapshot)
+        {
+            try
+            {
+                kv.Key.GradientStops.Clear();
+                foreach (var (o, c) in kv.Value)
+                    kv.Key.GradientStops.Add(new GradientStop { Offset = o, Color = c });
+            }
+            catch { }
+        }
+        _circSnapshot.Clear();
     }
 
     private static void SetGradientAxes(double sx, double sy, double ex, double ey)
