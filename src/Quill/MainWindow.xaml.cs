@@ -1083,13 +1083,82 @@ public sealed partial class MainWindow : Window
         PenType.Watercolor => "M3 13 C5.5 12.5 6.5 11 7.5 9.5 L11.5 4.5 L12.5 5.5 L8.5 10.5 C7.5 12 5.5 13 3 13 Z M13.4 9 C14.4 10.2 14.4 11.4 13.4 12 C12.4 11.4 12.4 10.2 13.4 9 Z",
         // detailed redesigns (24-grid); fountain matches the user's reference:
         // a classic vertical nib — grip, band, flared nib, breather hole, slit
-        PenType.Fountain => "M8.6 2 H15.4 L14.6 6.2 H9.4 Z M7.8 7 H16.2 A1.4 1.4 0 0 1 16.2 9.8 H7.8 A1.4 1.4 0 0 1 7.8 7 Z M9.3 10.6 H14.7 C14.9 12.3 16.3 13.5 17.4 14.5 L12 22 6.6 14.5 C7.7 13.5 9.1 12.3 9.3 10.6 Z M12 13.4 a1.2 1.2 0 1 0 0.01 0 Z M11.65 15.9 H12.35 V20.1 L12 20.7 11.65 20.1 Z",
+        PenType.Fountain => "M17.5 2.3 A2.55 2.55 0 0 1 21.7 6.5 L20.1 8.1 L15.9 3.9 Z M14.9 4.9 L19.1 9.1 L11.2 17 L7 12.8 Z M6.4 13.4 L10.6 17.6 C9.2 19.6 6.4 20.7 2.9 21.1 C3.3 17.6 4.4 14.8 6.4 13.4 Z M7.0 15.45 a0.85 0.85 0 1 0 0.001 0 Z M4.2 19.5 L6.0 17.5 L6.6 18.1 L4.8 20.1 Z M18.9 10.1 L14.0 15.0 L14.9 15.9 L19.8 11.0 Z",
         PenType.Calligraphy => "M4 20 C5.6 14.6 8.8 9.6 13.6 5.4 C15.6 3.7 17.6 2.7 19.6 2.3 C19.3 4 18.6 5.8 17.6 7.6 L15.8 7.5 L16.8 9 C16 10.3 15 11.6 13.9 12.8 L12.1 12.7 L13.1 14.2 C11.9 15.4 10.5 16.5 9 17.5 L7.3 17.3 L8.2 18.6 C6.9 19.3 5.5 19.8 4 20 Z M5.4 18.6 C7.6 13.9 10.8 9.5 16.9 4.5 L17.4 5 C11.6 10 8.4 14.4 6 19 Z",
         PenType.Marker => "M12.4 3.2 20.8 11.6 15.6 16.8 7.2 8.4 Z M13.9 4.7 19.3 10.1 18.5 10.9 13.1 5.5 Z M12.8 8.6 15.4 11.2 13.6 13 11 10.4 Z M7.2 8.4 15.6 16.8 11 18.2 5.8 18.2 5.8 13 Z M7.9 12.6 11.4 16.1 10.6 16.9 7.1 13.4 Z",
         PenType.FeltTip => "M14.6 3 21 9.4 17.2 13.2 10.8 6.8 Z M15.9 4.3 19.7 8.1 19 8.8 15.2 5 Z M10.8 6.8 17.2 13.2 15.6 14.8 9.2 8.4 Z M9.2 8.4 15.6 14.8 7.3 18.1 5.9 16.7 Z M7.3 18.1 5.9 16.7 4 20 Z M12.2 10 13.6 11.4 6.9 16.5 6.3 15.9 Z",
         // Standard: kept v1 by request (16-grid)
         _ => "M3.5 12.5 L5 9 L11.5 2.5 L13.5 4.5 L7 11 Z M12.3 1.7 L14.3 3.7 L15 3 A1.4 1.4 0 0 0 13 1 Z"
     };
+
+    // OneNote-style two-tone pen chips (#3-batch4): a neutral-grey body plus a
+    // second path that carries the pen's own colour on the tip and top band, on
+    // a shared 30x46 grid so both paths scale together. Replaces the colour disc.
+    private static (string Body, string Colour) PenChipData(PenType t) => t switch
+    {
+        PenType.Fountain => ("M10 7.5 H20 V28 L15 33 L10 28 Z",
+            "M10 3 H20 V6.5 H10 Z M15 43 C12.2 40.4 11.2 37.8 12.6 33.4 L15 31 L17.4 33.4 C18.8 37.8 17.8 40.4 15 43 Z"),
+        PenType.Brush or PenType.Watercolor => ("M12 4 H18 V22 H12 Z M11.3 22 H18.7 V27 H11.3 Z",
+            "M12 4 H18 V7.5 H12 Z M15 44 C11.5 39 11 33 12.6 27.5 H17.4 C19 33 18.5 39 15 44 Z"),
+        PenType.Pencil or PenType.Crayon => ("M10 7 H20 V32 H10 Z",
+            "M10 3 H20 V6.5 H10 Z M10 32 H20 L15 43 Z"),
+        PenType.Marker => ("M9.5 4.5 H20.5 C21.3 4.5 22 5.2 22 6 V31 H8 V6 C8 5.2 8.7 4.5 9.5 4.5 Z",
+            "M9.5 0.8 H20.5 V3.6 H9.5 Z M11 31.5 H19 L17.2 42 H12.8 Z"),
+        PenType.FeltTip => ("M11 6 H19 V33 L15 36.5 L11 33 Z",
+            "M11 2.6 H19 V5.6 H11 Z M15 43 C13.4 41 12.6 38.6 13.2 35.4 L15 33.8 L16.8 35.4 C17.4 38.6 16.6 41 15 43 Z"),
+        PenType.Highlighter => ("M8.5 5 H21.5 V28 H8.5 Z",
+            "M8.5 2 H21.5 V5 H8.5 Z M8.5 28 H21.5 L18 42 H12 Z"),
+        PenType.Calligraphy => ("M10 7.5 H20 V28 L15 33 L10 28 Z",
+            "M10 3 H20 V6.5 H10 Z M12 33 L20 37 L17.5 43 L13.5 41 Z"),
+        _ => ("M10 7.5 H20 V30 L15 36 L10 30 Z",
+            "M10 3 H20 V6.5 H10 Z M15 43.5 L11.6 36 H18.4 Z")
+    };
+
+    private static Microsoft.UI.Xaml.Media.Geometry ParseGeometry(string data)
+    {
+        var p = (Microsoft.UI.Xaml.Shapes.Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+            "<Path xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Data='" + data + "'/>");
+        return p.Data;
+    }
+
+    private Color ChipBodyGrey() =>
+        ((FrameworkElement)Content).ActualTheme == ElementTheme.Dark
+            ? Color.FromArgb(255, 0xC3, 0xBE, 0xB3)
+            : Color.FromArgb(255, 0x7E, 0x7A, 0x71);
+
+    // Builds the two-tone chip visual and hands back the two live paths and the
+    // lift transform so selection and flyout edits can update it in place.
+    private FrameworkElement BuildTwoToneChip(string bodyData, string colData, Color color,
+        out Microsoft.UI.Xaml.Shapes.Path bodyPath, out Microsoft.UI.Xaml.Shapes.Path colPath,
+        out TranslateTransform lift)
+    {
+        bodyPath = new Microsoft.UI.Xaml.Shapes.Path { Data = ParseGeometry(bodyData), Fill = new SolidColorBrush(ChipBodyGrey()) };
+        colPath = new Microsoft.UI.Xaml.Shapes.Path { Data = ParseGeometry(colData), Fill = new SolidColorBrush(color) };
+        var art = new Grid { Width = 30, Height = 46 };
+        art.Children.Add(bodyPath);
+        art.Children.Add(colPath);
+        var chip = new Viewbox { Child = art, Width = 20, Height = 31, Stretch = Stretch.Uniform,
+                                 VerticalAlignment = VerticalAlignment.Bottom };
+        lift = new TranslateTransform();
+        chip.RenderTransform = lift;
+        var content = new Grid { Width = 26, Height = 40 };
+        content.Children.Add(chip);
+        return content;
+    }
+
+    // The selected pen (in pen mode) or the eraser (in eraser mode) pops up out
+    // of the row; everything else sits tucked at the baseline. The lift replaces
+    // the old accent ring as the selection cue.
+    private readonly Dictionary<Guid, TranslateTransform> _penLifts = new();
+    private TranslateTransform? _eraserLift;
+    private void RefreshPenSelection()
+    {
+        bool penMode = Surface.Tool == ToolType.Pen;
+        foreach (var kv in _penLifts)
+            kv.Value.Y = (penMode && kv.Key == _activePresetId) ? -8 : 0;
+        if (_eraserLift != null)
+            _eraserLift.Y = Surface.Tool == ToolType.Eraser ? -8 : 0;
+    }
 
     private static Microsoft.UI.Xaml.Shapes.Path MakeIconPath(string data, Color fill, double size = 14)
     {
@@ -1121,71 +1190,58 @@ public sealed partial class MainWindow : Window
         // freshly built chips must honour touch mode (#36)
         if (_library.TouchMode)
             DispatcherQueue.TryEnqueue(() => ApplyTouchMode(true));
+        _penLifts.Clear();
         foreach (var preset in _library.Pens)
         {
             var p = preset;
             var color = ColorUtil.Parse(p.Color);
-
-            var ell = new Ellipse
-            {
-                Width = 24, Height = 24,
-                Fill = new SolidColorBrush(color),
-                Stroke = new SolidColorBrush(Color.FromArgb(255, 176, 174, 165)),
-                StrokeThickness = 1
-            };
-            var iconHost = new Grid { Width = 26, Height = 26, IsHitTestVisible = false };
-            SetPenChipIcon(iconHost, p.Pen, color);
-            var icon = new Grid { Width = 26, Height = 26 };
-            icon.Children.Add(ell);
-            icon.Children.Add(iconHost);
+            var (bodyData, colData) = PenChipData(p.Pen);
+            var content = BuildTwoToneChip(bodyData, colData, color,
+                out var bodyPath, out var colPath, out var lift);
+            _penLifts[p.Id] = lift;
 
             var btn = new Button
             {
-                Content = icon,
-                Padding = new Thickness(2),
-                CornerRadius = new CornerRadius(15),
-                BorderThickness = new Thickness(2),
+                Content = content,
+                Padding = new Thickness(0),
+                CornerRadius = new CornerRadius(6),
+                BorderThickness = new Thickness(0),
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Bottom,
                 HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Background = new SolidColorBrush(Colors.Transparent),
-                BorderBrush = new SolidColorBrush(
-                    p.Id == _activePresetId ? Surface.Accent : Colors.Transparent)
+                VerticalContentAlignment = VerticalAlignment.Bottom,
+                Background = new SolidColorBrush(Colors.Transparent)
             };
             ToolTipService.SetToolTip(btn, $"{p.Name} (right-click to edit)");
             btn.Click += (_, _) => ApplyPreset(p);
-            btn.ContextFlyout = CreatePresetFlyout(p, ell, iconHost);
+            btn.ContextFlyout = CreatePresetFlyout(p, bodyPath, colPath);
 
             PresetPanel.Children.Add(btn);
         }
+        RefreshPenSelection();
     }
 
     private void BuildEraserChip()
     {
-        var icon = new Grid { Width = 26, Height = 26 };
-        icon.Children.Add(new Ellipse
-        {
-            Width = 24, Height = 24,
-            Fill = new SolidColorBrush(Color.FromArgb(255, 232, 230, 220)),
-            Stroke = new SolidColorBrush(Color.FromArgb(255, 176, 174, 165)),
-            StrokeThickness = 1
-        });
-        icon.Children.Add(new FontIcon { Glyph = "\uE75C", FontSize = 12, Foreground = new SolidColorBrush(Color.FromArgb(255, 20, 20, 19)) });
+        // OneNote-style block eraser: grey body, soft pink-purple base (#3-batch4)
+        var content = BuildTwoToneChip(
+            "M9 8 C9 6.3 10.3 5 12 5 H18 C19.7 5 21 6.3 21 8 V26 H9 Z",
+            "M9 26 H21 V37 C21 38.7 19.7 40 18 40 H12 C10.3 40 9 38.7 9 37 Z",
+            Color.FromArgb(255, 0xC0, 0x7C, 0xB4),
+            out _, out _, out var elift);
+        _eraserLift = elift;
 
         var chip = new Button
         {
-            Content = icon,
-            Padding = new Thickness(2),
-            CornerRadius = new CornerRadius(15),
-            BorderThickness = new Thickness(2),
+            Content = content,
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(0),
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Bottom,
             HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Background = new SolidColorBrush(Colors.Transparent),
-            BorderBrush = new SolidColorBrush(
-                Surface.Tool == ToolType.Eraser ? Surface.Accent : Colors.Transparent)
+            VerticalContentAlignment = VerticalAlignment.Bottom,
+            Background = new SolidColorBrush(Colors.Transparent)
         };
         ToolTipService.SetToolTip(chip, "Eraser (right-click to pick point or stroke mode)");
         chip.Click += (_, _) => SelectTool("Eraser");
@@ -1207,14 +1263,10 @@ public sealed partial class MainWindow : Window
 
     private void RefreshEraserChip()
     {
-        if (_eraserChip != null)
-        {
-            _eraserChip.BorderBrush = new SolidColorBrush(
-                Surface.Tool == ToolType.Eraser ? Surface.Accent : Colors.Transparent);
-        }
+        RefreshPenSelection();   // the lift now shows which tool is active (#3-batch4)
     }
 
-    private Flyout CreatePresetFlyout(PenPreset p, Ellipse ell, Grid iconHost)
+    private Flyout CreatePresetFlyout(PenPreset p, Microsoft.UI.Xaml.Shapes.Path bodyPath, Microsoft.UI.Xaml.Shapes.Path colPath)
     {
         var fly = new Flyout();
         bool built = false;
@@ -1253,7 +1305,9 @@ public sealed partial class MainWindow : Window
             {
                 if (typeCombo.SelectedIndex < 0) return;
                 p.Pen = (PenType)typeCombo.SelectedIndex;
-                SetPenChipIcon(iconHost, p.Pen, ColorUtil.Parse(p.Color));
+                var (bd, cd) = PenChipData(p.Pen);
+                bodyPath.Data = ParseGeometry(bd);
+                colPath.Data = ParseGeometry(cd);
                 if (_activePresetId == p.Id) Surface.Pen = p.Pen;
                 ScheduleSave();
             };
@@ -1264,8 +1318,7 @@ public sealed partial class MainWindow : Window
             {
                 var hex = ColorUtil.ToHex(c);
                 p.Color = hex;
-                ell.Fill = new SolidColorBrush(c);
-                SetPenChipIcon(iconHost, p.Pen, c);   // keep the icon contrast-correct
+                colPath.Fill = new SolidColorBrush(c);
                 if (_activePresetId == p.Id) Surface.PenColor = c;
 
                 _library.RecentColors.Remove(hex);
