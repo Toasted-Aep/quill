@@ -27,7 +27,7 @@ namespace Quill.Controls;
 /// </summary>
 public sealed class InkSurface : UserControl
 {
-    private readonly CanvasControl _canvas;
+    private readonly CanvasVirtualControl _canvas;
     private readonly Canvas _textLayer;
     private readonly CompositeTransform _textTransform = new();
     private readonly DispatcherTimer _zoomSettleTimer = new() { Interval = TimeSpan.FromMilliseconds(260) };
@@ -236,8 +236,11 @@ public sealed class InkSurface : UserControl
 
     public InkSurface()
     {
-        _canvas = new CanvasControl();
-        _canvas.Draw += OnDraw;
+        // CanvasVirtualControl (#cvc): the draw callback receives INVALIDATED
+        // REGIONS instead of always painting the whole viewport, so wet ink can
+        // repaint just the pixels around the fresh segment on dense pages.
+        _canvas = new CanvasVirtualControl();
+        _canvas.RegionsInvalidated += OnRegionsInvalidated;
         _textLayer = new Canvas { Background = null, RenderTransform = _textTransform };
 
         var root = new Grid();
@@ -1535,6 +1538,7 @@ public sealed class InkSurface : UserControl
                 }
                 if (!RulerMode)
                 {
+                    int wetBefore = _wet?.Count ?? 0;
                     var pts = e.GetIntermediatePoints(_canvas);
                     for (int i = pts.Count - 1; i >= 0; i--)
                     {
@@ -1552,6 +1556,24 @@ public sealed class InkSurface : UserControl
                         if (Math.Abs(v.X - last.X) + Math.Abs(v.Y - last.Y) < minGap) continue;
                         _wet.Add(new StrokePoint(v.X, v.Y, ip.Properties.Pressure));
                     }
+                    // The virtual-control win (#cvc): while inking, repaint ONLY
+                    // the pixels around the fresh segment instead of the whole
+                    // viewport — dense pages stop re-drawing per pen move.
+                    if (_wet != null && _wet.Count > wetBefore)
+                    {
+                        float mnX = float.MaxValue, mnY = float.MaxValue, mxX = float.MinValue, mxY = float.MinValue;
+                        for (int i = Math.Max(0, wetBefore - 1); i < _wet.Count; i++)
+                        {
+                            mnX = Math.Min(mnX, _wet[i].X); mxX = Math.Max(mxX, _wet[i].X);
+                            mnY = Math.Min(mnY, _wet[i].Y); mxY = Math.Max(mxY, _wet[i].Y);
+                        }
+                        double pad = PenSize * 3f * ViewZoom + 12;
+                        InvalidateScreenRect(new Rect(
+                            mnX * ViewZoom + ViewOffset.X - pad, mnY * ViewZoom + ViewOffset.Y - pad,
+                            (mxX - mnX) * ViewZoom + 2 * pad, (mxY - mnY) * ViewZoom + 2 * pad));
+                    }
+                    e.Handled = true;
+                    return;
                 }
                 break;
 
@@ -1651,6 +1673,19 @@ public sealed class InkSurface : UserControl
 
         e.Handled = true;
         _canvas.Invalidate();
+    }
+
+    // Clamped partial invalidation with a full-repaint fallback (#cvc).
+    private void InvalidateScreenRect(Rect r)
+    {
+        try
+        {
+            var clip = new Rect(0, 0, ActualWidth, ActualHeight);
+            clip.Intersect(r);
+            if (clip.IsEmpty || clip.Width <= 0 || clip.Height <= 0) return;
+            _canvas.Invalidate(clip);
+        }
+        catch { try { _canvas.Invalidate(); } catch { } }
     }
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
@@ -2456,9 +2491,22 @@ public sealed class InkSurface : UserControl
     // viewport, then blitted each frame. Rebuilt when content changes, zoom
     // drifts, or the view pans outside the cached area.
     // =======================================================================
-    private void OnDraw(CanvasControl sender, CanvasDrawEventArgs args)
+    private void OnRegionsInvalidated(CanvasVirtualControl sender, CanvasRegionsInvalidatedEventArgs args)
     {
-        var ds = args.DrawingSession;
+        foreach (var region in args.InvalidatedRegions)
+        {
+            try
+            {
+                using var ds = sender.CreateDrawingSession(region);
+                DrawRegion(ds, region);
+            }
+            catch { }
+        }
+    }
+
+    private void DrawRegion(CanvasDrawingSession ds, Rect region)
+    {
+        var sender = _canvas;   // resource creator for the draw helpers below
         if (_page == null)
         {
             ds.Clear(Colors.Transparent);
@@ -2474,10 +2522,10 @@ public sealed class InkSurface : UserControl
         DrawGrid(ds, bg);
         DrawPageTitle(ds, bg);
 
-        // Visible world rectangle — anything fully outside it is skipped so pages
-        // with thousands of strokes stay smooth (only on-screen content is drawn).
-        var vTL = ToWorld(new Vector2(0, 0));
-        var vBR = ToWorld(new Vector2((float)ActualWidth, (float)ActualHeight));
+        // World rectangle of THIS REGION — anything fully outside it is skipped,
+        // so a small invalidation only pays for the strokes it actually touches.
+        var vTL = ToWorld(new Vector2((float)region.X, (float)region.Y));
+        var vBR = ToWorld(new Vector2((float)region.Right, (float)region.Bottom));
         float visMinX = vTL.X, visMinY = vTL.Y, visMaxX = vBR.X, visMaxY = vBR.Y;
 
         foreach (var sh in _page.Shapes)
@@ -5496,7 +5544,7 @@ public sealed class InkSurface : UserControl
         }
     }
 
-    private bool TryDrawInkCache(CanvasDrawingSession ds, CanvasControl sender,
+    private bool TryDrawInkCache(CanvasDrawingSession ds, ICanvasResourceCreator sender,
                                  float vx0, float vy0, float vx1, float vy1)
     {
         try
@@ -5513,8 +5561,12 @@ public sealed class InkSurface : UserControl
 
             if (_inkCacheDirty || !zoomOk || !coversView)
             {
-                double vw = Math.Max(64, vx1 - vx0), vh = Math.Max(64, vy1 - vy0);
-                var world = new Rect(vx0 - vw, vy0 - vh, vw * 3, vh * 3);
+                // build around the FULL viewport — under the virtual control the
+                // vx params describe one invalidated region, which may be tiny
+                var ftl = ToWorld(new Vector2(0, 0));
+                var fbr = ToWorld(new Vector2((float)ActualWidth, (float)ActualHeight));
+                double vw = Math.Max(64, fbr.X - ftl.X), vh = Math.Max(64, fbr.Y - ftl.Y);
+                var world = new Rect(ftl.X - vw, ftl.Y - vh, vw * 3, vh * 3);
                 float scale = ViewZoom * 1.5f;
                 double pxW = world.Width * scale, pxH = world.Height * scale;
                 const double maxPx = 4096;
