@@ -10,3 +10,6 @@ decomp_*.cs
 
 # Visual Studio project-upgrade log
 UpgradeLog*.htm
+
+# MSIX build output (the .appinstaller template IS tracked)
+dist/msix/

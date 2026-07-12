@@ -26,6 +26,9 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // Deserialising a big library overlaps the window's XAML construction
+        // instead of running after it (#roadmap: async library load).
+        Services.LibraryStore.BeginLoad();
         MainWindowInstance = new MainWindow();
         MainWindowInstance.Activate();
     }

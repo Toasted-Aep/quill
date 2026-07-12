@@ -44,21 +44,32 @@
 - Undo/redo flash-highlight: undoing or redoing pulses an accent highlight
   over the affected element (bounds reported across the ink/shape/text/mixed
   action types).
-- Pressure-curve editor: drag the midpoint of a live curve to shape how pen
-  pressure maps to width (replaces the three-preset dropdown).
+- Pressure response: Soft / Hard presets or a fully custom curve with three
+  draggable points (outer two slide in x too), interpolated by the engine.
 - OneNote-style two-tone pen row: each pen is a grey body with the pen's own
   colour on its tip and band; the selected pen (or eraser) lifts out of the row.
 - Ctrl+D duplicates the selection in place; double-tap a table divider to
   auto-fit that column to its content.
+- CanvasVirtualControl: region-driven rendering; wet ink repaints only the
+  pixels around the fresh segment instead of the whole viewport.
+- View safety: the viewport is clamped to the content region, palm touches
+  near an active pen no longer pan, and pages whose saved view drifted into
+  empty space self-heal on open (the "invisible drawings" fix).
+- MSIX packaging: `-p:Msix=true` builds a signed package with a `.quill` file
+  association; auto-update template via GitHub Releases (docs/PACKAGING.md).
+- Library deserialisation overlaps window construction (async load, phase 1).
+- Offline LaTeX prompt has a live preview; PDF import cap raised to 2000 pages.
+- Equations invert at draw when their ink matches the page brightness; the
+  static-ink cache re-renders crisply when zoom settles; table rotation now
+  carries its cell text.
 
 ## Next release — big rocks
 
-- **CanvasVirtualControl swap**: true region invalidation for huge pages;
-  removes the ink-cache ceiling and rebuild hitches. (Tracked, 0% built.)
 - **Spatial index** (grid buckets) for hit-testing/erasing at high stroke
   counts — needs stroke/shape mutation centralised first (~27 call sites).
-- **Async library load**: show the window before deserialising every
-  notebook; most of startup becomes a post-load continuation.
+- **Async library load, phase 2**: the deserialise now runs in parallel with
+  the window's XAML build (shipped); phase 2 is showing the window before the
+  load completes, with startup as a post-load continuation.
 
 ## Next release — medium
 
@@ -75,16 +86,12 @@
 ## Next release — small
 
 - Notebook cover thumbnails in gallery cards (background-rendered, cached).
-- MSIX packaging with auto-update and `.quill` file association.
 - Finish string extraction so the language picker can ship (en/tr/it groundwork
   exists; most UI text is still code-built English).
 
 ## Known rough edges
 
-- Ink cache softens slightly between zoom rebuild thresholds (0.50–1.05×).
 - Vector-export text uses the first font size found per box.
-- The MathLive equation editor needs internet; the LaTeX prompt fallback works
-  offline but without preview.
-- PDF import caps at 200 pages and rasterises (imported text isn't selectable).
-- Table rotation doesn't rotate cell text (rotation on tables should likely be
-  disabled).
+- PDF import rasterises (imported text isn't selectable); cap is 2000 pages.
+- The MSIX is signed with a self-signed dev cert — public distribution needs
+  a real code-signing cert or the Store.

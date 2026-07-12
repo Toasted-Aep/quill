@@ -114,7 +114,7 @@ public sealed partial class MainWindow : Window
         }
         catch { }
 
-        _library = LibraryStore.Load();
+        _library = LibraryStore.LoadOrJoin();   // joins the load App started (#roadmap)
         SeedPens();
         Surface.PendingFontFamily = _library.DefaultFont;
         Surface.PendingFontSize = (float)_library.DefaultFontSize;
@@ -5026,6 +5026,54 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
     // Insert a new equation, or reopen an existing one with its LaTeX already
     // in the editor so the user tweaks instead of retyping (#27-batch2).
+    // Offline LaTeX prompt with a live preview rendered by the built-in
+    // equation renderer — no internet, no WebView2 required (#roughedge).
+    private async Task<string?> PromptLatexWithPreviewAsync(string initial)
+    {
+        var box = new TextBox { Text = initial, AcceptsReturn = false };
+        var img = new Image { MaxHeight = 120, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 8, 0, 0) };
+        var err = new TextBlock { FontSize = 11, Opacity = 0.7, Visibility = Visibility.Collapsed, Text = "Could not preview — the equation may still insert fine." };
+        var panel = new StackPanel { Spacing = 4, Width = 420 };
+        panel.Children.Add(box);
+        panel.Children.Add(img);
+        panel.Children.Add(err);
+
+        var debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
+        async void Render()
+        {
+            try
+            {
+                var device = Microsoft.Graphics.Canvas.CanvasDevice.GetSharedDevice();
+                var color = ColorUtil.Parse(ContrastHexForPage());
+                var bytes = await Quill.Services.EquationRenderer.RenderToPngBytesAsync(device, box.Text, 28f, "Cambria Math", color);
+                if (bytes == null) { err.Visibility = Visibility.Visible; return; }
+                using var ms = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+                using (var wtr = new Windows.Storage.Streams.DataWriter(ms.GetOutputStreamAt(0)))
+                { wtr.WriteBytes(bytes); await wtr.StoreAsync(); }
+                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+                await bmp.SetSourceAsync(ms);
+                img.Source = bmp;
+                err.Visibility = Visibility.Collapsed;
+            }
+            catch { err.Visibility = Visibility.Visible; }
+        }
+        debounce.Tick += (_, _) => { debounce.Stop(); Render(); };
+        box.TextChanged += (_, _) => { debounce.Stop(); debounce.Start(); };
+        Render();
+
+        var dlg = new ContentDialog
+        {
+            Title = "Equation (LaTeX)",
+            Content = panel,
+            PrimaryButtonText = "OK",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        var res = await dlg.ShowAsync();
+        return res == ContentDialogResult.Primary ? box.Text : null;
+    }
+
     private async Task InsertOrEditEquationAsync(ShapeElement? existing)
     {
         string? latex = null;
@@ -5124,8 +5172,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         catch { /* WebView2 runtime missing */ }
         finally { try { web?.Close(); } catch { } }
 
-        // offline / no-WebView2 fallback: type LaTeX directly
-        latex ??= await PromptAsync("Equation (LaTeX)", initial ?? @"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}");
+        // offline / no-WebView2 fallback: type LaTeX with a LIVE preview from
+        // the built-in renderer (#roughedge — offline used to be blind)
+        latex ??= await PromptLatexWithPreviewAsync(initial ?? @"x=\frac{-b\pm\sqrt{b^2-4ac}}{2a}");
         if (string.IsNullOrWhiteSpace(latex)) return;
 
         // Preferred path: crop the MathLive screenshot to the formula (#14-batch3)
@@ -5379,7 +5428,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
             ShowStatus("Importing PDF…");
             var doc = await Windows.Data.Pdf.PdfDocument.LoadFromFileAsync(file);
-            int count = (int)Math.Min(doc.PageCount, 500);
+            // effectively uncapped, with a guardrail against pathological files
+            // (pages rasterise to page-backdrop images; text stays non-selectable)
+            int count = (int)Math.Min(doc.PageCount, 2000);
             var dir = System.IO.Path.Combine(LibraryStore.Dir, "assets");
             Directory.CreateDirectory(dir);
 
