@@ -192,6 +192,7 @@ public sealed partial class MainWindow : Window
         };
         Surface.ActiveTextChanged += box => { UpdateFormatBarVisibility(); SyncSizeComboFromSelection(box); };
         Surface.ContextMenuRequested += ShowCanvasContextMenu;
+        Surface.CommentActivated += ShowCommentFlyout;
         Surface.ReplayEnded += () => BtnReplay.IsChecked = false;
         Surface.UndoManager.Changed += UpdateUndoButtons;
         Surface.ViewChanged += OnViewChanged;
@@ -1452,22 +1453,80 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(stabLabel);
             panel.Children.Add(stab);
 
-            var curveCombo = new ComboBox
+            // Pressure-curve editor (#roadmap): drag the midpoint to shape how
+            // input pressure maps to stroke width. Endpoints are pinned at
+            // (0,0) and (1,1); the engine reads the single midpoint.
+            const double cvW = 240, cvH = 92, cvPad = 12;
+            double plotW = cvW - 2 * cvPad, plotH = cvH - 2 * cvPad;
+            double CurMid() => p.PressureCurve is { Count: > 1 } ? p.PressureCurve[1] : 0.5;
+
+            panel.Children.Add(new TextBlock { Text = "Pressure curve — drag the dot", FontSize = 12 });
+            var curveHost = new Grid { Width = cvW, Height = cvH };
+            curveHost.Children.Add(new Border
             {
-                Header = "Pressure curve",
-                ItemsSource = new[] { "Linear (default)", "Soft (thickens easily)", "Hard (needs pressure)" },
-                SelectedIndex = p.PressureCurve == null ? 0 : (p.PressureCurve.Count > 1 && p.PressureCurve[1] > 0.5f ? 1 : 2),
-                HorizontalAlignment = HorizontalAlignment.Stretch
+                Background = new SolidColorBrush(Color.FromArgb(24, 128, 128, 128)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(60, 128, 128, 128)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6)
+            });
+            var curveCanvas = new Canvas();
+            curveHost.Children.Add(curveCanvas);
+            curveCanvas.Children.Add(new Microsoft.UI.Xaml.Shapes.Line
+            {
+                X1 = cvPad, Y1 = cvPad + plotH, X2 = cvPad + plotW, Y2 = cvPad,
+                Stroke = new SolidColorBrush(Color.FromArgb(50, 128, 128, 128)),
+                StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 3 }
+            });
+            var poly = new Microsoft.UI.Xaml.Shapes.Polyline
+            {
+                Stroke = new SolidColorBrush(Surface.Accent), StrokeThickness = 2.5
             };
-            curveCombo.SelectionChanged += (_, _) =>
+            curveCanvas.Children.Add(poly);
+            var knob = new Microsoft.UI.Xaml.Shapes.Ellipse
             {
-                if (curveCombo.SelectedIndex == 0) p.PressureCurve = null;
-                else if (curveCombo.SelectedIndex == 1) p.PressureCurve = new List<float> { 0f, 0.6f, 1f };
-                else p.PressureCurve = new List<float> { 0f, 0.2f, 1f };
+                Width = 16, Height = 16,
+                Fill = new SolidColorBrush(Surface.Accent),
+                Stroke = new SolidColorBrush(Colors.White), StrokeThickness = 2
+            };
+            curveCanvas.Children.Add(knob);
+            var curveCaption = new TextBlock { FontSize = 11, Opacity = 0.7, TextWrapping = TextWrapping.Wrap };
+            void RedrawCurve(double mid)
+            {
+                double my = cvPad + (1 - mid) * plotH;
+                poly.Points = new PointCollection
+                {
+                    new Point(cvPad, cvPad + plotH),
+                    new Point(cvPad + plotW / 2, my),
+                    new Point(cvPad + plotW, cvPad)
+                };
+                Canvas.SetLeft(knob, cvPad + plotW / 2 - 8);
+                Canvas.SetTop(knob, my - 8);
+                curveCaption.Text = mid > 0.55 ? "Soft — light pressure already thickens the line."
+                    : mid < 0.45 ? "Hard — needs firm pressure to thicken."
+                    : "Linear — width tracks pressure evenly.";
+            }
+            void SetMidFromY(double y)
+            {
+                double mid = Math.Clamp(1 - (y - cvPad) / plotH, 0, 1);
+                p.PressureCurve = Math.Abs(mid - 0.5) < 0.02 ? null : new List<float> { 0f, (float)mid, 1f };
                 if (_activePresetId == p.Id) Surface.PenPressureCurve = p.PressureCurve;
+                RedrawCurve(mid);
                 ScheduleSave();
+            }
+            bool curveDrag = false;
+            curveHost.PointerPressed += (s2, e2) =>
+            {
+                curveDrag = true; curveHost.CapturePointer(e2.Pointer);
+                SetMidFromY(e2.GetCurrentPoint(curveHost).Position.Y);
             };
-            panel.Children.Add(curveCombo);
+            curveHost.PointerMoved += (s2, e2) =>
+            {
+                if (curveDrag) SetMidFromY(e2.GetCurrentPoint(curveHost).Position.Y);
+            };
+            curveHost.PointerReleased += (s2, e2) => { curveDrag = false; curveHost.ReleasePointerCaptures(); };
+            RedrawCurve(CurMid());
+            panel.Children.Add(curveHost);
+            panel.Children.Add(curveCaption);
 
             panel.Children.Add(new TextBlock
             {
@@ -3641,6 +3700,9 @@ public sealed partial class MainWindow : Window
     {
         if (tag != "FreeSpace") _blankSpaceOnce = false;   // any explicit tool pick cancels the one-shot
         _toolTag = tag;
+        // picking a drawing tool leaves comment mode, so the user is never stuck
+        // unable to draw with the pin tool still armed (#roadmap)
+        if (ToolComment.IsChecked == true) { ToolComment.IsChecked = false; Surface.CommentMode = false; }
         ToolPen.IsChecked = tag == "Pen";
         ToolText.IsChecked = tag == "Text";
         ToolSelect.IsChecked = tag == "Select";
@@ -3679,6 +3741,54 @@ public sealed partial class MainWindow : Window
         ShowStatus(Surface.HandDrawMode
             ? "Finger and mouse drawing enabled."
             : "Finger and mouse drawing disabled; touch pans the page.");
+    }
+
+    private void ToggleComment_Click(object sender, RoutedEventArgs e)
+    {
+        Surface.CommentMode = ToolComment.IsChecked == true;
+        ShowStatus(Surface.CommentMode
+            ? "Comment mode: tap the page to drop a note pin, or tap a pin to read, resolve or delete it. Tap the button again to leave."
+            : "Comment mode off.");
+    }
+
+    // Read / edit / resolve / delete a comment pin (#roadmap). An empty comment
+    // (a mis-tap) is discarded when the flyout closes.
+    private void ShowCommentFlyout(PageComment c, Point screenPos)
+    {
+        var fly = new Flyout();
+        var panel = new StackPanel { Spacing = 8, Width = 260 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = c.Resolved ? "Resolved comment" : "Comment",
+            FontSize = 12, Opacity = 0.7
+        });
+        var box = new TextBox
+        {
+            PlaceholderText = "Write a note…",
+            Text = c.Text,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MaxHeight = 160
+        };
+        box.TextChanged += (_, _) => { c.Text = box.Text; Surface.NotifyCommentEdited(); ScheduleSave(); };
+        panel.Children.Add(box);
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var resolveBtn = new Button { Content = c.Resolved ? "Reopen" : "Resolve" };
+        resolveBtn.Click += (_, _) => { Surface.ResolveComment(c, !c.Resolved); ScheduleSave(); fly.Hide(); };
+        var delBtn = new Button { Content = "Delete" };
+        delBtn.Click += (_, _) => { Surface.DeleteComment(c); ScheduleSave(); fly.Hide(); };
+        row.Children.Add(resolveBtn);
+        row.Children.Add(delBtn);
+        panel.Children.Add(row);
+
+        fly.Content = panel;
+        fly.Closed += (_, _) =>
+        {
+            if (string.IsNullOrWhiteSpace(c.Text)) { Surface.DeleteComment(c); ScheduleSave(); }
+        };
+        fly.ShowAt(Surface, new FlyoutShowOptions { Position = screenPos });
+        box.Focus(FocusState.Programmatic);
     }
 
     private void MouseMode_Click(object sender, RoutedEventArgs e)

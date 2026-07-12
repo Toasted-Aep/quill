@@ -38,6 +38,18 @@
 - Per-notebook default font/size; custom accent swatches; pen-dock position
   picker; visual emoji cover picker; configurable autosave; window placement
   and eraser mode remembered.
+- Comment pins: tap the Comment tool to drop a numbered note pin anywhere,
+  tap a pin to read / edit / resolve / delete it; resolved pins grey out.
+  (Standalone step toward staged collaboration — see COLLABORATION-PLAN.md.)
+- Undo/redo flash-highlight: undoing or redoing pulses an accent highlight
+  over the affected element (bounds reported across the ink/shape/text/mixed
+  action types).
+- Pressure-curve editor: drag the midpoint of a live curve to shape how pen
+  pressure maps to width (replaces the three-preset dropdown).
+- OneNote-style two-tone pen row: each pen is a grey body with the pen's own
+  colour on its tip and band; the selected pen (or eraser) lifts out of the row.
+- Ctrl+D duplicates the selection in place; double-tap a table divider to
+  auto-fit that column to its content.
 
 ## Next release — big rocks
 
@@ -50,21 +62,18 @@
 
 ## Next release — medium
 
-- Comments on pages (pins + resolve), then an operation log — the staged
-  path to collaboration (see docs/COLLABORATION-PLAN.md).
+- Operation log (Stage 0 of collaboration): make every `IPageAction`
+  serializable to a tagged JSON op and persist a rolling `oplog.jsonl` — crash
+  recovery and change history now, sync groundwork later. Comments already ship
+  and will ride the op-log for free (see docs/COLLABORATION-PLAN.md).
 - Gallery card → page connected animation (needs a XAML placeholder target
   over the Win2D canvas).
-- Undo/redo flash-highlight of the affected element (bounds reporting across
-  the ~26 undo action types).
-- Pressure-curve editor (single draggable control point — the engine reads
-  one midpoint today); toolbar hide/show customisation.
+- Toolbar hide/show customisation (choose which tool buttons appear).
 - Alternate keyboard preset layouts (full remapping is deliberately out of
   scope; the command palette covers most of it).
 
 ## Next release — small
 
-- Ctrl+D duplicate selection in place.
-- Double-tap a table divider to auto-fit the column to its content.
 - Notebook cover thumbnails in gallery cards (background-rendered, cached).
 - MSIX packaging with auto-update and `.quill` file association.
 - Finish string extraction so the language picker can ship (en/tr/it groundwork
