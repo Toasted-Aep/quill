@@ -190,8 +190,24 @@ public class NotePage
     // Audio recording: relative path to m4a file and UTC ticks when recording started.
     public string? AudioFile { get; set; }
     public long AudioStartTicks { get; set; }
+    // Comment pins (#roadmap: staged collaboration — comments ship standalone).
+    public List<PageComment> Comments { get; set; } = new();
 
     public override string ToString() => Name;
+}
+
+// A pinned note anchored to a spot on the page. Fully useful single-user
+// (self-notes / TODO pins) and rides the future op-log sync for free.
+public class PageComment
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid? AnchorElementId { get; set; }   // reserved: stroke/shape/text it points at
+    public double X { get; set; }
+    public double Y { get; set; }
+    public string Author { get; set; } = "";
+    public string Text { get; set; } = "";
+    public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
+    public bool Resolved { get; set; }
 }
 
 public class Section

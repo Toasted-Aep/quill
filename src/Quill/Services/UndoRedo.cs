@@ -1,4 +1,5 @@
 using Quill.Models;
+using Windows.Foundation;
 
 namespace Quill.Services;
 
@@ -11,6 +12,44 @@ public interface IPageAction
     // be rebuilt). Defaults to true for safety; pure ink/shape actions say false
     // so undoing a stroke no longer tears down every text box (#perf-roadmap).
     bool TouchesText => true;
+    // World-space bounds of what this action touched, so undo/redo can flash a
+    // highlight over the affected element (#roadmap). null = no highlight.
+    Rect? AffectedBounds(NotePage page) => null;
+}
+
+// Bounds helpers shared by the AffectedBounds implementations (#roadmap).
+internal static class ActionBounds
+{
+    public static Rect? Of(IEnumerable<PenStroke> strokes)
+    {
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        bool any = false;
+        foreach (var s in strokes)
+        {
+            if (s.Points.Count == 0) continue;
+            s.GetBounds(out float x0, out float y0, out float x1, out float y1);
+            any = true;
+            minX = Math.Min(minX, x0); minY = Math.Min(minY, y0);
+            maxX = Math.Max(maxX, x1); maxY = Math.Max(maxY, y1);
+        }
+        return any ? new Rect(minX, minY, maxX - minX, maxY - minY) : (Rect?)null;
+    }
+    public static Rect Of(ShapeElement s) =>
+        new(Math.Min(s.X, s.X + s.W), Math.Min(s.Y, s.Y + s.H), Math.Abs(s.W), Math.Abs(s.H));
+    public static Rect Of(TextElement t) => new(t.X, t.Y, Math.Max(60, t.Width), 40);
+    public static Rect? Union(params Rect?[] rects)
+    {
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        bool any = false;
+        foreach (var r in rects)
+        {
+            if (r is not { } rr) continue;
+            any = true;
+            minX = Math.Min(minX, rr.Left); minY = Math.Min(minY, rr.Top);
+            maxX = Math.Max(maxX, rr.Right); maxY = Math.Max(maxY, rr.Bottom);
+        }
+        return any ? new Rect(minX, minY, maxX - minX, maxY - minY) : (Rect?)null;
+    }
 }
 
 public class AddStrokeAction : IPageAction
@@ -23,6 +62,7 @@ public class AddStrokeAction : IPageAction
     public string Description => "Draw stroke";
     public void Do(NotePage page) => page.Strokes.Add(_stroke);
     public void Undo(NotePage page) => page.Strokes.Remove(_stroke);
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(new[] { _stroke });
 }
 
 public class AddStrokesAction : IPageAction
@@ -34,6 +74,7 @@ public class AddStrokesAction : IPageAction
     public string Description => "Paste";
     public void Do(NotePage page) => page.Strokes.AddRange(_strokes);
     public void Undo(NotePage page) { foreach (var s in _strokes) page.Strokes.Remove(s); }
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_strokes);
 }
 
 public class RemoveStrokesAction : IPageAction
@@ -56,6 +97,7 @@ public class RemoveStrokesAction : IPageAction
         foreach (var (idx, s) in _items.OrderBy(i => i.Index))
             page.Strokes.Insert(Math.Min(idx, page.Strokes.Count), s);
     }
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_items.Select(i => i.Stroke));
 }
 
 public class ReplaceStrokesAction : IPageAction
@@ -81,6 +123,8 @@ public class ReplaceStrokesAction : IPageAction
         foreach (var (idx, s) in _removed.OrderBy(i => i.Index))
             page.Strokes.Insert(Math.Min(idx, page.Strokes.Count), s);
     }
+    public Rect? AffectedBounds(NotePage page) =>
+        ActionBounds.Union(ActionBounds.Of(_removed.Select(i => i.Stroke)), ActionBounds.Of(_added));
 }
 
 public class MoveStrokesAction : IPageAction
@@ -101,6 +145,7 @@ public class MoveStrokesAction : IPageAction
         foreach (var s in _strokes)
             foreach (var p in s.Points) { p.X += dx; p.Y += dy; }
     }
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_strokes);
 }
 
 public class InsertSpaceAction : IPageAction
@@ -138,6 +183,7 @@ public class AddShapeAction : IPageAction
     public string Description => "Insert shape";
     public void Do(NotePage page) => page.Shapes.Add(_shape);
     public void Undo(NotePage page) => page.Shapes.Remove(_shape);
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_shape);
 }
 
 public class RemoveShapesAction : IPageAction
@@ -156,6 +202,8 @@ public class RemoveShapesAction : IPageAction
         foreach (var (idx, s) in _items.OrderBy(i => i.Index))
             page.Shapes.Insert(Math.Min(idx, page.Shapes.Count), s);
     }
+    public Rect? AffectedBounds(NotePage page) =>
+        ActionBounds.Union(_items.Select(i => (Rect?)ActionBounds.Of(i.Shape)).ToArray());
 }
 
 public class MoveResizeShapeAction : IPageAction
@@ -176,6 +224,7 @@ public class MoveResizeShapeAction : IPageAction
     {
         _shape.X = v.X; _shape.Y = v.Y; _shape.W = v.W; _shape.H = v.H;
     }
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_shape);
 }
 
 public class RotateShapeAction : IPageAction
@@ -188,6 +237,7 @@ public class RotateShapeAction : IPageAction
     public string Description => "Rotate";
     public void Do(NotePage page) => _s.Rotation = _to;
     public void Undo(NotePage page) => _s.Rotation = _from;
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_s);
 }
 
 public class AddTextAction : IPageAction
@@ -198,6 +248,7 @@ public class AddTextAction : IPageAction
     public string Description => "Add text box";
     public void Do(NotePage page) => page.Texts.Add(_text);
     public void Undo(NotePage page) => page.Texts.Remove(_text);
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_text);
 }
 
 public class RemoveTextAction : IPageAction
@@ -213,6 +264,7 @@ public class RemoveTextAction : IPageAction
     }
     public void Undo(NotePage page) =>
         page.Texts.Insert(Math.Clamp(_index, 0, page.Texts.Count), _text);
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_text);
 }
 
 public class MoveTextAction : IPageAction
@@ -226,6 +278,7 @@ public class MoveTextAction : IPageAction
     public string Description => "Move text box";
     public void Do(NotePage page) { _text.X = _tx; _text.Y = _ty; }
     public void Undo(NotePage page) { _text.X = _fx; _text.Y = _fy; }
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_text);
 }
 
 // Bundles several actions into one undo/redo step (e.g. moving a mixed
@@ -242,6 +295,8 @@ public class CompositeAction : IPageAction
     public bool TouchesText => _actions.Any(a => a.TouchesText);
     public void Do(NotePage page) { foreach (var a in _actions) a.Do(page); }
     public void Undo(NotePage page) { for (int i = _actions.Count - 1; i >= 0; i--) _actions[i].Undo(page); }
+    public Rect? AffectedBounds(NotePage page) =>
+        ActionBounds.Union(_actions.Select(a => a.AffectedBounds(page)).ToArray());
 }
 
 // Moves a set of shapes by a delta (used in mixed-selection moves).
@@ -262,6 +317,8 @@ public class MoveShapesAction : IPageAction
     {
         foreach (var s in _shapes) { s.X += dx; s.Y += dy; }
     }
+    public Rect? AffectedBounds(NotePage page) =>
+        ActionBounds.Union(_shapes.Select(s => (Rect?)ActionBounds.Of(s)).ToArray());
 }
 
 // Moves a set of text boxes by a delta.
@@ -280,6 +337,8 @@ public class MoveTextsAction : IPageAction
     {
         foreach (var t in _texts) { t.X += dx; t.Y += dy; }
     }
+    public Rect? AffectedBounds(NotePage page) =>
+        ActionBounds.Union(_texts.Select(t => (Rect?)ActionBounds.Of(t)).ToArray());
 }
 
 // Adds a batch of strokes, shapes and texts (used by mixed paste).
@@ -306,6 +365,10 @@ public class AddMixedAction : IPageAction
         foreach (var s in _shapes) page.Shapes.Remove(s);
         foreach (var t in _texts) page.Texts.Remove(t);
     }
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Union(
+        ActionBounds.Of(_strokes),
+        ActionBounds.Union(_shapes.Select(s => (Rect?)ActionBounds.Of(s)).ToArray()),
+        ActionBounds.Union(_texts.Select(t => (Rect?)ActionBounds.Of(t)).ToArray()));
 }
 
 // Removes a batch of strokes, shapes and texts (used by mixed delete).
@@ -332,6 +395,10 @@ public class RemoveMixedAction : IPageAction
         page.Shapes.AddRange(_shapes);
         page.Texts.AddRange(_texts);
     }
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Union(
+        ActionBounds.Of(_strokes),
+        ActionBounds.Union(_shapes.Select(s => (Rect?)ActionBounds.Of(s)).ToArray()),
+        ActionBounds.Union(_texts.Select(t => (Rect?)ActionBounds.Of(t)).ToArray()));
 }
 
 // Repositions table cell text boxes after their table moves or resizes (#40).

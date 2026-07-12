@@ -92,6 +92,13 @@ public sealed class InkSurface : UserControl
     public event Action<Point>? ContextMenuRequested;
     public event Action<PenStroke>? StrokeTapped;
 
+    // Comment pins (#roadmap): a modal placing tool + a flash-highlight on undo.
+    public event Action<PageComment, Point>? CommentActivated;
+    public bool CommentMode { get; set; }
+    public bool ShowResolvedComments { get; set; } = true;
+    private Rect? _flashRect;
+    private long _flashStartMs;
+
     // Internal copy/paste clipboard for canvas objects (shared across pages).
     private static List<PenStroke>? _clipStrokes;
     private static List<ShapeElement>? _clipShapes;
@@ -561,7 +568,8 @@ public sealed class InkSurface : UserControl
     public void Undo()
     {
         if (_page == null || _replaying) return;
-        bool touchesText = UndoManager.PeekUndo?.TouchesText ?? true;
+        var act = UndoManager.PeekUndo;
+        bool touchesText = act?.TouchesText ?? true;
         FlushTexts();
         UndoManager.Undo(_page);
         ClearSelection();
@@ -569,6 +577,7 @@ public sealed class InkSurface : UserControl
         // rebuilding every RichEditBox is expensive on text-heavy pages — only
         // do it when the undone action could actually change the text layer
         if (touchesText) RebuildTextLayer();
+        if (act != null) FlashAction(act);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
     }
@@ -576,14 +585,64 @@ public sealed class InkSurface : UserControl
     public void Redo()
     {
         if (_page == null || _replaying) return;
-        bool touchesText = UndoManager.PeekRedo?.TouchesText ?? true;
+        var act = UndoManager.PeekRedo;
+        bool touchesText = act?.TouchesText ?? true;
         FlushTexts();
         UndoManager.Redo(_page);
         ClearSelection();
         _activeShape = null;
         if (touchesText) RebuildTextLayer();
+        if (act != null) FlashAction(act);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
+    }
+
+    // ---- comment pins + undo flash (#roadmap) ----
+    private void FlashAction(IPageAction act)
+    {
+        try
+        {
+            if (_page != null && act.AffectedBounds(_page) is { } r && r.Width >= 0 && r.Height >= 0)
+            {
+                _flashRect = r;
+                _flashStartMs = Environment.TickCount64;
+            }
+        }
+        catch { }
+    }
+
+    private PageComment? HitComment(Vector2 world)
+    {
+        if (_page == null) return null;
+        float r = 14f / ViewZoom;
+        for (int i = _page.Comments.Count - 1; i >= 0; i--)   // topmost first
+        {
+            var c = _page.Comments[i];
+            if (c.Resolved && !ShowResolvedComments) continue;
+            if (Vector2.Distance(world, new Vector2((float)c.X, (float)c.Y)) <= r) return c;
+        }
+        return null;
+    }
+
+    public void ResolveComment(PageComment c, bool resolved)
+    {
+        c.Resolved = resolved;
+        ContentChanged?.Invoke();
+        _canvas.Invalidate();
+    }
+
+    public void DeleteComment(PageComment c)
+    {
+        if (_page == null) return;
+        _page.Comments.Remove(c);
+        ContentChanged?.Invoke();
+        _canvas.Invalidate();
+    }
+
+    public void NotifyCommentEdited()   // called after the flyout edits a comment's text
+    {
+        ContentChanged?.Invoke();
+        _canvas.Invalidate();
     }
 
     // =======================================================================
@@ -826,6 +885,23 @@ public sealed class InkSurface : UserControl
         bool isMouse = device == Microsoft.UI.Input.PointerDeviceType.Mouse;
         var screen = new Vector2((float)pp.Position.X, (float)pp.Position.Y);
         var pos = ToWorld(screen);
+
+        // Comment mode is modal: a press opens the pin under it, or drops a new
+        // one, and never draws (#roadmap). Right-click still reaches the menu.
+        if (CommentMode && !props.IsRightButtonPressed)
+        {
+            var hit = HitComment(pos);
+            if (hit == null)
+            {
+                hit = new PageComment { X = pos.X, Y = pos.Y };
+                _page.Comments.Add(hit);
+                ContentChanged?.Invoke();
+                _canvas.Invalidate();
+            }
+            CommentActivated?.Invoke(hit, new Point(screen.X, screen.Y));
+            e.Handled = true;
+            return;
+        }
 
         // middle-mouse drag pans
         if (isMouse && props.IsMiddleButtonPressed)
@@ -2516,6 +2592,46 @@ public sealed class InkSurface : UserControl
             float y2 = (float)(_spaceY + _spaceDelta);
             ds.DrawLine(new Vector2(tl.X, y2), new Vector2(br.X, y2), accent, uiScale, _dashStyle);
         }
+
+        // Comment pins: a numbered accent dot per comment, greyed when resolved.
+        if (_page != null && _page.Comments.Count > 0)
+        {
+            float pr = 11f / ViewZoom;
+            for (int i = 0; i < _page.Comments.Count; i++)
+            {
+                var c = _page.Comments[i];
+                if (c.Resolved && !ShowResolvedComments) continue;
+                var ctr = new Vector2((float)c.X, (float)c.Y);
+                var baseCol = c.Resolved ? Color.FromArgb(255, 150, 150, 150) : Accent;
+                byte a = c.Resolved ? (byte)165 : (byte)255;
+                ds.FillCircle(ctr, pr, Color.FromArgb(a, baseCol.R, baseCol.G, baseCol.B));
+                ds.DrawCircle(ctr, pr, Color.FromArgb(a, 255, 255, 255), Math.Max(1f, 1.4f / ViewZoom));
+                using var cf = new CanvasTextFormat
+                {
+                    FontSize = 12.5f / ViewZoom,
+                    HorizontalAlignment = CanvasHorizontalAlignment.Center,
+                    VerticalAlignment = CanvasVerticalAlignment.Center,
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+                };
+                ds.DrawText((i + 1).ToString(), new Rect(ctr.X - pr, ctr.Y - pr, pr * 2, pr * 2), Colors.White, cf);
+            }
+        }
+
+        // Undo / redo flash highlight over the affected element (#roadmap).
+        if (_flashRect is { } fr)
+        {
+            double ft = (Environment.TickCount64 - _flashStartMs) / 500.0;
+            if (ft >= 1) _flashRect = null;
+            else
+            {
+                float pad = 5f / ViewZoom;
+                var rr = new Rect(fr.X - pad, fr.Y - pad, fr.Width + 2 * pad, fr.Height + 2 * pad);
+                ds.FillRectangle(rr, Color.FromArgb((byte)(70 * (1 - ft)), Accent.R, Accent.G, Accent.B));
+                ds.DrawRectangle(rr, Color.FromArgb((byte)(210 * (1 - ft)), Accent.R, Accent.G, Accent.B),
+                                 Math.Max(1.4f, 1.6f / ViewZoom));
+                _canvas.Invalidate();
+            }
+        }
     }
 
     private void DrawGrid(CanvasDrawingSession ds, Color bg)
@@ -3417,7 +3533,7 @@ public sealed class InkSurface : UserControl
                 float inner = Math.Max(1f, w * 0.75f);
                 var cw = TableColWidths(s);
                 var rh = TableRowHeights(s);
-                
+
                 double[] px = new double[cw.Length + 1];
                 for (int i = 0; i < cw.Length; i++) px[i + 1] = px[i] + cw[i];
                 double[] py = new double[rh.Length + 1];
@@ -3432,7 +3548,7 @@ public sealed class InkSurface : UserControl
                     int row = Math.Clamp(t.TableRow, 0, rh.Length - 1);
                     int colSpan = Math.Clamp(t.CellColSpan, 1, cw.Length - col);
                     int rowSpan = Math.Clamp(t.CellRowSpan, 1, rh.Length - row);
-                    
+
                     for (int dr = 0; dr < rowSpan; dr++)
                         for (int dc = 0; dc < colSpan; dc++)
                             cellMap[row + dr, col + dc] = t;
@@ -3951,7 +4067,7 @@ public sealed class InkSurface : UserControl
             int c = Math.Clamp(t.TableCol, 0, cw.Length - 1);
             int r = Math.Clamp(t.TableRow, 0, rh.Length - 1);
             int colSpan = Math.Clamp(t.CellColSpan, 1, cw.Length - c);
-            
+
             double widthSum = 0;
             for (int i = 0; i < colSpan; i++) widthSum += cw[c + i];
 
@@ -3999,7 +4115,7 @@ public sealed class InkSurface : UserControl
         if (topLeft == null) return;
 
         var hidden = selected.Where(x => x != topLeft).ToList();
-        
+
         var sb = new System.Text.StringBuilder(StripRtf(topLeft.Rtf));
         foreach (var h in hidden)
         {
@@ -4010,7 +4126,7 @@ public sealed class InkSurface : UserControl
                 sb.Append(text);
             }
         }
-        
+
         topLeft.Rtf = @"{\rtf1\ansi\deff0{\fonttbl{\f0\fnil Lora;}}\viewkind4\uc1\pars " + sb.ToString() + "}";
 
         int toColSpan = maxCol - minCol + 1;
@@ -4093,7 +4209,7 @@ public sealed class InkSurface : UserControl
     {
         if (_page == null) return;
         UndoManager.Push(new HeaderRowAction(table, table.HeaderRow, !table.HeaderRow), _page);
-        
+
         // Bold/unbold text of the header row cells
         foreach (var t in _page.Texts)
         {
@@ -5123,7 +5239,7 @@ public sealed class InkSurface : UserControl
                         {
                             string txt = StripRtf(text.Rtf);
                             if (string.IsNullOrEmpty(txt)) continue;
-                            
+
                             using var layout = new CanvasTextLayout(_canvas, txt, new CanvasTextFormat { FontSize = 16f }, 1000, 1000);
                             maxTextWidth = Math.Max(maxTextWidth, layout.LayoutBounds.Width);
                         }
@@ -5160,7 +5276,7 @@ public sealed class InkSurface : UserControl
             {
                 var bg = ColorUtil.Parse(page.Background);
                 ds.Clear(bg);
-                
+
                 double w = 1200;
                 double h = 900;
                 float scale = Math.Min((float)(targetWidth / w), (float)(targetHeight / h));
