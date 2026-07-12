@@ -1118,7 +1118,9 @@ public sealed partial class MainWindow : Window
     {
         var p = (Microsoft.UI.Xaml.Shapes.Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(
             "<Path xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Data='" + data + "'/>");
-        return p.Data;
+        var geo = p.Data;
+        p.Data = null;   // detach: a Geometry can't be parented to two Paths at once (#3-batch4 fix)
+        return geo;
     }
 
     private Color ChipBodyGrey() =>
@@ -1132,8 +1134,11 @@ public sealed partial class MainWindow : Window
         out Microsoft.UI.Xaml.Shapes.Path bodyPath, out Microsoft.UI.Xaml.Shapes.Path colPath,
         out TranslateTransform lift)
     {
-        bodyPath = new Microsoft.UI.Xaml.Shapes.Path { Data = ParseGeometry(bodyData), Fill = new SolidColorBrush(ChipBodyGrey()) };
-        colPath = new Microsoft.UI.Xaml.Shapes.Path { Data = ParseGeometry(colData), Fill = new SolidColorBrush(color) };
+        bodyPath = new Microsoft.UI.Xaml.Shapes.Path { Fill = new SolidColorBrush(ChipBodyGrey()) };
+        colPath = new Microsoft.UI.Xaml.Shapes.Path { Fill = new SolidColorBrush(color) };
+        // a malformed path must never take the whole pen row (and app) down
+        try { bodyPath.Data = ParseGeometry(bodyData); } catch { }
+        try { colPath.Data = ParseGeometry(colData); } catch { }
         var art = new Grid { Width = 30, Height = 46 };
         art.Children.Add(bodyPath);
         art.Children.Add(colPath);
