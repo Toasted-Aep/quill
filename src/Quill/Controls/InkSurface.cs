@@ -30,6 +30,10 @@ public sealed class InkSurface : UserControl
     private readonly CanvasControl _canvas;
     private readonly Canvas _textLayer;
     private readonly CompositeTransform _textTransform = new();
+    private readonly DispatcherTimer _zoomSettleTimer = new() { Interval = TimeSpan.FromMilliseconds(260) };
+    // last moment a pen was seen on/over the canvas — used to ignore palm
+    // touches while writing (#inkfix)
+    private long _lastPenSeenMs;
     private NotePage? _page;
 
     // ---- view transform ---------------------------------------------------
@@ -278,11 +282,25 @@ public sealed class InkSurface : UserControl
 
         ContentChanged += () =>
         {
+            _contentMaxDirty = true;   // view clamp bounds follow edits (#inkfix)
             // text-box keystrokes never touch ink, so they leave the static-ink
             // cache valid; every other edit invalidates it (#43). The per-stroke
             // cache-append optimisation was removed — it dropped just-drawn ink.
             if (_inkCacheTextOnly) return;
             _inkCacheDirty = true;
+        };
+        // After a zoom settles, re-render the static-ink cache at the exact new
+        // zoom so big pages stop looking slightly soft between the 0.50-1.05x
+        // rebuild thresholds (#roughedge).
+        _zoomSettleTimer.Tick += (_, _) =>
+        {
+            _zoomSettleTimer.Stop();
+            if (_page != null && _page.Strokes.Count >= InkCacheThreshold &&
+                Math.Abs(ViewZoom - _inkCacheBuiltZoom) > 0.01f)
+            {
+                _inkCacheDirty = true;
+                _canvas.Invalidate();
+            }
         };
         Unloaded += (_, _) => _canvas.RemoveFromVisualTree();
     }
@@ -300,6 +318,9 @@ public sealed class InkSurface : UserControl
         ViewZoom = newZoom;
         ViewOffset = screenPivot - world * newZoom;
         OnViewChanged();
+        // crisp cache re-render once the zoom stops moving (#roughedge)
+        _zoomSettleTimer.Stop();
+        _zoomSettleTimer.Start();
     }
 
     public void SetViewZoom(float zoom) =>
@@ -385,6 +406,19 @@ public sealed class InkSurface : UserControl
 
     private void OnViewChanged()
     {
+        // The top/left clamp existed, but nothing bounded the other side: a
+        // stray palm-fling (touch pan + inertia) could hurl the view thousands
+        // of px past the content AND get saved with the page — every stroke
+        // looked "invisible" because the viewport was in empty space (#inkfix).
+        if (_page != null && ActualWidth > 10)
+        {
+            EnsureContentMax();
+            double worldR = Math.Max(Math.Max(_page.Width, _contentMaxX), 1500) + 900;
+            double worldB = Math.Max(Math.Max(_page.Height, _contentMaxY), 2200) + 900;
+            ViewOffset = new Vector2(
+                MathF.Max(ViewOffset.X, (float)(-worldR * ViewZoom + Math.Min(ActualWidth * 0.3, 260))),
+                MathF.Max(ViewOffset.Y, (float)(-worldB * ViewZoom + Math.Min(ActualHeight * 0.3, 260))));
+        }
         ViewOffset = new Vector2(
             MathF.Min(ViewOffset.X, OriginMargin),
             MathF.Min(ViewOffset.Y, OriginMargin));
@@ -406,7 +440,9 @@ public sealed class InkSurface : UserControl
     {
         _touchPanActive =
             e.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch &&
-            _gestureTool == null && !_replaying;
+            _gestureTool == null && !_replaying &&
+            // a palm resting near an active pen must not pan the page (#inkfix)
+            Environment.TickCount64 - _lastPenSeenMs > 400;
     }
 
     private void OnManipDelta(object sender, ManipulationDeltaRoutedEventArgs e)
@@ -484,8 +520,24 @@ public sealed class InkSurface : UserControl
         _activeShape = null;
         ViewOffset = new Vector2((float)page.ViewX, (float)page.ViewY);
         ViewZoom = Math.Clamp((float)page.ViewZoom, 0.1f, 8f);
+        _contentMaxDirty = true;
         RebuildTextLayer();
         OnViewChanged();
+        // Self-heal corrupt saved views (#inkfix): the palm-fling bug SAVED
+        // runaway offsets with the page, so on open the ink looked gone. If the
+        // restored view shows none of the page's content, jump to the content.
+        try
+        {
+            if (ActualWidth > 10 && ContentBoundsWorld() is { } cb && (cb.Width > 1 || cb.Height > 1))
+            {
+                var tl = ToWorld(new Vector2(0, 0));
+                var br = ToWorld(new Vector2((float)ActualWidth, (float)ActualHeight));
+                var vis = new Rect(tl.X, tl.Y, br.X - tl.X, br.Y - tl.Y);
+                vis.Intersect(cb);
+                if (vis.IsEmpty || vis.Width < 1) FitToContent(48);
+            }
+        }
+        catch { }
     }
 
     /// <summary>
@@ -886,6 +938,7 @@ public sealed class InkSurface : UserControl
         var props = pp.Properties;
         var device = e.Pointer.PointerDeviceType;
         bool isPen = device == Microsoft.UI.Input.PointerDeviceType.Pen;
+        if (isPen) _lastPenSeenMs = Environment.TickCount64;   // (#inkfix)
         bool isMouse = device == Microsoft.UI.Input.PointerDeviceType.Mouse;
         var screen = new Vector2((float)pp.Position.X, (float)pp.Position.Y);
         var pos = ToWorld(screen);
@@ -1432,6 +1485,8 @@ public sealed class InkSurface : UserControl
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
         if (_page == null) return;
+        if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Pen)
+            _lastPenSeenMs = Environment.TickCount64;   // pen hover counts (#inkfix)
         var pp = e.GetCurrentPoint(_canvas);
         var screen = new Vector2((float)pp.Position.X, (float)pp.Position.Y);
         _hover = ToWorld(screen);
@@ -1628,6 +1683,36 @@ public sealed class InkSurface : UserControl
         e.Handled = true;
     }
 
+    // Cached content extents for the view clamp; refreshed lazily after edits.
+    private bool _contentMaxDirty = true;
+    private double _contentMaxX, _contentMaxY;
+    private void EnsureContentMax()
+    {
+        if (!_contentMaxDirty || _page == null) return;
+        _contentMaxDirty = false;
+        double mx = 0, my = 0;
+        foreach (var s in _page.Strokes)
+        {
+            if (s.Points.Count == 0) continue;
+            s.GetBounds(out _, out _, out float x1, out float y1);
+            if (x1 > mx) mx = x1;
+            if (y1 > my) my = y1;
+        }
+        foreach (var sh in _page.Shapes)
+        {
+            double x1 = Math.Max(sh.X, sh.X + sh.W), y1 = Math.Max(sh.Y, sh.Y + sh.H);
+            if (x1 > mx) mx = x1;
+            if (y1 > my) my = y1;
+        }
+        foreach (var t in _page.Texts)
+        {
+            if (t.X + t.Width > mx) mx = t.X + t.Width;
+            if (t.Y + 60 > my) my = t.Y + 60;
+        }
+        _contentMaxX = mx;
+        _contentMaxY = my;
+    }
+
     public Vector2 ScreenToWorld(Point screen) => ToWorld(new Vector2((float)screen.X, (float)screen.Y));
 
     /// <summary>Pans (keeping the current zoom) so the given world point sits
@@ -1787,6 +1872,7 @@ public sealed class InkSurface : UserControl
                     if (Math.Abs(_activeShape.Rotation - _rotateStartShapeDeg) > 0.1)
                     {
                         UndoManager.Push(new RotateShapeAction(_activeShape, _rotateStartShapeDeg, _activeShape.Rotation), _page, alreadyDone: true);
+                        if (_activeShape.Kind == ShapeKind.Table) RebuildTextLayer();   // cells follow (#tablerot)
                         changed = true;
                     }
                     _rotatingShape = false;
@@ -3538,7 +3624,27 @@ public sealed class InkSurface : UserControl
                 var r = new Rect(s.X, s.Y, Math.Max(1, s.W), Math.Max(1, s.H));
                 if (s.ImagePath != null && _bitmaps.TryGetValue(s.ImagePath, out var bmp) && bmp != null)
                 {
-                    ds.DrawImage(bmp, r);
+                    // equations stay readable when the page flips light/dark:
+                    // if the equation ink matches the page brightness, invert
+                    // RGB at draw time — alpha (transparent bg) untouched (#eq)
+                    if (s.EquationLatex != null && _page != null &&
+                        ColorUtil.IsDark(ColorUtil.Parse(_page.Background)) == EquationInkIsDark(s.ImagePath, bmp))
+                    {
+                        using var inv = new Microsoft.Graphics.Canvas.Effects.ColorMatrixEffect
+                        {
+                            Source = bmp,
+                            ColorMatrix = new Microsoft.Graphics.Canvas.Effects.Matrix5x4
+                            {
+                                M11 = -1, M22 = -1, M33 = -1, M44 = 1,
+                                M51 = 1, M52 = 1, M53 = 1, M54 = 0
+                            }
+                        };
+                        ds.DrawImage(inv, r, new Rect(0, 0, bmp.Size.Width, bmp.Size.Height));
+                    }
+                    else
+                    {
+                        ds.DrawImage(bmp, r);
+                    }
                 }
                 else
                 {
@@ -4978,6 +5084,19 @@ public sealed class InkSurface : UserControl
                 var rhs = TableRowHeights(cellTable);
                 int rr = Math.Clamp(t.TableRow, 0, rhs.Length - 1);
                 box.MaxHeight = Math.Max(22, rhs[rr] - 4);
+                if (Math.Abs(cellTable.Rotation) > 0.01)
+                {
+                    // ride the table's rotation (#tablerot): rotate the cell
+                    // origin about the table centre, then spin the box itself
+                    double ang = cellTable.Rotation * Math.PI / 180.0;
+                    double tcx = cellTable.X + cellTable.W / 2, tcy = cellTable.Y + cellTable.H / 2;
+                    double dxr = t.X - tcx, dyr = t.Y - tcy;
+                    double rx = tcx + dxr * Math.Cos(ang) - dyr * Math.Sin(ang);
+                    double ry = tcy + dxr * Math.Sin(ang) + dyr * Math.Cos(ang);
+                    container.RenderTransformOrigin = new Point(0, 0);
+                    container.RenderTransform = new CompositeTransform
+                    { Rotation = cellTable.Rotation, TranslateX = rx - t.X, TranslateY = ry - t.Y };
+                }
             }
             // an overflowing cell may still scroll internally while edited
             box.GotFocus += (_, _) => ScrollViewer.SetVerticalScrollMode(box, ScrollMode.Enabled);
@@ -5174,6 +5293,29 @@ public sealed class InkSurface : UserControl
 
         _textLayer.Children.Add(container);
         _textUi[t.Id] = (container, box);
+    }
+
+    // Whether an equation bitmap's ink is dark — sampled once per image and
+    // cached, so the draw-time invert knows when the page and ink clash (#eq).
+    private readonly Dictionary<string, bool> _eqInkDark = new();
+    private bool EquationInkIsDark(string path, CanvasBitmap bmp)
+    {
+        if (_eqInkDark.TryGetValue(path, out bool dark)) return dark;
+        try
+        {
+            var px = bmp.GetPixelColors();
+            long lum = 0, n = 0;
+            for (int i = 0; i < px.Length; i += 7)   // sparse sample is plenty
+            {
+                if (px[i].A < 128) continue;
+                lum += (px[i].R * 3 + px[i].G * 6 + px[i].B) / 10;
+                n++;
+            }
+            dark = n == 0 || lum / Math.Max(1, n) < 128;
+        }
+        catch { dark = true; }
+        _eqInkDark[path] = dark;
+        return dark;
     }
 
     public PenStroke? HitStroke(Vector2 pos, float tol)

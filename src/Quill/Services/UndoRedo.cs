@@ -229,7 +229,8 @@ public class MoveResizeShapeAction : IPageAction
 
 public class RotateShapeAction : IPageAction
 {
-    public bool TouchesText => false;
+    // tables carry cell text boxes that must re-place on rotation (#tablerot)
+    public bool TouchesText => true;
 
     private readonly ShapeElement _s;
     private readonly double _from, _to;
