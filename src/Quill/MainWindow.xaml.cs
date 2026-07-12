@@ -375,7 +375,10 @@ public sealed partial class MainWindow : Window
             _glowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
             _glowTimer.Tick += (_, _) => GlowTick();
         }
-        foreach (var b in GlowBrushes()) b.Opacity = 0.9;
+        // Repeat lets Circulate translate the gradient and wrap seamlessly; for
+        // the static axis (0,0)-(1,1) every element still projects onto [0,1], so
+        // Breathe / Off look unchanged (#4).
+        foreach (var b in GlowBrushes()) { b.Opacity = 0.9; b.SpreadMethod = GradientSpreadMethod.Repeat; }
         SetGradientAxes(0, 0, 1, 1);
         if (_reduceMotion || _library.GlowMode == "Off") _glowTimer.Stop();
         else _glowTimer.Start();
@@ -394,17 +397,14 @@ public sealed partial class MainWindow : Window
         else if (mode == "Circulate")
         {
             opacity = 0.95;
-            // Walk the gradient anchor around the rectangle PERIMETER at a
-            // constant rate. The old angle sweep looked wildly exponential on
-            // wide panels like the pen row: the highlight dwelt at the ends,
-            // then whipped across the whole width in a frame (#4-batch4).
-            double t = (_glowT / 6.0) % 1.0;   // one lap / 6 s
-            double px, py;
-            if (t < 0.25) { px = t * 4; py = 0; }
-            else if (t < 0.5) { px = 1; py = (t - 0.25) * 4; }
-            else if (t < 0.75) { px = 1 - (t - 0.5) * 4; py = 1; }
-            else { px = 0; py = 1 - (t - 0.75) * 4; }
-            SetGradientAxes(px, py, 1 - px, 1 - py);
+            // Glide the highlight straight along the diagonal at a CONSTANT rate
+            // and let SpreadMethod=Repeat wrap it seamlessly. The old perimeter
+            // walk gave each edge equal TIME but not equal length, so on the wide
+            // pen row the shine crawled the short sides and raced across the top —
+            // the "exponential" dwell-then-whip. A translating repeat has no
+            // rotation, so the band never balloons and its speed is even (#4).
+            double s = (_glowT / 4.0) % 1.0;   // one seamless loop / 4 s
+            SetGradientAxes(s, s, s + 1.0, s + 1.0);
         }
         if (_rippleStartMs >= 0)
         {
@@ -5579,9 +5579,16 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             }
         }
         // reverted to the original coverage on request — touch mode behaves
-        // exactly as it did before the batch-10 changes
+        // exactly as it did before the batch-10 changes, PLUS the three buttons
+        // that used to be missed (they sit outside these roots):
         foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
             try { Walk(root); } catch { }
+        // the minimal-UI and full-screen buttons live in the pinned strip, not
+        // the scrolling top bar; the gallery search button sits beside New
+        // notebook / Close, which must stay normal size — enlarge only these
+        // three so they match the rest of touch mode (#touch)
+        try { Walk(TopBarPinned); } catch { }
+        try { GallerySearchBtn.MinWidth = on ? 44 : 0; GallerySearchBtn.MinHeight = on ? 42 : 0; } catch { }
     }
 
 
