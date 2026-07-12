@@ -136,6 +136,8 @@ public class TextElement
     public double X { get; set; }
     public double Y { get; set; }
     public double Width { get; set; } = 280;
+    // true once the user drags the width grip — opts out of auto-sizing (#15-batch4)
+    public bool WidthPinned { get; set; }
     public string Rtf { get; set; } = "";
     public double Rotation { get; set; }
     // Cell membership for table shapes (#40): null = a free text box.
@@ -270,9 +272,11 @@ public class Library
     public bool OledBlack { get; set; }
     // Autosave debounce in seconds.
     public double AutosaveSeconds { get; set; } = 1.5;
-    // Pen repair: compensates for faulty pen hardware that drops contact
-    // mid-stroke (gap bridging) or bounces on lift (stray-dot suppression).
+    // Pen repair, split into its two behaviours (#6-batch4). PenRepair is the
+    // legacy combined switch, kept only so old settings migrate on first run.
     public bool PenRepair { get; set; }
+    public bool PenRepairDots { get; set; }
+    public bool PenRepairBridge { get; set; }
     // AI assistant (#25): provider + model + local endpoint. API keys are kept
     // in the Windows Credential Locker, never in this file.
     public string AiProvider { get; set; } = "None";

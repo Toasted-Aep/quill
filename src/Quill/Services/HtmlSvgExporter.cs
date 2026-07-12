@@ -13,8 +13,24 @@ public static class HtmlSvgExporter
 {
     private static string N(double d) => d.ToString("0.##", CultureInfo.InvariantCulture);
 
-    private static string Esc(string s) => s
-        .Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
+    private static string Esc(string s)
+    {
+        var sb = new StringBuilder(s.Length);
+        foreach (var c in s)
+        {
+            // control characters (RTF extraction can leak NULs) are invalid XML (#10-batch4)
+            if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') continue;
+            switch (c)
+            {
+                case '&': sb.Append("&amp;"); break;
+                case '<': sb.Append("&lt;"); break;
+                case '>': sb.Append("&gt;"); break;
+                case '"': sb.Append("&quot;"); break;
+                default: sb.Append(c); break;
+            }
+        }
+        return sb.ToString();
+    }
 
     public static string PageToSvg(PdfVectorPage pg)
     {

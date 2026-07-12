@@ -162,7 +162,10 @@ public sealed partial class MainWindow : Window
 
         // restore the last-selected eraser mode (#13-batch2)
         Surface.EraserMode = _library.LastEraserMode == "Point" ? EraserMode.Point : EraserMode.Object;
-        Surface.PenRepair = _library.PenRepair;
+        // the legacy combined pen-repair switch migrates to the split toggles (#6-batch4)
+        if (_library.PenRepair) { _library.PenRepairDots = true; _library.PenRepairBridge = true; _library.PenRepair = false; }
+        Surface.PenRepairDots = _library.PenRepairDots;
+        Surface.PenRepairBridge = _library.PenRepairBridge;
         // the font list used to say "Amsterdam"; the installed family is
         // "Amsterdam Handwriting" — migrate saved settings (#9-batch2)
         if (_library.DefaultFont == "Amsterdam") _library.DefaultFont = "Amsterdam Handwriting";
@@ -210,7 +213,11 @@ public sealed partial class MainWindow : Window
         // text box, or a fresh text box is created at the view centre
         _dictation.TextRecognized += text => DispatcherQueue.TryEnqueue(() =>
         {
-            var box = Surface.ActiveTextBox;
+            // pressing the mic button steals focus, so also accept the last
+            // focused box; a tapped-but-empty Text caret becomes the target
+            // instead of a bubble in the middle of the screen (#5-batch4)
+            var box = Surface.ActiveTextBox ?? Surface.LastTextBox;
+            if (box == null && Surface.HasPendingText) box = Surface.MaterializePendingText();
             if (box != null)
             {
                 try { box.Document.Selection.TypeText(text + " "); } catch { }
@@ -386,10 +393,17 @@ public sealed partial class MainWindow : Window
         else if (mode == "Circulate")
         {
             opacity = 0.95;
-            double ang = _glowT * (2 * Math.PI / 6.0);   // one lap / 6 s, constant rate
-            const double r = 0.7071;
-            double cx = 0.5 + r * Math.Cos(ang), cy = 0.5 + r * Math.Sin(ang);
-            SetGradientAxes(cx, cy, 1 - cx, 1 - cy);
+            // Walk the gradient anchor around the rectangle PERIMETER at a
+            // constant rate. The old angle sweep looked wildly exponential on
+            // wide panels like the pen row: the highlight dwelt at the ends,
+            // then whipped across the whole width in a frame (#4-batch4).
+            double t = (_glowT / 6.0) % 1.0;   // one lap / 6 s
+            double px, py;
+            if (t < 0.25) { px = t * 4; py = 0; }
+            else if (t < 0.5) { px = 1; py = (t - 0.25) * 4; }
+            else if (t < 0.75) { px = 1 - (t - 0.5) * 4; py = 1; }
+            else { px = 0; py = 1 - (t - 0.75) * 4; }
+            SetGradientAxes(px, py, 1 - px, 1 - py);
         }
         if (_rippleStartMs >= 0)
         {
@@ -837,20 +851,50 @@ public sealed partial class MainWindow : Window
 
     // Immediate retint + debounced theme refresh — shared by manual picking AND
     // accent-follow, so following the pen retints EVERYTHING too (#3-batch3).
+    private Color? _accentCurrent;
+    private Color _accentFrom, _accentTarget;
+    private double _accentLerpT;
+    private DispatcherTimer? _accentLerp;
+
+    private static Color LerpColor(Color a, Color b, double t) => Color.FromArgb(255,
+        (byte)(a.R + (b.R - a.R) * t), (byte)(a.G + (b.G - a.G) * t), (byte)(a.B + (b.B - a.B) * t));
+
     private void ApplyAccentLive(Color c)
     {
-        ApplyAccent(c, refreshTheme: false);
-        if (!_accentTimerHooked)
+        // strictly linear ramp from the on-screen colour, ~220 ms (#7-batch4)
+        _accentFrom = _accentCurrent ?? c;
+        _accentTarget = c;
+        _accentLerpT = 0;
+        if (_accentLerp == null)
         {
-            _accentTimerHooked = true;
-            _accentTimer.Tick += (_, _) => { _accentTimer.Stop(); RefreshThemeForAccent(); };
+            _accentLerp = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            _accentLerp.Tick += (_, _) =>
+            {
+                _accentLerpT = Math.Min(1, _accentLerpT + 16.0 / 220.0);
+                ApplyAccent(LerpColor(_accentFrom, _accentTarget, _accentLerpT), refreshTheme: false);
+                if (_accentLerpT >= 1)
+                {
+                    _accentLerp!.Stop();
+                    // chrome that bakes the accent into brushes follows suit (#8-batch4)
+                    BuildPenStrip();
+                    RefreshEraserChip();
+                    if (!_accentTimerHooked)
+                    {
+                        _accentTimerHooked = true;
+                        _accentTimer.Tick += (_, _) => { _accentTimer.Stop(); RefreshThemeForAccent(); };
+                    }
+                    _accentTimer.Stop();
+                    _accentTimer.Start();
+                }
+            };
         }
-        _accentTimer.Stop();
-        _accentTimer.Start();
+        _accentLerp.Stop();
+        _accentLerp.Start();
     }
 
     private void ApplyAccent(Color c, bool refreshTheme)
     {
+        _accentCurrent = c;
         try { Surface.Accent = c; Surface.Refresh(); } catch { }
         var res = Application.Current.Resources;
         if (res["BrandOrangeBrush"] is SolidColorBrush brand) brand.Color = c;
@@ -1107,7 +1151,7 @@ public sealed partial class MainWindow : Window
                 VerticalContentAlignment = VerticalAlignment.Center,
                 Background = new SolidColorBrush(Colors.Transparent),
                 BorderBrush = new SolidColorBrush(
-                    p.Id == _activePresetId ? Color.FromArgb(255, 217, 119, 87) : Colors.Transparent)
+                    p.Id == _activePresetId ? Surface.Accent : Colors.Transparent)
             };
             ToolTipService.SetToolTip(btn, $"{p.Name} (right-click to edit)");
             btn.Click += (_, _) => ApplyPreset(p);
@@ -1141,7 +1185,7 @@ public sealed partial class MainWindow : Window
             VerticalContentAlignment = VerticalAlignment.Center,
             Background = new SolidColorBrush(Colors.Transparent),
             BorderBrush = new SolidColorBrush(
-                Surface.Tool == ToolType.Eraser ? Color.FromArgb(255, 217, 119, 87) : Colors.Transparent)
+                Surface.Tool == ToolType.Eraser ? Surface.Accent : Colors.Transparent)
         };
         ToolTipService.SetToolTip(chip, "Eraser (right-click to pick point or stroke mode)");
         chip.Click += (_, _) => SelectTool("Eraser");
@@ -1166,7 +1210,7 @@ public sealed partial class MainWindow : Window
         if (_eraserChip != null)
         {
             _eraserChip.BorderBrush = new SolidColorBrush(
-                Surface.Tool == ToolType.Eraser ? Color.FromArgb(255, 217, 119, 87) : Colors.Transparent);
+                Surface.Tool == ToolType.Eraser ? Surface.Accent : Colors.Transparent);
         }
     }
 
@@ -1223,11 +1267,11 @@ public sealed partial class MainWindow : Window
                 ell.Fill = new SolidColorBrush(c);
                 SetPenChipIcon(iconHost, p.Pen, c);   // keep the icon contrast-correct
                 if (_activePresetId == p.Id) Surface.PenColor = c;
-                
+
                 _library.RecentColors.Remove(hex);
                 _library.RecentColors.Insert(0, hex);
                 if (_library.RecentColors.Count > 16) _library.RecentColors.RemoveAt(16);
-                
+
                 ScheduleSave();
             }
 
@@ -3239,15 +3283,25 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(autosaveSlider);
 
         // ---- pen repair (#2-batch2) ----
-        var penFixToggle = new ToggleSwitch { Header = "Pen repair — for a faulty pen", IsOn = _library.PenRepair };
-        penFixToggle.Toggled += (_, _) =>
+        var penFixDots = new ToggleSwitch { Header = "Pen repair — ignore stray dots", IsOn = _library.PenRepairDots };
+        penFixDots.Toggled += (_, _) =>
         {
-            _library.PenRepair = penFixToggle.IsOn;
-            Surface.PenRepair = penFixToggle.IsOn;
+            _library.PenRepairDots = penFixDots.IsOn;
+            Surface.PenRepairDots = penFixDots.IsOn;
             ScheduleSave();
         };
-        panel.Children.Add(penFixToggle);
-        panel.Children.Add(new TextBlock { Text = "Bridges strokes when the pen momentarily loses contact mid-line, and ignores the stray dot a bouncy pen tip leaves right where a stroke just ended. Deliberate dots (like dotting an i) still register.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(penFixDots);
+        panel.Children.Add(new TextBlock { Text = "Drops the tiny dot a bouncy pen tip leaves right where a stroke just ended. Deliberate dots (like dotting an i) still register.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        var penFixBridge = new ToggleSwitch { Header = "Pen repair — bridge lost contact", IsOn = _library.PenRepairBridge };
+        penFixBridge.Toggled += (_, _) =>
+        {
+            _library.PenRepairBridge = penFixBridge.IsOn;
+            Surface.PenRepairBridge = penFixBridge.IsOn;
+            ScheduleSave();
+        };
+        panel.Children.Add(penFixBridge);
+        panel.Children.Add(new TextBlock { Text = "Continues the same stroke when the pen momentarily loses contact mid-line.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- pen dock position (#cust-roadmap): the drag gesture already works;
         //      this makes the four dock sides discoverable without dragging ----
@@ -3523,9 +3577,12 @@ public sealed partial class MainWindow : Window
         _curNb?.DefaultFont ?? _library.DefaultFont,
         (float)(_curNb?.DefaultFontSize ?? _library.DefaultFontSize));
 
+    private string _toolTag = "Pen";
+
     private void SelectTool(string tag)
     {
         if (tag != "FreeSpace") _blankSpaceOnce = false;   // any explicit tool pick cancels the one-shot
+        _toolTag = tag;
         ToolPen.IsChecked = tag == "Pen";
         ToolText.IsChecked = tag == "Text";
         ToolSelect.IsChecked = tag == "Select";
@@ -3542,6 +3599,7 @@ public sealed partial class MainWindow : Window
         Surface.SetTool(tool);
         UpdateFormatBarVisibility();
         RefreshEraserChip();
+        ApplyPenRowVisibility();   // the pen row only belongs to pen mode (#14-batch4)
 
         switch (tool)
         {
@@ -3904,6 +3962,10 @@ public sealed partial class MainWindow : Window
         bool rowOn = _curPage?.PenRowVisible ?? true;
         bool showRow = _uiHidden ? _floatPen : rowOn;
         bool showChip = !_uiHidden && !rowOn;
+        // outside pen/eraser mode neither the row nor its reopen chip belongs
+        // on screen (#14-batch4); the floating pen in minimal UI stays manual
+        bool penMode = _toolTag is "Pen" or "Eraser";
+        if (!penMode && !_uiHidden) { showRow = false; showChip = false; }
         // slide in from the bottom edge the dock lives on, like the other bars
         if (showRow) FadeIn(PenRow, slideY: 24); else FadeOut(PenRow);
         if (showChip) FadeIn(PenRowShowBtn); else FadeOut(PenRowShowBtn);
@@ -4779,6 +4841,21 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                     using var rt = new Microsoft.Graphics.Canvas.CanvasRenderTarget(device0, (float)pw, (float)ph, 96);
                     using (var ds0 = rt.CreateDrawingSession())
                         ds0.DrawImage(full, new Rect(0, 0, pw, ph), new Rect(px, py, pw, ph));
+                    // page-coloured pixels become transparent, so the equation
+                    // floats over grids, ruling and images instead of sitting
+                    // on an opaque card (#17-batch4)
+                    try
+                    {
+                        var bgc = ColorUtil.Parse(_curPage?.Background ?? "#FFFFFF");
+                        var pix = rt.GetPixelColors();
+                        for (int i = 0; i < pix.Length; i++)
+                        {
+                            int d = Math.Abs(pix[i].R - bgc.R) + Math.Abs(pix[i].G - bgc.G) + Math.Abs(pix[i].B - bgc.B);
+                            if (d < 24) pix[i] = Microsoft.UI.Colors.Transparent;
+                        }
+                        rt.SetPixelColors(pix);
+                    }
+                    catch { }
                     var dir0 = System.IO.Path.Combine(LibraryStore.Dir, "images");
                     Directory.CreateDirectory(dir0);
                     var shotPath = System.IO.Path.Combine(dir0, $"{Guid.NewGuid()}.png");
@@ -5011,7 +5088,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             var dlgTask = progressDlg.ShowAsync();
 
             var sec = new Section { Name = file.DisplayName };
-            
+
             await Task.Run(async () =>
             {
                 for (int i = 0; i < count; i++)
@@ -5029,7 +5106,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                     var pagePath = path;
                     var pageW = w;
                     var pageH = h;
-                    
+
                     var tcs = new TaskCompletionSource<bool>();
                     DispatcherQueue.TryEnqueue(() =>
                     {
@@ -5044,7 +5121,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                                 X = 44, Y = 104, W = pageW * scale, H = pageH * scale
                             });
                             sec.Pages.Add(page);
-                            
+
                             progressBar.Value = idx + 1;
                             textBlock.Text = $"Processing page {idx + 1} of {count}...";
                             tcs.SetResult(true);
@@ -5492,22 +5569,39 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         { ShowStatus("Add your API key in Settings first."); return; }
 
         AiInput.Text = "";
+        if (_aiPendingText.Length > 0) { q += _aiPendingText; _aiPendingText = ""; }
         _aiChat.Add(("user", q));
         RebuildAiMessages();
         AddAiBubble("assistant", "thinking…");
         AiScroll.UpdateLayout();
         AiScroll.ChangeView(null, AiScroll.ScrollableHeight, null, true);
 
-        byte[]? png = null;
+        var atts = new List<AiService.AiAttachment>();
         if (AiSeePage.IsChecked == true)
         {
             try
             {
-                var cap = await CapturePageAsync();
-                if (cap != null) png = MiniPng.FromBgra(cap.Value.Pixels, cap.Value.Width, cap.Value.Height);
+                if (_library.AiProvider == "Local")
+                {
+                    // local vision models take images, not PDFs
+                    var cap = await CapturePageAsync();
+                    if (cap != null)
+                        atts.Add(new AiService.AiAttachment(
+                            MiniPng.FromBgra(cap.Value.Pixels, cap.Value.Width, cap.Value.Height),
+                            "image/png", "page.png"));
+                }
+                else if (_curPage != null)
+                {
+                    // the page as a vector PDF: real geometry and selectable
+                    // text instead of a flat screenshot (#9-batch4)
+                    var vp = await CollectVectorPagesAsync(new List<NotePage> { _curPage });
+                    if (vp.Count > 0)
+                        atts.Add(new AiService.AiAttachment(PdfExporter.CreateVector(vp), "application/pdf", "page.pdf"));
+                }
             }
             catch { }
         }
+        atts.AddRange(_aiPendingFiles);   // user-attached files ride along (#11-batch4)
 
         _aiBusy = true;
         try
@@ -5515,8 +5609,8 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             var history = _aiChat.Count > 12 ? _aiChat.GetRange(_aiChat.Count - 12, 12) : _aiChat;
             var reply = await AiService.ChatAsync(
                 _library.AiProvider, _library.AiModel, _library.AiEndpoint, key,
-                AiSystem + " You may be shown a snapshot of the user's handwritten page - read the ink directly.",
-                history, png);
+                AiSystem + " You may be shown the user's page as an attached PDF or image, plus files they attach - read them directly.",
+                history, atts);
             _aiChat.Add(("assistant", reply.Trim()));
         }
         catch (Exception ex)
@@ -5526,8 +5620,60 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         finally
         {
             _aiBusy = false;
+            _aiPendingFiles.Clear();
+            _aiPendingText = "";
+            UpdateAiAttachChip();
             RebuildAiMessages();
         }
+    }
+
+    // ---- user file attachments for the AI chat (#11-batch4) ----
+    private readonly List<AiService.AiAttachment> _aiPendingFiles = new();
+    private string _aiPendingText = "";
+    private readonly List<string> _aiAttachNames = new();
+
+    private async void AiAttach_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new FileOpenPicker();
+            foreach (var ext in new[] { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".txt", ".md" })
+                picker.FileTypeFilter.Add(ext);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            var file = await picker.PickSingleFileAsync();
+            if (file == null) return;
+            var ext2 = System.IO.Path.GetExtension(file.Path).ToLowerInvariant();
+            if (ext2 is ".txt" or ".md")
+            {
+                // plain text rides along inside the message itself
+                var txt = await System.IO.File.ReadAllTextAsync(file.Path);
+                if (txt.Length > 60000) txt = txt[..60000];
+                _aiPendingText += "\n\n[Attached file " + file.Name + "]\n" + txt;
+            }
+            else
+            {
+                string mime = ext2 switch
+                {
+                    ".jpg" or ".jpeg" => "image/jpeg",
+                    ".gif" => "image/gif",
+                    ".webp" => "image/webp",
+                    ".pdf" => "application/pdf",
+                    _ => "image/png"
+                };
+                _aiPendingFiles.Add(new AiService.AiAttachment(
+                    await System.IO.File.ReadAllBytesAsync(file.Path), mime, file.Name));
+            }
+            _aiAttachNames.Add(file.Name);
+            UpdateAiAttachChip();
+        }
+        catch (Exception ex) { ShowStatus("Could not attach: " + ex.Message); }
+    }
+
+    private void UpdateAiAttachChip()
+    {
+        if (_aiPendingFiles.Count == 0 && _aiPendingText.Length == 0) _aiAttachNames.Clear();
+        AiAttachChip.Text = _aiAttachNames.Count == 0 ? "" : "Attached: " + string.Join(", ", _aiAttachNames);
+        AiAttachChip.Visibility = _aiAttachNames.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private const string AiSystem = "You are a study assistant inside Quill, a pen-first lecture notes app. Be concise and concrete. Use plain text (no markdown syntax).";
@@ -5567,8 +5713,11 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
     private async void AiImprove_Click(object sender, RoutedEventArgs e)
     {
-        var box = Surface.ActiveTextBox;
-        if (box == null || box.FocusState == FocusState.Unfocused || !HasTextSelection(box))
+        // opening the flyout steals focus before the click lands, so the box
+        // is no longer "active" — fall back to the last focused box, whose
+        // document still remembers its selection (#12-batch4)
+        var box = Surface.ActiveTextBox ?? Surface.LastTextBox;
+        if (box == null || !HasTextSelection(box))
         {
             ShowStatus("Select some text in a text box first.");
             return;
@@ -6800,20 +6949,24 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             if (content.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
             {
                 var text = await content.GetTextAsync();
-                
+
+                // a pending Text caret becomes the paste target (#5-batch4)
+                var target = Surface.ActiveTextBox;
+                if (target == null && Surface.HasPendingText) target = Surface.MaterializePendingText();
+
                 // Check if it looks like markdown
                 bool isMarkdown = text.Contains("**") || text.Contains("~~") || text.Contains("`") ||
                                   text.Split('\n').Any(l => l.StartsWith("#") || l.StartsWith("- ") || l.StartsWith("* "));
-                
-                if (isMarkdown && Surface.ActiveTextBox != null)
+
+                if (isMarkdown && target != null)
                 {
                     string rtf = MarkdownToRtf(text);
-                    Surface.ActiveTextBox.Document.Selection.SetText(Microsoft.UI.Text.TextSetOptions.FormatRtf, rtf);
+                    target.Document.Selection.SetText(Microsoft.UI.Text.TextSetOptions.FormatRtf, rtf);
                     ShowStatus("Markdown pasted as rich text.");
                 }
                 else
                 {
-                    Surface.ActiveTextBox?.Document.Selection.Paste(0);
+                    target?.Document.Selection.Paste(0);
                 }
             }
         }
@@ -7083,7 +7236,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
         _audioPlayer.Pause();
         _audioPlayer.Close();
-        
+
         Surface.AudioPlayheadPosition = null;
         Surface.RecordingStartTicks = null;
 
@@ -7133,7 +7286,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                 AudioSlider.Value = (position.TotalSeconds / duration.TotalSeconds) * 100.0;
             }
             AudioTimeText.Text = position.ToString(@"m\:ss");
-            
+
             // Sync with InkSurface drawing!
             Surface.AudioPlayheadPosition = position;
             Surface.Refresh(); // Redraw canvas
@@ -7171,7 +7324,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             {
                 // Stop active player
                 _audioPlayer.Pause();
-                
+
                 await _audioRecorder.StartRecordingAsync(filePath);
                 _curPage.AudioFile = filePath;
                 _curPage.AudioStartTicks = _audioRecorder.RecordingStartTicks;
@@ -7262,9 +7415,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             var picker = new Windows.Storage.Pickers.FileSavePicker();
             picker.FileTypeChoices.Add("M4A audio", new List<string> { ".m4a" });
             picker.SuggestedFileName = $"{_curPage.Name}_audio";
-            
+
             WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-            
+
             var destFile = await picker.PickSaveFileAsync();
             if (destFile != null)
             {

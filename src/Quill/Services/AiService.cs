@@ -124,50 +124,55 @@ public static class AiService
             .GetProperty("message").GetProperty("content").GetString() ?? "";
     }
 
-    /// <summary>Multi-turn chat, optionally attaching a PNG of the page to the
-    /// last user message so the model sees the actual ink (#22-batch3).</summary>
+    public sealed record AiAttachment(byte[] Data, string Mime, string Name);
+
+    /// <summary>Multi-turn chat with attachments on the last user message: the
+    /// page as a vector PDF (so the model reads real geometry + selectable
+    /// text, #9-batch4), images, or user-picked files (#11-batch4).</summary>
     public static async Task<string> ChatAsync(
         string provider, string? model, string? endpoint, string? apiKey,
-        string system, IReadOnlyList<(string Role, string Text)> messages, byte[]? pagePng)
+        string system, IReadOnlyList<(string Role, string Text)> messages,
+        IReadOnlyList<AiAttachment>? attachments = null)
     {
         model = string.IsNullOrWhiteSpace(model) ? DefaultModel(provider) : model.Trim();
-        string? b64 = pagePng != null ? Convert.ToBase64String(pagePng) : null;
+        var atts = attachments ?? Array.Empty<AiAttachment>();
         return provider switch
         {
-            "Claude" => await ClaudeChatAsync(model, apiKey!, system, messages, b64),
-            "Gemini" => await GeminiChatAsync(model, apiKey!, system, messages, b64),
-            "OpenAI" => await OpenAiChatAsync("https://api.openai.com/v1", model, apiKey, system, messages, b64),
+            "Claude" => await ClaudeChatAsync(model, apiKey!, system, messages, atts),
+            "Gemini" => await GeminiChatAsync(model, apiKey!, system, messages, atts),
+            "OpenAI" => await OpenAiChatAsync("https://api.openai.com/v1", model, apiKey, system, messages, atts),
             "Local" => await OpenAiChatAsync(
                 string.IsNullOrWhiteSpace(endpoint) ? "http://localhost:11434/v1" : endpoint.TrimEnd('/'),
-                model, apiKey, system, messages, b64),
+                model, apiKey, system, messages, atts),
             _ => throw new InvalidOperationException("No AI provider selected.")
         };
     }
 
     private static async Task<string> ClaudeChatAsync(
         string model, string apiKey, string system,
-        IReadOnlyList<(string Role, string Text)> messages, string? pngB64)
+        IReadOnlyList<(string Role, string Text)> messages, IReadOnlyList<AiAttachment> atts)
     {
         var msgs = new List<object>();
         for (int i = 0; i < messages.Count; i++)
         {
             var (role, text) = messages[i];
             bool last = i == messages.Count - 1;
-            if (last && role == "user" && pngB64 != null)
-                msgs.Add(new Dictionary<string, object>
+            if (last && role == "user" && atts.Count > 0)
+            {
+                var parts = new List<object>();
+                foreach (var a in atts)
                 {
-                    ["role"] = "user",
-                    ["content"] = new object[]
+                    string kind = a.Mime == "application/pdf" ? "document" : "image";
+                    parts.Add(new Dictionary<string, object>
                     {
-                        new Dictionary<string, object>
-                        {
-                            ["type"] = "image",
-                            ["source"] = new Dictionary<string, object>
-                            { ["type"] = "base64", ["media_type"] = "image/png", ["data"] = pngB64 }
-                        },
-                        new Dictionary<string, object> { ["type"] = "text", ["text"] = text }
-                    }
-                });
+                        ["type"] = kind,
+                        ["source"] = new Dictionary<string, object>
+                        { ["type"] = "base64", ["media_type"] = a.Mime, ["data"] = Convert.ToBase64String(a.Data) }
+                    });
+                }
+                parts.Add(new Dictionary<string, object> { ["type"] = "text", ["text"] = text });
+                msgs.Add(new Dictionary<string, object> { ["role"] = "user", ["content"] = parts });
+            }
             else
                 msgs.Add(new Dictionary<string, object> { ["role"] = role, ["content"] = text });
         }
@@ -191,27 +196,36 @@ public static class AiService
 
     private static async Task<string> OpenAiChatAsync(
         string baseUrl, string model, string? apiKey, string system,
-        IReadOnlyList<(string Role, string Text)> messages, string? pngB64)
+        IReadOnlyList<(string Role, string Text)> messages, IReadOnlyList<AiAttachment> atts)
     {
         var msgs = new List<object> { new Dictionary<string, object> { ["role"] = "system", ["content"] = system } };
         for (int i = 0; i < messages.Count; i++)
         {
             var (role, text) = messages[i];
             bool last = i == messages.Count - 1;
-            if (last && role == "user" && pngB64 != null)
-                msgs.Add(new Dictionary<string, object>
+            if (last && role == "user" && atts.Count > 0)
+            {
+                var parts = new List<object>();
+                foreach (var a in atts)
                 {
-                    ["role"] = "user",
-                    ["content"] = new object[]
-                    {
-                        new Dictionary<string, object>
+                    string b64 = Convert.ToBase64String(a.Data);
+                    if (a.Mime == "application/pdf")
+                        parts.Add(new Dictionary<string, object>
+                        {
+                            ["type"] = "file",
+                            ["file"] = new Dictionary<string, object>
+                            { ["filename"] = a.Name, ["file_data"] = "data:application/pdf;base64," + b64 }
+                        });
+                    else
+                        parts.Add(new Dictionary<string, object>
                         {
                             ["type"] = "image_url",
-                            ["image_url"] = new Dictionary<string, object> { ["url"] = "data:image/png;base64," + pngB64 }
-                        },
-                        new Dictionary<string, object> { ["type"] = "text", ["text"] = text }
-                    }
-                });
+                            ["image_url"] = new Dictionary<string, object> { ["url"] = "data:" + a.Mime + ";base64," + b64 }
+                        });
+                }
+                parts.Add(new Dictionary<string, object> { ["type"] = "text", ["text"] = text });
+                msgs.Add(new Dictionary<string, object> { ["role"] = "user", ["content"] = parts });
+            }
             else
                 msgs.Add(new Dictionary<string, object> { ["role"] = role, ["content"] = text });
         }
@@ -229,7 +243,7 @@ public static class AiService
 
     private static async Task<string> GeminiChatAsync(
         string model, string apiKey, string system,
-        IReadOnlyList<(string Role, string Text)> messages, string? pngB64)
+        IReadOnlyList<(string Role, string Text)> messages, IReadOnlyList<AiAttachment> atts)
     {
         var contents = new List<object>();
         for (int i = 0; i < messages.Count; i++)
@@ -237,11 +251,13 @@ public static class AiService
             var (role, text) = messages[i];
             bool last = i == messages.Count - 1;
             var parts = new List<object>();
-            if (last && role == "user" && pngB64 != null)
-                parts.Add(new Dictionary<string, object>
-                {
-                    ["inline_data"] = new Dictionary<string, object> { ["mime_type"] = "image/png", ["data"] = pngB64 }
-                });
+            if (last && role == "user")
+                foreach (var a in atts)
+                    parts.Add(new Dictionary<string, object>
+                    {
+                        ["inline_data"] = new Dictionary<string, object>
+                        { ["mime_type"] = a.Mime, ["data"] = Convert.ToBase64String(a.Data) }
+                    });
             parts.Add(new Dictionary<string, object> { ["text"] = text });
             contents.Add(new Dictionary<string, object>
             {
