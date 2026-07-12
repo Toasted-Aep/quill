@@ -172,7 +172,7 @@
                         <PathIcon Data="M8 1 L9.6 6.4 L15 8 L9.6 9.6 L8 15 L6.4 9.6 L1 8 L6.4 6.4 Z M13 1.5 L13.6 3.4 L15.5 4 L13.6 4.6 L13 6.5 L12.4 4.6 L10.5 4 L12.4 3.4 Z"/>
                         <Button.Flyout>
                             <MenuFlyout>
-                                <MenuFlyoutItem Text="Chat with AI… (sees the page)" Click="AiChat_Click" AllowFocusOnInteraction="False"/>
+                                <MenuFlyoutItem Text="Chat with AI…" Click="AiChat_Click" AllowFocusOnInteraction="False"/>
                                 <MenuFlyoutSeparator/>
                                 <MenuFlyoutItem Text="Summarise this page" Click="AiSummarize_Click" AllowFocusOnInteraction="False"/>
                                 <MenuFlyoutItem Text="Action items from this page" Click="AiActions_Click" AllowFocusOnInteraction="False"/>
@@ -780,20 +780,33 @@
                         <StackPanel x:Name="AiMessages" Spacing="6"/>
                     </ScrollViewer>
                     <Grid Grid.Row="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="AiInput" PlaceholderText="Ask about this page…" FontSize="13"
+                        <TextBlock x:Name="AiAttachChip" Grid.ColumnSpan="4" FontSize="11" Opacity="0.75"
+                                   Margin="2,0,2,4" TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
+                        <TextBox x:Name="AiInput" Grid.Row="1" PlaceholderText="Ask about this page…" FontSize="13"
                                  TextWrapping="Wrap" MaxHeight="90" KeyDown="AiInput_KeyDown"/>
-                        <ToggleButton x:Name="AiSeePage" Grid.Column="1" IsChecked="True" Margin="4,0,0,0"
+                        <Button x:Name="AiAttachBtn" Grid.Row="1" Grid.Column="1" Click="AiAttach_Click" Margin="4,0,0,0"
+                                VerticalAlignment="Bottom"
+                                ToolTipService.ToolTip="Attach a file (image, PDF or text) to your next message">
+                            <!-- paperclip silhouette -->
+                            <PathIcon Data="M11.9 3.9 L6.1 9.7 A3.2 3.2 0 0 0 10.6 14.2 L15.6 9.2 L16.6 10.2 L11.6 15.2 A4.6 4.6 0 0 1 5.1 8.7 L10.9 2.9 A3.1 3.1 0 0 1 15.3 7.3 L9.9 12.7 A1.6 1.6 0 0 1 7.6 10.4 L12.3 5.7 L13.3 6.7 L8.6 11.4 A0.2 0.2 0 0 0 8.9 11.7 L14.3 6.3 A1.7 1.7 0 0 0 11.9 3.9 Z"/>
+                        </Button>
+                        <ToggleButton x:Name="AiSeePage" Grid.Row="1" Grid.Column="2" IsChecked="True" Margin="4,0,0,0"
                                       VerticalAlignment="Bottom"
-                                      ToolTipService.ToolTip="Attach a snapshot of the page — the AI sees your actual ink">
+                                      ToolTipService.ToolTip="Attach the page as a vector PDF — the AI reads your actual ink">
                             <!-- original eye silhouette -->
                             <PathIcon Data="M8 3.5 C11.6 3.5 14.4 6 15.5 8 C14.4 10 11.6 12.5 8 12.5 C4.4 12.5 1.6 10 0.5 8 C1.6 6 4.4 3.5 8 3.5 Z M8 5.4 A2.6 2.6 0 1 0 8 10.6 A2.6 2.6 0 1 0 8 5.4 Z M8 6.7 A1.3 1.3 0 1 1 7.99 6.7 Z"/>
                         </ToggleButton>
-                        <Button x:Name="AiSendBtn" Grid.Column="2" Click="AiSend_Click" Margin="4,0,0,0"
+                        <Button x:Name="AiSendBtn" Grid.Row="1" Grid.Column="3" Click="AiSend_Click" Margin="4,0,0,0"
                                 VerticalAlignment="Bottom" Style="{StaticResource AccentButtonStyle}"
                                 ToolTipService.ToolTip="Send (Enter)">
                             <FontIcon Glyph="&#xE724;" FontSize="13"/>

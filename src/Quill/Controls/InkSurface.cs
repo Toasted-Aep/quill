@@ -60,7 +60,7 @@ public sealed class InkSurface : UserControl
     public bool HandDrawMode { get; set; }
     public MouseMode MouseMode { get; set; } = MouseMode.Auto;
 
-    private const int InkCacheThreshold = 2500;
+    private const int InkCacheThreshold = 600;   // static ink kicks in early (#16-batch4)
     private CanvasRenderTarget? _inkCache;
     private Rect _inkCacheWorld;
     private float _inkCacheScale = 1f;
@@ -79,6 +79,8 @@ public sealed class InkSurface : UserControl
     public UndoRedoManager UndoManager { get; } = new();
     public NotePage? Page => _page;
     public RichEditBox? ActiveTextBox { get; private set; }
+    // survives focus loss — menus steal focus before their click lands (#12-batch4)
+    public RichEditBox? LastTextBox { get; private set; }
 
     public event Action? ContentChanged;
     public event Action<RichEditBox?>? ActiveTextChanged;
@@ -110,7 +112,8 @@ public sealed class InkSurface : UserControl
     // pen-down right where a stroke just ended resumes that stroke (bridging a
     // momentary contact drop-out), and a tiny stroke at a fresh stroke's end is
     // discarded as lift-bounce.
-    public bool PenRepair { get; set; }
+    public bool PenRepairBridge { get; set; }   // resume a stroke after a contact drop-out
+    public bool PenRepairDots { get; set; }     // drop the lift-bounce dot at a stroke's end
 
     // the app accent, pushed from MainWindow so selection chrome, handles and
     // table adorners match the rest of the app instead of a hardcoded orange
@@ -263,7 +266,13 @@ public sealed class InkSurface : UserControl
         CharacterReceived += OnCharacterReceived;
         KeyDown += OnKeyDown;
 
-        ContentChanged += () => _inkCacheDirty = true;   // any edit invalidates the ink cache (#43)
+        ContentChanged += () =>
+        {
+            // a just-committed stroke was painted straight into the cache and
+            // text-box keystrokes never touch ink — neither needs a rebuild
+            if (_inkCacheAppendFresh || _inkCacheTextOnly) { _inkCacheAppendFresh = false; return; }
+            _inkCacheDirty = true;   // any other edit invalidates the ink cache (#43)
+        };
         Unloaded += (_, _) => _canvas.RemoveFromVisualTree();
     }
 
@@ -1034,9 +1043,9 @@ public sealed class InkSurface : UserControl
                 // contact ends the stroke and instantly starts a new one. If a
                 // pen-down lands right where a stroke just finished, pick that
                 // stroke back up and keep drawing as if nothing happened.
-                if (PenRepair && !RulerMode && _lastCommitted != null && _page != null &&
-                    Environment.TickCount64 - _lastCommitMs < 320 &&
-                    Vector2.Distance(pos, _lastCommitEnd) < 30f / ViewZoom &&
+                if (PenRepairBridge && !RulerMode && _lastCommitted != null && _page != null &&
+                    Environment.TickCount64 - _lastCommitMs < 200 &&
+                    Vector2.Distance(pos, _lastCommitEnd) < 14f / ViewZoom &&
                     _page.Strokes.Count > 0 && ReferenceEquals(_page.Strokes[^1], _lastCommitted))
                 {
                     var resume = _lastCommitted;
@@ -1588,15 +1597,15 @@ public sealed class InkSurface : UserControl
                     // discard it. Deliberate dots (i-dots, full stops) land away
                     // from a stroke end or after a pause, so they still register.
                     bool bounceDot = false;
-                    if (PenRepair && !RulerMode && _lastCommitted != null &&
-                        Environment.TickCount64 - _lastCommitMs < 260 && pts.Count <= 3)
+                    if (PenRepairDots && !RulerMode && _lastCommitted != null &&
+                        Environment.TickCount64 - _lastCommitMs < 160 && pts.Count <= 2)
                     {
                         float span = 0;
                         for (int i = 1; i < pts.Count; i++)
                             span += Math.Abs(pts[i].X - pts[i - 1].X) + Math.Abs(pts[i].Y - pts[i - 1].Y);
                         var first = new Vector2(pts[0].X, pts[0].Y);
-                        bounceDot = span < 6f / ViewZoom &&
-                                    Vector2.Distance(first, _lastCommitEnd) < 24f / ViewZoom;
+                        bounceDot = span < 3f / ViewZoom &&
+                                    Vector2.Distance(first, _lastCommitEnd) < 12f / ViewZoom;
                     }
                     if (!bounceDot)
                     {
@@ -1610,6 +1619,7 @@ public sealed class InkSurface : UserControl
                             PressureCurve = PenPressureCurve != null ? new List<float>(PenPressureCurve) : null
                         };
                         UndoManager.Push(new AddStrokeAction(stroke), _page);
+                        AppendStrokeToInkCache(stroke);   // static ink stays valid (#16-batch4)
                         changed = true;
                         _lastCommitted = stroke;
                         _lastCommitMs = Environment.TickCount64;
@@ -1827,7 +1837,7 @@ public sealed class InkSurface : UserControl
         float width = 60f / ViewZoom;
 
         var bodyColor = ColorUtil.IsDark(bg) ? Color.FromArgb(55, 255, 255, 255) : Color.FromArgb(46, 60, 80, 120);
-        var edgeColor = Color.FromArgb(210, 217, 119, 87);
+        var edgeColor = Color.FromArgb(210, Accent.R, Accent.G, Accent.B);
         var a1 = center - dir * half;
         var a2 = center + dir * half;
         var e1 = a1 + perp * width;
@@ -2442,14 +2452,14 @@ public sealed class InkSurface : UserControl
             var r = new Rect(
                 Math.Min(_rectStart.X, _rectCur.X), Math.Min(_rectStart.Y, _rectCur.Y),
                 Math.Abs(_rectCur.X - _rectStart.X), Math.Abs(_rectCur.Y - _rectStart.Y));
-            ds.FillRectangle(r, Color.FromArgb(18, 217, 119, 87));
+            ds.FillRectangle(r, Color.FromArgb(18, Accent.R, Accent.G, Accent.B));
             ds.DrawRectangle(r, accent, uiScale, _dashStyle);
         }
 
         if (HasMultiSelection && !_selBounds.IsEmpty)
         {
             var r = new Rect(_selBounds.X + _moveDx, _selBounds.Y + _moveDy, _selBounds.Width, _selBounds.Height);
-            ds.FillRectangle(r, Color.FromArgb(26, 217, 119, 87));
+            ds.FillRectangle(r, Color.FromArgb(26, Accent.R, Accent.G, Accent.B));
             ds.DrawRectangle(r, accent, uiScale, _dashStyle);
 
             // corner handles: drag to scale the whole selection (#54)
@@ -2568,7 +2578,7 @@ public sealed class InkSurface : UserControl
         int n = pts.Count;
         if (n == 0) return;
 
-        var color = Color.FromArgb(80, 217, 119, 87); // beautiful semi-translucent orange/red highlight
+        var color = Color.FromArgb(80, Accent.R, Accent.G, Accent.B); // semi-translucent accent highlight
         float hw = s.Size * 3.5f;
 
         if (n == 1)
@@ -3450,7 +3460,7 @@ public sealed class InkSurface : UserControl
                         }
                         else if (s.HeaderRow && row == 0)
                         {
-                            ds.FillRectangle(cellRect, Color.FromArgb(40, 217, 119, 87));
+                            ds.FillRectangle(cellRect, Color.FromArgb(40, Accent.R, Accent.G, Accent.B));
                         }
 
                         var bColor = (t != null && !string.IsNullOrEmpty(t.BorderColor)) ? ColorUtil.Parse(t.BorderColor) : color;
@@ -3764,9 +3774,9 @@ public sealed class InkSurface : UserControl
         args.Handled = true;
     }
 
-    private void SpawnTextBox(Vector2 worldPos, string? initial)
+    private RichEditBox? SpawnTextBox(Vector2 worldPos, string? initial)
     {
-        if (_page == null) return;
+        if (_page == null) return null;
         FlushTexts(); // save other boxes' live edits before adding a new one
         var t = new TextElement { X = worldPos.X - 4, Y = worldPos.Y - 10 };
         UndoManager.Push(new AddTextAction(t), _page);
@@ -3778,8 +3788,24 @@ public sealed class InkSurface : UserControl
             try { var cf = ui.Box.Document.Selection.CharacterFormat; cf.Name = PendingFontFamily; cf.Size = PendingFontSize; } catch { }
             if (!string.IsNullOrEmpty(initial))
                 try { ui.Box.Document.Selection.TypeText(initial); } catch { }
+            ContentChanged?.Invoke();
+            return ui.Box;
         }
         ContentChanged?.Invoke();
+        return null;
+    }
+
+    public bool HasPendingText => _pendingTextPos != null;
+
+    /// <summary>Turns a pending Text-tool caret into a real empty box so
+    /// dictation and paste land at the tapped spot without needing a typed
+    /// character first (#5-batch4). A bare tap alone still creates nothing.</summary>
+    public RichEditBox? MaterializePendingText()
+    {
+        if (_page == null || _pendingTextPos == null) return null;
+        var at = _pendingTextPos.Value;
+        CancelPendingText();
+        return SpawnTextBox(at, null);
     }
 
     /// <summary>Rotates the focused text box by the given delta in degrees (#20).</summary>
@@ -4618,6 +4644,7 @@ public sealed class InkSurface : UserControl
         _textLayer.Children.Clear();
         _textUi.Clear();
         ActiveTextBox = null;
+        LastTextBox = null;
         if (_page == null) return;
         foreach (var t in _page.Texts)
             BuildTextUi(t);
@@ -4751,7 +4778,6 @@ public sealed class InkSurface : UserControl
         var box = new RichEditBox
         {
             MinWidth = 160,
-            Width = t.Width,
             MinHeight = 40,
             FontSize = PendingFontSize,
             FontFamily = new FontFamily(PendingFontFamily),
@@ -4790,6 +4816,7 @@ public sealed class InkSurface : UserControl
         bool isCell = t.TableId != null;
         if (isCell)
         {
+            box.Width = t.Width;
             grip.Height = 0;
             box.MinHeight = 20;
             var cellTable = _page?.Shapes.FirstOrDefault(sh => sh.Id == t.TableId);
@@ -4799,17 +4826,39 @@ public sealed class InkSurface : UserControl
                 int rr = Math.Clamp(t.TableRow, 0, rhs.Length - 1);
                 box.MaxHeight = Math.Max(22, rhs[rr] - 4);
             }
+            // an overflowing cell may still scroll internally while edited
+            box.GotFocus += (_, _) => ScrollViewer.SetVerticalScrollMode(box, ScrollMode.Enabled);
+            box.LostFocus += (_, _) => ScrollViewer.SetVerticalScrollMode(box, ScrollMode.Disabled);
+        }
+        else if (t.WidthPinned)
+        {
+            box.Width = t.Width;   // the user dragged the width grip — keep it
+        }
+        else
+        {
+            // free bubbles auto-size: start at the familiar width, grow with
+            // the text, cap at half the visible page at the current zoom
+            // (#15-batch4)
+            double maxW = ActualWidth > 40
+                ? Math.Max(280, ActualWidth * 0.5 / Math.Max(0.1f, ViewZoom))
+                : 640;
+            box.MaxWidth = maxW;
+            box.Width = double.NaN;
         }
 
-        // an unfocused bubble must not dead-end the wheel: forward to the canvas
-        // so scroll/zoom keeps working over text (#12-batch3)
+        // The RichEditBox's inner ScrollViewer grabbed the wheel through direct
+        // manipulation, so the routed event never surfaced: bubbles dead-ended
+        // scrolling entirely, and text mode paid DManip's ~1 s scroll-chaining
+        // delay (#13-batch4). Free bubbles auto-grow and never scroll inside —
+        // disable the inner ScrollViewer and hand every wheel to the canvas.
+        ScrollViewer.SetVerticalScrollMode(box, ScrollMode.Disabled);
+        ScrollViewer.SetHorizontalScrollMode(box, ScrollMode.Disabled);
+        ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Hidden);
+        ScrollViewer.SetZoomMode(box, ZoomMode.Disabled);
         container.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, we) =>
         {
-            if (!ReferenceEquals(ActiveTextBox, box))
-            {
-                OnPointerWheel(_canvas, we);
-                we.Handled = true;
-            }
+            OnPointerWheel(_canvas, we);
+            we.Handled = true;
         }), true);
 
         // Ctrl+Click opens links (#20-batch3)
@@ -4846,9 +4895,16 @@ public sealed class InkSurface : UserControl
         box.GotFocus += (_, _) =>
         {
             ActiveTextBox = box;
+            LastTextBox = box;
             ActiveTextChanged?.Invoke(box);
         };
-        box.TextChanged += (_, _) => ContentChanged?.Invoke();
+        box.TextChanged += (_, _) =>
+        {
+            // typing never moves ink: raise the change without nuking the
+            // ink cache, which stuttered text entry on big pages (#13-batch4)
+            _inkCacheTextOnly = true;
+            try { ContentChanged?.Invoke(); } finally { _inkCacheTextOnly = false; }
+        };
         box.LostFocus += (_, _) =>
         {
             if (_page == null) return;
@@ -4872,7 +4928,7 @@ public sealed class InkSurface : UserControl
         var rGrip = new Border
         {
             Width = 11,
-            Background = new SolidColorBrush(Color.FromArgb(110, 217, 119, 87)),
+            Background = new SolidColorBrush(Color.FromArgb(110, Accent.R, Accent.G, Accent.B)),
             CornerRadius = new CornerRadius(3),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Stretch,
@@ -4885,7 +4941,7 @@ public sealed class InkSurface : UserControl
         // Reveal the grip / close / resize handle only while this box is focused.
         box.GotFocus += (_, _) =>
         {
-            gripBrush.Color = Color.FromArgb(60, 217, 119, 87);
+            gripBrush.Color = Color.FromArgb(60, Accent.R, Accent.G, Accent.B);
             dots.Visibility = Visibility.Visible;
             rotate.Visibility = Visibility.Visible;
             close.Visibility = Visibility.Visible;
@@ -4914,12 +4970,13 @@ public sealed class InkSurface : UserControl
         rGrip.ManipulationMode = ManipulationModes.TranslateX;
         rGrip.ManipulationDelta += (_, e) =>
         {
-            double cur = double.IsNaN(box.Width) ? t.Width : box.Width;
+            double cur = double.IsNaN(box.Width) ? box.ActualWidth : box.Width;
             box.Width = Math.Max(120, cur + e.Delta.Translation.X);
         };
         rGrip.ManipulationCompleted += (_, _) =>
         {
             t.Width = box.Width;
+            t.WidthPinned = true;   // an explicit drag opts out of auto-sizing (#15-batch4)
             ContentChanged?.Invoke();
         };
         container.Children.Add(rGrip);
@@ -5205,5 +5262,24 @@ public sealed class InkSurface : UserControl
             _inkCache = null;
             return false;   // fall back to the per-stroke path
         }
+    }
+
+    // Paints a freshly committed stroke straight into the static-ink cache so
+    // big pages never rebuild the whole cache per stroke (#16-batch4).
+    private bool _inkCacheAppendFresh;
+    private bool _inkCacheTextOnly;
+    private void AppendStrokeToInkCache(PenStroke s)
+    {
+        if (_inkCache == null || _inkCacheDirty || _page == null) return;
+        if (_page.Strokes.Count < InkCacheThreshold) return;
+        try
+        {
+            using var cds = _inkCache.CreateDrawingSession();
+            cds.Transform = Matrix3x2.CreateTranslation((float)-_inkCacheWorld.X, (float)-_inkCacheWorld.Y) *
+                            Matrix3x2.CreateScale(_inkCacheScale);
+            DrawStroke(cds, _canvas, s, Vector2.Zero, null);
+            _inkCacheAppendFresh = true;
+        }
+        catch { _inkCacheDirty = true; }
     }
 }
