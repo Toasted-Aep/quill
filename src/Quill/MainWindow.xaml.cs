@@ -7078,11 +7078,12 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
     private void PasteAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
-        bool hasBitmap = false;
+        bool hasBitmap = false, hasText = false;
         try
         {
-            hasBitmap = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
-                .Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap);
+            var content = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+            hasBitmap = content.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap);
+            hasText = content.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text);
         }
         catch { }
 
@@ -7093,7 +7094,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             _ = PasteImageAsync();
             return;
         }
-        if (TextBoxFocused)
+        // A blinking Text caret is not yet a focused box, but paste must still
+        // land there — materialise it and paste into it (#5, VERY IMPORTANT).
+        if (TextBoxFocused || (Surface.HasPendingText && hasText))
         {
             args.Handled = true;
             _ = HandleTextPasteAsync(args);
