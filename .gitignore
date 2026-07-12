@@ -7,3 +7,6 @@ graphify-out/
 *.user
 *.lnk
 decomp_*.cs
+
+# Visual Studio project-upgrade log
+UpgradeLog*.htm
