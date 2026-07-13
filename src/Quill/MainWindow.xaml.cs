@@ -115,6 +115,7 @@ public sealed partial class MainWindow : Window
         catch { }
 
         _library = LibraryStore.LoadOrJoin();   // joins the load App started (#roadmap)
+        SyncLog.Initialize(_library);           // op-log shadow: only post-launch edits log (#collab)
         SeedPens();
         Surface.PendingFontFamily = _library.DefaultFont;
         Surface.PendingFontSize = (float)_library.DefaultFontSize;
@@ -322,6 +323,12 @@ public sealed partial class MainWindow : Window
 
         // touch mode needs the visual tree, so apply it after first layout (#36)
         RootGrid.Loaded += (_, _) => { if (_library.TouchMode) ApplyTouchMode(true); UpdateScreenMetrics(); };
+
+        // Stage 1 collaboration (#collab): every 20s, apply ops other devices
+        // appended to their oplog files in the (synced) library folder.
+        _syncTimer.Interval = TimeSpan.FromSeconds(20);
+        _syncTimer.Tick += (_, _) => RunForeignMerge();
+        _syncTimer.Start();
         // keep the real monitor width current so a NEW text box caps at half the
         // physical screen; existing boxes snapshot their own cap at creation and
         // are left untouched by a later resize (#15)
@@ -5745,6 +5752,28 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             ShowStatus($"Exported {vpages.Count} vector page{(vpages.Count == 1 ? "" : "s")} to {file.Name} — opens in any browser.");
         }
         catch { ShowStatus("Could not save the HTML. Check the location and try again."); }
+    }
+
+    // Stage 1 collaboration (#collab): fold other devices' ops into the local
+    // library; refresh whatever the merge touched.
+    private readonly DispatcherTimer _syncTimer = new();
+    private void RunForeignMerge()
+    {
+        try
+        {
+            var changed = SyncLog.MergeForeign(_library);
+            if (changed.Count == 0) return;
+            BuildTree();
+            if (GalleryPanel.Visibility == Visibility.Visible) BuildGallery();
+            if (_curPage != null && changed.Contains(_curPage.Id))
+            {
+                Surface.FlushTexts();
+                Surface.LoadPage(_curPage);   // re-render the merged content
+            }
+            ScheduleSave();                    // persist the merged state
+            ShowStatus("Synced changes from another device.");
+        }
+        catch { }
     }
 
     // Pushes the real monitor width (in DIPs, DPI-corrected) to the surface so
