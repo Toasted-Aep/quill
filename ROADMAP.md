@@ -59,6 +59,12 @@
   association; auto-update template via GitHub Releases (docs/PACKAGING.md).
 - Library deserialisation overlaps window construction (async load, phase 1).
 - Offline LaTeX prompt has a live preview; PDF import cap raised to 2000 pages.
+- Collaboration Stages 0+1: per-device operation log (element-level
+  upsert/delete ops appended on every save) and synced-folder sharing — point
+  two devices' storage at one OneDrive/Dropbox folder and edits flow both ways.
+- Text bubbles genuinely grow as you type (measured per keystroke at the
+  typing font size), capped at half the physical screen / the window edge,
+  with per-box snapshotted ceilings; old notes never re-wrap.
 - Equations invert at draw when their ink matches the page brightness; the
   static-ink cache re-renders crisply when zoom settles; table rotation now
   carries its cell text.
@@ -73,10 +79,11 @@
 
 ## Next release — medium
 
-- Operation log (Stage 0 of collaboration): make every `IPageAction`
-  serializable to a tagged JSON op and persist a rolling `oplog.jsonl` — crash
-  recovery and change history now, sync groundwork later. Comments already ship
-  and will ride the op-log for free (see docs/COLLABORATION-PLAN.md).
+- Collaboration Stage 2 (live relay server) — Stages 0 and 1 shipped: every
+  save appends element-level ops to a per-device oplog next to the library,
+  and ops from other devices' logs (arriving via any synced folder) merge in
+  on a 20s timer, element-level last-writer-wins. Verified with a simulated
+  second device. Oplog compaction (files grow forever) is a known follow-up.
 - Gallery card → page connected animation (needs a XAML placeholder target
   over the Win2D canvas).
 - Toolbar hide/show customisation (choose which tool buttons appear).

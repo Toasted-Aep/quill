@@ -217,6 +217,8 @@ public static class LibraryStore
         string json;
         try { json = JsonSerializer.Serialize(lib, Opts); }
         catch { return; } // unserializable model: never crash the app on save
+        // Stage 0 op log: diff against the shadow and append change ops (#collab)
+        try { SyncLog.OnSaved(lib); } catch { }
         _lastWrite = Task.Run(() => WriteAll(json));
     }
 
