@@ -4098,7 +4098,10 @@ public sealed class InkSurface : UserControl
             box.Document.GetText(Microsoft.UI.Text.TextGetOptions.None, out string txt);
             txt = txt.TrimEnd('\r', '\n');
             float fs;
-            try { fs = box.Document.Selection.CharacterFormat.Size; } catch { fs = (float)box.FontSize; }
+            // CharacterFormat.Size is in POINTS; Win2D measures in PIXELS —
+            // feeding points as pixels made the box run ~25% behind the real
+            // text width, wrapping a beat before it grew (#15 fix).
+            try { fs = box.Document.Selection.CharacterFormat.Size * 96f / 72f; } catch { fs = (float)box.FontSize; }
             if (fs <= 1 || float.IsNaN(fs)) fs = (float)box.FontSize;
             double natural = 0;
             if (txt.Length > 0)
@@ -4107,7 +4110,9 @@ public sealed class InkSurface : UserControl
                 using var tl = new CanvasTextLayout(CanvasDevice.GetSharedDevice(), txt, fmt, float.MaxValue, float.MaxValue);
                 natural = tl.LayoutBounds.Width;
             }
-            double w = Math.Clamp(natural + box.Padding.Left + box.Padding.Right + 18, 260, Math.Max(260, t.MaxWidth));
+            // one-character lookahead so the box widens BEFORE the next
+            // keystroke would wrap, not after
+            double w = Math.Clamp(natural + fs * 0.75 + box.Padding.Left + box.Padding.Right + 18, 260, Math.Max(260, t.MaxWidth));
             if (double.IsNaN(box.Width) || Math.Abs(box.Width - w) > 1.5) box.Width = w;
         }
         catch { }
