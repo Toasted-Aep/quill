@@ -2507,6 +2507,11 @@ public sealed class InkSurface : UserControl
     private void DrawRegion(CanvasDrawingSession ds, Rect region)
     {
         var sender = _canvas;   // resource creator for the draw helpers below
+        // CVC hands each tile a session PRE-TRANSLATED so control-space
+        // coordinates land inside the tile. Overwriting that transform painted
+        // every non-origin tile displaced and clipped — strokes drew in the
+        // wrong place and looked invisible (#inkfix2). Compose, don't clobber.
+        var regionT = ds.Transform;
         if (_page == null)
         {
             ds.Clear(Colors.Transparent);
@@ -2517,7 +2522,8 @@ public sealed class InkSurface : UserControl
         ds.Clear(bg);
 
         ds.Transform = Matrix3x2.CreateScale(ViewZoom) *
-                       Matrix3x2.CreateTranslation(ViewOffset.X, ViewOffset.Y);
+                       Matrix3x2.CreateTranslation(ViewOffset.X, ViewOffset.Y) *
+                       regionT;
 
         DrawGrid(ds, bg);
         DrawPageTitle(ds, bg);
