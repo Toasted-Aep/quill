@@ -2561,7 +2561,20 @@ public sealed class InkSurface : UserControl
                 if (blur > 0f) DrawRegionBlurred(sender, ds, region, blur);
                 else DrawRegion(ds, region);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // A silently dropped region shows BLANK content — the "invisible
+                // ink" failure class. Log it and schedule a full repaint so the
+                // canvas self-heals instead of staying wrong (#inkfix3).
+                try
+                {
+                    System.IO.File.AppendAllText(
+                        System.IO.Path.Combine(LibraryStore.Dir, "crash.log"),
+                        $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] render region failed: {ex.Message}" + Environment.NewLine);
+                }
+                catch { }
+                try { DispatcherQueue.TryEnqueue(() => _canvas.Invalidate()); } catch { }
+            }
         }
     }
 

@@ -416,7 +416,7 @@ public sealed partial class MainWindow : Window
             // (Pad spread painted the whole element with one end colour — the
             // white fog over the gallery, and the washed "disabled-looking"
             // chrome). Stops stay in [0,1], so nothing can wash out (#4).
-            double band = (_glowT / 5.0) % 1.0;
+            double band = (_glowT / 6.5) % 1.0;   // slower, statelier lap
             var seen = new HashSet<LinearGradientBrush>();
             foreach (var b in GlowBrushes()) { seen.Add(b); CirculateStops(b, band); }
             // hover glows come and go — drop snapshots of brushes that left the
@@ -462,9 +462,9 @@ public sealed partial class MainWindow : Window
             var orig = SampleStops(snap, off);
             double d = Math.Abs(off - band);
             d = Math.Min(d, 1 - d);                       // circular distance -> ONE peak
-            double peak = Math.Max(0, 1 - d / 0.18);
-            peak = peak * peak * (3 - 2 * peak);          // smoothstep shoulders
-            byte a = (byte)Math.Clamp(orig.A * (0.35 + 0.65 * peak), 0, 255);
+            double peak = Math.Max(0, 1 - d / 0.13);      // tighter, more luminous band
+            peak = peak * peak * peak * (peak * (peak * 6 - 15) + 10);   // smootherstep: soft shoulders, no hard edge
+            byte a = (byte)Math.Clamp(orig.A * (0.5 + 0.5 * peak), 0, 255);   // calmer resting dim
             b.GradientStops[i].Color = Color.FromArgb(a, orig.R, orig.G, orig.B);
         }
     }
