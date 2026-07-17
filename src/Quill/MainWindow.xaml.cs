@@ -412,7 +412,7 @@ public sealed partial class MainWindow : Window
         else if (mode == "Comet")
         {
             opacity = 0.95;
-            double cband = (_glowT / 4.0) % 1.0;
+            double cband = (_glowT / 3.5) % 1.0;   // one reveal lap, then black and again
             var cseen = new HashSet<LinearGradientBrush>();
             foreach (var b in GlowBrushes()) { cseen.Add(b); CometStops(b, cband); }
             foreach (var dead in _circSnapshot.Keys.Where(k => !cseen.Contains(k)).ToList())
@@ -487,7 +487,16 @@ public sealed partial class MainWindow : Window
     // The reference-photo comet (#glow): white-hot tight head, a tail that
     // wraps more than half the ring, near-black far side. Same static-stops +
     // sliding-axis mechanism as Circulate (stop mutations don't re-render).
-    private static void CometStops(LinearGradientBrush b, double band)
+    // Cyclic comet (#glow, user spec): each lap the ring starts BLACK; the
+    // comet emerges from the origin and lights the path as it travels — the
+    // arc ahead of the head stays black until the head arrives; on lap
+    // completion the ring snaps back to black and the cycle repeats.
+    // Mechanism: static stops (oldest-tail 3% at offset 0 rising to the
+    // white-hot head at 0.93, then hard-to-zero) and the animation lives
+    // entirely in the brush's EndPoint (Pad past the end paints the
+    // not-yet-visited arc black) — stop mutations don't re-render in WinUI 3,
+    // brush-level properties do.
+    private static void CometStops(LinearGradientBrush b, double progress)
     {
         const int N = 28;
         if (!_circSnapshot.ContainsKey(b))
@@ -500,17 +509,17 @@ public sealed partial class MainWindow : Window
             {
                 double off = i / (double)(N - 1);
                 var orig = SampleStops(snap, off);
-                double behindHead = 1 - off;
-                double intensity = behindHead < 0.58
-                    ? Math.Pow(1 - behindHead / 0.58, 3.0)   // longer, softer-fading tail
-                    : 0;
-                byte a = (byte)Math.Clamp(orig.A * (0.05 + 1.35 * intensity), 0, 255);
+                double a01 = off <= 0.93
+                    ? 0.03 + 1.30 * Math.Pow(off / 0.93, 2.6)   // tail rising into the head
+                    : 0;                                          // beyond the head: black
+                byte a = (byte)Math.Clamp(orig.A * a01, 0, 255);
                 b.GradientStops.Add(new GradientStop { Offset = off, Color = Color.FromArgb(a, orig.R, orig.G, orig.B) });
             }
-            b.SpreadMethod = GradientSpreadMethod.Repeat;
+            b.SpreadMethod = GradientSpreadMethod.Pad;   // Pad's end colour IS the black ahead
         }
-        b.StartPoint = new Point(band, band);
-        b.EndPoint = new Point(band + 1, band + 1);
+        double pr = Math.Max(progress, 0.02);
+        b.StartPoint = new Point(0, 0);       // the comet is born at the top-left rim
+        b.EndPoint = new Point(pr, pr);       // and sweeps the ring as the lap progresses
     }
 
     private static void RestoreCirculateStops()
