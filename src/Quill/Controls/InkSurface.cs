@@ -3,6 +3,7 @@ using Quill.Helpers;
 using Quill.Models;
 using Quill.Services;
 using Microsoft.Graphics.Canvas;
+using Microsoft.Graphics.Canvas.Effects;
 using Microsoft.Graphics.Canvas.Geometry;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.Graphics.Canvas.UI.Xaml;
@@ -127,6 +128,18 @@ public sealed class InkSurface : UserControl
     // discarded as lift-bounce.
     public bool PenRepairBridge { get; set; }   // resume a stroke after a contact drop-out
     public bool PenRepairDots { get; set; }     // drop the lift-bounce dot at a stroke's end
+
+    // Motion blur (#A5): while the view pans/zooms, frames draw through a
+    // Gaussian blur proportional to recent view velocity, decaying to sharp
+    // within ~150ms of the motion stopping. Never active mid pen gesture.
+    public bool MotionBlur { get; set; }
+    private const float BlurVelocityMin = 350f;   // px/s — slower motion stays sharp
+    private readonly DispatcherTimer _blurDecayTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
+    private float _blurVelocity;                  // low-passed view speed, px/s
+    private Vector2 _blurPrevOffset;
+    private float _blurPrevZoom = 1f;
+    private long _blurPrevMs;
+    private CanvasRenderTarget? _blurScratch;     // intermediate target, alive only while blurred
 
     // the app accent, pushed from MainWindow so selection chrome, handles and
     // table adorners match the rest of the app instead of a hardcoded orange
@@ -280,6 +293,21 @@ public sealed class InkSurface : UserControl
         _replayTimer.Tick += ReplayTick;
         _holdTimer.Tick += HoldTick;
         _caretTimer.Tick += (_, _) => { _caretOn = !_caretOn; _canvas.Invalidate(); };
+
+        // Motion blur (#A5): after the view stops moving, halve the tracked
+        // velocity each tick (sharp within ~150ms) and repaint until it lands.
+        _blurDecayTimer.Tick += (_, _) =>
+        {
+            _blurVelocity *= 0.5f;
+            if (_blurVelocity <= BlurVelocityMin * 0.5f || !MotionBlur)
+            {
+                _blurVelocity = 0f;
+                _blurDecayTimer.Stop();
+                _blurScratch?.Dispose();
+                _blurScratch = null;
+            }
+            _canvas.Invalidate();
+        };
 
         // Receive the first typed character so a pending caret can spawn a box.
         CharacterReceived += OnCharacterReceived;
@@ -437,6 +465,7 @@ public sealed class InkSurface : UserControl
         _textTransform.ScaleY = ViewZoom;
         _textTransform.TranslateX = ViewOffset.X;
         _textTransform.TranslateY = ViewOffset.Y;
+        TrackViewVelocity();
         _canvas.Invalidate();
         ViewChanged?.Invoke();
     }
@@ -2523,15 +2552,75 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     private void OnRegionsInvalidated(CanvasVirtualControl sender, CanvasRegionsInvalidatedEventArgs args)
     {
+        float blur = CurrentBlurRadius();
         foreach (var region in args.InvalidatedRegions)
         {
             try
             {
                 using var ds = sender.CreateDrawingSession(region);
-                DrawRegion(ds, region);
+                if (blur > 0f) DrawRegionBlurred(sender, ds, region, blur);
+                else DrawRegion(ds, region);
             }
             catch { }
         }
+    }
+
+    // ---- motion blur (#A5) ------------------------------------------------
+
+    // Feed one view-change sample into the velocity estimate. Large jumps
+    // (page switch, fit-to-view, restore) are teleports, not motion — reset
+    // rather than flash a blur.
+    private void TrackViewVelocity()
+    {
+        if (!MotionBlur) return;
+        long now = Environment.TickCount64;
+        float dist = (ViewOffset - _blurPrevOffset).Length() +
+                     MathF.Abs(ViewZoom - _blurPrevZoom) * 800f;   // zoom as edge travel
+        float dt = Math.Clamp(now - _blurPrevMs, 1, 100) / 1000f;
+        _blurPrevOffset = ViewOffset;
+        _blurPrevZoom = ViewZoom;
+        _blurPrevMs = now;
+        if (dist > 400f) { _blurVelocity = 0f; return; }
+        _blurVelocity = _blurVelocity * 0.6f + (dist / dt) * 0.4f; // low-pass the spikes
+        if (_blurVelocity > BlurVelocityMin) _blurDecayTimer.Start();
+    }
+
+    private float CurrentBlurRadius()
+    {
+        // never while a pen/tool gesture is live — the wet stroke must stay crisp
+        if (!MotionBlur || _gestureTool != null || _wet != null || _blurVelocity <= BlurVelocityMin)
+            return 0f;
+        return MathF.Min((_blurVelocity - BlurVelocityMin) / 900f, 5f);
+    }
+
+    // Renders the region into an intermediate target, then composites it through
+    // a GaussianBlurEffect. Only runs while blurred, so the steady-state draw
+    // path pays nothing.
+    private void DrawRegionBlurred(CanvasVirtualControl sender, CanvasDrawingSession ds, Rect region, float radius)
+    {
+        float w = (float)region.Width, h = (float)region.Height;
+        if (w < 1f || h < 1f) { DrawRegion(ds, region); return; }
+        if (_blurScratch == null || _blurScratch.Dpi != sender.Dpi ||
+            Math.Abs(_blurScratch.Size.Width - w) > 0.5 || Math.Abs(_blurScratch.Size.Height - h) > 0.5)
+        {
+            _blurScratch?.Dispose();
+            _blurScratch = new CanvasRenderTarget(sender, w, h, sender.Dpi);
+        }
+        using (var rds = _blurScratch.CreateDrawingSession())
+        {
+            // mimic the CVC's pre-translated tile session so DrawRegion composes
+            // its world transform exactly as in the direct path
+            rds.Transform = Matrix3x2.CreateTranslation(-(float)region.X, -(float)region.Y);
+            DrawRegion(rds, region);
+        }
+        using var blur = new GaussianBlurEffect
+        {
+            Source = _blurScratch,
+            BlurAmount = radius,
+            BorderMode = EffectBorderMode.Hard,   // no transparent halo at the tile edges
+            Optimization = EffectOptimization.Speed,
+        };
+        ds.DrawImage(blur, (float)region.X, (float)region.Y);
     }
 
     private void DrawRegion(CanvasDrawingSession ds, Rect region)
