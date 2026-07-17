@@ -135,6 +135,7 @@ public sealed partial class MainWindow : Window
         BuildCalcButtons();
         FillConvUnits();
         RefreshCalcHistory();   // history persists with the library (#47)
+        RestoreCalcVars();      // user variables persist too (#A7)
 
         Surface.TitleClicked += async () => await RenamePageFromTitleAsync();
         Surface.DateClicked += async () => await EditPageDateAsync();
@@ -167,6 +168,7 @@ public sealed partial class MainWindow : Window
         if (_library.PenRepair) { _library.PenRepairDots = true; _library.PenRepairBridge = true; _library.PenRepair = false; }
         Surface.PenRepairDots = _library.PenRepairDots;
         Surface.PenRepairBridge = _library.PenRepairBridge;
+        Surface.MotionBlur = _library.MotionBlur;
         Surface.ShowCommentsAlways = _library.ShowCommentPins;
         // the font list used to say "Amsterdam"; the installed family is
         // "Amsterdam Handwriting" — migrate saved settings (#9-batch2)
@@ -3570,6 +3572,17 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(penFixBridge);
         panel.Children.Add(new TextBlock { Text = "Continues the same stroke when the pen momentarily loses contact mid-line.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- motion blur (#A5) ----
+        var motionBlur = new ToggleSwitch { Header = "Motion blur", IsOn = _library.MotionBlur };
+        motionBlur.Toggled += (_, _) =>
+        {
+            _library.MotionBlur = motionBlur.IsOn;
+            Surface.MotionBlur = motionBlur.IsOn;
+            ScheduleSave();
+        };
+        panel.Children.Add(motionBlur);
+        panel.Children.Add(new TextBlock { Text = "Softens the page while it pans or zooms fast, sharpening the instant it stops.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- comment pins outside comment mode (#A3) ----
         var pinsToggle = new ToggleSwitch { Header = "Always show comment pins", IsOn = _library.ShowCommentPins };
@@ -7165,6 +7178,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             if (CalcEngine.TryEvaluate(PrepCalcExpr(m.Groups[2].Value), CalcDeg.IsChecked == true, out double vv, out string verr))
             {
                 _calcVars[m.Groups[1].Value] = vv;
+                PersistCalcVars();
                 _calcAns = vv;
                 AddCalcHistory($"{m.Groups[1].Value} = {vv.ToString("G12")}");
                 CalcInput.Text = "";
@@ -7235,6 +7249,28 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
     }
 
+    // Variables survive restarts via the library (#A7). Values round-trip in
+    // invariant culture — same "0,125" pitfall as CalcEvaluate's result field.
+    private void PersistCalcVars()
+    {
+        _library.CalcVars = _calcVars
+            .Select(kv => $"{kv.Key}={kv.Value.ToString("G12", System.Globalization.CultureInfo.InvariantCulture)}")
+            .ToList();
+        ScheduleSave();
+    }
+
+    private void RestoreCalcVars()
+    {
+        foreach (var entry in _library.CalcVars)
+        {
+            var parts = entry.Split('=', 2);
+            if (parts.Length == 2 && double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out double v))
+                _calcVars[parts[0]] = v;
+        }
+        if (_calcVars.Count > 0) RefreshCalcVars();
+    }
+
     private void RefreshCalcVars()
     {
         CalcVarsPanel.Children.Clear();
@@ -7250,7 +7286,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             };
             var fly = new MenuFlyout();
             var rm = new MenuFlyoutItem { Text = "Remove " + name };
-            rm.Click += (_, _) => { _calcVars.Remove(name); RefreshCalcVars(); };
+            rm.Click += (_, _) => { _calcVars.Remove(name); PersistCalcVars(); RefreshCalcVars(); };
             fly.Items.Add(rm);
             chip.ContextFlyout = fly;
             CalcVarsPanel.Children.Add(chip);

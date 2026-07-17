@@ -281,6 +281,8 @@ public class Library
     public List<string> CalcHistory { get; set; } = new();
     // User-defined calculator constants, "name=value" (#18-batch3).
     public List<string> CalcConstants { get; set; } = new();
+    // Calculator session variables ("name=value"), restored across restarts (#A7).
+    public List<string> CalcVars { get; set; } = new();
     // Liquid-glass panel transparency, 0 (solid) … 1 (fully liquid) (#48).
     public double Liquidness { get; set; } = 0.35;
     // Recently used pen/highlight colours (newest first, max 16).
@@ -302,6 +304,8 @@ public class Library
     public bool PenRepair { get; set; }
     public bool PenRepairDots { get; set; }
     public bool PenRepairBridge { get; set; }
+    // Motion blur (#A5): soften the page while it pans/zooms, sharpening as it stops.
+    public bool MotionBlur { get; set; }
     // show comment pins even when the Comment tool is not active (#A3)
     public bool ShowCommentPins { get; set; }
     // AI assistant (#25): provider + model + local endpoint. API keys are kept

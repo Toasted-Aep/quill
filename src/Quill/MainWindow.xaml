@@ -71,7 +71,8 @@
                     </ToggleButton>
                     <ToggleButton x:Name="ToolSpace" Tag="FreeSpace" Click="ToolButton_Click" ToolTipService.ToolTip="Insert free space (drag down to push content apart)">
                         <!-- approved icon set: two content lines + double arrow -->
-                        <PathIcon Data="M3 4.4 H21 V6 H3 Z M3 18 H21 V19.6 H3 Z M12 7.2 15 10.6 13 10.6 13 13.4 15 13.4 12 16.8 9 13.4 11 13.4 11 10.6 9 10.6 Z"/>
+                        <!-- explicit 24x24 box: PathIcon sizes to geometry extent, which would pull the ink off-centre -->
+                        <PathIcon Width="24" Height="24" Data="M3 4.4 H21 V6 H3 Z M3 18 H21 V19.6 H3 Z M12 7.2 15 10.6 13 10.6 13 13.4 15 13.4 12 16.8 9 13.4 11 13.4 11 10.6 9 10.6 Z"/>
                     </ToggleButton>
                     <ToggleButton x:Name="TouchDrawToggle" Click="TouchDraw_Click"
                                   ToolTipService.ToolTip="Touch draw: draw with finger or mouse (otherwise touch pans)">
@@ -84,7 +85,8 @@
                     </ToggleButton>
                     <Button x:Name="ShapeBtn" ToolTipService.ToolTip="Insert a perfect shape (or draw one and hold the pen still!)">
                         <!-- approved icon set: outlined square + triangle -->
-                        <PathIcon Data="M3.6 6 H14 V16.4 H3.6 Z M5.2 7.6 V14.8 H12.4 V7.6 Z M15 10.2 21.4 20.4 8.6 20.4 Z M11.5 18.8 H18.5 L15 13.2 Z"/>
+                        <!-- explicit 24x24 box + data recentred (was centre 12.5,13.2) so the ink sits at 12,12 -->
+                        <PathIcon Width="24" Height="24" Data="M3.1 4.8 H13.5 V15.2 H3.1 Z M4.7 6.4 V13.6 H11.9 V6.4 Z M14.5 9 20.9 19.2 8.1 19.2 Z M11 17.6 H18 L14.5 12 Z"/>
                         <Button.Flyout>
                             <MenuFlyout>
                                 <MenuFlyoutItem Text="Straight line" Tag="Line" Click="InsertShape_Click"/>
@@ -672,7 +674,8 @@
                     BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5"
                     ToolTipService.ToolTip="Show the pen panel">
                 <!-- the nib-pen silhouette from the icon set, replacing the emoji (#15-batch3) -->
-                <PathIcon Data="M3.5 12.5 L5 9 L11.5 2.5 L13.5 4.5 L7 11 Z M12.3 1.7 L14.3 3.7 L15 3 A1.4 1.4 0 0 0 13 1 Z"/>
+                <!-- explicit 16x16 box + data recentred (was centre ~9.5,6.5) so the ink sits at 8,8 in the round chip -->
+                <PathIcon Width="16" Height="16" Data="M2.04 13.96 L3.54 10.46 L10.04 3.96 L12.04 5.96 L5.54 12.46 Z M10.84 3.16 L12.84 5.16 L13.54 4.46 A1.4 1.4 0 0 0 11.54 2.46 Z"/>
             </Button>
 
             <!-- Floating calculator -->
