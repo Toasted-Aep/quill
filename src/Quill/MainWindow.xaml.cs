@@ -416,7 +416,7 @@ public sealed partial class MainWindow : Window
             // (Pad spread painted the whole element with one end colour — the
             // white fog over the gallery, and the washed "disabled-looking"
             // chrome). Stops stay in [0,1], so nothing can wash out (#4).
-            double band = (_glowT / 6.5) % 1.0;   // slower, statelier lap
+            double band = (_glowT / 4.5) % 1.0;   // brisk enough that the motion clearly reads
             var seen = new HashSet<LinearGradientBrush>();
             foreach (var b in GlowBrushes()) { seen.Add(b); CirculateStops(b, band); }
             // hover glows come and go — drop snapshots of brushes that left the
@@ -441,32 +441,54 @@ public sealed partial class MainWindow : Window
 
     private static void CirculateStops(LinearGradientBrush b, double band)
     {
-        // Modulate each brush's OWN designed alpha profile with one travelling
-        // peak — imposing a flat bright band washed large glassy surfaces into
-        // a white fog. Dim floor 0.35x, peak up to 1.0x of the original (#4).
-        const int N = 12;
+        // WinUI 3 re-renders BRUSH-level property changes (Start/EndPoint,
+        // SpreadMethod) but caches gradient stop mutations — every
+        // stops-animated variant looked frozen. So: build a STATIC comet
+        // gradient once (blazing head at offset 1, tail decaying behind it,
+        // faint far side), then animate by SLIDING THE AXIS each tick with
+        // Repeat wrap. Repeat is (re)assigned per brush, which also prevents
+        // the Pad end-colour wash that fogged late-registered brushes (#4).
+        const int N = 24;
         if (!_circSnapshot.ContainsKey(b))
-            _circSnapshot[b] = b.GradientStops.OrderBy(gs => gs.Offset)
-                                              .Select(gs => (gs.Offset, gs.Color)).ToList();
-        var snap = _circSnapshot[b];
-        if (snap.Count == 0) return;
-        if (b.GradientStops.Count != N)
         {
+            var snap = b.GradientStops.Select(gs => (gs.Offset, gs.Color)).ToList();
+            _circSnapshot[b] = snap;
+            if (snap.Count == 0) return;
             b.GradientStops.Clear();
             for (int i = 0; i < N; i++)
-                b.GradientStops.Add(new GradientStop { Offset = i / (double)(N - 1) });
+            {
+                double off = i / (double)(N - 1);
+                var orig = SampleStops(snap, off);
+                double behindHead = 1 - off;                     // the head lives at offset 1
+                double intensity = behindHead < 0.42
+                    ? Math.Pow(1 - behindHead / 0.42, 2.2)       // long accelerating tail
+                    : 0;                                          // faint far side
+                byte a = (byte)Math.Clamp(orig.A * (0.10 + 1.25 * intensity), 0, 255);
+                b.GradientStops.Add(new GradientStop { Offset = off, Color = Color.FromArgb(a, orig.R, orig.G, orig.B) });
+            }
+            b.SpreadMethod = GradientSpreadMethod.Repeat;
         }
-        for (int i = 0; i < N; i++)
+        // Repeat tiles the comet; the 1 -> 0 wrap forms the crisp leading edge
+        b.StartPoint = new Point(band, band);
+        b.EndPoint = new Point(band + 1, band + 1);
+    }
+
+    private static void RestoreCirculateStops()
+    {
+        foreach (var kv in _circSnapshot)
         {
-            double off = i / (double)(N - 1);
-            var orig = SampleStops(snap, off);
-            double d = Math.Abs(off - band);
-            d = Math.Min(d, 1 - d);                       // circular distance -> ONE peak
-            double peak = Math.Max(0, 1 - d / 0.13);      // tighter, more luminous band
-            peak = peak * peak * peak * (peak * (peak * 6 - 15) + 10);   // smootherstep: soft shoulders, no hard edge
-            byte a = (byte)Math.Clamp(orig.A * (0.5 + 0.5 * peak), 0, 255);   // calmer resting dim
-            b.GradientStops[i].Color = Color.FromArgb(a, orig.R, orig.G, orig.B);
+            try
+            {
+                kv.Key.GradientStops.Clear();
+                foreach (var (o, c) in kv.Value)
+                    kv.Key.GradientStops.Add(new GradientStop { Offset = o, Color = c });
+                kv.Key.SpreadMethod = GradientSpreadMethod.Pad;
+                kv.Key.StartPoint = new Point(0, 0);
+                kv.Key.EndPoint = new Point(1, 1);
+            }
+            catch { }
         }
+        _circSnapshot.Clear();
     }
 
     // Piecewise-linear sample of a brush's snapshotted stops at a given offset.
@@ -486,20 +508,6 @@ public sealed partial class MainWindow : Window
         return snap[^1].C;
     }
 
-    private static void RestoreCirculateStops()
-    {
-        foreach (var kv in _circSnapshot)
-        {
-            try
-            {
-                kv.Key.GradientStops.Clear();
-                foreach (var (o, c) in kv.Value)
-                    kv.Key.GradientStops.Add(new GradientStop { Offset = o, Color = c });
-            }
-            catch { }
-        }
-        _circSnapshot.Clear();
-    }
 
     private static void SetGradientAxes(double sx, double sy, double ex, double ey)
     {

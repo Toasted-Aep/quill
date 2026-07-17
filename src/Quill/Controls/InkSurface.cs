@@ -4105,15 +4105,43 @@ public sealed class InkSurface : UserControl
 
     private bool FocusTextAt(Vector2 pos)
     {
-        foreach (var (_, ui) in _textUi)
+        foreach (var (id, ui) in _textUi)
         {
             double l = Canvas.GetLeft(ui.Container), tp = Canvas.GetTop(ui.Container);
             double w = ui.Container.ActualWidth, h = ui.Container.ActualHeight;
             if (pos.X >= l && pos.X <= l + w && pos.Y >= tp && pos.Y <= tp + h)
             {
-                ui.Box.Focus(FocusState.Programmatic);
+                ui.Box.Focus(FocusState.Pointer);
                 ActiveTextBox = ui.Box;
                 ActiveTextChanged?.Invoke(ui.Box);
+                // caret lands at the TAP, not at position 0 (B4) — matters most
+                // for tall table cells whose empty lower half is now tappable
+                var cellT = _page?.Texts.FirstOrDefault(x => x.Id == id);
+                // (skip rotated tables: the world→box-local mapping below assumes no rotation)
+                if (cellT?.TableId is Guid tid &&
+                    Math.Abs(_page?.Shapes.FirstOrDefault(sh => sh.Id == tid)?.Rotation ?? 0) < 0.01)
+                {
+                    var box = ui.Box;
+                    // box-local coordinates: the container sits at (l, tp) in the
+                    // text layer (world space) and the cell grip has zero height
+                    var local = new Point(pos.X - l, pos.Y - tp);
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        try
+                        {
+                            box.Document.Selection.SetPoint(local, PointOptions.ClientCoordinates, false);
+                        }
+                        catch
+                        {
+                            try
+                            {
+                                var rng = box.Document.GetRangeFromPoint(local, PointOptions.ClientCoordinates);
+                                box.Document.Selection.SetRange(rng.StartPosition, rng.StartPosition);
+                            }
+                            catch { }
+                        }
+                    });
+                }
                 return true;
             }
         }
@@ -4230,36 +4258,203 @@ public sealed class InkSurface : UserControl
         return null;
     }
 
-    // Measures the bubble's text (at its typing font size, so bigger characters
-    // widen it faster) and sets the width explicitly: starts at the familiar
-    // width, grows with content, hard-capped at the box's snapshotted ceiling
-    // (#15). Grip-dragged (pinned) boxes and table cells never come through here.
-    private void AutoGrowBubble(TextElement t, RichEditBox box)
+    // Per-bubble width-growth scratch state: cached max-run font size (C1),
+    // keystroke counter for cache refresh, and the shrink-debounce timer (C3).
+    // Lives in the BuildTextUi closure alongside the box it sizes.
+    private sealed class BubbleSizeState
     {
-        if (t.WidthPinned) return;
+        public float MaxRunPx;                 // cached max run font size, PIXELS
+        public int Keystrokes;                 // keystrokes since last cache refresh
+        public int LastLen = -1;               // doc length at the previous TextChanged
+        public Microsoft.UI.Dispatching.DispatcherQueueTimer? ShrinkTimer;
+        public double PendingShrinkW = -1;     // width the debounced shrink will apply
+    }
+
+    // Sizes a free bubble to its content: width phase (auto-width boxes only,
+    // #15 contract) then height phase (ALL free bubbles, including pinned and
+    // legacy fixed-width boxes). Table cells never come through here — their
+    // rows grow instead (AutoGrowCellRow).
+    private void AutoSizeBubble(TextElement t, RichEditBox box, BubbleSizeState st)
+    {
+        if (t.TableId != null) return;   // cells: rows grow, boxes don't (spec D)
+        if (!t.WidthPinned && t.AutoWidth) AutoSizeBubbleWidth(t, box, st);
+        AutoSizeBubbleHeight(t, box);
+        // persist the derived width so selection bounds / export see the real
+        // size, not the stale construction default (no undo push — derived).
+        if (!double.IsNaN(box.Width) && box.Width > 0) t.Width = box.Width;
+    }
+
+    // Width phase: measures each LINE at the document's max run size and sets
+    // the width explicitly — grow immediately, shrink debounced 400 ms (C3),
+    // hard-capped at the box's snapshotted ceiling (#15).
+    private void AutoSizeBubbleWidth(TextElement t, RichEditBox box, BubbleSizeState st)
+    {
         try
         {
+            // a degenerate saved cap (pre-floor-change notes) starves MinWidth —
+            // re-snapshot it (C4)
+            if (t.MaxWidth > 0 && t.MaxWidth < 200)
+            {
+                t.MaxWidth = ComputeBubbleMaxWidth(t.X);
+                box.MaxWidth = t.MaxWidth;
+            }
             box.Document.GetText(Microsoft.UI.Text.TextGetOptions.None, out string txt);
             txt = txt.TrimEnd('\r', '\n');
-            float fs;
-            // CharacterFormat.Size is in POINTS; Win2D measures in PIXELS —
-            // feeding points as pixels made the box run ~25% behind the real
-            // text width, wrapping a beat before it grew (#15 fix).
-            try { fs = box.Document.Selection.CharacterFormat.Size * 96f / 72f; } catch { fs = (float)box.FontSize; }
-            if (fs <= 1 || float.IsNaN(fs)) fs = (float)box.FontSize;
+            // Max run size, cached (C1): Selection.CharacterFormat.Size is the
+            // caret's font — wrong the moment sizes are mixed. Recompute on
+            // paste/format change (length delta ≠ ±1) or every 10th keystroke.
+            int len = txt.Length;
+            if (st.MaxRunPx <= 0 || st.LastLen < 0 || Math.Abs(len - st.LastLen) != 1 || ++st.Keystrokes >= 10)
+            {
+                st.MaxRunPx = MaxRunFontSizePx(box);
+                st.Keystrokes = 0;
+            }
+            st.LastLen = len;
+            float fs = st.MaxRunPx;
+            // Per-line natural width (C2): a long first line + short second must
+            // let the box shrink back — measure lines separately, take the max.
             double natural = 0;
             if (txt.Length > 0)
             {
                 using var fmt = new CanvasTextFormat { FontSize = fs, FontFamily = box.FontFamily?.Source ?? "Segoe UI" };
-                using var tl = new CanvasTextLayout(CanvasDevice.GetSharedDevice(), txt, fmt, float.MaxValue, float.MaxValue);
-                natural = tl.LayoutBounds.Width;
+                var dev = CanvasDevice.GetSharedDevice();
+                foreach (var line in txt.Split('\r'))
+                {
+                    if (line.Length == 0) continue;
+                    using var tl = new CanvasTextLayout(dev, line, fmt, float.MaxValue, float.MaxValue);
+                    natural = Math.Max(natural, tl.LayoutBounds.Width);
+                }
             }
             // one-character lookahead so the box widens BEFORE the next
-            // keystroke would wrap, not after
-            double w = Math.Clamp(natural + fs * 0.75 + box.Padding.Left + box.Padding.Right + 18, 260, Math.Max(260, t.MaxWidth));
-            if (double.IsNaN(box.Width) || Math.Abs(box.Width - w) > 1.5) box.Width = w;
+            // keystroke would wrap, not after; floor 200 aligns with MinWidth (C4)
+            double needed = Math.Clamp(natural + fs * 0.75 + box.Padding.Left + box.Padding.Right + 18, 200, Math.Max(200, t.MaxWidth));
+            double cur = double.IsNaN(box.Width) ? box.ActualWidth : box.Width;
+            if (double.IsNaN(box.Width) || cur <= 0 || needed > cur - 2)
+            {
+                // grow NOW — wrap must never beat the widen
+                st.PendingShrinkW = -1;
+                st.ShrinkTimer?.Stop();
+                if (double.IsNaN(box.Width) || Math.Abs(cur - needed) > 1.5) box.Width = needed;
+            }
+            else if (needed < cur - 32)
+            {
+                // shrink after the typing pause, not per keystroke (C3)
+                if (st.ShrinkTimer == null)
+                {
+                    var timer = DispatcherQueue.CreateTimer();
+                    timer.Interval = TimeSpan.FromMilliseconds(400);
+                    timer.IsRepeating = false;
+                    timer.Tick += (_, _) =>
+                    {
+                        if (st.PendingShrinkW <= 0) return;
+                        box.Width = st.PendingShrinkW;
+                        st.PendingShrinkW = -1;
+                        AutoSizeBubbleHeight(t, box);   // narrower box may wrap taller
+                        if (!double.IsNaN(box.Width) && box.Width > 0) t.Width = box.Width;
+                    };
+                    st.ShrinkTimer = timer;
+                }
+                st.PendingShrinkW = needed;
+                st.ShrinkTimer.Stop();
+                st.ShrinkTimer.Start();
+            }
+            else
+            {
+                // inside the hysteresis band — cancel any pending shrink
+                st.PendingShrinkW = -1;
+                st.ShrinkTimer?.Stop();
+            }
         }
         catch { }
+    }
+
+    // Height phase (A1): the wrapped content height comes from the RichEdit
+    // document itself — mixed fonts/sizes make a single-format Win2D
+    // measurement wrong vertically. Explicit height means the disabled inner
+    // ScrollViewer can never clip or scroll; content is always fully visible.
+    private static void AutoSizeBubbleHeight(TextElement t, RichEditBox box)
+    {
+        try
+        {
+            box.Document.GetText(Microsoft.UI.Text.TextGetOptions.None, out string plain);
+            if (string.IsNullOrEmpty(plain.TrimEnd('\r', '\n')))
+            {
+                box.ClearValue(FrameworkElement.HeightProperty);   // empty: MinHeight rules
+                return;
+            }
+            double contentH = MeasureContentHeight(box);
+            if (contentH <= 0) return;   // measurement failed — never clip by guessing
+            float fs;
+            try { fs = box.Document.Selection.CharacterFormat.Size * 96f / 72f; } catch { fs = (float)box.FontSize; }
+            if (fs <= 1 || float.IsNaN(fs)) fs = (float)box.FontSize;
+            // descender/swash headroom — same motive as the 1.25 line-spacing fix (#17-batch3)
+            double h = Math.Max(40, contentH + box.Padding.Top + box.Padding.Bottom + fs * 0.35);
+            if (double.IsNaN(box.Height) || Math.Abs(box.Height - h) > 1.5) box.Height = h;
+        }
+        catch { }
+    }
+
+    // Wrapped content height straight from the RichEdit engine: bottom of the
+    // last char minus top of the first (A1/B1). Falls back to a XAML measure
+    // when GetPoint is unavailable (box not realised yet).
+    private static double MeasureContentHeight(RichEditBox box)
+    {
+        try
+        {
+            var full = box.Document.GetRange(0, int.MaxValue);
+            int end = full.EndPosition;
+            var topR = box.Document.GetRange(0, 0);
+            topR.GetPoint(Microsoft.UI.Text.HorizontalCharacterAlignment.Left,
+                          Microsoft.UI.Text.VerticalCharacterAlignment.Top,
+                          Microsoft.UI.Text.PointOptions.NoHorizontalScroll | Microsoft.UI.Text.PointOptions.AllowOffClient,
+                          out Point pTop);
+            var botR = box.Document.GetRange(end, end);
+            botR.GetPoint(Microsoft.UI.Text.HorizontalCharacterAlignment.Left,
+                          Microsoft.UI.Text.VerticalCharacterAlignment.Bottom,
+                          Microsoft.UI.Text.PointOptions.NoHorizontalScroll | Microsoft.UI.Text.PointOptions.AllowOffClient,
+                          out Point pBot);
+            double h = pBot.Y - pTop.Y;
+            if (h > 0.5 && h < 100000) return h;
+        }
+        catch { }
+        try
+        {
+            double w = !double.IsNaN(box.Width) && box.Width > 0 ? box.Width
+                     : box.ActualWidth > 0 ? box.ActualWidth : 280;
+            box.Measure(new Size(w, double.PositiveInfinity));
+            return Math.Max(0, box.DesiredSize.Height - box.Padding.Top - box.Padding.Bottom);
+        }
+        catch { return 0; }
+    }
+
+    // Largest font size across the document's format runs, in PIXELS (C1).
+    // O(#runs), capped at 64 runs; points→pixels because Win2D measures pixels
+    // while CharacterFormat.Size is points (#15 fix).
+    private static float MaxRunFontSizePx(RichEditBox box)
+    {
+        float maxPt = 0;
+        try
+        {
+            var doc = box.Document;
+            int len = doc.GetRange(0, int.MaxValue).EndPosition;
+            int pos = 0, guard = 0;
+            while (pos < len && guard++ < 64)
+            {
+                var run = doc.GetRange(pos, pos);
+                run.Expand(Microsoft.UI.Text.TextRangeUnit.CharacterFormat);
+                float sz = run.CharacterFormat.Size;
+                if (sz > maxPt && sz < 1000 && !float.IsNaN(sz)) maxPt = sz;
+                if (run.EndPosition <= pos) break;   // no forward progress — bail
+                pos = run.EndPosition;
+            }
+        }
+        catch { }
+        if (maxPt <= 1 || float.IsNaN(maxPt))
+        {
+            try { maxPt = box.Document.Selection.CharacterFormat.Size; } catch { }
+        }
+        if (maxPt <= 1 || float.IsNaN(maxPt)) maxPt = (float)(box.FontSize * 72.0 / 96.0);
+        return maxPt * 96f / 72f;
     }
 
     // Ceiling for an auto-growing text box, in world units (#15): half the real
@@ -4450,6 +4645,96 @@ public sealed class InkSurface : UserControl
         if (moves.Count == 0) { RebuildTextLayer(); return; }
         UndoManager.Push(new RepositionTextsAction(moves), _page);
         RebuildTextLayer();
+    }
+
+    /// <summary>Word model: a cell's stored row height is a MINIMUM — typing
+    /// past it grows the row (never shrinks; row-fit is the divider
+    /// double-tap). Reflows in place so the focused cell keeps focus and
+    /// caret (B1). Undo is coalesced per focus session in BuildTextUi.</summary>
+    private void AutoGrowCellRow(TextElement t, RichEditBox box)
+    {
+        if (_page == null || t.TableId == null) return;
+        var table = _page.Shapes.FirstOrDefault(s => s.Id == t.TableId && s.Kind == ShapeKind.Table);
+        if (table == null) return;
+        try
+        {
+            var rh = TableRowHeights(table);
+            int r0 = Math.Clamp(t.TableRow, 0, rh.Length - 1);
+            int span = Math.Clamp(Math.Max(1, t.CellRowSpan), 1, rh.Length - r0);
+            double sum = 0;
+            for (int i = 0; i < span; i++) sum += rh[r0 + i];
+
+            double contentH = MeasureContentHeight(box);
+            if (contentH <= 0) return;
+            double needed = contentH + box.Padding.Top + box.Padding.Bottom + 4;
+            if (needed <= sum + 0.5) return;   // never auto-shrink while typing
+
+            double deficit = needed - sum;
+            // materialize TRowH so the growth lands on a real per-row list
+            if (table.TRowH == null || table.TRowH.Count != rh.Length) table.TRowH = rh.ToList();
+            table.TRowH[r0 + span - 1] += deficit;   // a row-span merge grows its LAST row
+            table.H += deficit;
+            ReflowTableCellsInPlace(table);
+            _canvas.Invalidate();
+        }
+        catch { }
+    }
+
+    /// <summary>Same geometry as ReflowTableCells but mutates the LIVE UI —
+    /// no undo push, no rebuild — so typing in a cell never loses focus or
+    /// caret when the table reflows (B2). Structural ops (insert/delete row,
+    /// merge/split, drag-resize, LoadPage heal) keep the rebuild variant.</summary>
+    public void ReflowTableCellsInPlace(ShapeElement table)
+    {
+        if (_page == null || table.Kind != ShapeKind.Table) return;
+        var cw = TableColWidths(table);
+        var rh = TableRowHeights(table);
+        double[] px = new double[cw.Length + 1];
+        for (int i = 0; i < cw.Length; i++) px[i + 1] = px[i] + cw[i];
+        double[] py = new double[rh.Length + 1];
+        for (int i = 0; i < rh.Length; i++) py[i + 1] = py[i] + rh[i];
+
+        foreach (var t in _page.Texts)
+        {
+            if (t.TableId != table.Id) continue;
+            int c = Math.Clamp(t.TableCol, 0, cw.Length - 1);
+            int r = Math.Clamp(t.TableRow, 0, rh.Length - 1);
+            int colSpan = Math.Clamp(t.CellColSpan, 1, cw.Length - c);
+            int rowSpan = Math.Clamp(Math.Max(1, t.CellRowSpan), 1, rh.Length - r);
+
+            double widthSum = 0;
+            for (int i = 0; i < colSpan; i++) widthSum += cw[c + i];
+            double heightSum = 0;
+            for (int i = 0; i < rowSpan; i++) heightSum += rh[r + i];
+
+            t.X = table.X + px[c] + 6;
+            t.Y = table.Y + py[r] + 2;
+            t.Width = Math.Max(48, widthSum - 16);
+
+            if (!_textUi.TryGetValue(t.Id, out var ui)) continue;
+            Canvas.SetLeft(ui.Container, t.X);
+            Canvas.SetTop(ui.Container, t.Y);
+            ui.Box.Width = t.Width;
+            ui.Box.MaxHeight = Math.Max(22, heightSum - 4);   // span-aware (B3)
+            ui.Box.MinHeight = Math.Max(20, heightSum - 4);   // hit target fills the row (B3)
+            if (Math.Abs(table.Rotation) > 0.01)
+            {
+                // recompute the ride-along rotation (#tablerot) at the new origin
+                double ang = table.Rotation * Math.PI / 180.0;
+                double tcx = table.X + table.W / 2, tcy = table.Y + table.H / 2;
+                double dxr = t.X - tcx, dyr = t.Y - tcy;
+                double rx = tcx + dxr * Math.Cos(ang) - dyr * Math.Sin(ang);
+                double ry = tcy + dxr * Math.Sin(ang) + dyr * Math.Cos(ang);
+                ui.Container.RenderTransformOrigin = new Point(0, 0);
+                ui.Container.RenderTransform = new CompositeTransform
+                { Rotation = table.Rotation, TranslateX = rx - t.X, TranslateY = ry - t.Y };
+            }
+            else
+            {
+                ui.Container.RenderTransform = null;
+            }
+        }
+        _canvas.Invalidate();
     }
 
     public List<TextElement> GetSelectedTableCells(ShapeElement table)
@@ -5310,7 +5595,11 @@ public sealed class InkSurface : UserControl
             {
                 var rhs = TableRowHeights(cellTable);
                 int rr = Math.Clamp(t.TableRow, 0, rhs.Length - 1);
-                box.MaxHeight = Math.Max(22, rhs[rr] - 4);
+                int rspan = Math.Clamp(Math.Max(1, t.CellRowSpan), 1, rhs.Length - rr);
+                double spanH = 0;
+                for (int i = 0; i < rspan; i++) spanH += rhs[rr + i];
+                box.MaxHeight = Math.Max(22, spanH - 4);   // span-aware: merged cells cap at ALL spanned rows (B3)
+                box.MinHeight = Math.Max(20, spanH - 4);   // empty cell's hit target fills the row (B3)
                 if (Math.Abs(cellTable.Rotation) > 0.01)
                 {
                     // ride the table's rotation (#tablerot): rotate the cell
@@ -5325,13 +5614,38 @@ public sealed class InkSurface : UserControl
                     { Rotation = cellTable.Rotation, TranslateX = rx - t.X, TranslateY = ry - t.Y };
                 }
             }
-            // an overflowing cell may still scroll internally while edited
+            // rows grow with the content, Word-style (B1)
+            box.TextChanged += (_, _) => AutoGrowCellRow(t, box);
+            // Undo: one coalesced TableLayoutAction per focus session, not one
+            // per keystroke (B1). Snapshot on GotFocus, push the delta on
+            // LostFocus — this handler is attached BEFORE any FlushTexts-
+            // triggered rebuild can run in the same LostFocus chain (spec D).
+            List<double>? rowSnap = null;
+            double hSnap = 0;
+            box.GotFocus += (_, _) =>
+            {
+                if (cellTable != null) { rowSnap = TableRowHeights(cellTable).ToList(); hSnap = cellTable.H; }
+            };
+            box.LostFocus += (_, _) =>
+            {
+                if (cellTable == null || rowSnap == null || _page == null) return;
+                var snap = rowSnap;
+                rowSnap = null;
+                var cur = TableRowHeights(cellTable).ToList();
+                bool grew = Math.Abs(cellTable.H - hSnap) > 0.5;
+                if (!grew)
+                    for (int i = 0; i < cur.Count && i < snap.Count; i++)
+                        if (Math.Abs(cur[i] - snap[i]) > 0.5) { grew = true; break; }
+                if (!grew) return;
+                var colW = TableColWidths(cellTable).ToList();
+                UndoManager.Push(new TableLayoutAction(cellTable,
+                    colW, snap, cellTable.W, hSnap,
+                    colW, cur, cellTable.W, cellTable.H), _page, alreadyDone: true);
+            };
+            // an overflowing cell may still scroll internally while edited —
+            // safety net for content that outruns a mid-typing measurement (B3)
             box.GotFocus += (_, _) => ScrollViewer.SetVerticalScrollMode(box, ScrollMode.Enabled);
             box.LostFocus += (_, _) => ScrollViewer.SetVerticalScrollMode(box, ScrollMode.Disabled);
-        }
-        else if (t.WidthPinned)
-        {
-            box.Width = t.Width;   // the user dragged the width grip — keep it
         }
         else
         {
@@ -5341,18 +5655,27 @@ public sealed class InkSurface : UserControl
             // later window resize only affects NEW boxes (#15). RichEditBox
             // does not reliably auto-size horizontally in wrap mode, so the
             // width is measured explicitly from the text on every change.
-            if (t.AutoWidth)
+            // Height auto-sizes for EVERY free bubble — pinned and legacy
+            // fixed-width boxes included (A1); their width phase is skipped
+            // inside AutoSizeBubble.
+            var sizeState = new BubbleSizeState();
+            if (t.WidthPinned)
             {
-                if (t.MaxWidth <= 0) t.MaxWidth = ComputeBubbleMaxWidth(t.X);
+                box.Width = t.Width;   // the user dragged the width grip — keep it
+            }
+            else if (t.AutoWidth)
+            {
+                if (t.MaxWidth <= 0 || t.MaxWidth < 200) t.MaxWidth = ComputeBubbleMaxWidth(t.X);
                 box.MaxWidth = t.MaxWidth;
                 box.MinWidth = Math.Min(t.MaxWidth, 200);
-                AutoGrowBubble(t, box);                   // size to current content
-                box.TextChanged += (_, _) => AutoGrowBubble(t, box);
             }
             else
             {
                 box.Width = t.Width;   // pre-feature boxes never re-wrap (#15)
             }
+            AutoSizeBubble(t, box, sizeState);                     // size to current content
+            box.TextChanged += (_, _) => AutoSizeBubble(t, box, sizeState);
+            box.Loaded += (_, _) => AutoSizeBubble(t, box, sizeState);   // re-measure once real layout exists
         }
 
         // The RichEditBox's inner ScrollViewer grabbed the wheel through direct
@@ -5432,7 +5755,11 @@ public sealed class InkSurface : UserControl
                     ActiveTextBox = null;
                     ActiveTextChanged?.Invoke(null);
                 }
-                RebuildTextLayer();
+                if (ReferenceEquals(LastTextBox, box)) LastTextBox = null;
+                // targeted teardown (A2): a full RebuildTextLayer here steals
+                // focus from the box the user just tapped into
+                _textLayer.Children.Remove(container);
+                _textUi.Remove(t.Id);
                 ContentChanged?.Invoke();
             }
         };
@@ -5484,6 +5811,8 @@ public sealed class InkSurface : UserControl
         {
             double cur = double.IsNaN(box.Width) ? box.ActualWidth : box.Width;
             box.Width = Math.Max(120, cur + e.Delta.Translation.X);
+            // wrap changes must be visible DURING the drag (spec D)
+            if (t.TableId == null) AutoSizeBubbleHeight(t, box);
         };
         rGrip.ManipulationCompleted += (_, _) =>
         {
@@ -5675,6 +6004,55 @@ public sealed class InkSurface : UserControl
                     double newW = shape.W + diff;
 
                     UndoManager.Push(new TableLayoutAction(shape, oldColW, rowH, shape.W, shape.H, colW, rowH, newW, shape.H), _page);
+                    ReflowTableCells(shape);
+                    _canvas.Invalidate();
+                    ContentChanged?.Invoke();
+                    e.Handled = true;
+                    return;
+                }
+                if (row > 0)
+                {
+                    // row-fit, mirroring the column-fit above (B1): shrink/grow
+                    // row row-1 to the max content height of its cells
+                    int targetRow = row - 1;
+                    double maxCellH = 0;
+                    foreach (var text in _page.Texts)
+                    {
+                        if (text.TableId != shape.Id) continue;
+                        if (targetRow < text.TableRow || targetRow >= text.TableRow + Math.Max(1, text.CellRowSpan)) continue;
+                        double cellH = 0;
+                        if (_textUi.TryGetValue(text.Id, out var ui))
+                        {
+                            double contentH = MeasureContentHeight(ui.Box);
+                            if (contentH > 0) cellH = contentH + ui.Box.Padding.Top + ui.Box.Padding.Bottom + 4;
+                        }
+                        else
+                        {
+                            string txt = StripRtf(text.Rtf);
+                            if (!string.IsNullOrEmpty(txt))
+                            {
+                                using var layout = new CanvasTextLayout(_canvas, txt,
+                                    new CanvasTextFormat { FontSize = 16f },
+                                    (float)Math.Max(24, text.Width), 10000);
+                                cellH = layout.LayoutBounds.Height + 22;
+                            }
+                        }
+                        // a row-span-merged cell asks this row only for its share
+                        int spanR = Math.Max(1, text.CellRowSpan);
+                        maxCellH = Math.Max(maxCellH, cellH / spanR);
+                    }
+
+                    double newRowH = Math.Clamp(maxCellH, 24, 800);
+                    var colW2 = TableColWidths(shape).ToList();
+                    var rowH2 = TableRowHeights(shape).ToList();
+                    var oldRowH = rowH2.ToList();
+
+                    double diff = newRowH - rowH2[targetRow];
+                    if (Math.Abs(diff) < 0.5) { e.Handled = true; return; }
+                    rowH2[targetRow] = newRowH;
+                    double newH = shape.H + diff;
+
+                    UndoManager.Push(new TableLayoutAction(shape, colW2, oldRowH, shape.W, shape.H, colW2, rowH2, shape.W, newH), _page);
                     ReflowTableCells(shape);
                     _canvas.Invalidate();
                     ContentChanged?.Invoke();
