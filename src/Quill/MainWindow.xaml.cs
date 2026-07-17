@@ -392,7 +392,9 @@ public sealed partial class MainWindow : Window
         foreach (var b in GlowBrushes()) b.Opacity = 0.9;
         SetGradientAxes(0, 0, 1, 1);
         // leaving Circulate restores every brush's own artistic stops (#4)
-        if (_reduceMotion || _library.GlowMode != "Circulate") RestoreCirculateStops();
+        // a mode change always restores the original stops; the animated modes
+        // rebuild their own pattern on the next tick
+        RestoreCirculateStops();
         if (_reduceMotion || _library.GlowMode == "Off") _glowTimer.Stop();
         else _glowTimer.Start();
     }
@@ -406,6 +408,15 @@ public sealed partial class MainWindow : Window
         {
             // pure sinusoid: perfectly even rise and fall
             opacity = 0.675 + 0.325 * Math.Sin(_glowT * (2 * Math.PI / 5.0));
+        }
+        else if (mode == "Comet")
+        {
+            opacity = 0.95;
+            double cband = (_glowT / 4.0) % 1.0;
+            var cseen = new HashSet<LinearGradientBrush>();
+            foreach (var b in GlowBrushes()) { cseen.Add(b); CometStops(b, cband); }
+            foreach (var dead in _circSnapshot.Keys.Where(k => !cseen.Contains(k)).ToList())
+                _circSnapshot.Remove(dead);
         }
         else if (mode == "Circulate")
         {
@@ -469,6 +480,35 @@ public sealed partial class MainWindow : Window
             b.SpreadMethod = GradientSpreadMethod.Repeat;
         }
         // Repeat tiles the comet; the 1 -> 0 wrap forms the crisp leading edge
+        b.StartPoint = new Point(band, band);
+        b.EndPoint = new Point(band + 1, band + 1);
+    }
+
+    // The reference-photo comet (#glow): white-hot tight head, a tail that
+    // wraps more than half the ring, near-black far side. Same static-stops +
+    // sliding-axis mechanism as Circulate (stop mutations don't re-render).
+    private static void CometStops(LinearGradientBrush b, double band)
+    {
+        const int N = 28;
+        if (!_circSnapshot.ContainsKey(b))
+        {
+            var snap = b.GradientStops.Select(gs => (gs.Offset, gs.Color)).ToList();
+            _circSnapshot[b] = snap;
+            if (snap.Count == 0) return;
+            b.GradientStops.Clear();
+            for (int i = 0; i < N; i++)
+            {
+                double off = i / (double)(N - 1);
+                var orig = SampleStops(snap, off);
+                double behindHead = 1 - off;
+                double intensity = behindHead < 0.58
+                    ? Math.Pow(1 - behindHead / 0.58, 3.0)   // longer, softer-fading tail
+                    : 0;
+                byte a = (byte)Math.Clamp(orig.A * (0.05 + 1.35 * intensity), 0, 255);
+                b.GradientStops.Add(new GradientStop { Offset = off, Color = Color.FromArgb(a, orig.R, orig.G, orig.B) });
+            }
+            b.SpreadMethod = GradientSpreadMethod.Repeat;
+        }
         b.StartPoint = new Point(band, band);
         b.EndPoint = new Point(band + 1, band + 1);
     }
@@ -3511,8 +3551,8 @@ public sealed partial class MainWindow : Window
 
         // ---- glow animation (#4-batch2) ----
         var glowBox = new ComboBox { Header = "Glow animation", Width = 220 };
-        foreach (var mode in new[] { "Off", "Breathe", "Circulate" }) glowBox.Items.Add(mode);
-        glowBox.SelectedItem = _library.GlowMode is "Off" or "Circulate" ? _library.GlowMode : "Breathe";
+        foreach (var mode in new[] { "Off", "Breathe", "Circulate", "Comet" }) glowBox.Items.Add(mode);
+        glowBox.SelectedItem = _library.GlowMode is "Off" or "Circulate" or "Comet" ? _library.GlowMode : "Breathe";
         glowBox.SelectionChanged += (_, _) =>
         {
             if (glowBox.SelectedItem is string gm)
