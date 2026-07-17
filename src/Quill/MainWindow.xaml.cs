@@ -4277,6 +4277,15 @@ public sealed partial class MainWindow : Window
         ScheduleSave();
     }
 
+    private void GridColorPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curPage == null) return;
+        // Tag holds "#RRGGBB"; the untagged "Auto" swatch clears back to automatic
+        _curPage.GridColor = (sender as FrameworkElement)?.Tag as string;
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
     private void SpacingSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
         if (_syncingUi || _curPage == null) return;
