@@ -100,6 +100,8 @@ public sealed class InkSurface : UserControl
     public event Action<PageComment, Point>? CommentActivated;
     public bool CommentMode { get; set; }
     public bool ShowResolvedComments { get; set; } = true;
+    // pins stay hidden outside comment mode unless the user opts in (#A3)
+    public bool ShowCommentsAlways { get; set; }
     private Rect? _flashRect;
     private long _flashStartMs;
 
@@ -2765,7 +2767,7 @@ public sealed class InkSurface : UserControl
         }
 
         // Comment pins: a numbered accent dot per comment, greyed when resolved.
-        if (_page != null && _page.Comments.Count > 0)
+        if (_page != null && _page.Comments.Count > 0 && (CommentMode || ShowCommentsAlways))
         {
             float pr = 11f / ViewZoom;
             for (int i = 0; i < _page.Comments.Count; i++)

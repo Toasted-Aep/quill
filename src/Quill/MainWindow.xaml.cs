@@ -167,6 +167,7 @@ public sealed partial class MainWindow : Window
         if (_library.PenRepair) { _library.PenRepairDots = true; _library.PenRepairBridge = true; _library.PenRepair = false; }
         Surface.PenRepairDots = _library.PenRepairDots;
         Surface.PenRepairBridge = _library.PenRepairBridge;
+        Surface.ShowCommentsAlways = _library.ShowCommentPins;
         // the font list used to say "Amsterdam"; the installed family is
         // "Amsterdam Handwriting" — migrate saved settings (#9-batch2)
         if (_library.DefaultFont == "Amsterdam") _library.DefaultFont = "Amsterdam Handwriting";
@@ -3569,6 +3570,18 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(penFixBridge);
         panel.Children.Add(new TextBlock { Text = "Continues the same stroke when the pen momentarily loses contact mid-line.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- comment pins outside comment mode (#A3) ----
+        var pinsToggle = new ToggleSwitch { Header = "Always show comment pins", IsOn = _library.ShowCommentPins };
+        pinsToggle.Toggled += (_, _) =>
+        {
+            _library.ShowCommentPins = pinsToggle.IsOn;
+            Surface.ShowCommentsAlways = pinsToggle.IsOn;
+            Surface.Refresh();
+            ScheduleSave();
+        };
+        panel.Children.Add(pinsToggle);
+        panel.Children.Add(new TextBlock { Text = "Off: pins only appear while the Comment tool is active.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- pen dock position (#cust-roadmap): the drag gesture already works;
         //      this makes the four dock sides discoverable without dragging ----
