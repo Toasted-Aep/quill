@@ -186,6 +186,8 @@ public class NotePage
     public string Background { get; set; } = "#FFFFFF";
     public GridType Grid { get; set; } = GridType.None;
     public double GridSpacing { get; set; } = 32;
+    // Custom gridline colour ("#RRGGBB"); null = automatic (contrast with background).
+    public string? GridColor { get; set; }
     public bool PenRowVisible { get; set; } = true;
     public double Width { get; set; } = 1500;
     public double Height { get; set; } = 2200;

@@ -2824,6 +2824,12 @@ public sealed class InkSurface : UserControl
         var gridColor = ColorUtil.IsDark(bg)
             ? Color.FromArgb(70, 255, 255, 255)
             : Color.FromArgb(46, 0, 0, 0);
+        if (!string.IsNullOrEmpty(_page.GridColor))
+        {
+            // custom colour keeps the subtle automatic alpha so the grid stays unobtrusive
+            try { var c = ColorUtil.Parse(_page.GridColor); gridColor = Color.FromArgb(gridColor.A, c.R, c.G, c.B); }
+            catch { }
+        }
         float lw = 1f / ViewZoom;
 
         switch (_page.Grid)

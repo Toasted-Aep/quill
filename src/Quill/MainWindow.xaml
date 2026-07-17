@@ -278,6 +278,15 @@
                                     <TextBlock x:Uid="GridSpacingHeader" Text="Grid spacing" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
                                     <Slider x:Name="SpacingSlider" Minimum="16" Maximum="96" StepFrequency="4"
                                             ValueChanged="SpacingSlider_ValueChanged"/>
+                                    <TextBlock Text="Grid colour" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <Button Click="GridColorPreset_Click" ToolTipService.ToolTip="Automatic" Width="52" Height="28" FontSize="11" Content="Auto"/>
+                                        <Button Tag="#8C8C8C" Click="GridColorPreset_Click" ToolTipService.ToolTip="Grey" Width="34" Height="28" Background="#8C8C8C" BorderBrush="Gray"/>
+                                        <Button Tag="#5B8DEF" Click="GridColorPreset_Click" ToolTipService.ToolTip="Blue" Width="34" Height="28" Background="#5B8DEF" BorderBrush="Gray"/>
+                                        <Button Tag="#4CAF7D" Click="GridColorPreset_Click" ToolTipService.ToolTip="Green" Width="34" Height="28" Background="#4CAF7D" BorderBrush="Gray"/>
+                                        <Button Tag="#E2A93B" Click="GridColorPreset_Click" ToolTipService.ToolTip="Amber" Width="34" Height="28" Background="#E2A93B" BorderBrush="Gray"/>
+                                        <Button Tag="#D96D6D" Click="GridColorPreset_Click" ToolTipService.ToolTip="Red" Width="34" Height="28" Background="#D96D6D" BorderBrush="Gray"/>
+                                    </StackPanel>
                                     <Button Click="SetDefaultGrid_Click" FontSize="12" HorizontalAlignment="Stretch"
                                             Content="Use this grid for all new pages"/>
                                     <Button Click="SetNotebookDefaultGrid_Click" FontSize="12" HorizontalAlignment="Stretch"
