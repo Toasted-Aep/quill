@@ -524,6 +524,34 @@ public sealed class InkSurface : UserControl
         ViewOffset = new Vector2((float)page.ViewX, (float)page.ViewY);
         ViewZoom = Math.Clamp((float)page.ViewZoom, 0.1f, 8f);
         _contentMaxDirty = true;
+        // Heal cells eaten by the old empty-box cleanup (#cellfix): every grid
+        // slot of every table needs a TextElement, EXCEPT slots covered by a
+        // merged cell's span (merges legitimately remove hidden cells).
+        try
+        {
+            foreach (var tb in page.Shapes.Where(s => s.Kind == ShapeKind.Table))
+            {
+                var cw = TableColWidths(tb);
+                var rh = TableRowHeights(tb);
+                bool added = false;
+                for (int r = 0; r < rh.Length; r++)
+                    for (int c = 0; c < cw.Length; c++)
+                    {
+                        bool covered = page.Texts.Any(t => t.TableId == tb.Id &&
+                            r >= t.TableRow && r < t.TableRow + Math.Max(1, t.CellRowSpan) &&
+                            c >= t.TableCol && c < t.TableCol + Math.Max(1, t.CellColSpan));
+                        if (covered) continue;
+                        page.Texts.Add(new TextElement
+                        {
+                            TableId = tb.Id, TableRow = r, TableCol = c,
+                            X = tb.X + 4, Y = tb.Y + 2, Width = Math.Max(28, cw[c] - 8)
+                        });
+                        added = true;
+                    }
+                if (added) ReflowTableCells(tb);
+            }
+        }
+        catch { }
         RebuildTextLayer();
         OnViewChanged();
         // Self-heal corrupt saved views (#inkfix): the palm-fling bug SAVED
@@ -5279,6 +5307,9 @@ public sealed class InkSurface : UserControl
         box.LostFocus += (_, _) =>
         {
             if (_page == null) return;
+            // an empty TABLE CELL is normal — discarding it deletes the cell's
+            // TextElement and leaves the cell untypeable forever (#cellfix)
+            if (t.TableId != null) return;
             box.Document.GetText(TextGetOptions.None, out string plain);
             if (string.IsNullOrWhiteSpace(plain))
             {
