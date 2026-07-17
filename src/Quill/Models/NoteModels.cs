@@ -300,6 +300,8 @@ public class Library
     public bool PenRepair { get; set; }
     public bool PenRepairDots { get; set; }
     public bool PenRepairBridge { get; set; }
+    // show comment pins even when the Comment tool is not active (#A3)
+    public bool ShowCommentPins { get; set; }
     // AI assistant (#25): provider + model + local endpoint. API keys are kept
     // in the Windows Credential Locker, never in this file.
     public string AiProvider { get; set; } = "None";
