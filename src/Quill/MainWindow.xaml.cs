@@ -327,7 +327,7 @@ public sealed partial class MainWindow : Window
         // Startup experience: full screen + the notebook/section/page picker,
         // with the last-used page already loaded behind it (#31).
         if (_library.StartFullscreen)
-            try { AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen); } catch { }
+            try { if (AppWindow.Presenter is OverlappedPresenter sop) sop.Maximize(); } catch { }
         UpdateFullscreenIcon();
         if (_library.StartOnGallery) ShowGallery(launcher: true);
 
@@ -1271,8 +1271,8 @@ public sealed partial class MainWindow : Window
             BtnWinCloseIcon.ClearValue(FontIcon.ForegroundProperty);
         };
 
-        UpdateMaxGlyph();
-        this.SizeChanged += (_, _) => UpdateMaxGlyph();
+        UpdateFullscreenIcon();
+        this.SizeChanged += (_, _) => UpdateFullscreenIcon();
     }
 
     // A press on any button/menu must not start a window drag.
@@ -1288,30 +1288,17 @@ public sealed partial class MainWindow : Window
         return false;
     }
 
+    // still reachable by double-clicking the bar, like a real title bar
     private void ToggleMaximise()
     {
         if (AppWindow.Presenter is not OverlappedPresenter op) return;
         if (op.State == OverlappedPresenterState.Maximized) op.Restore(); else op.Maximize();
-        UpdateMaxGlyph();
-    }
-
-    private void UpdateMaxGlyph()
-    {
-        try
-        {
-            bool max = AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Maximized };
-            BtnWinMaxIcon.Glyph = max ? "" : "";   // restore : maximise
-            ToolTipService.SetToolTip(BtnWinMax, max ? "Restore down" : "Maximise");
-        }
-        catch { }
     }
 
     private void WinMin_Click(object sender, RoutedEventArgs e)
     {
         if (AppWindow.Presenter is OverlappedPresenter op) op.Minimize();
     }
-
-    private void WinMax_Click(object sender, RoutedEventArgs e) => ToggleMaximise();
 
     private void WinClose_Click(object sender, RoutedEventArgs e) => Close();
 
@@ -3761,7 +3748,13 @@ public sealed partial class MainWindow : Window
         };
         var defSize = new ComboBox { Width = 92, IsEditable = true };
         foreach (var sz in FontSizes) defSize.Items.Add(sz);
-        defSize.Text = ((int)_library.DefaultFontSize).ToString();
+        string curSize = ((int)_library.DefaultFontSize).ToString();
+        foreach (var it in defSize.Items)
+            if (it?.ToString() == curSize) { defSize.SelectedItem = it; break; }
+        // an editable ComboBox discards Text set before it is templated, which
+        // left the box blank even though the size was stored — restore it on
+        // load, which also covers custom sizes that aren't in the list
+        defSize.Loaded += (_, _) => { if (defSize.SelectedItem == null) defSize.Text = curSize; };
         void ApplyDefaultSize(string? txt)
         {
             if (ParseSize(txt) is float v) { _library.DefaultFontSize = v; Surface.PendingFontSize = v; ScheduleSave(); }
@@ -3799,7 +3792,7 @@ public sealed partial class MainWindow : Window
 
         // ---- startup behaviour ----
         panel.Children.Add(new TextBlock { Text = "Startup", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
-        var fsToggle = new ToggleSwitch { Header = "Start in full screen", IsOn = _library.StartFullscreen };
+        var fsToggle = new ToggleSwitch { Header = "Start maximised", IsOn = _library.StartFullscreen };
         fsToggle.Toggled += (_, _) => { _library.StartFullscreen = fsToggle.IsOn; ScheduleSave(); };
         panel.Children.Add(fsToggle);
         var pickerToggle = new ToggleSwitch { Header = "Show the notebook picker at startup", IsOn = _library.StartOnGallery };
@@ -4886,7 +4879,7 @@ public sealed partial class MainWindow : Window
         {
             bool fs = AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
             BtnFullscreenIcon.Glyph = fs ? "\uE73F" : "\uE740";   // BackToWindow / FullScreen
-            ToolTipService.SetToolTip(BtnFullscreen, fs ? "Exit full screen (F11)" : "Full screen (F11)");
+            ToolTipService.SetToolTip(BtnWinFull, fs ? "Exit full screen (F11)" : "Full screen (F11)");
         }
         catch { }
     }
