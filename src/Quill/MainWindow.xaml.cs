@@ -412,9 +412,15 @@ public sealed partial class MainWindow : Window
         else if (mode == "Comet")
         {
             opacity = 0.95;
-            double cband = (_glowT / 3.5) % 1.0;   // one reveal lap, then black and again
+            // constant-speed walk around the perimeter = the circular trajectory
+            double ct = (_glowT / 3.5) % 1.0;
+            double cpx, cpy;
+            if (ct < 0.25) { cpx = ct * 4; cpy = 0; }
+            else if (ct < 0.5) { cpx = 1; cpy = (ct - 0.25) * 4; }
+            else if (ct < 0.75) { cpx = 1 - (ct - 0.5) * 4; cpy = 1; }
+            else { cpx = 0; cpy = 1 - (ct - 0.75) * 4; }
             var cseen = new HashSet<LinearGradientBrush>();
-            foreach (var b in GlowBrushes()) { cseen.Add(b); CometStops(b, cband); }
+            foreach (var b in GlowBrushes()) { cseen.Add(b); CometStops(b, cpx, cpy); }
             foreach (var dead in _circSnapshot.Keys.Where(k => !cseen.Contains(k)).ToList())
                 _circSnapshot.Remove(dead);
         }
@@ -496,9 +502,15 @@ public sealed partial class MainWindow : Window
     // entirely in the brush's EndPoint (Pad past the end paints the
     // not-yet-visited arc black) — stop mutations don't re-render in WinUI 3,
     // brush-level properties do.
-    private static void CometStops(LinearGradientBrush b, double progress)
+    // Comet as an indeterminate spinner (#glow, user spec): a lit head runs a
+    // CIRCULAR trajectory around the border — its anchor walks the panel
+    // perimeter at constant speed — and the light fades away behind it, with
+    // the rest of the rim near-dark. No percentage, no reveal: it just spins.
+    // Stops are static (head at offset 0 fading out by 0.45); the animation is
+    // pure brush-level axis movement, which WinUI 3 reliably re-renders.
+    private static void CometStops(LinearGradientBrush b, double hx, double hy)
     {
-        const int N = 28;
+        const int N = 22;
         if (!_circSnapshot.ContainsKey(b))
         {
             var snap = b.GradientStops.Select(gs => (gs.Offset, gs.Color)).ToList();
@@ -509,17 +521,15 @@ public sealed partial class MainWindow : Window
             {
                 double off = i / (double)(N - 1);
                 var orig = SampleStops(snap, off);
-                double a01 = off <= 0.93
-                    ? 0.03 + 1.30 * Math.Pow(off / 0.93, 2.6)   // tail rising into the head
-                    : 0;                                          // beyond the head: black
+                double fall = Math.Max(0, 1 - off / 0.45);
+                double a01 = 0.04 + 1.30 * fall * fall;      // hot head, slow spatial fade
                 byte a = (byte)Math.Clamp(orig.A * a01, 0, 255);
                 b.GradientStops.Add(new GradientStop { Offset = off, Color = Color.FromArgb(a, orig.R, orig.G, orig.B) });
             }
-            b.SpreadMethod = GradientSpreadMethod.Pad;   // Pad's end colour IS the black ahead
+            b.SpreadMethod = GradientSpreadMethod.Pad;
         }
-        double pr = Math.Max(progress, 0.02);
-        b.StartPoint = new Point(0, 0);       // the comet is born at the top-left rim
-        b.EndPoint = new Point(pr, pr);       // and sweeps the ring as the lap progresses
+        b.StartPoint = new Point(hx, hy);                    // the head sits here on the rim
+        b.EndPoint = new Point(1 - hx, 1 - hy);              // fading toward the far side
     }
 
     private static void RestoreCirculateStops()
@@ -2962,10 +2972,21 @@ public sealed partial class MainWindow : Window
         el.PointerEntered += (_, _) =>
         {
             var glow = MakeColorGlowBrush(col);
-            glow.Opacity = 1;
-            RegisterGlowBrush(glow);   // breathes / circulates with the glow engine
+            glow.Opacity = 0;   // slow appear (#gallery-polish): ramp over ~350ms
             SetBorder(glow, hoverThickness);
             el.Translation = new System.Numerics.Vector3(0, -2, 0);
+            var ramp = el.DispatcherQueue.CreateTimer();
+            ramp.Interval = TimeSpan.FromMilliseconds(40);
+            ramp.Tick += (_, _) =>
+            {
+                glow.Opacity = Math.Min(1, glow.Opacity + 0.12);
+                if (glow.Opacity >= 1)
+                {
+                    ramp.Stop();
+                    RegisterGlowBrush(glow);   // joins the glow engine only once fully in
+                }
+            };
+            ramp.Start();
         };
         el.PointerExited += (_, _) =>
         {
@@ -3378,7 +3399,7 @@ public sealed partial class MainWindow : Window
             BorderBrush = new SolidColorBrush(Colors.Transparent),
             Child = chip
         };
-        AttachHoverGlow(glowWrap, ColorUtil.Parse(nb.Color), glowWrap.BorderBrush, new Thickness(1.6), new Thickness(1.6));
+        AttachHoverGlow(glowWrap, ColorUtil.Parse(nb.Color), glowWrap.BorderBrush, new Thickness(1.6), new Thickness(2.6));
         return glowWrap;
     }
 
