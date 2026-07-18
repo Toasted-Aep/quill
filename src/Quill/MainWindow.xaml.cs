@@ -374,6 +374,16 @@ public sealed partial class MainWindow : Window
         lock (_glowClients) _glowClients.Add(new WeakReference<LinearGradientBrush>(b));
     }
 
+    // Hand a brush back so the engine stops driving its opacity — without this
+    // a hover fade-OUT is overwritten by the next GlowTick (#anim).
+    public static void UnregisterGlowBrush(LinearGradientBrush b)
+    {
+        lock (_glowClients)
+            for (int i = _glowClients.Count - 1; i >= 0; i--)
+                if (!_glowClients[i].TryGetTarget(out var t) || ReferenceEquals(t, b))
+                    _glowClients.RemoveAt(i);
+    }
+
     private static IEnumerable<LinearGradientBrush> GlowBrushes()
     {
         var res = Application.Current.Resources;
@@ -3068,27 +3078,61 @@ public sealed partial class MainWindow : Window
             if (el is Border bd) { bd.BorderBrush = b; bd.BorderThickness = th; }
             else if (el is Control c) { c.BorderBrush = b; c.BorderThickness = th; }
         }
-        el.PointerEntered += (_, _) =>
+        // One brush + one timer for the element's whole lifetime: the glow eases
+        // IN on enter and OUT on exit, and a re-entry mid-fade simply reverses
+        // direction instead of stacking brushes/timers (#anim).
+        LinearGradientBrush? glow = null;
+        Microsoft.UI.Dispatching.DispatcherQueueTimer? ramp = null;
+        double target = 0;
+        bool joined = false;
+
+        void EnsureRamp()
         {
-            var glow = MakeColorGlowBrush(col);
-            glow.Opacity = 0;   // slow appear (#gallery-polish): ramp over ~350ms
-            SetBorder(glow, restThickness);   // paint-only hover: geometry never changes (#gallery-fix)
-            var ramp = el.DispatcherQueue.CreateTimer();
-            ramp.Interval = TimeSpan.FromMilliseconds(40);
+            if (ramp != null) return;
+            ramp = el.DispatcherQueue.CreateTimer();
+            ramp.Interval = TimeSpan.FromMilliseconds(33);
             ramp.Tick += (_, _) =>
             {
-                glow.Opacity = Math.Min(1, glow.Opacity + 0.12);
-                if (glow.Opacity >= 1)
+                if (glow == null) { ramp!.Stop(); return; }
+                // out is a touch slower than in — the classic ease asymmetry
+                double step = target > glow.Opacity ? 0.11 : -0.07;
+                double next = glow.Opacity + step;
+                if ((step > 0 && next >= target) || (step < 0 && next <= target)) next = target;
+                glow.Opacity = next;
+                if (next >= 1)
                 {
-                    ramp.Stop();
-                    RegisterGlowBrush(glow);   // joins the glow engine only once fully in
+                    ramp!.Stop();
+                    if (!joined) { RegisterGlowBrush(glow); joined = true; }   // breathe only once fully in
+                }
+                else if (next <= 0)
+                {
+                    ramp!.Stop();
+                    SetBorder(restBrush, restThickness);
+                    glow = null;
                 }
             };
-            ramp.Start();
+        }
+
+        el.PointerEntered += (_, _) =>
+        {
+            if (glow == null)
+            {
+                glow = MakeColorGlowBrush(col);
+                glow.Opacity = 0;
+                joined = false;
+                SetBorder(glow, restThickness);   // paint-only hover: geometry never changes
+            }
+            target = 1;
+            EnsureRamp();
+            ramp!.Start();
         };
         el.PointerExited += (_, _) =>
         {
-            SetBorder(restBrush, restThickness);
+            if (glow == null) { SetBorder(restBrush, restThickness); return; }
+            if (joined) { UnregisterGlowBrush(glow); joined = false; }   // let the fade own the opacity
+            target = 0;
+            EnsureRamp();
+            ramp!.Start();
         };
     }
 
