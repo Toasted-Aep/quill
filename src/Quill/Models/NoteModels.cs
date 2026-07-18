@@ -308,6 +308,8 @@ public class Library
     public bool MotionBlur { get; set; }
     // show comment pins even when the Comment tool is not active (#A3)
     public bool ShowCommentPins { get; set; }
+    // toolbar buttons the user has switched off (#topbar)
+    public List<string> HiddenTools { get; set; } = new();
     // AI assistant (#25): provider + model + local endpoint. API keys are kept
     // in the Windows Credential Locker, never in this file.
     public string AiProvider { get; set; } = "None";
