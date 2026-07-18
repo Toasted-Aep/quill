@@ -3072,8 +3072,7 @@ public sealed partial class MainWindow : Window
         {
             var glow = MakeColorGlowBrush(col);
             glow.Opacity = 0;   // slow appear (#gallery-polish): ramp over ~350ms
-            SetBorder(glow, hoverThickness);
-            el.Translation = new System.Numerics.Vector3(0, -2, 0);
+            SetBorder(glow, restThickness);   // paint-only hover: geometry never changes (#gallery-fix)
             var ramp = el.DispatcherQueue.CreateTimer();
             ramp.Interval = TimeSpan.FromMilliseconds(40);
             ramp.Tick += (_, _) =>
@@ -3090,7 +3089,6 @@ public sealed partial class MainWindow : Window
         el.PointerExited += (_, _) =>
         {
             SetBorder(restBrush, restThickness);
-            el.Translation = new System.Numerics.Vector3(0, 0, 0);
         };
     }
 
