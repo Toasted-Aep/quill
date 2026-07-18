@@ -419,7 +419,9 @@ public sealed partial class MainWindow : Window
         // overlay rectangles on only for Comet (and only when motion is allowed);
         // every other mode collapses them so they cost nothing.
         bool cometOn = !_reduceMotion && _library.GlowMode == "Comet";
-        var rimAccent = _accentCurrent ?? ColorUtil.Parse(_library.AccentColor);
+        // the static rim is the accent mixed 45% toward white (see ApplyAccent);
+        // the comet must be that exact colour, since it replaces it (#anim)
+        var rimAccent = Mix(_accentCurrent ?? ColorUtil.Parse(_library.AccentColor), Colors.White, 0.45);
         foreach (var rim in _cometRims) { rim.SetColor(rimAccent); rim.SetActive(cometOn); }
         if (_reduceMotion || _library.GlowMode == "Off") _glowTimer.Stop();
         else _glowTimer.Start();
@@ -589,9 +591,11 @@ public sealed partial class MainWindow : Window
     private sealed class CometRim
     {
         private const double Thick = 2.5;
-        private const int Segments = 18;        // enough to read as a continuous trail
+        private const int Segments = 36;        // short segments so no banding is visible
         private const double TrailFrac = 0.34;  // comet occupies ~a third of the rim
         private readonly Rectangle[] _segs = new Rectangle[Segments];
+        private readonly Border _host;
+        private readonly Brush? _restBorder;
         private readonly double[] _fade = new double[Segments];
         private double _perimUnits;             // full lap length, in thickness units
         private double _segUnits;               // one segment's dash length
@@ -600,6 +604,8 @@ public sealed partial class MainWindow : Window
 
         public CometRim(Border host, Color color)
         {
+            _host = host;
+            _restBorder = host.BorderBrush;   // restored when Comet is switched off
             double rx = host.CornerRadius.TopLeft;
             // Three phases along the trail, as one smooth curve rather than
             // discrete blocks: [0] the main light at full strength, then a
@@ -608,7 +614,9 @@ public sealed partial class MainWindow : Window
             for (int i = 0; i < Segments; i++)
             {
                 double u = i / (double)(Segments - 1);          // 0 = head, 1 = tail end
-                _fade[i] = Math.Pow(1 - u, 2.4);
+                // raised cosine: flat at both ends, so the head doesn't start
+                // with a hard step and the tail reaches zero imperceptibly
+                _fade[i] = Math.Pow(0.5 * (1 + Math.Cos(Math.PI * u)), 1.3);
                 _segs[i] = MakeRect(color, _fade[i], rx);
             }
 
@@ -689,6 +697,9 @@ public sealed partial class MainWindow : Window
             _active = on;
             var v = on ? Visibility.Visible : Visibility.Collapsed;
             foreach (var s in _segs) s.Visibility = v;
+            // only ONE glow on the edge: the panel's static rim steps aside so
+            // the comet is the sole light travelling it (#anim)
+            _host.BorderBrush = on ? new SolidColorBrush(Colors.Transparent) : _restBorder;
         }
     }
 
