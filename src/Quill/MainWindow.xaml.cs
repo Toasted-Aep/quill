@@ -306,6 +306,7 @@ public sealed partial class MainWindow : Window
         BuildPenStrip();
         OpenStartupPage();
         SelectTool("Pen");
+        ApplyToolbarVisibility();
         if (_library.Pens.Count > 0) ApplyPreset(_library.Pens[0]);
         UpdateUndoButtons();
 
@@ -3950,6 +3951,25 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(pinsToggle);
         panel.Children.Add(new TextBlock { Text = "Off: pins only appear while the Comment tool is active.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
+        // ---- toolbar buttons (#topbar) ----
+        panel.Children.Add(new TextBlock { Text = "Toolbar buttons", FontFamily = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["HeadingFont"], FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = "Switch off what you don't use — the top bar stops overflowing.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        foreach (var (key, label) in OptionalTools)
+        {
+            var k = key;
+            var cb = new CheckBox { Content = label, IsChecked = !_library.HiddenTools.Contains(k), MinHeight = 0, Margin = new Thickness(0, 2, 0, 2) };
+            void Toggle()
+            {
+                if (cb.IsChecked == true) _library.HiddenTools.Remove(k);
+                else if (!_library.HiddenTools.Contains(k)) _library.HiddenTools.Add(k);
+                ApplyToolbarVisibility();
+                ScheduleSave();
+            }
+            cb.Checked += (_, _) => Toggle();
+            cb.Unchecked += (_, _) => Toggle();
+            panel.Children.Add(cb);
+        }
+
         // ---- pen dock position (#cust-roadmap): the drag gesture already works;
         //      this makes the four dock sides discoverable without dragging ----
         var dockBox = new ComboBox { Header = "Pen toolbar docked to", Width = 220 };
@@ -4233,6 +4253,7 @@ public sealed partial class MainWindow : Window
         // picking a drawing tool leaves comment mode, so the user is never stuck
         // unable to draw with the pin tool still armed (#roadmap)
         if (ToolComment.IsChecked == true) { ToolComment.IsChecked = false; Surface.CommentMode = false; }
+        ApplyToolbarVisibility();   // pen-only buttons follow the active tool (#topbar)
         ToolPen.IsChecked = tag == "Pen";
         ToolText.IsChecked = tag == "Text";
         ToolSelect.IsChecked = tag == "Select";
@@ -4954,9 +4975,14 @@ public sealed partial class MainWindow : Window
 
     private void ShortcutsAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
+        ToggleShortcutsPanel();
+        args.Handled = true;
+    }
+
+    private void ToggleShortcutsPanel()
+    {
         if (ShortcutsPanel.Visibility == Visibility.Visible) FadeOut(ShortcutsPanel, 140);
         else FadeIn(ShortcutsPanel, 200);
-        args.Handled = true;
     }
 
     private void Shortcuts_Close(object sender, TappedRoutedEventArgs e) => FadeOut(ShortcutsPanel, 140);
@@ -6168,6 +6194,73 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             ShowStatus("Synced changes from another device.");
         }
         catch { }
+    }
+
+    // ---- toolbar visibility (#topbar) ------------------------------------
+    // Two independent filters: the user's own show/hide choices, and context
+    // (pen-only buttons are pointless while the text or lasso tool is active).
+    private static readonly (string Key, string Label)[] OptionalTools =
+    {
+        ("ToolSpace",       "Free space"),
+        ("TouchDrawToggle", "Touch draw (pen mode)"),
+        ("ToolComment",     "Comments"),
+        ("ShapeBtn",        "Shapes & tables (pen mode)"),
+        ("MouseModeBtn",    "Mouse mode (pen mode)"),
+        ("BtnHistory",      "History & replay"),
+        ("VoiceBtn",        "Voice — recording & dictation"),
+        ("BtnAi",           "AI assistant"),
+        ("ZoomBtn",         "Zoom"),
+        ("PageSettingsBtn", "Page background & grid"),
+        ("ExportBtn",       "Export"),
+        ("BtnCalc",         "Calculator"),
+    };
+
+    private void ApplyToolbarVisibility()
+    {
+        bool pen = _toolTag == "Pen";
+        void Set(FrameworkElement? el, string key, bool inContext = true)
+        {
+            if (el == null) return;
+            bool on = !_library.HiddenTools.Contains(key) && inContext;
+            el.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        }
+        try
+        {
+            Set(ToolSpace, "ToolSpace");
+            Set(TouchDrawToggle, "TouchDrawToggle", pen);
+            Set(ToolComment, "ToolComment");
+            Set(ShapeBtn, "ShapeBtn", pen);
+            Set(MouseModeBtn, "MouseModeBtn", pen);
+            Set(BtnHistory, "BtnHistory");
+            Set(VoiceBtn, "VoiceBtn");
+            Set(BtnAi, "BtnAi");
+            Set(ZoomBtn, "ZoomBtn");
+            Set(PageSettingsBtn, "PageSettingsBtn");
+            Set(ExportBtn, "ExportBtn");
+            Set(BtnCalc, "BtnCalc");
+        }
+        catch { }
+    }
+
+    private void ShortcutsMenu_Click(object sender, RoutedEventArgs e) => ToggleShortcutsPanel();
+
+    private async void About_Click(object sender, RoutedEventArgs e)
+    {
+        var panel = new StackPanel { Spacing = 6, Width = 320 };
+        panel.Children.Add(new TextBlock { Text = "Quill", FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        panel.Children.Add(new TextBlock { Text = "Pen-first lecture notes.", Opacity = 0.75 });
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Notebooks are stored in {LibraryStore.Dir}",
+            FontSize = 12, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0)
+        });
+        await new ContentDialog
+        {
+            Title = "About",
+            Content = panel,
+            CloseButtonText = "Close",
+            XamlRoot = RootGrid.XamlRoot
+        }.ShowAsync();
     }
 
     // Pushes the real monitor width (in DIPs, DPI-corrected) to the surface so

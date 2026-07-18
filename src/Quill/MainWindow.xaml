@@ -37,10 +37,36 @@
                 BorderThickness="0,0,0,1">
             <Grid>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-            <ScrollViewer x:Name="TopBarScroll" Grid.Column="0" HorizontalScrollBarVisibility="Hidden" HorizontalScrollMode="Enabled"
+                <!-- app icon: pinned outside the scroller, like a title-bar icon,
+                     and doubles as the app menu (#topbar) -->
+                <Button x:Name="AppMenuBtn" Grid.Column="0" Padding="6,4" Margin="0,0,4,0"
+                        Background="Transparent" BorderThickness="0"
+                        ToolTipService.ToolTip="Quill — app menu">
+                    <Image Source="ms-appx:///Assets/app.ico" Width="18" Height="18"/>
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem Text="Settings…" Click="Settings_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;"/></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem Text="Keyboard shortcuts" Click="ShortcutsMenu_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE765;"/></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutSeparator/>
+                            <MenuFlyoutItem Text="About Quill" Click="About_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE946;"/></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutSeparator/>
+                            <MenuFlyoutItem Text="Quit" Click="WinClose_Click">
+                                <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7E8;"/></MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+            <ScrollViewer x:Name="TopBarScroll" Grid.Column="1" HorizontalScrollBarVisibility="Hidden" HorizontalScrollMode="Enabled"
                           VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Disabled"
                           PointerWheelChanged="BarScroll_Wheel">
                 <StackPanel Orientation="Horizontal" Spacing="4">
@@ -163,6 +189,11 @@
 
                     <AppBarSeparator/>
 
+                    <DropDownButton x:Name="VoiceBtn" ToolTipService.ToolTip="Voice — audio recording &amp; dictation">
+                        <FontIcon Glyph="&#xE720;" FontSize="14"/>
+                        <DropDownButton.Flyout>
+                            <Flyout>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
                     <ToggleButton x:Name="BtnAudioRecording" Click="BtnAudioRecording_Click" ToolTipService.ToolTip="Toggle audio recording panel">
                         <FontIcon Glyph="&#xE720;" FontSize="14"/>
                     </ToggleButton>
@@ -171,6 +202,10 @@
                         <!-- original mic-with-caret silhouette -->
                         <PathIcon Data="M8 1.2 A2.3 2.3 0 0 1 10.3 3.5 V7.2 A2.3 2.3 0 0 1 5.7 7.2 V3.5 A2.3 2.3 0 0 1 8 1.2 Z M3.8 7.2 H5 A3 3 0 0 0 11 7.2 H12.2 A4.2 4.2 0 0 1 8.6 11.3 V13 H10.4 V14.2 H5.6 V13 H7.4 V11.3 A4.2 4.2 0 0 1 3.8 7.2 Z M13 12 H16 V13 H13 Z"/>
                     </ToggleButton>
+                                </StackPanel>
+                            </Flyout>
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
                     <!-- AllowFocusOnInteraction=False everywhere so opening this menu
                          doesn't destroy the text selection the AI is about to use (#9-batch3) -->
                     <Button x:Name="BtnAi" AllowFocusOnInteraction="False"
@@ -332,7 +367,7 @@
                 </StackPanel>
             </ScrollViewer>
             <!-- pinned at the far right, outside the scrolling row (#20-batch2) -->
-            <StackPanel x:Name="TopBarPinned" Grid.Column="1" Orientation="Horizontal" Spacing="4" Margin="8,0,0,0">
+            <StackPanel x:Name="TopBarPinned" Grid.Column="2" Orientation="Horizontal" Spacing="4" Margin="8,0,0,0">
                 <AppBarSeparator/>
                 <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
                     <FontIcon Glyph="&#xE890;" FontSize="14"/>
