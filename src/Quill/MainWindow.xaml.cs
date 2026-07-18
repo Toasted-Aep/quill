@@ -602,6 +602,13 @@ public sealed partial class MainWindow : Window
             grid.Children.Add(_head);
             host.Child = grid;
 
+            // the child grid lives INSIDE the border + padding — pull the rim
+            // rectangles back out so they trace the panel's OUTER edge
+            var pad = host.Padding; var bt = host.BorderThickness;
+            var outset = new Thickness(-(pad.Left + bt.Left), -(pad.Top + bt.Top),
+                                       -(pad.Right + bt.Right), -(pad.Bottom + bt.Bottom));
+            _head.Margin = outset; _tail1.Margin = outset; _tail2.Margin = outset;
+
             _radius = rx;
             // Recompute dash metrics from the rectangle's own rendered size so
             // insets/padding never desync the maths.
