@@ -337,19 +337,17 @@
                 <Button x:Name="BtnHideUi" Click="HideUi_Click" ToolTipService.ToolTip="Minimal UI (hide all panels)">
                     <FontIcon Glyph="&#xE890;" FontSize="14"/>
                 </Button>
-                <Button x:Name="BtnFullscreen" Click="Fullscreen_Click" ToolTipService.ToolTip="Full screen (F11)">
-                    <FontIcon x:Name="BtnFullscreenIcon" Glyph="&#xE740;" FontSize="14"/>
-                </Button>
                 <!-- custom window controls (#caption): the system title bar is
-                     removed, so these ARE the caption buttons -->
+                     removed, so these ARE the caption buttons. The middle one is
+                     the full-screen toggle (the separate UI button is gone). -->
                 <AppBarSeparator/>
                 <Button x:Name="BtnWinMin" Click="WinMin_Click" Background="Transparent" BorderThickness="0"
                         ToolTipService.ToolTip="Minimise">
                     <FontIcon Glyph="&#xE921;" FontSize="11"/>
                 </Button>
-                <Button x:Name="BtnWinMax" Click="WinMax_Click" Background="Transparent" BorderThickness="0"
-                        ToolTipService.ToolTip="Maximise">
-                    <FontIcon x:Name="BtnWinMaxIcon" Glyph="&#xE922;" FontSize="11"/>
+                <Button x:Name="BtnWinFull" Click="Fullscreen_Click" Background="Transparent" BorderThickness="0"
+                        ToolTipService.ToolTip="Full screen (F11)">
+                    <FontIcon x:Name="BtnFullscreenIcon" Glyph="&#xE740;" FontSize="11"/>
                 </Button>
                 <Button x:Name="BtnWinClose" Click="WinClose_Click" Background="Transparent" BorderThickness="0"
                         ToolTipService.ToolTip="Close">
