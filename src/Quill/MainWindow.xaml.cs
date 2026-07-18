@@ -164,8 +164,7 @@ public sealed partial class MainWindow : Window
         // TopBar + NotebookPanel are cheap to include). ApplyGlowMode below
         // switches them on only when GlowMode == "Comet".
         AttachCometRim(PenRow);
-        AttachCometRim(TopBar);
-        AttachCometRim(NotebookPanel);
+        AttachCometRim(NotebookPanel);   // floating panels only — never the docked top bar
         ApplyGlowMode();
 
         // restore the last-selected eraser mode (#13-batch2)
@@ -410,7 +409,8 @@ public sealed partial class MainWindow : Window
         // overlay rectangles on only for Comet (and only when motion is allowed);
         // every other mode collapses them so they cost nothing.
         bool cometOn = !_reduceMotion && _library.GlowMode == "Comet";
-        foreach (var rim in _cometRims) rim.SetActive(cometOn);
+        var rimAccent = _accentCurrent ?? ColorUtil.Parse(_library.AccentColor);
+        foreach (var rim in _cometRims) { rim.SetColor(rimAccent); rim.SetActive(cometOn); }
         if (_reduceMotion || _library.GlowMode == "Off") _glowTimer.Stop();
         else _glowTimer.Start();
     }
@@ -623,6 +623,12 @@ public sealed partial class MainWindow : Window
             Opacity = opacity,
             Visibility = Visibility.Collapsed,
         };
+
+        public void SetColor(Color c)
+        {
+            foreach (var rect in new[] { _head, _tail1, _tail2 })
+                ((SolidColorBrush)rect.Stroke).Color = c;
+        }
 
         private void Recompute(double w, double h)
         {
