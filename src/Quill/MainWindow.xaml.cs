@@ -589,27 +589,34 @@ public sealed partial class MainWindow : Window
     private sealed class CometRim
     {
         private const double Thick = 2.5;
-        private const double HeadFrac = 0.12;   // head ~12% of the perimeter
-        private readonly Rectangle _head, _tail1, _tail2;
+        private const int Segments = 18;        // enough to read as a continuous trail
+        private const double TrailFrac = 0.34;  // comet occupies ~a third of the rim
+        private readonly Rectangle[] _segs = new Rectangle[Segments];
+        private readonly double[] _fade = new double[Segments];
         private double _perimUnits;             // full lap length, in thickness units
-        private double _headUnits;              // head dash length, in thickness units
+        private double _segUnits;               // one segment's dash length
         private double _radius;
         private bool _active;
 
         public CometRim(Border host, Color color)
         {
             double rx = host.CornerRadius.TopLeft;
-            _head = MakeRect(color, 1.0, rx);
-            _tail1 = MakeRect(color, 0.45, rx);
-            _tail2 = MakeRect(color, 0.18, rx);
+            // Three phases along the trail, as one smooth curve rather than
+            // discrete blocks: [0] the main light at full strength, then a
+            // steady smooth decay, reaching exactly zero at the tail's end so
+            // the far side of the rim carries no glow at all.
+            for (int i = 0; i < Segments; i++)
+            {
+                double u = i / (double)(Segments - 1);          // 0 = head, 1 = tail end
+                _fade[i] = Math.Pow(1 - u, 2.4);
+                _segs[i] = MakeRect(color, _fade[i], rx);
+            }
 
             var original = host.Child;
             host.Child = null;
             var grid = new Grid();
             if (original != null) grid.Children.Add(original);
-            grid.Children.Add(_tail2);
-            grid.Children.Add(_tail1);
-            grid.Children.Add(_head);
+            for (int i = Segments - 1; i >= 0; i--) grid.Children.Add(_segs[i]);   // head paints last
             host.Child = grid;
 
             // the child grid lives INSIDE the border + padding — pull the rim
@@ -617,15 +624,17 @@ public sealed partial class MainWindow : Window
             var pad = host.Padding; var bt = host.BorderThickness;
             var outset = new Thickness(-(pad.Left + bt.Left), -(pad.Top + bt.Top),
                                        -(pad.Right + bt.Right), -(pad.Bottom + bt.Bottom));
-            _head.Margin = outset; _tail1.Margin = outset; _tail2.Margin = outset;
+            foreach (var s in _segs) s.Margin = outset;
 
             _radius = rx;
-            // Recompute dash metrics from the rectangle's own rendered size so
+            // Recompute dash metrics from a rectangle's own rendered size so
             // insets/padding never desync the maths.
-            _head.SizeChanged += (_, e) => Recompute(e.NewSize.Width, e.NewSize.Height);
+            _segs[0].SizeChanged += (_, e) => Recompute(e.NewSize.Width, e.NewSize.Height);
             SetActive(false);
         }
 
+        // Every segment MUST share one StrokeThickness: dash units are
+        // thickness-relative, so differing thickness would desync the offsets.
         private static Rectangle MakeRect(Color c, double opacity, double rx) => new Rectangle
         {
             IsHitTestVisible = false,
@@ -643,8 +652,7 @@ public sealed partial class MainWindow : Window
 
         public void SetColor(Color c)
         {
-            foreach (var rect in new[] { _head, _tail1, _tail2 })
-                ((SolidColorBrush)rect.Stroke).Color = c;
+            foreach (var s in _segs) ((SolidColorBrush)s.Stroke).Color = c;
         }
 
         private void Recompute(double w, double h)
@@ -655,34 +663,32 @@ public sealed partial class MainWindow : Window
             // circle from the four quarter arcs.
             double perimPx = 2 * (w - 2 * r) + 2 * (h - 2 * r) + 2 * Math.PI * r;
             _perimUnits = perimPx / Thick;
-            _headUnits = HeadFrac * _perimUnits;
-            double gap = Math.Max(0.01, _perimUnits - _headUnits);
-            foreach (var rect in new[] { _head, _tail1, _tail2 })
+            _segUnits = TrailFrac * _perimUnits / Segments;
+            double gap = Math.Max(0.01, _perimUnits - _segUnits);
+            foreach (var s in _segs)
             {
-                rect.StrokeDashArray = new DoubleCollection { _headUnits, gap };
-                rect.RadiusX = r;
-                rect.RadiusY = r;
+                s.StrokeDashArray = new DoubleCollection { _segUnits, gap };
+                s.RadiusX = r;
+                s.RadiusY = r;
             }
         }
 
-        // t01 in [0,1): fraction of one lap. Offset advances linearly in path
-        // units; the two tail shapes trail the head by ~0.9 and ~1.7 head-lengths.
+        // t01 in [0,1): fraction of one lap. Each segment sits one segment-length
+        // further back along the path than the one ahead of it, so the whole
+        // trail travels as a single continuous comet.
         public void SetProgress(double t01)
         {
             if (!_active || _perimUnits <= 0) return;
             double off = -t01 * _perimUnits;
-            _head.StrokeDashOffset = off;
-            _tail1.StrokeDashOffset = off + _headUnits * 0.9;
-            _tail2.StrokeDashOffset = off + _headUnits * 1.7;
+            for (int i = 0; i < Segments; i++)
+                _segs[i].StrokeDashOffset = off + i * _segUnits;
         }
 
         public void SetActive(bool on)
         {
             _active = on;
             var v = on ? Visibility.Visible : Visibility.Collapsed;
-            _head.Visibility = v;
-            _tail1.Visibility = v;
-            _tail2.Visibility = v;
+            foreach (var s in _segs) s.Visibility = v;
         }
     }
 
