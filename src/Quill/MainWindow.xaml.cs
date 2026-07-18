@@ -160,6 +160,12 @@ public sealed partial class MainWindow : Window
         };
 
         HookAccessibilitySettings();
+        // Equip panels with the comet rim runner (PenRow is the user's focus;
+        // TopBar + NotebookPanel are cheap to include). ApplyGlowMode below
+        // switches them on only when GlowMode == "Comet".
+        AttachCometRim(PenRow);
+        AttachCometRim(TopBar);
+        AttachCometRim(NotebookPanel);
         ApplyGlowMode();
 
         // restore the last-selected eraser mode (#13-batch2)
@@ -358,6 +364,11 @@ public sealed partial class MainWindow : Window
     private long _rippleStartMs = -1;
     private static readonly List<WeakReference<LinearGradientBrush>> _glowClients = new();
 
+    // Comet mode: a true rim runner. Each equipped panel gets 3 dashed
+    // Rectangles overlaid on its rim; a single dash segment travels the
+    // rounded-rect path at constant PATH speed via StrokeDashOffset (#comet).
+    private readonly List<CometRim> _cometRims = new();
+
     // per-instance glow brushes (gallery hover glows) opt in here
     public static void RegisterGlowBrush(LinearGradientBrush b)
     {
@@ -395,6 +406,11 @@ public sealed partial class MainWindow : Window
         // a mode change always restores the original stops; the animated modes
         // rebuild their own pattern on the next tick
         RestoreCirculateStops();
+        // Comet is now a dashed rim runner, not a brush animation: flip the
+        // overlay rectangles on only for Comet (and only when motion is allowed);
+        // every other mode collapses them so they cost nothing.
+        bool cometOn = !_reduceMotion && _library.GlowMode == "Comet";
+        foreach (var rim in _cometRims) rim.SetActive(cometOn);
         if (_reduceMotion || _library.GlowMode == "Off") _glowTimer.Stop();
         else _glowTimer.Start();
     }
@@ -412,17 +428,12 @@ public sealed partial class MainWindow : Window
         else if (mode == "Comet")
         {
             opacity = 0.95;
-            // constant-speed walk around the perimeter = the circular trajectory
-            double ct = (_glowT / 3.5) % 1.0;
-            double cpx, cpy;
-            if (ct < 0.25) { cpx = ct * 4; cpy = 0; }
-            else if (ct < 0.5) { cpx = 1; cpy = (ct - 0.25) * 4; }
-            else if (ct < 0.75) { cpx = 1 - (ct - 0.5) * 4; cpy = 1; }
-            else { cpx = 0; cpy = 1 - (ct - 0.75) * 4; }
-            var cseen = new HashSet<LinearGradientBrush>();
-            foreach (var b in GlowBrushes()) { cseen.Add(b); CometStops(b, cpx, cpy); }
-            foreach (var dead in _circSnapshot.Keys.Where(k => !cseen.Contains(k)).ToList())
-                _circSnapshot.Remove(dead);
+            // The glow brushes keep their designed static look (RestoreCirculateStops
+            // already ran on the mode switch); the motion lives entirely in the
+            // overlay rim rectangles, whose dash segment travels the rounded-rect
+            // path at CONSTANT path speed — follows corners, never mirrors (#comet).
+            double ct = (_glowT / 3.5) % 1.0;   // one lap ~3.5s
+            foreach (var rim in _cometRims) rim.SetProgress(ct);
         }
         else if (mode == "Circulate")
         {
@@ -490,48 +501,9 @@ public sealed partial class MainWindow : Window
         b.EndPoint = new Point(band + 1, band + 1);
     }
 
-    // The reference-photo comet (#glow): white-hot tight head, a tail that
-    // wraps more than half the ring, near-black far side. Same static-stops +
-    // sliding-axis mechanism as Circulate (stop mutations don't re-render).
-    // Cyclic comet (#glow, user spec): each lap the ring starts BLACK; the
-    // comet emerges from the origin and lights the path as it travels — the
-    // arc ahead of the head stays black until the head arrives; on lap
-    // completion the ring snaps back to black and the cycle repeats.
-    // Mechanism: static stops (oldest-tail 3% at offset 0 rising to the
-    // white-hot head at 0.93, then hard-to-zero) and the animation lives
-    // entirely in the brush's EndPoint (Pad past the end paints the
-    // not-yet-visited arc black) — stop mutations don't re-render in WinUI 3,
-    // brush-level properties do.
-    // Comet as an indeterminate spinner (#glow, user spec): a lit head runs a
-    // CIRCULAR trajectory around the border — its anchor walks the panel
-    // perimeter at constant speed — and the light fades away behind it, with
-    // the rest of the rim near-dark. No percentage, no reveal: it just spins.
-    // Stops are static (head at offset 0 fading out by 0.45); the animation is
-    // pure brush-level axis movement, which WinUI 3 reliably re-renders.
-    private static void CometStops(LinearGradientBrush b, double hx, double hy)
-    {
-        const int N = 22;
-        if (!_circSnapshot.ContainsKey(b))
-        {
-            var snap = b.GradientStops.Select(gs => (gs.Offset, gs.Color)).ToList();
-            _circSnapshot[b] = snap;
-            if (snap.Count == 0) return;
-            b.GradientStops.Clear();
-            for (int i = 0; i < N; i++)
-            {
-                double off = i / (double)(N - 1);
-                var orig = SampleStops(snap, off);
-                double fall = Math.Max(0, 1 - off / 0.45);
-                double a01 = 0.04 + 1.30 * fall * fall;      // hot head, slow spatial fade
-                byte a = (byte)Math.Clamp(orig.A * a01, 0, 255);
-                b.GradientStops.Add(new GradientStop { Offset = off, Color = Color.FromArgb(a, orig.R, orig.G, orig.B) });
-            }
-            b.SpreadMethod = GradientSpreadMethod.Pad;
-        }
-        b.StartPoint = new Point(hx, hy);                    // the head sits here on the rim
-        b.EndPoint = new Point(1 - hx, 1 - hy);              // fading toward the far side
-    }
-
+    // Comet no longer touches the glow brushes at all — it is a dashed rim
+    // runner built from overlay Rectangles (see CometRim below). The brushes
+    // simply keep their designed static gradient, restored here on mode switch.
     private static void RestoreCirculateStops()
     {
         foreach (var kv in _circSnapshot)
@@ -574,6 +546,120 @@ public sealed partial class MainWindow : Window
         {
             b.StartPoint = new Point(sx, sy);
             b.EndPoint = new Point(ex, ey);
+        }
+    }
+
+    // The accent that the GlowBrush derives from (App.xaml SystemAccentColor
+    // #D97757); the comet rim is stroked in the same hue.
+    private static Color AccentGlowColor()
+    {
+        try
+        {
+            if (Application.Current.Resources["SystemAccentColor"] is Color c) return c;
+        }
+        catch { }
+        return Color.FromArgb(0xFF, 0xD9, 0x77, 0x57);
+    }
+
+    // Wrap a panel's single child in a Grid and overlay 3 dashed Rectangles that
+    // run the comet head + fading wake around the rim. Built at runtime so the
+    // XAML children are never hand-edited.
+    private CometRim AttachCometRim(Border host)
+    {
+        var rim = new CometRim(host, AccentGlowColor());
+        _cometRims.Add(rim);
+        return rim;
+    }
+
+    // A true rim runner. StrokeDashArray/StrokeDashOffset are expressed in
+    // multiples of StrokeThickness (WinUI dash units); we convert the rounded-
+    // rect path length into those units so ONE dash = the comet head and the
+    // offset advances linearly in path-length units => constant physical speed
+    // that follows the corners and never mirrors onto a second edge.
+    private sealed class CometRim
+    {
+        private const double Thick = 2.5;
+        private const double HeadFrac = 0.12;   // head ~12% of the perimeter
+        private readonly Rectangle _head, _tail1, _tail2;
+        private double _perimUnits;             // full lap length, in thickness units
+        private double _headUnits;              // head dash length, in thickness units
+        private double _radius;
+        private bool _active;
+
+        public CometRim(Border host, Color color)
+        {
+            double rx = host.CornerRadius.TopLeft;
+            _head = MakeRect(color, 1.0, rx);
+            _tail1 = MakeRect(color, 0.45, rx);
+            _tail2 = MakeRect(color, 0.18, rx);
+
+            var original = host.Child;
+            host.Child = null;
+            var grid = new Grid();
+            if (original != null) grid.Children.Add(original);
+            grid.Children.Add(_tail2);
+            grid.Children.Add(_tail1);
+            grid.Children.Add(_head);
+            host.Child = grid;
+
+            _radius = rx;
+            // Recompute dash metrics from the rectangle's own rendered size so
+            // insets/padding never desync the maths.
+            _head.SizeChanged += (_, e) => Recompute(e.NewSize.Width, e.NewSize.Height);
+            SetActive(false);
+        }
+
+        private static Rectangle MakeRect(Color c, double opacity, double rx) => new Rectangle
+        {
+            IsHitTestVisible = false,
+            Fill = null,
+            Stroke = new SolidColorBrush(c),
+            StrokeThickness = Thick,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeDashCap = PenLineCap.Round,
+            RadiusX = rx,
+            RadiusY = rx,
+            Opacity = opacity,
+            Visibility = Visibility.Collapsed,
+        };
+
+        private void Recompute(double w, double h)
+        {
+            if (w <= 0 || h <= 0) return;
+            double r = Math.Min(_radius, Math.Min(w, h) / 2.0);
+            // rounded-rect perimeter: straight runs (corners removed) + one full
+            // circle from the four quarter arcs.
+            double perimPx = 2 * (w - 2 * r) + 2 * (h - 2 * r) + 2 * Math.PI * r;
+            _perimUnits = perimPx / Thick;
+            _headUnits = HeadFrac * _perimUnits;
+            double gap = Math.Max(0.01, _perimUnits - _headUnits);
+            foreach (var rect in new[] { _head, _tail1, _tail2 })
+            {
+                rect.StrokeDashArray = new DoubleCollection { _headUnits, gap };
+                rect.RadiusX = r;
+                rect.RadiusY = r;
+            }
+        }
+
+        // t01 in [0,1): fraction of one lap. Offset advances linearly in path
+        // units; the two tail shapes trail the head by ~0.9 and ~1.7 head-lengths.
+        public void SetProgress(double t01)
+        {
+            if (!_active || _perimUnits <= 0) return;
+            double off = -t01 * _perimUnits;
+            _head.StrokeDashOffset = off;
+            _tail1.StrokeDashOffset = off + _headUnits * 0.9;
+            _tail2.StrokeDashOffset = off + _headUnits * 1.7;
+        }
+
+        public void SetActive(bool on)
+        {
+            _active = on;
+            var v = on ? Visibility.Visible : Visibility.Collapsed;
+            _head.Visibility = v;
+            _tail1.Visibility = v;
+            _tail2.Visibility = v;
         }
     }
 
