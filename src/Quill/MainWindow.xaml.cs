@@ -309,6 +309,8 @@ public sealed partial class MainWindow : Window
         if (_library.Pens.Count > 0) ApplyPreset(_library.Pens[0]);
         UpdateUndoButtons();
 
+        ConfigureCustomTitleBar();
+
         // Restore the last window placement BEFORE any fullscreen presenter, so
         // leaving fullscreen/maximise lands on the size the user actually had
         // last session instead of the small first-run default (#14-batch2).
@@ -1219,6 +1221,99 @@ public sealed partial class MainWindow : Window
         _rippleStartMs = Environment.TickCount64;
         _glowTimer?.Start();
     }
+
+    // ---- custom window controls (#caption) -------------------------------
+    // The system title bar is removed entirely so the app draws its own
+    // minimise / maximise / close in the top bar. Dragging and snap are
+    // restored by handing the press to the OS as a caption hit.
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    private const uint WM_NCLBUTTONDOWN = 0x00A1;
+    private const int HTCAPTION = 2;
+
+    private void ConfigureCustomTitleBar()
+    {
+        try
+        {
+            if (AppWindow.Presenter is OverlappedPresenter op)
+                op.SetBorderAndTitleBar(true, false);   // keep the resize border, drop the caption
+        }
+        catch { }
+
+        // empty space in the top bar drags the window, and double-click toggles
+        // maximise — exactly what a real title bar does
+        TopBar.PointerPressed += (s, e) =>
+        {
+            if (e.GetCurrentPoint(TopBar).Properties.IsLeftButtonPressed && !OverInteractive(e.OriginalSource))
+            {
+                try
+                {
+                    ReleaseCapture();
+                    SendMessage(WinRT.Interop.WindowNative.GetWindowHandle(this),
+                                WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+                }
+                catch { }
+            }
+        };
+        TopBar.DoubleTapped += (s, e) => { if (!OverInteractive(e.OriginalSource)) ToggleMaximise(); };
+
+        // close goes red on hover, the one caption affordance users expect
+        BtnWinClose.PointerEntered += (_, _) =>
+        {
+            BtnWinClose.Background = new SolidColorBrush(Color.FromArgb(255, 0xC4, 0x2B, 0x1C));
+            BtnWinCloseIcon.Foreground = new SolidColorBrush(Colors.White);
+        };
+        BtnWinClose.PointerExited += (_, _) =>
+        {
+            BtnWinClose.Background = new SolidColorBrush(Colors.Transparent);
+            BtnWinCloseIcon.ClearValue(FontIcon.ForegroundProperty);
+        };
+
+        UpdateMaxGlyph();
+        this.SizeChanged += (_, _) => UpdateMaxGlyph();
+    }
+
+    // A press on any button/menu must not start a window drag.
+    private static bool OverInteractive(object? src)
+    {
+        var d = src as DependencyObject;
+        while (d != null)
+        {
+            if (d is Microsoft.UI.Xaml.Controls.Primitives.ButtonBase or ComboBox or Slider or TextBox or ScrollViewer)
+                return true;
+            d = VisualTreeHelper.GetParent(d);
+        }
+        return false;
+    }
+
+    private void ToggleMaximise()
+    {
+        if (AppWindow.Presenter is not OverlappedPresenter op) return;
+        if (op.State == OverlappedPresenterState.Maximized) op.Restore(); else op.Maximize();
+        UpdateMaxGlyph();
+    }
+
+    private void UpdateMaxGlyph()
+    {
+        try
+        {
+            bool max = AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Maximized };
+            BtnWinMaxIcon.Glyph = max ? "" : "";   // restore : maximise
+            ToolTipService.SetToolTip(BtnWinMax, max ? "Restore down" : "Maximise");
+        }
+        catch { }
+    }
+
+    private void WinMin_Click(object sender, RoutedEventArgs e)
+    {
+        if (AppWindow.Presenter is OverlappedPresenter op) op.Minimize();
+    }
+
+    private void WinMax_Click(object sender, RoutedEventArgs e) => ToggleMaximise();
+
+    private void WinClose_Click(object sender, RoutedEventArgs e) => Close();
 
     private void ApplyTitleBarColors(bool dark)
     {
