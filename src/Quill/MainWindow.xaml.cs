@@ -1230,6 +1230,9 @@ public sealed partial class MainWindow : Window
     private static extern bool ReleaseCapture();
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "ShowWindow")]
+    private static extern bool ShowWindowNative(IntPtr hWnd, int nCmdShow);
+    private const int SW_MINIMIZE = 6;
     private const uint WM_NCLBUTTONDOWN = 0x00A1;
     private const int HTCAPTION = 2;
 
@@ -1288,16 +1291,43 @@ public sealed partial class MainWindow : Window
         return false;
     }
 
-    // still reachable by double-clicking the bar, like a real title bar
+    // also reachable by double-clicking the bar, like a real title bar
     private void ToggleMaximise()
     {
         if (AppWindow.Presenter is not OverlappedPresenter op) return;
         if (op.State == OverlappedPresenterState.Maximized) op.Restore(); else op.Maximize();
+        UpdateFullscreenIcon();
+    }
+
+    private void WinMax_Click(object sender, RoutedEventArgs e)
+    {
+        if (AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
+        {
+            AppWindow.SetPresenter(AppWindowPresenterKind.Default);   // leave full screen
+            ReapplyBorderlessCaption();
+            UpdateFullscreenIcon();
+            return;
+        }
+        ToggleMaximise();
+    }
+
+    // Switching presenters hands back a fresh OverlappedPresenter WITH the
+    // system caption, which would undo the custom window controls.
+    private void ReapplyBorderlessCaption()
+    {
+        try
+        {
+            if (AppWindow.Presenter is OverlappedPresenter op) op.SetBorderAndTitleBar(true, false);
+        }
+        catch { }
     }
 
     private void WinMin_Click(object sender, RoutedEventArgs e)
     {
-        if (AppWindow.Presenter is OverlappedPresenter op) op.Minimize();
+        // OverlappedPresenter.Minimize() does nothing under the full-screen
+        // presenter, so minimise the window itself in that case (#caption)
+        if (AppWindow.Presenter is OverlappedPresenter op) { op.Minimize(); return; }
+        try { ShowWindowNative(WinRT.Interop.WindowNative.GetWindowHandle(this), SW_MINIMIZE); } catch { }
     }
 
     private void WinClose_Click(object sender, RoutedEventArgs e) => Close();
@@ -4724,6 +4754,7 @@ public sealed partial class MainWindow : Window
         {
             if (_hideEnteredFullscreen && AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
                 AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+                ReapplyBorderlessCaption();
         }
         catch { }
         _hideEnteredFullscreen = false;
@@ -4867,7 +4898,10 @@ public sealed partial class MainWindow : Window
     {
         var presenter = AppWindow.Presenter;
         if (presenter.Kind == AppWindowPresenterKind.FullScreen)
+        {
             AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+            ReapplyBorderlessCaption();
+        }
         else
             AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
         UpdateFullscreenIcon();
@@ -4877,9 +4911,10 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            bool fs = AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
-            BtnFullscreenIcon.Glyph = fs ? "\uE73F" : "\uE740";   // BackToWindow / FullScreen
-            ToolTipService.SetToolTip(BtnWinFull, fs ? "Exit full screen (F11)" : "Full screen (F11)");
+            bool covers = AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen
+                       || AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Maximized };
+            BtnFullscreenIcon.Glyph = covers ? "" : "";   // inward once it fills the screen
+            ToolTipService.SetToolTip(BtnWinFull, covers ? "Restore down" : "Maximise");
         }
         catch { }
     }

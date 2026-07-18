@@ -345,8 +345,8 @@
                         ToolTipService.ToolTip="Minimise">
                     <FontIcon Glyph="&#xE921;" FontSize="11"/>
                 </Button>
-                <Button x:Name="BtnWinFull" Click="Fullscreen_Click" Background="Transparent" BorderThickness="0"
-                        ToolTipService.ToolTip="Full screen (F11)">
+                <Button x:Name="BtnWinFull" Click="WinMax_Click" Background="Transparent" BorderThickness="0"
+                        ToolTipService.ToolTip="Maximise">
                     <FontIcon x:Name="BtnFullscreenIcon" Glyph="&#xE740;" FontSize="11"/>
                 </Button>
                 <Button x:Name="BtnWinClose" Click="WinClose_Click" Background="Transparent" BorderThickness="0"
