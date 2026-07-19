@@ -25,6 +25,8 @@ public class StrokePoint
     public float X { get; set; }
     public float Y { get; set; }
     public float Pressure { get; set; } = 0.5f;
+    public float TiltX { get; set; } = 0f;
+    public float TiltY { get; set; } = 0f;
 
     public StrokePoint() { }
     public StrokePoint(float x, float y, float pressure) { X = x; Y = y; Pressure = pressure; }
@@ -249,6 +251,7 @@ public class Notebook
     // Per-notebook default text font/size (null = the library-wide default).
     public string? DefaultFont { get; set; }
     public double? DefaultFontSize { get; set; }
+    public bool IsArt { get; set; } = false;
     public List<Section> Sections { get; set; } = new();
 
     public override string ToString() => Name;
@@ -315,6 +318,7 @@ public class Library
     public string AiProvider { get; set; } = "None";
     public string AiModel { get; set; } = "";
     public string AiEndpoint { get; set; } = "";
+    public bool ArtAutoReloadPaint { get; set; } = true;
     // Last non-maximised window placement, so leaving fullscreen/maximise
     // returns to the size the user actually had. 0 width = never saved.
     public double WinX { get; set; }
