@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices.WindowsRuntime;
+﻿using System.Runtime.InteropServices.WindowsRuntime;
 using Quill.Controls;
 using Quill.Helpers;
 using Quill.Models;
@@ -49,9 +49,6 @@ public sealed partial class MainWindow : Window
     private bool _syncingSize;
     private bool _uiHidden;
     private bool _floatPen;
-    private Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase? _standardAiFlyout;
-    private Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase? _originalPageSettingsFlyout;
-    private Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase? _originalHistoryFlyout;
     // true right after a drag on the minimal-UI cluster/tab, so the Button.Click
     // that a WinUI manipulation gesture leaves behind on release doesn't also fire.
     private bool _minimalButtonsDragged;
@@ -66,7 +63,6 @@ public sealed partial class MainWindow : Window
     // notebook grid) and whether the gallery is acting as the startup picker (#31).
     private Notebook? _galleryNb;
     private bool _galleryLauncher;
-    private bool _isFirstPageLoad = true;
     private readonly Quill.Services.AudioRecorder _audioRecorder = new Quill.Services.AudioRecorder();
     private readonly Quill.Services.DictationService _dictation = new();
     private readonly Quill.Services.AudioPlayer _audioPlayer = new Quill.Services.AudioPlayer();
@@ -100,9 +96,6 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         Title = "Quill";
-        _standardAiFlyout = BtnAi.Flyout;
-        _originalPageSettingsFlyout = PageSettingsBtn.Flyout;
-        _originalHistoryFlyout = BtnHistory.Flyout;
         try
         {
             var icon = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico");
@@ -437,34 +430,6 @@ public sealed partial class MainWindow : Window
         else _glowTimer.Start();
     }
 
-    private Color ColorFromHSL(double h, double s, double l)
-    {
-        double r = 0, g = 0, b = 0;
-        if (s == 0)
-        {
-            r = g = b = l; // achromatic
-        }
-        else
-        {
-            var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-            var p = 2 * l - q;
-            r = HueToRgb(p, q, h + 1.0/3.0);
-            g = HueToRgb(p, q, h);
-            b = HueToRgb(p, q, h - 1.0/3.0);
-        }
-        return Color.FromArgb(255, (byte)(r * 255), (byte)(g * 255), (byte)(b * 255));
-    }
-
-    private double HueToRgb(double p, double q, double t)
-    {
-        if (t < 0.0) t += 1.0;
-        if (t > 1.0) t -= 1.0;
-        if (t < 1.0/6.0) return p + (q - p) * 6.0 * t;
-        if (t < 1.0/2.0) return q;
-        if (t < 2.0/3.0) return p + (q - p) * (2.0/3.0 - t) * 6.0;
-        return p;
-    }
-
     private void GlowTick()
     {
         _glowT += 0.04;
@@ -472,6 +437,7 @@ public sealed partial class MainWindow : Window
         double opacity = 0.9;
         if (mode == "Breathe")
         {
+            // pure sinusoid: perfectly even rise and fall
             opacity = 0.675 + 0.325 * Math.Sin(_glowT * (2 * Math.PI / 5.0));
         }
         else if (mode == "Comet")
@@ -483,36 +449,6 @@ public sealed partial class MainWindow : Window
             // path at CONSTANT path speed — follows corners, never mirrors (#comet).
             double ct = (_glowT / 3.5) % 1.0;   // one lap ~3.5s
             foreach (var rim in _cometRims) rim.SetProgress(ct);
-        }
-        else if (mode == "Pulse")
-        {
-            // double-pulse heartbeat pattern
-            opacity = 0.45 + 0.45 * Math.Pow(Math.Max(0, Math.Sin(_glowT * 2.2)), 6.0) + 0.25 * Math.Pow(Math.Max(0, Math.Sin(_glowT * 2.2 - 0.4)), 6.0);
-        }
-        else if (mode == "Flicker")
-        {
-            var rand = new Random((int)(_glowT * 100));
-            opacity = 0.72 + 0.14 * Math.Sin(_glowT * 3.5) + (rand.NextDouble() - 0.5) * 0.08;
-            opacity = Math.Clamp(opacity, 0.4, 1.0);
-        }
-        else if (mode == "Rainbow Flow")
-        {
-            opacity = 0.9;
-            double hue = (_glowT * 0.04) % 1.0; // full cycle every 25 seconds
-            Color rainbowCol = ColorFromHSL(hue, 0.75, 0.6);
-            foreach (var b in GlowBrushes())
-            {
-                if (!_circSnapshot.ContainsKey(b))
-                    _circSnapshot[b] = b.GradientStops.OrderBy(gs => gs.Offset)
-                                                      .Select(gs => (gs.Offset, gs.Color)).ToList();
-                foreach (var stop in b.GradientStops)
-                {
-                    if (stop.Color.A > 0)
-                    {
-                        stop.Color = Color.FromArgb(stop.Color.A, rainbowCol.R, rainbowCol.G, rainbowCol.B);
-                    }
-                }
-            }
         }
         else if (mode == "Circulate")
         {
@@ -526,6 +462,8 @@ public sealed partial class MainWindow : Window
             double band = (_glowT / 4.5) % 1.0;   // brisk enough that the motion clearly reads
             var seen = new HashSet<LinearGradientBrush>();
             foreach (var b in GlowBrushes()) { seen.Add(b); CirculateStops(b, band); }
+            // hover glows come and go — drop snapshots of brushes that left the
+            // engine so the dictionary can't pin them alive forever
             foreach (var dead in _circSnapshot.Keys.Where(k => !seen.Contains(k)).ToList())
                 _circSnapshot.Remove(dead);
         }
@@ -986,23 +924,10 @@ public sealed partial class MainWindow : Window
         _saveTimer.Start();
     }
 
-    private async void SaveNow()
+    private void SaveNow()
     {
         Surface.FlushTexts();
         LibraryStore.Save(_library);
-        if (_curNb != null && _curNb.IsArt && _curPage != null && ArtSurface.Visibility == Visibility.Visible)
-        {
-            try
-            {
-                string artPagesDir = System.IO.Path.Combine(LibraryStore.Dir, "art_pages");
-                System.IO.Directory.CreateDirectory(artPagesDir);
-                string filePath = System.IO.Path.Combine(artPagesDir, $"{_curPage.Id}.artq");
-                var folder = await Windows.Storage.StorageFolder.GetFolderFromPathAsync(artPagesDir);
-                var storageFile = await folder.CreateFileAsync($"{_curPage.Id}.artq", Windows.Storage.CreationCollisionOption.OpenIfExists);
-                await ArtSurface.SaveProjectAsync(storageFile);
-            }
-            catch { }
-        }
     }
 
     private void ShowStatus(string message)
@@ -1687,7 +1612,6 @@ public sealed partial class MainWindow : Window
             ToolTipService.SetToolTip(btn, $"{p.Name} (right-click to edit)");
             btn.Click += (_, _) => ApplyPreset(p);
             btn.ContextFlyout = CreatePresetFlyout(p, bodyPath, colPath);
-            AddHoverScaleAnimation(btn);
 
             PresetPanel.Children.Add(btn);
         }
@@ -1717,17 +1641,7 @@ public sealed partial class MainWindow : Window
             Background = new SolidColorBrush(Colors.Transparent)
         };
         ToolTipService.SetToolTip(chip, "Eraser (right-click to pick point or stroke mode)");
-        AddHoverScaleAnimation(chip);
-        chip.Click += (_, _) => {
-            if (_curNb != null && _curNb.IsArt)
-            {
-                SelectArtTool(ArtTool.Eraser);
-            }
-            else
-            {
-                SelectTool("Eraser");
-            }
-        };
+        chip.Click += (_, _) => SelectTool("Eraser");
 
         var fly = new Flyout();
         var panel = new StackPanel { Spacing = 6, Width = 220 };
@@ -2173,10 +2087,8 @@ public sealed partial class MainWindow : Window
         Scan(NotebookTree.RootNodes);
 
         NotebookTree.RootNodes.Clear();
-        bool filterArt = (_curNb != null && _curNb.IsArt);
         foreach (var nb in _library.Notebooks)
         {
-            if (nb.IsArt != filterArt) continue;
             var nbNode = new TreeViewNode { Content = nb, IsExpanded = expanded.Contains(nb) };
             foreach (var sec in nb.Sections)
             {
@@ -2419,37 +2331,12 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         }
 
-        bool isArt = nb.IsArt;
-        if (_isFirstPageLoad)
+        Surface.LoadPage(page);
+        if (pageChanged && !_suppressPageFade)
         {
-            _isFirstPageLoad = false;
-            NotebookPanel.Visibility = Visibility.Collapsed;
-            BtnSidebar.IsChecked = false;
-        }
-        UpdateTopBarForPageMode(isArt);
-
-        if (isArt)
-        {
-            Surface.Visibility = Visibility.Collapsed;
-            ArtSurface.Visibility = Visibility.Visible;
-            ArtSurface.AutoReloadPaint = _library.ArtAutoReloadPaint;
-            LoadArtPageAsync(page);
-            if (pageChanged && !_suppressPageFade)
-            {
-                ArtSurface.Opacity = 0.25;
-                FadeTo(ArtSurface, 1, 200, collapseAtEnd: false);
-            }
-        }
-        else
-        {
-            ArtSurface.Visibility = Visibility.Collapsed;
-            Surface.Visibility = Visibility.Visible;
-            Surface.LoadPage(page);
-            if (pageChanged && !_suppressPageFade)
-            {
-                Surface.Opacity = 0.25;
-                FadeTo(Surface, 1, 200, collapseAtEnd: false);
-            }
+            // gentle cross-fade so the new page eases in rather than snapping
+            Surface.Opacity = 0.25;
+            FadeTo(Surface, 1, 200, collapseAtEnd: false);
         }
         CrumbText.Text = $"{nb.Name} ▸ {sec.Name} ▸ {page.Name}";
 
@@ -2512,21 +2399,6 @@ public sealed partial class MainWindow : Window
         var name = await PromptAsync("New notebook", $"Notebook {_library.Notebooks.Count + 1}");
         if (name == null) return;
         var nb = new Notebook { Name = name };
-        var sec = new Section { Name = "Section 1" };
-        var pg = NewPage("Page 1");
-        sec.Pages.Add(pg);
-        nb.Sections.Add(sec);
-        _library.Notebooks.Add(nb);
-        BuildTree();
-        SwitchToPage(nb, sec, pg);
-        ScheduleSave();
-    }
-
-    private async void AddArtNotebook_Click(object sender, RoutedEventArgs e)
-    {
-        var name = await PromptAsync("New Art notebook", $"Art Notebook {_library.Notebooks.Count + 1}");
-        if (name == null) return;
-        var nb = new Notebook { Name = name, IsArt = true };
         var sec = new Section { Name = "Section 1" };
         var pg = NewPage("Page 1");
         sec.Pages.Add(pg);
@@ -3262,7 +3134,6 @@ public sealed partial class MainWindow : Window
         bool detail = _galleryNb != null;
         GalleryBackBtn.Visibility = detail ? Visibility.Visible : Visibility.Collapsed;
         GalleryNbBtn.Visibility = detail ? Visibility.Collapsed : Visibility.Visible;
-        GalleryArtNbBtn.Visibility = detail ? Visibility.Collapsed : Visibility.Visible;
         GalleryFolderBtn.Visibility = detail ? Visibility.Collapsed : Visibility.Visible;
         GallerySecBtn.Visibility = detail ? Visibility.Visible : Visibility.Collapsed;
         GallerySaveBtn.Visibility = detail ? Visibility.Visible : Visibility.Collapsed;
@@ -3295,15 +3166,13 @@ public sealed partial class MainWindow : Window
         }
         else GalleryContinueBtn.Visibility = Visibility.Collapsed;
 
-        var filteredNotebooks = _library.Notebooks;
-
         // ungrouped notebooks first
-        var ungrouped = filteredNotebooks.Where(n => string.IsNullOrEmpty(n.Folder)).ToList();
+        var ungrouped = _library.Notebooks.Where(n => string.IsNullOrEmpty(n.Folder)).ToList();
         if (ungrouped.Count > 0) GalleryHost.Children.Add(BuildCardRow(ungrouped));
 
         // then each folder (union of declared folders and folders in use)
         var folders = _library.Folders
-            .Concat(filteredNotebooks.Select(n => n.Folder ?? "").Where(f => f != ""))
+            .Concat(_library.Notebooks.Select(n => n.Folder ?? "").Where(f => f != ""))
             .Distinct().OrderBy(f => f).ToList();
         foreach (var folder in folders)
         {
@@ -3316,7 +3185,7 @@ public sealed partial class MainWindow : Window
                 Opacity = 0.85,
                 Margin = new Thickness(2, 6, 0, 0)
             });
-            var inFolder = filteredNotebooks.Where(n => n.Folder == folder).ToList();
+            var inFolder = _library.Notebooks.Where(n => n.Folder == folder).ToList();
             GalleryHost.Children.Add(inFolder.Count > 0
                 ? BuildCardRow(inFolder)
                 : new TextBlock { Text = "(empty — move a notebook here)", Opacity = 0.5, FontSize = 12, Margin = new Thickness(4, 0, 0, 0) });
@@ -3863,21 +3732,6 @@ public sealed partial class MainWindow : Window
         ScheduleSave();
     }
 
-    private async void GalleryNewArtNotebook_Click(object sender, RoutedEventArgs e)
-    {
-        var name = await PromptAsync("New Art notebook", $"Art Notebook {_library.Notebooks.Count + 1}");
-        if (name == null) return;
-        var nb = new Notebook { Name = name, IsArt = true };
-        var sec = new Section { Name = "Section 1" };
-        sec.Pages.Add(NewPage("Page 1"));
-        nb.Sections.Add(sec);
-        _library.Notebooks.Add(nb);
-        BuildTree();
-        _galleryNb = nb;      // jump straight into the new notebook's pages
-        BuildGallery();
-        ScheduleSave();
-    }
-
     private async void GalleryNewFolder_Click(object sender, RoutedEventArgs e)
     {
         var f = await PromptAsync("New folder", "Folder");
@@ -4004,16 +3858,15 @@ public sealed partial class MainWindow : Window
 
         // ---- glow animation (#4-batch2) ----
         var glowBox = new ComboBox { Header = "Glow animation", Width = 220 };
-        var glowModes = new[] { "Off", "Breathe", "Circulate", "Comet", "Pulse", "Flicker", "Rainbow Flow" };
-        foreach (var mode in glowModes) glowBox.Items.Add(mode);
-        glowBox.SelectedItem = glowModes.Contains(_library.GlowMode) ? _library.GlowMode : "Breathe";
+        foreach (var mode in new[] { "Off", "Breathe", "Circulate", "Comet" }) glowBox.Items.Add(mode);
+        glowBox.SelectedItem = _library.GlowMode is "Off" or "Circulate" or "Comet" ? _library.GlowMode : "Breathe";
         glowBox.SelectionChanged += (_, _) =>
         {
             if (glowBox.SelectedItem is string gm)
             { _library.GlowMode = gm; ApplyGlowMode(); ScheduleSave(); }
         };
         panel.Children.Add(glowBox);
-        panel.Children.Add(new TextBlock { Text = "Breathe/Pulse/Flicker pulsate the opacity. Circulate flows the highlight. Rainbow Flow cycles colors dynamically.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = "Circulate makes the highlight travel around the panel rims instead of fading in and out.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- theme mode (#10-roadmap) ----
         var themeBox = new ComboBox { Header = "Theme", Width = 220 };
@@ -4116,16 +3969,6 @@ public sealed partial class MainWindow : Window
             cb.Unchecked += (_, _) => Toggle();
             panel.Children.Add(cb);
         }
-
-        // ---- art mode auto reload paint ----
-        var artReloadToggle = new ToggleSwitch { Header = "Art notebook: automatically reapply paint at stroke start", IsOn = _library.ArtAutoReloadPaint };
-        artReloadToggle.Toggled += (_, _) =>
-        {
-            _library.ArtAutoReloadPaint = artReloadToggle.IsOn;
-            ScheduleSave();
-        };
-        panel.Children.Add(artReloadToggle);
-        panel.Children.Add(new TextBlock { Text = "When turned off, the brush remains depleted when starting a new stroke until you reload manually.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- pen dock position (#cust-roadmap): the drag gesture already works;
         //      this makes the four dock sides discoverable without dragging ----
@@ -4308,7 +4151,6 @@ public sealed partial class MainWindow : Window
         };
         var dlg = new ContentDialog { Title = "Settings", Content = scroller, CloseButtonText = "Done", XamlRoot = RootGrid.XamlRoot };
         await dlg.ShowAsync();
-        ArtSurface.AutoReloadPaint = _library.ArtAutoReloadPaint;
     }
 
     private async Task<string?> PickFolderAsync()
@@ -4446,10 +4288,8 @@ public sealed partial class MainWindow : Window
 
     private void TouchDraw_Click(object sender, RoutedEventArgs e)
     {
-        bool enabled = TouchDrawToggle.IsChecked == true;
-        Surface.HandDrawMode = enabled;
-        ArtSurface.TouchDrawEnabled = enabled;
-        ShowStatus(enabled
+        Surface.HandDrawMode = TouchDrawToggle.IsChecked == true;
+        ShowStatus(Surface.HandDrawMode
             ? "Finger and mouse drawing enabled."
             : "Finger and mouse drawing disabled; touch pans the page.");
     }
@@ -4586,24 +4426,8 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     // Undo / redo / history / replay
     // =======================================================================
-    private void Undo_Click(object sender, RoutedEventArgs e)
-    {
-        if (ArtSurface.Visibility == Visibility.Visible)
-        {
-            ArtSurface.Undo();
-            return;
-        }
-        Surface.Undo();
-    }
-    private void Redo_Click(object sender, RoutedEventArgs e)
-    {
-        if (ArtSurface.Visibility == Visibility.Visible)
-        {
-            ArtSurface.Redo();
-            return;
-        }
-        Surface.Redo();
-    }
+    private void Undo_Click(object sender, RoutedEventArgs e) => Surface.Undo();
+    private void Redo_Click(object sender, RoutedEventArgs e) => Surface.Redo();
 
     private void UpdateUndoButtons()
     {
@@ -4637,12 +4461,6 @@ public sealed partial class MainWindow : Window
 
     private void UndoAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
-        if (ArtSurface.Visibility == Visibility.Visible)
-        {
-            ArtSurface.Undo();
-            args.Handled = true;
-            return;
-        }
         if (Surface.ActiveTextBox != null && Surface.ActiveTextBox.FocusState != FocusState.Unfocused)
         {
             args.Handled = false;
@@ -4654,12 +4472,6 @@ public sealed partial class MainWindow : Window
 
     private void RedoAccel_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
-        if (ArtSurface.Visibility == Visibility.Visible)
-        {
-            ArtSurface.Redo();
-            args.Handled = true;
-            return;
-        }
         if (Surface.ActiveTextBox != null && Surface.ActiveTextBox.FocusState != FocusState.Unfocused)
         {
             args.Handled = false;
@@ -8558,287 +8370,4 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
     }
 
-    private async void LoadArtPageAsync(NotePage page)
-    {
-        string artPagesDir = System.IO.Path.Combine(LibraryStore.Dir, "art_pages");
-        System.IO.Directory.CreateDirectory(artPagesDir);
-        string filePath = System.IO.Path.Combine(artPagesDir, $"{page.Id}.artq");
-
-        if (System.IO.File.Exists(filePath))
-        {
-            var storageFile = await Windows.Storage.StorageFile.GetFileFromPathAsync(filePath);
-            await ArtSurface.LoadProjectAsync(storageFile);
-        }
-        else
-        {
-            await InitializeNewArtPageWorkspaceAsync(page, filePath);
-        }
-    }
-
-    private async Task InitializeNewArtPageWorkspaceAsync(NotePage page, string filePath)
-    {
-        var panel = new StackPanel { Spacing = 10, Width = 340 };
-        
-        var comboSubstrate = new ComboBox { Header = "Substrate/Panel Type", HorizontalAlignment = HorizontalAlignment.Stretch };
-        comboSubstrate.Items.Add("Canvas");
-        comboSubstrate.Items.Add("Belgian Linen");
-        comboSubstrate.Items.Add("Wood Panel");
-        comboSubstrate.Items.Add("Rough Watercolor Paper");
-        comboSubstrate.SelectedIndex = 0;
-        
-        var comboPreset = new ComboBox { Header = "Canvas Preset Size", HorizontalAlignment = HorizontalAlignment.Stretch };
-        comboPreset.Items.Add("A4 (8.27\" x 11.69\")");
-        comboPreset.Items.Add("Letter (8.5\" x 11\")");
-        comboPreset.Items.Add("8x10 (8\" x 10\")");
-        comboPreset.Items.Add("Custom Size");
-        comboPreset.SelectedIndex = 1;
-        
-        var gridCustom = new Grid { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 4, 0, 4) };
-        gridCustom.ColumnDefinitions.Add(new ColumnDefinition());
-        gridCustom.ColumnDefinitions.Add(new ColumnDefinition());
-        
-        var txtWidth = new TextBox { Header = "Width", Text = "8.5", Margin = new Thickness(0, 0, 4, 0) };
-        Grid.SetColumn(txtWidth, 0);
-        gridCustom.Children.Add(txtWidth);
-        
-        var txtHeight = new TextBox { Header = "Height", Text = "11.0", Margin = new Thickness(4, 0, 0, 0) };
-        Grid.SetColumn(txtHeight, 1);
-        gridCustom.Children.Add(txtHeight);
-        
-        comboPreset.SelectionChanged += (s0, e0) =>
-        {
-            gridCustom.Visibility = comboPreset.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
-        };
-        
-        var comboUnit = new ComboBox { Header = "Unit", HorizontalAlignment = HorizontalAlignment.Stretch };
-        comboUnit.Items.Add("Inches");
-        comboUnit.Items.Add("Centimeters (cm)");
-        comboUnit.SelectedIndex = 0;
-        
-        var comboDPI = new ComboBox { Header = "Resolution (DPI)", HorizontalAlignment = HorizontalAlignment.Stretch };
-        comboDPI.Items.Add("150 DPI (Good performance)");
-        comboDPI.Items.Add("300 DPI (High print quality)");
-        comboDPI.SelectedIndex = 0;
-        
-        panel.Children.Add(comboSubstrate);
-        panel.Children.Add(comboPreset);
-        panel.Children.Add(gridCustom);
-        panel.Children.Add(comboUnit);
-        panel.Children.Add(comboDPI);
-        
-        var dlg = new ContentDialog
-        {
-            Title = "🎨 Art Mode Workspace Setup",
-            Content = panel,
-            PrimaryButtonText = "Create Painting",
-            CloseButtonText = "Use Defaults",
-            DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = RootGrid.XamlRoot
-        };
-        
-        var result = await dlg.ShowAsync();
-        string substrate = "Canvas";
-        int wPixels = 1200;
-        int hPixels = 1600;
-        
-        if (result == ContentDialogResult.Primary)
-        {
-            substrate = comboSubstrate.SelectedItem.ToString()!;
-            int dpi = comboDPI.SelectedIndex == 0 ? 150 : 300;
-            double wInches = 8.5;
-            double hInches = 11.0;
-            
-            if (comboPreset.SelectedIndex == 0)
-            {
-                wInches = 8.27;
-                hInches = 11.69;
-            }
-            else if (comboPreset.SelectedIndex == 1)
-            {
-                wInches = 8.5;
-                hInches = 11.0;
-            }
-            else if (comboPreset.SelectedIndex == 2)
-            {
-                wInches = 8.0;
-                hInches = 10.0;
-            }
-            else
-            {
-                double.TryParse(txtWidth.Text, out double customW);
-                double.TryParse(txtHeight.Text, out double customH);
-                if (comboUnit.SelectedIndex == 1) // cm
-                {
-                    wInches = customW / 2.54;
-                    hInches = customH / 2.54;
-                }
-                else
-                {
-                    wInches = customW;
-                    hInches = customH;
-                }
-            }
-            
-            wPixels = (int)Math.Round(wInches * dpi);
-            hPixels = (int)Math.Round(hInches * dpi);
-        }
-        
-        ArtSurface.SetupWorkspace(wPixels, hPixels, substrate);
-        
-        try
-        {
-            string artPagesDir = System.IO.Path.Combine(LibraryStore.Dir, "art_pages");
-            var folder = await Windows.Storage.StorageFolder.GetFolderFromPathAsync(artPagesDir);
-            var storageFile = await folder.CreateFileAsync($"{page.Id}.artq", Windows.Storage.CreationCollisionOption.ReplaceExisting);
-            await ArtSurface.SaveProjectAsync(storageFile);
-        }
-        catch { }
-    }
-
-    private void UpdateTopBarForPageMode(bool isArt)
-    {
-        var vis = isArt ? Visibility.Collapsed : Visibility.Visible;
-        
-        ToolText.Visibility = vis;
-        ToolSelect.Visibility = vis;
-        MouseModeBtn.Visibility = vis;
-        BtnDictate.Visibility = vis;
-        BtnCalc.Visibility = vis;
-        ToolSpace.Visibility = vis;
-        
-        if (isArt)
-        {
-            BtnAi.Flyout = null;
-            BuildArtPenRow();
-            
-            ToolPen.IsChecked = true;
-            ToolButton_Click(ToolPen, new RoutedEventArgs());
-            
-            TouchDrawToggle.IsChecked = false;
-            Surface.HandDrawMode = false;
-            ArtSurface.TouchDrawEnabled = false;
-
-            var bgFlyout = new Flyout { Content = ArtSurface.CanvasSettingsUI };
-            PageSettingsBtn.Flyout = bgFlyout;
-
-            var histFlyout = new Flyout { Content = ArtSurface.StrokesHistoryUI };
-            BtnHistory.Flyout = histFlyout;
-        }
-        else
-        {
-            BtnAi.Flyout = _standardAiFlyout;
-            BuildPenStrip();
-
-            if (_originalPageSettingsFlyout != null)
-            {
-                PageSettingsBtn.Flyout = _originalPageSettingsFlyout;
-            }
-            if (_originalHistoryFlyout != null)
-            {
-                BtnHistory.Flyout = _originalHistoryFlyout;
-            }
-        }
-    }
-
-    private void SelectArtBrush(string brushName)
-    {
-        var br = ArtSurface.Brushes.Find(x => x.Name == brushName);
-        if (br != null)
-        {
-            ArtSurface.CurrentBrush = br;
-            ArtSurface.CurrentTool = ArtTool.Brush;
-            ArtSurface.ReloadBrushPaint();
-        }
-    }
-
-    private void SelectArtTool(ArtTool tool)
-    {
-        ArtSurface.CurrentTool = tool;
-    }
-
-    private void BuildArtPenRow()
-    {
-        PresetPanel.Children.Clear();
-        BuildEraserChip();
-        
-        var artPresets = new[]
-        {
-            new { Name = "Oil Paint", Body = "M12 4 H18 V22 H12 Z M11.3 22 H18.7 V27 H11.3 Z", Col = "M12 4 H18 V7.5 H12 Z M15 44 C11.5 39 11 33 12.6 27.5 H17.4 C19 33 18.5 39 15 44 Z", Action = (Action)(() => SelectArtBrush("Oil Paint")) },
-            new { Name = "Watercolor", Body = "M12 4 H18 V22 H12 Z M11.3 22 H18.7 V27 H11.3 Z", Col = "M12 4 H18 V7.5 H12 Z M15 44 C11.5 39 11 33 12.6 27.5 H17.4 C19 33 18.5 39 15 44 Z", Action = (Action)(() => SelectArtBrush("Watercolor")) },
-            new { Name = "Acrylic", Body = "M13 3 H17 V24 H13 Z M11 24 H19 V27 H11 Z", Col = "M13 3 H17 V7 H13 Z M11 27 H19 V41 H11 Z", Action = (Action)(() => SelectArtBrush("Acrylic")) },
-            new { Name = "Pastel", Body = "M11 6 H19 V34 H11 Z", Col = "M11 3 H19 V6 H11 Z M11 34 H19 V42 H11 Z", Action = (Action)(() => SelectArtBrush("Pastel")) },
-            new { Name = "Fan Brush", Body = "M13.5 3 H16.5 V25 H13.5 Z M10.5 25 H19.5 V28 H10.5 Z", Col = "M15 28 L5 42 C 9 44, 21 44, 25 42 Z", Action = (Action)(() => SelectArtBrush("Fan Brush")) },
-            new { Name = "Palette Knife", Body = "M14 3 H16 V22 H14 Z M13 22 L11 26 L13 32 L15 32 L17 26 Z", Col = "M13 32 L11 35 L15 42 L19 35 Z", Action = (Action)(() => SelectArtTool(ArtTool.PaletteKnife)) },
-            new { Name = "Eyedropper", Body = "M11 22 H19 V28 H11 Z M12 28 V36 H18 V28 Z", Col = "M13 14 C13 10, 17 10, 17 14 V22 H13 Z M15 42 L13 36 H17 Z", Action = (Action)(() => SelectArtTool(ArtTool.Eyedropper)) }
-        };
-
-        foreach (var ap in artPresets)
-        {
-            var color = ap.Name == "Eyedropper" ? Colors.Gray : (ArtSurface.ActiveColor ?? Colors.SaddleBrown);
-            if (ap.Name == "Fan Brush") color = Colors.ForestGreen;
-            else if (ap.Name == "Watercolor") color = Colors.DeepSkyBlue;
-            else if (ap.Name == "Acrylic") color = Colors.Crimson;
-            else if (ap.Name == "Pastel") color = Colors.SandyBrown;
-            
-            var content = BuildTwoToneChip(ap.Body, ap.Col, color, out var bodyPath, out var colPath, out var lift);
-            
-            var btn = new Button
-            {
-                Content = content,
-                Padding = new Thickness(0),
-                CornerRadius = new CornerRadius(6),
-                BorderThickness = new Thickness(0),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Bottom,
-                Background = new SolidColorBrush(Colors.Transparent)
-            };
-            ToolTipService.SetToolTip(btn, ap.Name);
-            btn.Click += (s, e) => { ap.Action(); };
-            AddHoverScaleAnimation(btn);
-            
-            PresetPanel.Children.Add(btn);
-        }
-    }
-
-    private void AddHoverScaleAnimation(Button btn)
-    {
-        var transform = new CompositeTransform { ScaleX = 1.0, ScaleY = 1.0, CenterX = 18, CenterY = 22 };
-        btn.RenderTransform = transform;
-        btn.PointerEntered += (s, e) =>
-        {
-            var sb = new Storyboard();
-            var animX = new DoubleAnimation { To = 1.16, Duration = TimeSpan.FromMilliseconds(130), EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } };
-            var animY = new DoubleAnimation { To = 1.16, Duration = TimeSpan.FromMilliseconds(130), EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } };
-            Storyboard.SetTarget(animX, transform);
-            Storyboard.SetTargetProperty(animX, "ScaleX");
-            Storyboard.SetTarget(animY, transform);
-            Storyboard.SetTargetProperty(animY, "ScaleY");
-            sb.Children.Add(animX);
-            sb.Children.Add(animY);
-            sb.Begin();
-        };
-        btn.PointerExited += (s, e) =>
-        {
-            var sb = new Storyboard();
-            var animX = new DoubleAnimation { To = 1.0, Duration = TimeSpan.FromMilliseconds(130), EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } };
-            var animY = new DoubleAnimation { To = 1.0, Duration = TimeSpan.FromMilliseconds(130), EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } };
-            Storyboard.SetTarget(animX, transform);
-            Storyboard.SetTargetProperty(animX, "ScaleX");
-            Storyboard.SetTarget(animY, transform);
-            Storyboard.SetTargetProperty(animY, "ScaleY");
-            sb.Children.Add(animX);
-            sb.Children.Add(animY);
-            sb.Begin();
-        };
-    }
-
-    private void BtnAi_Click(object sender, RoutedEventArgs e)
-    {
-        if (_curNb != null && _curNb.IsArt)
-        {
-            ArtSurface.ToggleAIPanelVisibility();
-        }
-    }
 }
