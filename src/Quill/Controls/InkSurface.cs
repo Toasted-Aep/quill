@@ -1187,12 +1187,12 @@ public sealed class InkSurface : UserControl
                     var resume = _lastCommitted;
                     UndoManager.TryDiscardTop(a => a is AddStrokeAction asa && ReferenceEquals(asa.Stroke, resume));
                     _page.Strokes.Remove(resume);
-                    _wet = new List<StrokePoint>(resume.Points) { new(pos.X, pos.Y, props.Pressure) };
+                    _wet = new List<StrokePoint>(resume.Points) { new(pos.X, pos.Y, props.Pressure) { TiltX = props.XTilt, TiltY = props.YTilt } };
                     _lastCommitted = null;
                 }
                 else
                 {
-                    _wet = new List<StrokePoint> { new(pos.X, pos.Y, props.Pressure) };
+                    _wet = new List<StrokePoint> { new(pos.X, pos.Y, props.Pressure) { TiltX = props.XTilt, TiltY = props.YTilt } };
                 }
                 _wetStart = pos;
                 _wetEnd = pos;
@@ -1554,7 +1554,7 @@ public sealed class InkSurface : UserControl
                         var last = _wet![^1];
                         float minGap = 0.7f / ViewZoom;
                         if (Math.Abs(v.X - last.X) + Math.Abs(v.Y - last.Y) < minGap) continue;
-                        _wet.Add(new StrokePoint(v.X, v.Y, ip.Properties.Pressure));
+                        _wet.Add(new StrokePoint(v.X, v.Y, ip.Properties.Pressure) { TiltX = ip.Properties.XTilt, TiltY = ip.Properties.YTilt });
                     }
                     // The virtual-control win (#cvc): while inking, repaint ONLY
                     // the pixels around the fresh segment instead of the whole
@@ -2737,7 +2737,7 @@ public sealed class InkSurface : UserControl
         }
 
         // Comment pins: a numbered accent dot per comment, greyed when resolved.
-        if (_page != null && _page.Comments.Count > 0)
+        if (_page != null && CommentMode && _page.Comments.Count > 0)
         {
             float pr = 11f / ViewZoom;
             for (int i = 0; i < _page.Comments.Count; i++)
@@ -2859,7 +2859,13 @@ public sealed class InkSurface : UserControl
         if (s.Pen == PenType.Highlighter)
         {
             color.A = 110;
-            float hw = s.Size * 2.4f;
+            float txAvg = 0, tyAvg = 0;
+            for (int i = 0; i < n; i++) { txAvg += pts[i].TiltX; tyAvg += pts[i].TiltY; }
+            txAvg /= n; tyAvg /= n;
+            float tiltRad = (float)Math.Sqrt(txAvg * txAvg + tyAvg * tyAvg) * (float)Math.PI / 180f;
+            float tiltFactor = 1.0f + tiltRad * 1.5f;
+
+            float hw = s.Size * 2.4f * tiltFactor;
             if (n == 1)
             {
                 ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, hw / 2, color);
@@ -2875,11 +2881,16 @@ public sealed class InkSurface : UserControl
             // Graphite: one continuous soft core (no beaded round-cap dots) plus
             // two faint offset passes for grain. Width follows average pressure.
             float prAvg = 0;
-            for (int i = 0; i < n; i++) prAvg += pts[i].Pressure;
+            float txAvg = 0, tyAvg = 0;
+            for (int i = 0; i < n; i++) { prAvg += pts[i].Pressure; txAvg += pts[i].TiltX; tyAvg += pts[i].TiltY; }
             prAvg = n > 0 ? prAvg / n : 0.5f;
+            txAvg /= n; tyAvg /= n;
             if (prAvg <= 0.01f) prAvg = 0.5f;
+            float tiltRad = (float)Math.Sqrt(txAvg * txAvg + tyAvg * tyAvg) * (float)Math.PI / 180f;
+            float tiltFactor = 1.0f + tiltRad * 1.5f;
+
             float sens = s.Sens <= 0.01f ? 1f : s.Sens;
-            float pw = Math.Max(0.6f, s.Size * (0.45f + 0.7f * sens * prAvg));
+            float pw = Math.Max(0.6f, s.Size * (0.45f + 0.7f * sens * prAvg) * tiltFactor);
             if (n == 1)
             {
                 var c1 = color; c1.A = 150;
@@ -2898,11 +2909,16 @@ public sealed class InkSurface : UserControl
         {
             // waxy, thick and grainy — heavier and more textured than the pencil
             float prAvg = 0;
-            for (int i = 0; i < n; i++) prAvg += pts[i].Pressure;
+            float txAvg = 0, tyAvg = 0;
+            for (int i = 0; i < n; i++) { prAvg += pts[i].Pressure; txAvg += pts[i].TiltX; tyAvg += pts[i].TiltY; }
             prAvg = n > 0 ? prAvg / n : 0.5f;
+            txAvg /= n; tyAvg /= n;
             if (prAvg <= 0.01f) prAvg = 0.5f;
+            float tiltRad = (float)Math.Sqrt(txAvg * txAvg + tyAvg * tyAvg) * (float)Math.PI / 180f;
+            float tiltFactor = 1.0f + tiltRad * 1.5f;
+
             float sens = s.Sens <= 0.01f ? 1f : s.Sens;
-            float cw = Math.Max(1.2f, s.Size * (0.9f + 0.7f * sens * prAvg));
+            float cw = Math.Max(1.2f, s.Size * (0.9f + 0.7f * sens * prAvg) * tiltFactor);
             if (n == 1)
             {
                 var c1 = color; c1.A = 220;
@@ -2920,9 +2936,15 @@ public sealed class InkSurface : UserControl
 
         if (s.Pen == PenType.Watercolor)
         {
+            float txAvg = 0, tyAvg = 0;
+            for (int i = 0; i < n; i++) { txAvg += pts[i].TiltX; tyAvg += pts[i].TiltY; }
+            txAvg /= n; tyAvg /= n;
+            float tiltRad = (float)Math.Sqrt(txAvg * txAvg + tyAvg * tyAvg) * (float)Math.PI / 180f;
+            float tiltFactor = 1.0f + tiltRad * 1.5f;
+
             // soft translucent wash that builds up where strokes overlap
             var wc = color; wc.A = 70;
-            float ww = Math.Max(1.5f, s.Size * 2.2f);
+            float ww = Math.Max(1.5f, s.Size * 2.2f * tiltFactor);
             if (n == 1)
             {
                 ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, ww / 2, wc);
@@ -3014,55 +3036,73 @@ public sealed class InkSurface : UserControl
             }
         }
         float sens = s.Sens <= 0.01f ? 1f : s.Sens;
+        float tx = (a.TiltX + b.TiltX) * 0.5f;
+        float ty = (a.TiltY + b.TiltY) * 0.5f;
+        float tiltRad = (float)Math.Sqrt(tx * tx + ty * ty) * (float)Math.PI / 180f;
+        float tiltFactor = 1.0f + tiltRad * 1.5f;
+
+        float width = s.Size;
         switch (s.Pen)
         {
             case PenType.Pencil:
-            {
-                // graphite: light pressure response + grainy width jitter
-                float jitter = 0.82f + 0.36f * (((uint)(index * 2654435761) % 1000) / 1000f);
-                return Math.Max(0.4f, s.Size * (0.4f + 0.7f * sens * pr) * jitter);
-            }
+                {
+                    // graphite: light pressure response + grainy width jitter
+                    float jitter = 0.82f + 0.36f * (((uint)(index * 2654435761) % 1000) / 1000f);
+                    width = Math.Max(0.4f, s.Size * (0.4f + 0.7f * sens * pr) * jitter);
+                    break;
+                }
             case PenType.Marker:
-            {
-                // chisel tip: width from stroke direction, indifferent to pressure
-                double angM = Math.Atan2(b.Y - a.Y, b.X - a.X);
-                float nibM = (float)Math.Abs(Math.Sin(angM - 0.78));
-                return Math.Max(1f, s.Size * (0.5f + 1.25f * nibM));
-            }
+                {
+                    // chisel tip: width from stroke direction, indifferent to pressure
+                    double angM = Math.Atan2(b.Y - a.Y, b.X - a.X);
+                    float nibM = (float)Math.Abs(Math.Sin(angM - 0.78));
+                    width = Math.Max(1f, s.Size * (0.5f + 1.25f * nibM));
+                    break;
+                }
             case PenType.Calligraphy:
-            {
-                // extreme nib contrast + pressure
-                double angC = Math.Atan2(b.Y - a.Y, b.X - a.X);
-                float nibC = (float)Math.Abs(Math.Sin(angC - 0.7));
-                return Math.Max(0.35f, s.Size * (0.2f + 1.75f * nibC) * (0.4f + 0.95f * sens * pr));
-            }
+                {
+                    // extreme nib contrast + pressure
+                    double angC = Math.Atan2(b.Y - a.Y, b.X - a.X);
+                    float nibC = (float)Math.Abs(Math.Sin(angC - 0.7));
+                    width = Math.Max(0.35f, s.Size * (0.2f + 1.75f * nibC) * (0.4f + 0.95f * sens * pr));
+                    break;
+                }
             case PenType.Standard:
-                return Math.Max(0.5f, s.Size * (0.5f + 1.0f * sens * pr));
+                width = Math.Max(0.5f, s.Size * (0.5f + 1.0f * sens * pr));
+                break;
             case PenType.Brush:
                 // very pressure-hungry: thin whisper -> fat daub
-                return Math.Max(0.4f, s.Size * (0.12f + 3.2f * sens * pr * pr));
+                width = Math.Max(0.4f, s.Size * (0.12f + 3.2f * sens * pr * pr));
+                break;
             case PenType.Fountain:
-            {
-                // Broad-edge nib held ~40°: strong thick (down/perpendicular) vs
-                // thin (across the nib) contrast, with a gentle, wet pressure
-                // response — reads like real fountain-pen calligraphy.
-                double ang = Math.Atan2(b.Y - a.Y, b.X - a.X);
-                float nib = (float)Math.Abs(Math.Sin(ang - 0.7));   // 0 thin .. 1 thick
-                float contrast = 0.22f + 1.15f * nib;
-                float press = 0.78f + 0.5f * sens * pr;             // gentle flow, not flex
-                return Math.Max(0.5f, s.Size * 0.62f * contrast * press);
-            }
+                {
+                    // Broad-edge nib held ~40°: strong thick (down/perpendicular) vs
+                    // thin (across the nib) contrast, with a gentle, wet pressure
+                    // response — reads like real fountain-pen calligraphy.
+                    double ang = Math.Atan2(b.Y - a.Y, b.X - a.X);
+                    float nib = (float)Math.Abs(Math.Sin(ang - 0.7));   // 0 thin .. 1 thick
+                    float contrast = 0.22f + 1.15f * nib;
+                    float press = 0.78f + 0.5f * sens * pr;             // gentle flow, not flex
+                    width = Math.Max(0.5f, s.Size * 0.62f * contrast * press);
+                    break;
+                }
             case PenType.Rollerball:
-                return Math.Max(0.4f, s.Size * (0.7f + 0.5f * sens * pr));
+                width = Math.Max(0.4f, s.Size * (0.7f + 0.5f * sens * pr));
+                break;
             case PenType.Gel:
-                return Math.Max(0.6f, s.Size * (0.85f + 0.5f * sens * pr));
+                width = Math.Max(0.6f, s.Size * (0.85f + 0.5f * sens * pr));
+                break;
             case PenType.Ballpoint:
-                return Math.Max(0.35f, s.Size * (0.55f + 0.6f * sens * pr));
+                width = Math.Max(0.35f, s.Size * (0.55f + 0.6f * sens * pr));
+                break;
             case PenType.FeltTip:
-                return Math.Max(1f, s.Size * (0.95f + 0.35f * sens * pr));
+                width = Math.Max(1f, s.Size * (0.95f + 0.35f * sens * pr));
+                break;
             default:
-                return s.Size;
+                width = s.Size;
+                break;
         }
+        return width * tiltFactor;
     }
 
 

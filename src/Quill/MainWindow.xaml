@@ -18,7 +18,6 @@
             <KeyboardAccelerator Key="Escape" Invoked="EscAccel_Invoked"/>
             <KeyboardAccelerator Key="D" Modifiers="Control" Invoked="DuplicateAccel_Invoked"/>
             <KeyboardAccelerator Key="V" Modifiers="Control,Shift" Invoked="PastePlainTextAccel_Invoked"/>
-            <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="SearchAccel_Invoked"/>
             <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="PaletteAccel_Invoked"/>
         </Grid.KeyboardAccelerators>
 
@@ -171,7 +170,7 @@
                     </ToggleButton>
                     <!-- AllowFocusOnInteraction=False everywhere so opening this menu
                          doesn't destroy the text selection the AI is about to use (#9-batch3) -->
-                    <Button x:Name="BtnAi" AllowFocusOnInteraction="False"
+                    <Button x:Name="BtnAi" Click="BtnAi_Click" AllowFocusOnInteraction="False"
                             ToolTipService.ToolTip="AI assistant — summarise, tag, ask, improve (configure in Settings)">
                         <!-- original four-point spark silhouette -->
                         <PathIcon Data="M8 1 L9.6 6.4 L15 8 L9.6 9.6 L8 15 L6.4 9.6 L1 8 L6.4 6.4 Z M13 1.5 L13.6 3.4 L15.5 4 L13.6 4.6 L13 6.5 L12.4 4.6 L10.5 4 L12.4 3.4 Z"/>
@@ -462,6 +461,7 @@
         <!-- ===================== CANVAS + FLOATING PANELS ===================== -->
         <Grid x:Name="CanvasArea" Grid.Row="2">
             <ctrl:InkSurface x:Name="Surface"/>
+            <ctrl:ArtSurface x:Name="ArtSurface" Visibility="Collapsed"/>
 
             <!-- Liquid-Glass Floating Audio Recording Panel -->
             <Border x:Name="AudioFloatingPanel" HorizontalAlignment="Center" VerticalAlignment="Top" 
@@ -519,7 +519,7 @@
                         <TextBlock Text="Notebooks" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"
                                    FontSize="14" Foreground="{ThemeResource InkBrush}" VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="2">
-                            <Button x:Name="SearchBtn" Padding="4,2" Background="Transparent" BorderThickness="0"
+                            <Button x:Name="SearchBtn" Padding="4,2" Background="Transparent" BorderThickness="0" Visibility="Collapsed"
                                     ToolTipService.ToolTip="Search all notes — text and handwriting (Ctrl+F)">
                                 <FontIcon Glyph="&#xE721;" FontSize="11"/>
                                 <Button.Flyout>
@@ -574,6 +574,9 @@
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B7;"/></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
                                     <MenuFlyoutItem Text="New notebook" Click="AddNotebook_Click">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8F1;"/></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem Text="New Art notebook" Click="AddArtNotebook_Click">
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8F1;"/></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
                                     <MenuFlyoutSeparator/>
@@ -916,7 +919,7 @@
                             </StackPanel>
                         </StackPanel>
                         <StackPanel x:Name="GalleryHeaderRow" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <Button x:Name="GallerySearchBtn" Click="GallerySearch_Click"
+                            <Button x:Name="GallerySearchBtn" Click="GallerySearch_Click" Visibility="Collapsed"
                                     ToolTipService.ToolTip="Search all notes — text and handwriting (Ctrl+F)">
                                 <FontIcon Glyph="&#xE721;" FontSize="14"/>
                             </Button>
@@ -925,6 +928,7 @@
                             <Button x:Name="GalleryContinueBtn" Click="GalleryContinue_Click" Visibility="Collapsed"
                                     Style="{StaticResource AccentButtonStyle}"/>
                             <Button x:Name="GalleryNbBtn" Click="GalleryNewNotebook_Click" Content="New notebook"/>
+                            <Button x:Name="GalleryArtNbBtn" Click="GalleryNewArtNotebook_Click" Content="New Art notebook" Style="{StaticResource AccentButtonStyle}"/>
                             <Button x:Name="GalleryFolderBtn" Click="GalleryNewFolder_Click" Content="New folder"/>
                             <Button x:Name="GallerySecBtn" Click="GalleryNewSection_Click" Content="New section" Visibility="Collapsed"/>
                             <Button x:Name="GalleryDoneBtn" Click="CloseGallery_Click" Content="Close" ToolTipService.ToolTip="Close the picker (Esc)"/>
