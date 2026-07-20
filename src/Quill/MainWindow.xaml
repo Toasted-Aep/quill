@@ -5,22 +5,9 @@
     xmlns:ctrl="using:Quill.Controls"
     xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml">
 
+    <!-- Accelerators are built in code from the active keyboard preset (C5) so
+         that the preset, the live bindings and the F1 sheet cannot drift apart. -->
     <Grid x:Name="RootGrid" Background="{ThemeResource SurfaceBrush}" KeyboardAcceleratorPlacementMode="Hidden">
-        <Grid.KeyboardAccelerators>
-            <KeyboardAccelerator Key="Z" Modifiers="Control" Invoked="UndoAccel_Invoked"/>
-            <KeyboardAccelerator Key="Y" Modifiers="Control" Invoked="RedoAccel_Invoked"/>
-            <KeyboardAccelerator Key="Delete" Invoked="DeleteAccel_Invoked"/>
-            <KeyboardAccelerator Key="C" Modifiers="Control" Invoked="CopyAccel_Invoked"/>
-            <KeyboardAccelerator Key="X" Modifiers="Control" Invoked="CutAccel_Invoked"/>
-            <KeyboardAccelerator Key="V" Modifiers="Control" Invoked="PasteAccel_Invoked"/>
-            <KeyboardAccelerator Key="F11" Invoked="FullscreenAccel_Invoked"/>
-            <KeyboardAccelerator Key="F1" Invoked="ShortcutsAccel_Invoked"/>
-            <KeyboardAccelerator Key="Escape" Invoked="EscAccel_Invoked"/>
-            <KeyboardAccelerator Key="D" Modifiers="Control" Invoked="DuplicateAccel_Invoked"/>
-            <KeyboardAccelerator Key="V" Modifiers="Control,Shift" Invoked="PastePlainTextAccel_Invoked"/>
-            <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="SearchAccel_Invoked"/>
-            <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="PaletteAccel_Invoked"/>
-        </Grid.KeyboardAccelerators>
 
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -940,12 +927,11 @@
                     <TextBlock Text="Shortcuts" FontSize="18" FontWeight="SemiBold"
                                FontFamily="{StaticResource HeadingFont}" Foreground="{ThemeResource InkBrush}"
                                Margin="0,0,0,6"/>
-                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="F11"/><Run Text="   Full screen"/></TextBlock>
-                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Esc"/><Run Text="   Close picker / leave full screen"/></TextBlock>
-                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Ctrl+F"/><Run Text="   Search all notes"/></TextBlock>
-                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Ctrl+Z / Ctrl+Y"/><Run Text="   Undo / redo"/></TextBlock>
-                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Ctrl+C / X / V"/><Run Text="   Copy, cut, paste (ink, images and text)"/></TextBlock>
-                    <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Delete"/><Run Text="   Remove the selection"/></TextBlock>
+                    <!-- Key rows are regenerated from the active preset (C5); the
+                         gesture rows below never change. -->
+                    <TextBlock x:Name="ShortcutsPresetLine" FontSize="12" Opacity="0.7" Margin="0,-4,0,4"
+                               Foreground="{ThemeResource InkBrush}"/>
+                    <StackPanel x:Name="ShortcutsKeyRows" Spacing="5"/>
                     <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Ctrl+wheel"/><Run Text="   Zoom · middle-drag pans"/></TextBlock>
                     <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Right-drag"/><Run Text="   Lasso select · right-tap opens the menu"/></TextBlock>
                     <TextBlock FontSize="13" Foreground="{ThemeResource InkBrush}"><Run FontWeight="SemiBold" Text="Pen barrel"/><Run Text="   Tap a selection for its menu · drag to lasso"/></TextBlock>
@@ -995,6 +981,49 @@
                     </ScrollViewer>
                 </Grid>
             </Border>
+
+            <!-- Connected card→page transition (C3): the page is a Win2D canvas and
+                 cannot be animated as a XAML element, so this placeholder stands in
+                 for it while the activated card grows into the page bounds. Sits
+                 above the gallery so the two cross-dissolve. -->
+            <Canvas x:Name="MorphHost" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="90">
+                <Border x:Name="MorphCard" CornerRadius="12" BorderThickness="1.5"
+                        Background="{ThemeResource CardBrush}"
+                        BorderBrush="{StaticResource GlowBrush}"/>
+            </Canvas>
+        </Grid>
+
+        <!-- Startup veil (#roadmap: async library load, phase 2). The window is
+             shown before library.json has been parsed, so this covers the
+             half-built UI, swallows input that would otherwise reach a library
+             with no notebooks in it, and becomes a real error state if the load
+             fails instead of letting an empty library look like the truth. -->
+        <Grid x:Name="LoadingVeil" Grid.RowSpan="3" Canvas.ZIndex="200"
+              Background="{ThemeResource SurfaceBrush}">
+            <StackPanel x:Name="LoadingBusy" Spacing="14"
+                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Image Source="ms-appx:///Assets/app.ico" Width="44" Height="44" HorizontalAlignment="Center"/>
+                <ProgressRing IsActive="True" Width="26" Height="26"/>
+                <TextBlock Text="Opening your notebooks…" FontSize="13" Opacity="0.7"
+                           HorizontalAlignment="Center" Foreground="{ThemeResource InkBrush}"/>
+            </StackPanel>
+
+            <StackPanel x:Name="LoadingError" Visibility="Collapsed" MaxWidth="540" Spacing="12"
+                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Quill could not open your library" FontSize="20" FontWeight="SemiBold"
+                           FontFamily="{StaticResource HeadingFont}" TextWrapping="Wrap"
+                           Foreground="{ThemeResource InkBrush}"/>
+                <TextBlock x:Name="LoadingErrorText" FontSize="13" TextWrapping="Wrap" Opacity="0.75"
+                           Foreground="{ThemeResource InkBrush}"/>
+                <TextBlock FontSize="12" TextWrapping="Wrap" Opacity="0.6" Foreground="{ThemeResource InkBrush}"
+                           Text="Nothing has been changed on disk. Quill will not write to your library while this message is showing, so your notes are safe — restore a copy from the backups folder, or try again."/>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="LoadRetryBtn" Content="Try again" Click="LoadRetry_Click"
+                            Style="{StaticResource AccentButtonStyle}"/>
+                    <Button x:Name="LoadFolderBtn" Content="Open the folder" Click="LoadOpenFolder_Click"/>
+                    <Button x:Name="LoadQuitBtn" Content="Close Quill" Click="LoadQuit_Click"/>
+                </StackPanel>
+            </StackPanel>
         </Grid>
     </Grid>
 </Window>

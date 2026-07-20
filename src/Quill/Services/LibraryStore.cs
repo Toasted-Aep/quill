@@ -14,6 +14,24 @@ public static class LibraryStore
     {
         public string? DataFolder { get; set; }
         public bool ImportedLegacy { get; set; }
+        // Mirror of the few library fields the window needs BEFORE the library
+        // has finished loading. Without them the window would paint light and
+        // snap to dark, and open at the default size before jumping to the
+        // remembered one (#roadmap: async library load, phase 2).
+        public UiHints Ui { get; set; } = new();
+    }
+
+    public sealed class UiHints
+    {
+        public string Theme { get; set; } = "Dark";
+        public bool OledBlack { get; set; }
+        public string Accent { get; set; } = "#D97757";
+        public double WinX { get; set; }
+        public double WinY { get; set; }
+        public double WinW { get; set; }
+        public double WinH { get; set; }
+        public bool WinMaximized { get; set; } = true;
+        public bool StartFullscreen { get; set; } = true;
     }
 
     private static AppSettings? _settings;
@@ -82,37 +100,104 @@ public static class LibraryStore
     // already-running task instead of loading again.
     private static Task<Library>? _pending;
     public static void BeginLoad() { _pending ??= Task.Run(Load); }
-    public static Library LoadOrJoin()
+
+    /// <summary>Phase 2 (#roadmap): the window is shown while this is still
+    /// running and adopts the result when it arrives, so startup no longer
+    /// blocks on JSON parsing.</summary>
+    public static Task<Library> LoadAsync()
     {
-        var t = _pending;
-        _pending = null;
-        return t != null ? t.GetAwaiter().GetResult() : Load();
+        BeginLoad();
+        return _pending!;
+    }
+
+    /// <summary>Drops the cached load so the error state's "Try again" really
+    /// re-reads the disk (the user may have restored a backup meanwhile).</summary>
+    public static void ResetPendingLoad() => _pending = null;
+
+    /// <summary>True when a library file was present but nothing readable came
+    /// out of it. The returned Library is then an EMPTY placeholder that must
+    /// never reach disk — see <see cref="EnableSaving"/>.</summary>
+    public static bool LoadFailed { get; private set; }
+    public static string? LoadError { get; private set; }
+
+    /// <summary>Set when the one-time legacy import actually merged something.
+    /// Load runs before saving is enabled, so the write is deferred to the
+    /// window instead of being silently dropped by the save gate.</summary>
+    public static bool PendingImportSave { get; private set; }
+
+    // Every path Load reads from, newest-first. Used to tell "first run"
+    // (nothing exists) apart from "the file is there and we could not read it".
+    private static IEnumerable<string> SourcePaths()
+    {
+        yield return FilePath;
+        yield return FilePath + ".bak";
+        yield return Path.Combine(OldAnchorDir, "library.json");
+        yield return Path.Combine(OldAnchorDir, "library.json.bak");
+        yield return LegacyFilePath;
+        yield return LegacyFilePath + ".bak";
     }
 
     public static Library Load()
     {
-        MigrateFromLegacyIfNeeded();
-        var lib = TryRead(FilePath, preserveCorrupt: true)
-            ?? TryRead(FilePath + ".bak", preserveCorrupt: false)
-            ?? TryRead(Path.Combine(OldAnchorDir, "library.json"), preserveCorrupt: false)
-            ?? TryRead(Path.Combine(OldAnchorDir, "library.json.bak"), preserveCorrupt: false)
-            ?? TryRead(LegacyFilePath, preserveCorrupt: false)
-            ?? TryRead(LegacyFilePath + ".bak", preserveCorrupt: false)
-            ?? Seed();
-
-        // One-time automatic recovery: pull in any notebooks that exist in the old
-        // location but not in the current central library (this restores notebooks
-        // that an earlier version left behind). Runs in the user's normal session
-        // where the old location is fully visible.
-        if (!Settings.ImportedLegacy)
+        LoadFailed = false;
+        LoadError = null;
+        try
         {
-            var legacy = TryRead(LegacyFilePath, false) ?? TryRead(LegacyFilePath + ".bak", false);
-            int added = legacy != null ? Merge(lib, legacy) : 0;
-            Settings.ImportedLegacy = true;
-            SaveSettings();
-            if (added > 0) Save(lib);
+            MigrateFromLegacyIfNeeded();
+            bool anySource = SourcePaths().Any(File.Exists);
+
+            var lib = TryRead(FilePath, preserveCorrupt: true)
+                ?? TryRead(FilePath + ".bak", preserveCorrupt: false)
+                ?? TryRead(Path.Combine(OldAnchorDir, "library.json"), preserveCorrupt: false)
+                ?? TryRead(Path.Combine(OldAnchorDir, "library.json.bak"), preserveCorrupt: false)
+                ?? TryRead(LegacyFilePath, preserveCorrupt: false)
+                ?? TryRead(LegacyFilePath + ".bak", preserveCorrupt: false);
+
+            if (lib == null)
+            {
+                // A library exists on disk but every copy failed to parse. Seeding
+                // a fresh one here would look like an empty app that then autosaves
+                // over the user's real notes, so report failure instead and leave
+                // the save gate shut.
+                if (anySource)
+                {
+                    LoadFailed = true;
+                    LoadError = $"Quill found a library at\n{FilePath}\nbut could not read it or any of its backups.";
+                    return new Library();
+                }
+                lib = Seed();   // genuine first run: nothing to lose
+            }
+
+            // One-time automatic recovery: pull in any notebooks that exist in the old
+            // location but not in the current central library (this restores notebooks
+            // that an earlier version left behind). Runs in the user's normal session
+            // where the old location is fully visible.
+            if (!Settings.ImportedLegacy)
+            {
+                var legacy = TryRead(LegacyFilePath, false) ?? TryRead(LegacyFilePath + ".bak", false);
+                int added = legacy != null ? Merge(lib, legacy) : 0;
+                Settings.ImportedLegacy = true;
+                SaveSettings();
+                if (added > 0) PendingImportSave = true;
+            }
+            return lib;
         }
-        return lib;
+        catch (Exception ex)
+        {
+            LoadFailed = true;
+            LoadError = ex.Message;
+            return new Library();
+        }
+    }
+
+    /// <summary>Copies every property of <paramref name="src"/> onto the live
+    /// instance the window already holds. The UI is built around a single
+    /// Library object — handlers, the op log and the calculator all capture it —
+    /// so the loaded state is adopted in place rather than swapped in.</summary>
+    public static void AdoptInPlace(Library target, Library src)
+    {
+        foreach (var p in typeof(Library).GetProperties())
+            if (p.CanRead && p.CanWrite) p.SetValue(target, p.GetValue(src));
     }
 
     /// <summary>Loads a library from an arbitrary file (for the Settings "Import" action).</summary>
@@ -210,8 +295,19 @@ public static class LibraryStore
 
     private static Task _lastWrite = Task.CompletedTask;
 
+    // Hard gate on every write of library.json. Startup shows the window before
+    // the library has loaded, so until a window has adopted a REAL library there
+    // is nothing in memory worth persisting — and after a failed load the gate
+    // stays shut forever, which is what stops an autosave from replacing notes
+    // we merely failed to parse (#roadmap).
+    private static bool _savingEnabled;
+    public static bool SavingEnabled => _savingEnabled;
+    public static void EnableSaving() => _savingEnabled = true;
+
     public static void Save(Library lib)
     {
+        if (!_savingEnabled) return;
+        SyncHints(lib);
         // Serialise on the caller's (UI) thread so the model can't mutate
         // mid-write, then push the actual file IO to a worker (#52).
         string json;
@@ -220,6 +316,25 @@ public static class LibraryStore
         // Stage 0 op log: diff against the shadow and append change ops (#collab)
         try { SyncLog.OnSaved(lib); } catch { }
         _lastWrite = Task.Run(() => WriteAll(json));
+    }
+
+    // Keep the startup hints in settings.json in step with the library. Written
+    // only when something actually changed, so an autosave every 1.5s does not
+    // turn into a second file write.
+    private static void SyncHints(Library lib)
+    {
+        try
+        {
+            var h = Settings.Ui ??= new UiHints();
+            if (h.Theme == lib.Theme && h.OledBlack == lib.OledBlack && h.Accent == lib.AccentColor &&
+                h.WinX == lib.WinX && h.WinY == lib.WinY && h.WinW == lib.WinW && h.WinH == lib.WinH &&
+                h.WinMaximized == lib.WinMaximized && h.StartFullscreen == lib.StartFullscreen) return;
+            h.Theme = lib.Theme; h.OledBlack = lib.OledBlack; h.Accent = lib.AccentColor;
+            h.WinX = lib.WinX; h.WinY = lib.WinY; h.WinW = lib.WinW; h.WinH = lib.WinH;
+            h.WinMaximized = lib.WinMaximized; h.StartFullscreen = lib.StartFullscreen;
+            SaveSettings();
+        }
+        catch { }
     }
 
     /// <summary>Blocks briefly until the last queued write hits disk — called

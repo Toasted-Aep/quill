@@ -32,6 +32,15 @@
     </Content>
   </ItemGroup>
 
+  <!-- UI strings (#C7). The .resw files keep their MRT layout, but Loc parses
+       them from the assembly so the picker can switch language without a
+       restart. LogicalName is pinned because MSBuild would mangle "en-US". -->
+  <ItemGroup>
+    <EmbeddedResource Include="Strings\en-US\Resources.resw" LogicalName="Quill.Strings.en-US.resw" />
+    <EmbeddedResource Include="Strings\tr\Resources.resw" LogicalName="Quill.Strings.tr.resw" />
+    <EmbeddedResource Include="Strings\it\Resources.resw" LogicalName="Quill.Strings.it.resw" />
+  </ItemGroup>
+
   <!-- MSIX packaging (#roadmap): dotnet build -p:Msix=true -p:Platform=x64
        -c Release -p:QuillCertThumbprint=<thumbprint>. See docs/PACKAGING.md. -->
   <PropertyGroup Condition="'$(Msix)'=='true'">

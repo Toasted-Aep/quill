@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Quill.Models;
 
 namespace Quill.Services;
@@ -13,27 +14,51 @@ namespace Quill.Services;
 /// (their oplog files arriving via OneDrive/Dropbox/any synced folder) are
 /// applied to the local library, element-level last-writer-wins by apply order.
 /// Per-actor read cursors live in %LOCALAPPDATA% so they never sync.
+/// Compaction — a log only ever needs the LATEST op per element, so once a log
+/// passes a size threshold it is rewritten keeping one op per id (tombstones
+/// included: dropping them would resurrect deleted elements on peers that never
+/// saw the delete). Surviving ops keep their original lamport order, so replay
+/// semantics are unchanged. The rewrite goes to a temp file in the same
+/// directory and is swapped in with File.Replace — the live log is never
+/// truncated in place. Each rewrite bumps a generation counter carried in a
+/// header line; peers whose stored byte offset predates that generation reset to
+/// offset 0 and filter by the per-actor lamport high-water mark instead.
 /// </summary>
 public static class SyncLog
 {
     private static readonly JsonSerializerOptions Opts = new() { WriteIndented = false };
 
+    private const string HeaderKind = "_h";
+    // Compact once a log passes this; checked after an append, not every save.
+    private const long CompactThresholdBytes = 2L * 1024 * 1024;
+
     private sealed class Op
     {
-        public string K { get; set; } = "";     // nb | sec | pg | st | sh | tx | cm
+        public string K { get; set; } = "";     // nb | sec | pg | st | sh | tx | cm | _h (header)
         public Guid Id { get; set; }
         public Guid Parent { get; set; }        // section->notebook, page->section, element->page
         public string? J { get; set; }          // full entity JSON (null = delete)
         public long N { get; set; }             // per-device lamport
         public string A { get; set; } = "";     // actor (device id)
         public long Ts { get; set; }
+        // header only; omitted from ordinary ops so compaction doesn't inflate every line
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public long G { get; set; }             // compaction generation
     }
 
     private sealed class Cursors
     {
         public Dictionary<string, long> Offsets { get; set; } = new();   // actor -> byte offset
+        // actor -> highest lamport applied from that actor. Survives compaction of
+        // the peer's log, which byte offsets do not.
+        public Dictionary<string, long> Seen { get; set; } = new();
+        // actor -> compaction generation the stored offset belongs to
+        public Dictionary<string, long> Gens { get; set; } = new();
         public long Lamport { get; set; }
     }
+
+    // don't re-attempt compaction on every save once a log is legitimately large
+    private static long _compactFloor = CompactThresholdBytes;
 
     // entity-key -> content hash; what this device believes was last persisted
     private static readonly Dictionary<string, long> _shadow = new();
@@ -152,6 +177,94 @@ public static class SyncLog
                 File.WriteAllText(CursorPath, JsonSerializer.Serialize(_cursors, Opts));
             }
             catch { }
+            CompactIfNeeded();
+        }
+    }
+
+    /// <summary>Reads the generation from a log's header line (0 = never compacted).
+    /// Leaves the stream position undefined; callers seek afterwards.</summary>
+    private static long ReadGeneration(FileStream fs)
+    {
+        try
+        {
+            fs.Seek(0, SeekOrigin.Begin);
+            using var rd = new StreamReader(fs, Encoding.UTF8, false, 1024, leaveOpen: true);
+            var first = rd.ReadLine();
+            if (string.IsNullOrEmpty(first)) return 0;
+            var op = JsonSerializer.Deserialize<Op>(first);
+            return op != null && op.K == HeaderKind ? op.G : 0;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>Rewrite our own log keeping only the latest op per element once it
+    /// grows past the threshold. Crash-safe: temp file in the same directory,
+    /// flushed to disk, then atomically swapped in. The live log is never opened
+    /// for truncation, so an interrupted compaction loses nothing.</summary>
+    private static void CompactIfNeeded()
+    {
+        var path = OplogPath;
+        try
+        {
+            var fi = new FileInfo(path);
+            if (!fi.Exists || fi.Length < _compactFloor) return;
+        }
+        catch { return; }
+
+        long gen;
+        var survivors = new Dictionary<string, Op>();
+        int total = 0;
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            gen = ReadGeneration(fs);
+            fs.Seek(0, SeekOrigin.Begin);
+            using var rd = new StreamReader(fs, Encoding.UTF8);
+            string? line;
+            while ((line = rd.ReadLine()) != null)
+            {
+                if (line.Length == 0) continue;
+                Op? op;
+                try { op = JsonSerializer.Deserialize<Op>(line); } catch { continue; }
+                if (op == null || op.K == HeaderKind) continue;
+                total++;
+                survivors[$"{op.K}:{op.Id}"] = op;   // later op wins; tombstones are kept
+            }
+        }
+        catch { return; }
+
+        // nothing to collapse — back off so we don't rescan a big log every save
+        if (survivors.Count >= total)
+        {
+            try { _compactFloor = new FileInfo(path).Length + CompactThresholdBytes; } catch { }
+            return;
+        }
+
+        var tmp = path + ".tmp";
+        try
+        {
+            using (var outFs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (var w = new StreamWriter(outFs, new UTF8Encoding(false)))
+            {
+                w.NewLine = "\r\n";
+                w.WriteLine(JsonSerializer.Serialize(new Op { K = HeaderKind, A = DeviceId, G = gen + 1, Ts = DateTime.UtcNow.Ticks }, Opts));
+                // original lamport order preserved, so replay semantics are unchanged
+                foreach (var op in survivors.Values.OrderBy(o => o.N))
+                    w.WriteLine(JsonSerializer.Serialize(op, Opts));
+                w.Flush();
+                outFs.Flush(true);   // to disk, not just to the OS cache
+            }
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
+            _compactFloor = CompactThresholdBytes;
+        }
+        catch
+        {
+            // swap failed (log locked by a sync client, disk full, ...). The live
+            // log is untouched and still authoritative; drop the temp and retry
+            // after the next threshold crossing.
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            try { _compactFloor = new FileInfo(path).Length + CompactThresholdBytes; } catch { }
         }
     }
 
@@ -171,10 +284,22 @@ public static class SyncLog
                 var actor = Path.GetFileNameWithoutExtension(file).Split('.').Last();
                 if (actor == DeviceId) continue;
                 long offset = _cursors.Offsets.TryGetValue(actor, out var o) ? o : 0;
+                long seen = _cursors.Seen.TryGetValue(actor, out var sn) ? sn : 0;
+                long knownGen = _cursors.Gens.TryGetValue(actor, out var g) ? g : 0;
                 try
                 {
                     using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    if (fs.Length <= offset) continue;
+                    long gen = ReadGeneration(fs);
+                    if (gen != knownGen)
+                    {
+                        // the peer compacted: our byte offset points into a file that
+                        // no longer exists. Re-read from the top and let the lamport
+                        // high-water mark decide what is genuinely new — a compacted
+                        // log holds only each element's latest op, so every op with
+                        // N <= seen has already been applied.
+                        offset = 0;
+                    }
+                    else if (fs.Length <= offset) continue;
                     fs.Seek(offset, SeekOrigin.Begin);
                     using var rd = new StreamReader(fs, Encoding.UTF8);
                     string? line;
@@ -183,11 +308,16 @@ public static class SyncLog
                         try
                         {
                             var op = JsonSerializer.Deserialize<Op>(line);
-                            if (op != null && Apply(lib, op) is { } pgId) changedPages.Add(pgId);
+                            if (op == null || op.K == HeaderKind) continue;
+                            if (op.N <= seen) continue;
+                            if (Apply(lib, op) is { } pgId) changedPages.Add(pgId);
+                            seen = op.N;
                         }
                         catch { }
                     }
                     _cursors.Offsets[actor] = fs.Length;
+                    _cursors.Seen[actor] = seen;
+                    _cursors.Gens[actor] = gen;
                     cursorsDirty = true;
                 }
                 catch { }

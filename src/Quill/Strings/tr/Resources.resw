@@ -58,16 +58,313 @@
   <resheader name="writer">
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
-  <data name="EditHistoryHeader.Text" xml:space="preserve">
-    <value>Düzenleme geçmişi</value>
+  <data name="Common.Done" xml:space="preserve">
+    <value>Bitti</value>
   </data>
-  <data name="BackgroundHeader.Text" xml:space="preserve">
-    <value>Arka plan</value>
+  <data name="Settings.Title" xml:space="preserve">
+    <value>Ayarlar</value>
   </data>
-  <data name="GridSpacingHeader.Text" xml:space="preserve">
-    <value>Izgara aralığı</value>
+  <data name="Settings.Storage.Header" xml:space="preserve">
+    <value>Defter deposu (evrensel eşitleme)</value>
   </data>
-  <data name="SearchBoxInput.PlaceholderText" xml:space="preserve">
-    <value>Notlarda ara…</value>
+  <data name="Settings.Storage.Desc" xml:space="preserve">
+    <value>Uygulamanın her sürümü defterleri bu tek klasörden okur ve buraya yazar, böylece her zaman eşitlenmiş kalırlar.</value>
+  </data>
+  <data name="Settings.Storage.Change" xml:space="preserve">
+    <value>Klasörü değiştir…</value>
+  </data>
+  <data name="Status.StorageUpdated" xml:space="preserve">
+    <value>Depo klasörü güncellendi — defterler artık buradan eşitleniyor.</value>
+  </data>
+  <data name="Settings.Font.Header" xml:space="preserve">
+    <value>Varsayılan metin yazı tipi ve boyutu</value>
+  </data>
+  <data name="Settings.Font.Font" xml:space="preserve">
+    <value>Yazı tipi</value>
+  </data>
+  <data name="Settings.Font.Size" xml:space="preserve">
+    <value>Boyut</value>
+  </data>
+  <data name="Settings.Font.Desc" xml:space="preserve">
+    <value>Yeni metin kutuları bu yazı tipi ve boyutuyla başlar.</value>
+  </data>
+  <data name="Settings.Font.UseForNotebook" xml:space="preserve">
+    <value>Açık defter için varsayılan yap</value>
+  </data>
+  <data name="Settings.Font.ClearOverride" xml:space="preserve">
+    <value>Defter geçersiz kılmasını temizle</value>
+  </data>
+  <data name="Status.NoNotebookOpen" xml:space="preserve">
+    <value>Açık defter yok.</value>
+  </data>
+  <data name="Status.NotebookFontSet" xml:space="preserve">
+    <value>“{0}” içindeki metin artık varsayılan olarak {1} {2}.</value>
+  </data>
+  <data name="Status.NotebookFontCleared" xml:space="preserve">
+    <value>“{0}” yeniden kitaplık genelindeki yazı tipini izliyor.</value>
+  </data>
+  <data name="Settings.Startup.Header" xml:space="preserve">
+    <value>Başlangıç</value>
+  </data>
+  <data name="Settings.Startup.Maximised" xml:space="preserve">
+    <value>Ekranı kaplayarak başlat</value>
+  </data>
+  <data name="Settings.Startup.ShowPicker" xml:space="preserve">
+    <value>Başlangıçta defter seçiciyi göster</value>
+  </data>
+  <data name="Settings.Startup.PickerDesc" xml:space="preserve">
+    <value>Seçici son sayfanızın üzerinde açılır — atlamak için Esc'e basın.</value>
+  </data>
+  <data name="Settings.TouchMode" xml:space="preserve">
+    <value>Dokunmatik ekran modu (daha büyük düğmeler)</value>
+  </data>
+  <data name="Settings.Liquid" xml:space="preserve">
+    <value>Sıvı cam — panel saydamlığı</value>
+  </data>
+  <data name="Settings.Glow.Header" xml:space="preserve">
+    <value>Parıltı animasyonu</value>
+  </data>
+  <data name="Settings.Glow.Desc" xml:space="preserve">
+    <value>Nefes ve Kalp Atışı yerinde nabız gibi atar; Dolaşım, Kuyruklu Yıldız ve Kovalama panel kenarlarında dolaşır; Auroa yakın renkler arasında süzülür; Işıltı birkaç saniyede bir geçer; Kor bir köz gibi titreşir.</value>
+  </data>
+  <data name="Glow.Off" xml:space="preserve">
+    <value>Kapalı</value>
+  </data>
+  <data name="Glow.Breathe" xml:space="preserve">
+    <value>Nefes</value>
+  </data>
+  <data name="Glow.Circulate" xml:space="preserve">
+    <value>Dolaşım</value>
+  </data>
+  <data name="Glow.Comet" xml:space="preserve">
+    <value>Kuyruklu Yıldız</value>
+  </data>
+  <data name="Glow.Aurora" xml:space="preserve">
+    <value>Aurora</value>
+  </data>
+  <data name="Glow.Shimmer" xml:space="preserve">
+    <value>Işıltı</value>
+  </data>
+  <data name="Glow.Ember" xml:space="preserve">
+    <value>Kor</value>
+  </data>
+  <data name="Glow.Chase" xml:space="preserve">
+    <value>Kovalama</value>
+  </data>
+  <data name="Glow.Heartbeat" xml:space="preserve">
+    <value>Kalp Atışı</value>
+  </data>
+  <data name="Settings.Keys.Header" xml:space="preserve">
+    <value>Klavye kısayolları</value>
+  </data>
+  <data name="Settings.Keys.Desc" xml:space="preserve">
+    <value>Esc, Delete ve F1 her düzende aynıdır. Bir düzenin bağlayamadığı her şey F1 sayfasında listelenir.</value>
+  </data>
+  <data name="KeyPreset.Quill" xml:space="preserve">
+    <value>Quill varsayılanı</value>
+  </data>
+  <data name="KeyPreset.OneNote" xml:space="preserve">
+    <value>OneNote benzeri</value>
+  </data>
+  <data name="KeyPreset.Photoshop" xml:space="preserve">
+    <value>Photoshop benzeri</value>
+  </data>
+  <data name="Status.KeyPresetActive" xml:space="preserve">
+    <value>{0} kısayolları etkin — tam liste için F1'e basın.</value>
+  </data>
+  <data name="Settings.Theme.Header" xml:space="preserve">
+    <value>Tema</value>
+  </data>
+  <data name="Theme.Light" xml:space="preserve">
+    <value>Açık</value>
+  </data>
+  <data name="Theme.Dark" xml:space="preserve">
+    <value>Koyu</value>
+  </data>
+  <data name="Theme.System" xml:space="preserve">
+    <value>Windows'u izle</value>
+  </data>
+  <data name="Settings.Oled" xml:space="preserve">
+    <value>Saf siyah koyu tema (OLED)</value>
+  </data>
+  <data name="Settings.Autosave" xml:space="preserve">
+    <value>Otomatik kaydetme gecikmesi (düzenlemeyi bıraktıktan sonra saniye)</value>
+  </data>
+  <data name="Settings.PenRepair.Dots" xml:space="preserve">
+    <value>Kalem onarımı — başıboş noktaları yok say</value>
+  </data>
+  <data name="Settings.PenRepair.DotsDesc" xml:space="preserve">
+    <value>Zıplayan bir kalem ucunun, bir çizgi biter bitmez bıraktığı küçük noktayı atar. Bilinçli noktalar (i'nin noktası gibi) yine algılanır.</value>
+  </data>
+  <data name="Settings.PenRepair.Bridge" xml:space="preserve">
+    <value>Kalem onarımı — kopan teması köprüle</value>
+  </data>
+  <data name="Settings.PenRepair.BridgeDesc" xml:space="preserve">
+    <value>Kalem çizgi ortasında anlık olarak temasını kaybettiğinde aynı çizgiyi sürdürür.</value>
+  </data>
+  <data name="Settings.MotionBlur.Header" xml:space="preserve">
+    <value>Hareket bulanıklığı</value>
+  </data>
+  <data name="Settings.MotionBlur.Desc" xml:space="preserve">
+    <value>Sayfa hızla kaydırılırken veya yakınlaştırılırken yumuşatır, durduğu an netleştirir.</value>
+  </data>
+  <data name="Settings.CommentPins.Header" xml:space="preserve">
+    <value>Yorum iğnelerini her zaman göster</value>
+  </data>
+  <data name="Settings.CommentPins.Desc" xml:space="preserve">
+    <value>Kapalı: iğneler yalnızca Yorum aracı etkinken görünür.</value>
+  </data>
+  <data name="Settings.Toolbar.Header" xml:space="preserve">
+    <value>Araç çubuğu düğmeleri</value>
+  </data>
+  <data name="Settings.Toolbar.Desc" xml:space="preserve">
+    <value>Kullanmadıklarınızı kapatın — üst çubuk taşmayı bırakır.</value>
+  </data>
+  <data name="Tool.ToolSpace" xml:space="preserve">
+    <value>Boş alan</value>
+  </data>
+  <data name="Tool.TouchDrawToggle" xml:space="preserve">
+    <value>Dokunmatik çizim (kalem modu)</value>
+  </data>
+  <data name="Tool.ToolComment" xml:space="preserve">
+    <value>Yorumlar</value>
+  </data>
+  <data name="Tool.ShapeBtn" xml:space="preserve">
+    <value>Şekiller ve tablolar (kalem modu)</value>
+  </data>
+  <data name="Tool.MouseModeBtn" xml:space="preserve">
+    <value>Fare modu (kalem modu)</value>
+  </data>
+  <data name="Tool.BtnHistory" xml:space="preserve">
+    <value>Geçmiş ve yeniden oynatma</value>
+  </data>
+  <data name="Tool.VoiceBtn" xml:space="preserve">
+    <value>Ses — kayıt ve dikte</value>
+  </data>
+  <data name="Tool.BtnAi" xml:space="preserve">
+    <value>Yapay zekâ asistanı</value>
+  </data>
+  <data name="Tool.ZoomBtn" xml:space="preserve">
+    <value>Yakınlaştırma</value>
+  </data>
+  <data name="Tool.PageSettingsBtn" xml:space="preserve">
+    <value>Sayfa arka planı ve ızgara</value>
+  </data>
+  <data name="Tool.ExportBtn" xml:space="preserve">
+    <value>Dışa aktar</value>
+  </data>
+  <data name="Tool.BtnCalc" xml:space="preserve">
+    <value>Hesap makinesi</value>
+  </data>
+  <data name="Settings.PenDock.Header" xml:space="preserve">
+    <value>Kalem araç çubuğu şuraya sabitli</value>
+  </data>
+  <data name="PenDock.Bottom" xml:space="preserve">
+    <value>Alt</value>
+  </data>
+  <data name="PenDock.Top" xml:space="preserve">
+    <value>Üst</value>
+  </data>
+  <data name="PenDock.Left" xml:space="preserve">
+    <value>Sol</value>
+  </data>
+  <data name="PenDock.Right" xml:space="preserve">
+    <value>Sağ</value>
+  </data>
+  <data name="Settings.Ai.Header" xml:space="preserve">
+    <value>Yapay zekâ asistanı</value>
+  </data>
+  <data name="Settings.Ai.Desc" xml:space="preserve">
+    <value>Açık sayfa üzerinde özetler, eylem maddeleri, akıllı etiketler, sorular ve bir yazma asistanı. API anahtarınız Windows Kimlik Bilgisi Kasası'nda saklanır, asla not dosyanızda değil.</value>
+  </data>
+  <data name="Settings.Ai.Provider" xml:space="preserve">
+    <value>Sağlayıcı</value>
+  </data>
+  <data name="Settings.Ai.ProviderNone" xml:space="preserve">
+    <value>Yok</value>
+  </data>
+  <data name="Settings.Ai.Model" xml:space="preserve">
+    <value>Model (boş = varsayılan)</value>
+  </data>
+  <data name="Settings.Ai.Endpoint" xml:space="preserve">
+    <value>Yerel sunucu adresi (OpenAI uyumlu, örn. Ollama / LM Studio)</value>
+  </data>
+  <data name="Settings.Ai.Key" xml:space="preserve">
+    <value>API anahtarı</value>
+  </data>
+  <data name="Settings.Ai.SaveKey" xml:space="preserve">
+    <value>Anahtarı kaydet</value>
+  </data>
+  <data name="Settings.Ai.KeyLocal" xml:space="preserve">
+    <value>Yerel sunucular genellikle anahtar gerektirmez.</value>
+  </data>
+  <data name="Settings.Ai.KeySaved" xml:space="preserve">
+    <value>{0} için bir anahtar kayıtlı.</value>
+  </data>
+  <data name="Settings.Ai.KeyMissing" xml:space="preserve">
+    <value>{0} için henüz anahtar kaydedilmedi.</value>
+  </data>
+  <data name="Status.AiPickProvider" xml:space="preserve">
+    <value>Önce bir sağlayıcı seçin.</value>
+  </data>
+  <data name="Status.AiKeySaved" xml:space="preserve">
+    <value>API anahtarı güvenle kaydedildi.</value>
+  </data>
+  <data name="Settings.Accent.Header" xml:space="preserve">
+    <value>Vurgu rengi</value>
+  </data>
+  <data name="Settings.Accent.Desc" xml:space="preserve">
+    <value>Parıltılar, vurgular, düğmeler ve seçim renkleri için kullanılır.</value>
+  </data>
+  <data name="Settings.Accent.ClayDefault" xml:space="preserve">
+    <value>Kil (varsayılan)</value>
+  </data>
+  <data name="Settings.Accent.Custom" xml:space="preserve">
+    <value>Özel renk (RGB)</value>
+  </data>
+  <data name="Settings.Accent.Mine" xml:space="preserve">
+    <value>Renklerim</value>
+  </data>
+  <data name="Settings.Accent.SwatchTip" xml:space="preserve">
+    <value>{0} — kullanmak için dokunun, kaldırmak için sağ tıklayın</value>
+  </data>
+  <data name="Settings.Accent.AddTip" xml:space="preserve">
+    <value>Geçerli vurgu rengini renklerimden biri olarak kaydet</value>
+  </data>
+  <data name="Settings.AccentFollow.Header" xml:space="preserve">
+    <value>Vurgu rengi şunu izler</value>
+  </data>
+  <data name="AccentFollow.Manual" xml:space="preserve">
+    <value>Seçtiğim renk</value>
+  </data>
+  <data name="AccentFollow.Pen" xml:space="preserve">
+    <value>Etkin kalemin rengi</value>
+  </data>
+  <data name="AccentFollow.Notebook" xml:space="preserve">
+    <value>Açık defterin rengi</value>
+  </data>
+  <data name="Settings.Import.Header" xml:space="preserve">
+    <value>Defterleri kurtar / içe aktar</value>
+  </data>
+  <data name="Settings.Import.Recover" xml:space="preserve">
+    <value>Eski defterlerimi kurtar (önceki konum)</value>
+  </data>
+  <data name="Settings.Import.FromFile" xml:space="preserve">
+    <value>Bir dosyadan defter içe aktar…</value>
+  </data>
+  <data name="Settings.Import.Desc" xml:space="preserve">
+    <value>İçe aktarma yalnızca sizde olmayan defterleri ekler — mevcut notlarınızın üzerine asla yazmaz ve onları silmez.</value>
+  </data>
+  <data name="Settings.Language.Header" xml:space="preserve">
+    <value>Dil</value>
+  </data>
+  <data name="Settings.Language.System" xml:space="preserve">
+    <value>Windows'u izle</value>
+  </data>
+  <data name="Settings.Language.Desc" xml:space="preserve">
+    <value>Hemen uygulanır. Henüz çevrilmemiş her şey İngilizce kalır.</value>
+  </data>
+  <data name="Status.LanguageChanged" xml:space="preserve">
+    <value>Quill artık {0} dilinde.</value>
   </data>
 </root>

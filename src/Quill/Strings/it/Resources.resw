@@ -58,16 +58,313 @@
   <resheader name="writer">
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
-  <data name="EditHistoryHeader.Text" xml:space="preserve">
-    <value>Cronologia modifiche</value>
+  <data name="Common.Done" xml:space="preserve">
+    <value>Fatto</value>
   </data>
-  <data name="BackgroundHeader.Text" xml:space="preserve">
-    <value>Sfondo</value>
+  <data name="Settings.Title" xml:space="preserve">
+    <value>Impostazioni</value>
   </data>
-  <data name="GridSpacingHeader.Text" xml:space="preserve">
-    <value>Spaziatura griglia</value>
+  <data name="Settings.Storage.Header" xml:space="preserve">
+    <value>Archivio taccuini (sincronizzazione universale)</value>
   </data>
-  <data name="SearchBoxInput.PlaceholderText" xml:space="preserve">
-    <value>Cerca nelle note…</value>
+  <data name="Settings.Storage.Desc" xml:space="preserve">
+    <value>Ogni versione dell'app legge e scrive i taccuini in questa unica cartella, così restano sempre sincronizzati.</value>
+  </data>
+  <data name="Settings.Storage.Change" xml:space="preserve">
+    <value>Cambia cartella…</value>
+  </data>
+  <data name="Status.StorageUpdated" xml:space="preserve">
+    <value>Cartella di archivio aggiornata — i taccuini si sincronizzano da qui.</value>
+  </data>
+  <data name="Settings.Font.Header" xml:space="preserve">
+    <value>Carattere e dimensione predefiniti</value>
+  </data>
+  <data name="Settings.Font.Font" xml:space="preserve">
+    <value>Carattere</value>
+  </data>
+  <data name="Settings.Font.Size" xml:space="preserve">
+    <value>Dimensione</value>
+  </data>
+  <data name="Settings.Font.Desc" xml:space="preserve">
+    <value>Le nuove caselle di testo partono con questo carattere e dimensione.</value>
+  </data>
+  <data name="Settings.Font.UseForNotebook" xml:space="preserve">
+    <value>Usa come predefinito per il taccuino aperto</value>
+  </data>
+  <data name="Settings.Font.ClearOverride" xml:space="preserve">
+    <value>Rimuovi l'override del taccuino</value>
+  </data>
+  <data name="Status.NoNotebookOpen" xml:space="preserve">
+    <value>Nessun taccuino aperto.</value>
+  </data>
+  <data name="Status.NotebookFontSet" xml:space="preserve">
+    <value>Il testo in “{0}” usa ora {1} {2} come predefinito.</value>
+  </data>
+  <data name="Status.NotebookFontCleared" xml:space="preserve">
+    <value>“{0}” segue di nuovo il carattere della libreria.</value>
+  </data>
+  <data name="Settings.Startup.Header" xml:space="preserve">
+    <value>Avvio</value>
+  </data>
+  <data name="Settings.Startup.Maximised" xml:space="preserve">
+    <value>Avvia a schermo massimizzato</value>
+  </data>
+  <data name="Settings.Startup.ShowPicker" xml:space="preserve">
+    <value>Mostra il selettore di taccuini all'avvio</value>
+  </data>
+  <data name="Settings.Startup.PickerDesc" xml:space="preserve">
+    <value>Il selettore si apre sopra l'ultima pagina — premi Esc per saltarlo.</value>
+  </data>
+  <data name="Settings.TouchMode" xml:space="preserve">
+    <value>Modalità touch (pulsanti più grandi)</value>
+  </data>
+  <data name="Settings.Liquid" xml:space="preserve">
+    <value>Vetro liquido — trasparenza dei pannelli</value>
+  </data>
+  <data name="Settings.Glow.Header" xml:space="preserve">
+    <value>Animazione del bagliore</value>
+  </data>
+  <data name="Settings.Glow.Desc" xml:space="preserve">
+    <value>Respiro e Battito pulsano sul posto; Circolo, Cometa e Inseguimento percorrono i bordi dei pannelli; Aurora scorre tra tinte vicine; Scintillio passa ogni pochi secondi; Brace tremola come un carbone.</value>
+  </data>
+  <data name="Glow.Off" xml:space="preserve">
+    <value>Disattivato</value>
+  </data>
+  <data name="Glow.Breathe" xml:space="preserve">
+    <value>Respiro</value>
+  </data>
+  <data name="Glow.Circulate" xml:space="preserve">
+    <value>Circolo</value>
+  </data>
+  <data name="Glow.Comet" xml:space="preserve">
+    <value>Cometa</value>
+  </data>
+  <data name="Glow.Aurora" xml:space="preserve">
+    <value>Aurora</value>
+  </data>
+  <data name="Glow.Shimmer" xml:space="preserve">
+    <value>Scintillio</value>
+  </data>
+  <data name="Glow.Ember" xml:space="preserve">
+    <value>Brace</value>
+  </data>
+  <data name="Glow.Chase" xml:space="preserve">
+    <value>Inseguimento</value>
+  </data>
+  <data name="Glow.Heartbeat" xml:space="preserve">
+    <value>Battito</value>
+  </data>
+  <data name="Settings.Keys.Header" xml:space="preserve">
+    <value>Scorciatoie da tastiera</value>
+  </data>
+  <data name="Settings.Keys.Desc" xml:space="preserve">
+    <value>Esc, Canc e F1 sono uguali in ogni layout. Ciò che un layout non può assegnare è elencato nella scheda F1.</value>
+  </data>
+  <data name="KeyPreset.Quill" xml:space="preserve">
+    <value>Predefinito Quill</value>
+  </data>
+  <data name="KeyPreset.OneNote" xml:space="preserve">
+    <value>Stile OneNote</value>
+  </data>
+  <data name="KeyPreset.Photoshop" xml:space="preserve">
+    <value>Stile Photoshop</value>
+  </data>
+  <data name="Status.KeyPresetActive" xml:space="preserve">
+    <value>Le scorciatoie {0} sono attive — premi F1 per l'elenco completo.</value>
+  </data>
+  <data name="Settings.Theme.Header" xml:space="preserve">
+    <value>Tema</value>
+  </data>
+  <data name="Theme.Light" xml:space="preserve">
+    <value>Chiaro</value>
+  </data>
+  <data name="Theme.Dark" xml:space="preserve">
+    <value>Scuro</value>
+  </data>
+  <data name="Theme.System" xml:space="preserve">
+    <value>Segui Windows</value>
+  </data>
+  <data name="Settings.Oled" xml:space="preserve">
+    <value>Tema scuro nero puro (OLED)</value>
+  </data>
+  <data name="Settings.Autosave" xml:space="preserve">
+    <value>Ritardo di salvataggio automatico (secondi dopo la fine della modifica)</value>
+  </data>
+  <data name="Settings.PenRepair.Dots" xml:space="preserve">
+    <value>Correzione penna — ignora i punti accidentali</value>
+  </data>
+  <data name="Settings.PenRepair.DotsDesc" xml:space="preserve">
+    <value>Elimina il puntino che una punta ballerina lascia proprio dove un tratto è appena finito. I punti voluti (come quello della i) restano.</value>
+  </data>
+  <data name="Settings.PenRepair.Bridge" xml:space="preserve">
+    <value>Correzione penna — ricongiungi il contatto perso</value>
+  </data>
+  <data name="Settings.PenRepair.BridgeDesc" xml:space="preserve">
+    <value>Prosegue lo stesso tratto quando la penna perde contatto per un istante.</value>
+  </data>
+  <data name="Settings.MotionBlur.Header" xml:space="preserve">
+    <value>Sfocatura di movimento</value>
+  </data>
+  <data name="Settings.MotionBlur.Desc" xml:space="preserve">
+    <value>Ammorbidisce la pagina mentre scorre o zooma velocemente, tornando nitida appena si ferma.</value>
+  </data>
+  <data name="Settings.CommentPins.Header" xml:space="preserve">
+    <value>Mostra sempre i segnaposto dei commenti</value>
+  </data>
+  <data name="Settings.CommentPins.Desc" xml:space="preserve">
+    <value>Disattivato: i segnaposto appaiono solo con lo strumento Commento attivo.</value>
+  </data>
+  <data name="Settings.Toolbar.Header" xml:space="preserve">
+    <value>Pulsanti della barra strumenti</value>
+  </data>
+  <data name="Settings.Toolbar.Desc" xml:space="preserve">
+    <value>Disattiva ciò che non usi — la barra superiore smette di traboccare.</value>
+  </data>
+  <data name="Tool.ToolSpace" xml:space="preserve">
+    <value>Spazio libero</value>
+  </data>
+  <data name="Tool.TouchDrawToggle" xml:space="preserve">
+    <value>Disegno a tocco (modalità penna)</value>
+  </data>
+  <data name="Tool.ToolComment" xml:space="preserve">
+    <value>Commenti</value>
+  </data>
+  <data name="Tool.ShapeBtn" xml:space="preserve">
+    <value>Forme e tabelle (modalità penna)</value>
+  </data>
+  <data name="Tool.MouseModeBtn" xml:space="preserve">
+    <value>Modalità mouse (modalità penna)</value>
+  </data>
+  <data name="Tool.BtnHistory" xml:space="preserve">
+    <value>Cronologia e riproduzione</value>
+  </data>
+  <data name="Tool.VoiceBtn" xml:space="preserve">
+    <value>Voce — registrazione e dettatura</value>
+  </data>
+  <data name="Tool.BtnAi" xml:space="preserve">
+    <value>Assistente IA</value>
+  </data>
+  <data name="Tool.ZoomBtn" xml:space="preserve">
+    <value>Zoom</value>
+  </data>
+  <data name="Tool.PageSettingsBtn" xml:space="preserve">
+    <value>Sfondo pagina e griglia</value>
+  </data>
+  <data name="Tool.ExportBtn" xml:space="preserve">
+    <value>Esporta</value>
+  </data>
+  <data name="Tool.BtnCalc" xml:space="preserve">
+    <value>Calcolatrice</value>
+  </data>
+  <data name="Settings.PenDock.Header" xml:space="preserve">
+    <value>Barra della penna ancorata a</value>
+  </data>
+  <data name="PenDock.Bottom" xml:space="preserve">
+    <value>In basso</value>
+  </data>
+  <data name="PenDock.Top" xml:space="preserve">
+    <value>In alto</value>
+  </data>
+  <data name="PenDock.Left" xml:space="preserve">
+    <value>A sinistra</value>
+  </data>
+  <data name="PenDock.Right" xml:space="preserve">
+    <value>A destra</value>
+  </data>
+  <data name="Settings.Ai.Header" xml:space="preserve">
+    <value>Assistente IA</value>
+  </data>
+  <data name="Settings.Ai.Desc" xml:space="preserve">
+    <value>Riepiloghi, azioni, tag intelligenti, domande e un assistente di scrittura sulla pagina aperta. La chiave API è nella Cassaforte credenziali di Windows, mai nel file delle note.</value>
+  </data>
+  <data name="Settings.Ai.Provider" xml:space="preserve">
+    <value>Fornitore</value>
+  </data>
+  <data name="Settings.Ai.ProviderNone" xml:space="preserve">
+    <value>Nessuno</value>
+  </data>
+  <data name="Settings.Ai.Model" xml:space="preserve">
+    <value>Modello (vuoto = predefinito)</value>
+  </data>
+  <data name="Settings.Ai.Endpoint" xml:space="preserve">
+    <value>URL del server locale (compatibile OpenAI, es. Ollama / LM Studio)</value>
+  </data>
+  <data name="Settings.Ai.Key" xml:space="preserve">
+    <value>Chiave API</value>
+  </data>
+  <data name="Settings.Ai.SaveKey" xml:space="preserve">
+    <value>Salva chiave</value>
+  </data>
+  <data name="Settings.Ai.KeyLocal" xml:space="preserve">
+    <value>I server locali di solito non richiedono una chiave.</value>
+  </data>
+  <data name="Settings.Ai.KeySaved" xml:space="preserve">
+    <value>È salvata una chiave per {0}.</value>
+  </data>
+  <data name="Settings.Ai.KeyMissing" xml:space="preserve">
+    <value>Nessuna chiave salvata per {0}.</value>
+  </data>
+  <data name="Status.AiPickProvider" xml:space="preserve">
+    <value>Scegli prima un fornitore.</value>
+  </data>
+  <data name="Status.AiKeySaved" xml:space="preserve">
+    <value>Chiave API salvata in modo sicuro.</value>
+  </data>
+  <data name="Settings.Accent.Header" xml:space="preserve">
+    <value>Colore d'accento</value>
+  </data>
+  <data name="Settings.Accent.Desc" xml:space="preserve">
+    <value>Usato per bagliori, evidenziazioni, pulsanti e colori di selezione.</value>
+  </data>
+  <data name="Settings.Accent.ClayDefault" xml:space="preserve">
+    <value>Argilla (predefinito)</value>
+  </data>
+  <data name="Settings.Accent.Custom" xml:space="preserve">
+    <value>Colore personalizzato (RGB)</value>
+  </data>
+  <data name="Settings.Accent.Mine" xml:space="preserve">
+    <value>I miei colori</value>
+  </data>
+  <data name="Settings.Accent.SwatchTip" xml:space="preserve">
+    <value>{0} — tocca per usarlo, clic destro per rimuoverlo</value>
+  </data>
+  <data name="Settings.Accent.AddTip" xml:space="preserve">
+    <value>Salva il colore d'accento attuale tra i miei colori</value>
+  </data>
+  <data name="Settings.AccentFollow.Header" xml:space="preserve">
+    <value>Il colore d'accento segue</value>
+  </data>
+  <data name="AccentFollow.Manual" xml:space="preserve">
+    <value>Il colore che ho scelto</value>
+  </data>
+  <data name="AccentFollow.Pen" xml:space="preserve">
+    <value>Il colore della penna attiva</value>
+  </data>
+  <data name="AccentFollow.Notebook" xml:space="preserve">
+    <value>Il colore del taccuino aperto</value>
+  </data>
+  <data name="Settings.Import.Header" xml:space="preserve">
+    <value>Recupera / importa taccuini</value>
+  </data>
+  <data name="Settings.Import.Recover" xml:space="preserve">
+    <value>Recupera i miei vecchi taccuini (posizione precedente)</value>
+  </data>
+  <data name="Settings.Import.FromFile" xml:space="preserve">
+    <value>Importa taccuini da un file…</value>
+  </data>
+  <data name="Settings.Import.Desc" xml:space="preserve">
+    <value>L'importazione aggiunge solo i taccuini che non hai — non sovrascrive né elimina le note attuali.</value>
+  </data>
+  <data name="Settings.Language.Header" xml:space="preserve">
+    <value>Lingua</value>
+  </data>
+  <data name="Settings.Language.System" xml:space="preserve">
+    <value>Segui Windows</value>
+  </data>
+  <data name="Settings.Language.Desc" xml:space="preserve">
+    <value>Si applica subito. Ciò che non è ancora tradotto resta in inglese.</value>
+  </data>
+  <data name="Status.LanguageChanged" xml:space="preserve">
+    <value>Quill è ora in {0}.</value>
   </data>
 </root>

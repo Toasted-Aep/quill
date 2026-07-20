@@ -263,6 +263,8 @@ public class Library
     public GridType DefaultGrid { get; set; } = GridType.None;
     public double DefaultGridSpacing { get; set; } = 32;
     public string Theme { get; set; } = "Dark";
+    // UI language tag ("en-US"/"tr"/"it"); "" follows the Windows UI language.
+    public string Language { get; set; } = "";
     public string DefaultFont { get; set; } = "Lora";
     public double DefaultFontSize { get; set; } = 16;
     public string PenDock { get; set; } = "Bottom";
@@ -295,6 +297,9 @@ public class Library
     public string GlowMode { get; set; } = "Breathe";
     // What drives the accent colour: Manual | Pen | Notebook.
     public string AccentFollow { get; set; } = "Manual";
+    // Keyboard shortcut preset: Quill | OneNote | Photoshop. Unknown values fall
+    // back to Quill so a hand-edited settings file cannot leave the app keyless.
+    public string KeyPreset { get; set; } = "Quill";
     // Pure-black dark theme for OLED displays.
     public bool OledBlack { get; set; }
     // Autosave debounce in seconds.

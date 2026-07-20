@@ -76,12 +76,27 @@ public static class HtmlSvgExporter
 
         foreach (var t in pg.Texts)
         {
-            if (string.IsNullOrWhiteSpace(t.Text)) continue;
+            var runs = t.Runs is { Count: > 0 } r
+                ? r
+                : new List<PdfVectorTextRun> { new(t.Text, t.Size, t.Font, false, false) };
+            if (runs.All(x => string.IsNullOrWhiteSpace(x.Text))) continue;
+
+            // Bare tspans (no x/y of their own) flow from the parent's anchor, so
+            // the renderer advances mixed-size runs for us. xml:space keeps the
+            // spaces that fall on a run boundary from being collapsed away.
             sb.Append("<text x=\"").Append(X(t.X)).Append("\" y=\"").Append(Y(t.Y))
-              .Append("\" font-size=\"").Append(N(t.Size))
-              .Append("\" fill=\"").Append(Esc(t.Color))
-              .Append("\" font-family=\"").Append(Esc(string.IsNullOrEmpty(t.Font) ? "Segoe UI" : t.Font))
-              .Append(", sans-serif\">").Append(Esc(t.Text)).Append("</text>");
+              .Append("\" fill=\"").Append(Esc(t.Color)).Append("\" xml:space=\"preserve\">");
+            foreach (var run in runs)
+            {
+                if (run.Text.Length == 0) continue;
+                sb.Append("<tspan font-size=\"").Append(N(run.Size))
+                  .Append("\" font-family=\"").Append(Esc(string.IsNullOrEmpty(run.Font) ? "Segoe UI" : run.Font))
+                  .Append(", sans-serif\"");
+                if (run.Bold) sb.Append(" font-weight=\"bold\"");
+                if (run.Italic) sb.Append(" font-style=\"italic\"");
+                sb.Append('>').Append(Esc(run.Text)).Append("</tspan>");
+            }
+            sb.Append("</text>");
         }
 
         sb.Append("</svg>");

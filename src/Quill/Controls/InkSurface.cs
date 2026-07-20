@@ -549,6 +549,7 @@ public sealed class InkSurface : UserControl
         }
         catch { }
         _inkCacheDirty = true;   // fresh page, fresh ink cache (#43)
+        _gridDirty = true;       // fresh page, fresh spatial index
         UndoManager.Clear();
         ClearSelection();
         _activeShape = null;
@@ -690,6 +691,7 @@ public sealed class InkSurface : UserControl
         bool touchesText = act?.TouchesText ?? true;
         FlushTexts();
         UndoManager.Undo(_page);
+        _gridDirty = true;
         ClearSelection();
         _activeShape = null; // don't leave a removed shape's selection box behind
         // rebuilding every RichEditBox is expensive on text-heavy pages — only
@@ -707,6 +709,7 @@ public sealed class InkSurface : UserControl
         bool touchesText = act?.TouchesText ?? true;
         FlushTexts();
         UndoManager.Redo(_page);
+        _gridDirty = true;
         ClearSelection();
         _activeShape = null;
         if (touchesText) RebuildTextLayer();
@@ -794,7 +797,7 @@ public sealed class InkSurface : UserControl
         if (_activeShape != null)
         {
             int idx = _page.Shapes.IndexOf(_activeShape);
-            UndoManager.Push(new RemoveShapesAction(new List<(int, ShapeElement)> { (idx, _activeShape) }), _page);
+            PushAction(new RemoveShapesAction(new List<(int, ShapeElement)> { (idx, _activeShape) }), _page);
             _activeShape = null;
             _canvas.Invalidate();
             ContentChanged?.Invoke();
@@ -805,7 +808,7 @@ public sealed class InkSurface : UserControl
         var strokes = _selected.ToList();
         var shapes = _selShapes.ToList();
         var texts = _selTexts.ToList();
-        UndoManager.Push(new RemoveMixedAction(strokes, shapes, texts), _page);
+        PushAction(new RemoveMixedAction(strokes, shapes, texts), _page);
         ClearSelection();
         RebuildTextLayer();
         ContentChanged?.Invoke();
@@ -917,7 +920,7 @@ public sealed class InkSurface : UserControl
 
         if (clonedStrokes.Count > 0 || clonedShapes.Count > 0 || clonedTexts.Count > 0)
         {
-            UndoManager.Push(new AddMixedAction(clonedStrokes, clonedShapes, clonedTexts), _page);
+            PushAction(new AddMixedAction(clonedStrokes, clonedShapes, clonedTexts), _page);
             ClearSelection();
             _activeShape = null;
 
@@ -1245,7 +1248,7 @@ public sealed class InkSurface : UserControl
                 {
                     var resume = _lastCommitted;
                     UndoManager.TryDiscardTop(a => a is AddStrokeAction asa && ReferenceEquals(asa.Stroke, resume));
-                    _page.Strokes.Remove(resume);
+                    RemoveStroke(resume);
                     _wet = new List<StrokePoint>(resume.Points) { new(pos.X, pos.Y, props.Pressure) };
                     _lastCommitted = null;
                 }
@@ -1515,8 +1518,10 @@ public sealed class InkSurface : UserControl
             float t = Math.Clamp(Vector2.Dot(pt - a, ab) / len2, 0f, 1f);
             return Vector2.Distance(pt, a + ab * t);
         }
+        var cand = StrokeCandidates(p.X - radius, p.Y - radius, p.X + radius, p.Y + radius);
         foreach (var s in _page.Strokes)
         {
+            if (cand != null && !cand.Contains(s)) continue;
             s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
             float pad = radius + s.Size;
             if (p.X < bx0 - pad || p.X > bx1 + pad || p.Y < by0 - pad || p.Y > by1 + pad) continue;
@@ -1843,7 +1848,7 @@ public sealed class InkSurface : UserControl
                         : sh.W > 8 && sh.H > 8;
                     if (big)
                     {
-                        UndoManager.Push(new AddShapeAction(sh), _page);
+                        PushAction(new AddShapeAction(sh), _page);
                         changed = true;
                     }
                     break;
@@ -1877,7 +1882,7 @@ public sealed class InkSurface : UserControl
                             Points = pts,
                             PressureCurve = PenPressureCurve != null ? new List<float>(PenPressureCurve) : null
                         };
-                        UndoManager.Push(new AddStrokeAction(stroke), _page);
+                        PushAction(new AddStrokeAction(stroke), _page);
                         changed = true;
                         _lastCommitted = stroke;
                         _lastCommitMs = Environment.TickCount64;
@@ -1891,17 +1896,17 @@ public sealed class InkSurface : UserControl
                 if (_eraseRemoved.Count > 0)
                 {
                     if (_gestureEraserMode == EraserMode.Object)
-                        UndoManager.Push(new RemoveStrokesAction(_eraseRemoved), _page, alreadyDone: true);
+                        PushAction(new RemoveStrokesAction(_eraseRemoved), _page, alreadyDone: true);
                     else
                     {
                         var added = _gestureFragments.Where(f => _page.Strokes.Contains(f)).ToList();
-                        UndoManager.Push(new ReplaceStrokesAction(_eraseRemoved, added), _page, alreadyDone: true);
+                        PushAction(new ReplaceStrokesAction(_eraseRemoved, added), _page, alreadyDone: true);
                     }
                     changed = true;
                 }
                 if (_eraseRemovedShapes.Count > 0)
                 {
-                    UndoManager.Push(new RemoveShapesAction(_eraseRemovedShapes), _page, alreadyDone: true);
+                    PushAction(new RemoveShapesAction(_eraseRemovedShapes), _page, alreadyDone: true);
                     _eraseRemovedShapes = new List<(int, ShapeElement)>();
                     changed = true;
                 }
@@ -1949,7 +1954,7 @@ public sealed class InkSurface : UserControl
                 }
                 if (_tableDividerDrag && _activeShape is { Kind: ShapeKind.Table } tdone)
                 {
-                    UndoManager.Push(new TableLayoutAction(tdone,
+                    PushAction(new TableLayoutAction(tdone,
                         _tableOrigColW ?? TableColWidths(tdone).ToList(),
                         _tableOrigRowH ?? TableRowHeights(tdone).ToList(),
                         _tableOrigW, _tableOrigH,
@@ -1965,7 +1970,7 @@ public sealed class InkSurface : UserControl
                 {
                     if (Math.Abs(_activeShape.Rotation - _rotateStartShapeDeg) > 0.1)
                     {
-                        UndoManager.Push(new RotateShapeAction(_activeShape, _rotateStartShapeDeg, _activeShape.Rotation), _page, alreadyDone: true);
+                        PushAction(new RotateShapeAction(_activeShape, _rotateStartShapeDeg, _activeShape.Rotation), _page, alreadyDone: true);
                         if (_activeShape.Kind == ShapeKind.Table) RebuildTextLayer();   // cells follow (#tablerot)
                         changed = true;
                     }
@@ -1978,7 +1983,7 @@ public sealed class InkSurface : UserControl
                     if (Math.Abs(now.X - _shapeOrig.X) > 0.5 || Math.Abs(now.Y - _shapeOrig.Y) > 0.5 ||
                         Math.Abs(now.W - _shapeOrig.W) > 0.5 || Math.Abs(now.H - _shapeOrig.H) > 0.5)
                     {
-                        UndoManager.Push(new MoveResizeShapeAction(_activeShape, _shapeOrig, now), _page, alreadyDone: true);
+                        PushAction(new MoveResizeShapeAction(_activeShape, _shapeOrig, now), _page, alreadyDone: true);
                         if (_activeShape.Kind == ShapeKind.Table)
                             ReflowTableCells(_activeShape);   // cells follow their table (#40)
                         changed = true;
@@ -1990,7 +1995,7 @@ public sealed class InkSurface : UserControl
                 {
                     if (Math.Abs(_scaleFactor - 1f) > 0.01f && _scaleStrokes != null && _page != null)
                     {
-                        UndoManager.Push(new ScaleMixedAction(
+                        PushAction(new ScaleMixedAction(
                             _scaleStrokes, _scaleShapes!, _scaleTexts!,
                             _scaleAnchor.X, _scaleAnchor.Y, _scaleFactor), _page, alreadyDone: true);
                         changed = true;
@@ -2013,7 +2018,7 @@ public sealed class InkSurface : UserControl
                         if (_selTexts.Count > 0) acts.Add(new MoveTextsAction(_selTexts.ToList(), _moveDx, _moveDy));
                         if (acts.Count > 0)
                         {
-                            UndoManager.Push(new CompositeAction(acts, "Move selection"), _page);
+                            PushAction(new CompositeAction(acts, "Move selection"), _page);
                             changed = true;
                         }
                     }
@@ -2034,7 +2039,7 @@ public sealed class InkSurface : UserControl
             {
                 if (Math.Abs(_spaceDelta) > 2)
                 {
-                    UndoManager.Push(new InsertSpaceAction(_spaceY, _spaceDelta), _page);
+                    PushAction(new InsertSpaceAction(_spaceY, _spaceDelta), _page);
                     RebuildTextLayer();
                     changed = true;
                 }
@@ -2164,22 +2169,310 @@ public sealed class InkSurface : UserControl
         => Math.Abs(a.X - b.X) < 0.6f && Math.Abs(a.Y - b.Y) < 0.6f;
 
     // =======================================================================
+    // Spatial index
+    // =======================================================================
+    // A uniform grid over world space. Every element registers in each cell its
+    // padded bounds touch, so a query can only over-report, never miss: a hit a
+    // linear scan would find is always in the candidate set. Callers use the set
+    // purely to skip the per-point distance maths and still walk the page's own
+    // lists in order, so the list indices recorded for undo stay exact.
+    //
+    // Element bounds carry a Size + 8 pad (the widest thickness tolerance any
+    // caller adds), so query rects only need the caller's own radius.
+    private const float GridCell = 256f;
+    // Under this element count a linear scan beats maintaining the grid.
+    private const int GridMinElements = 128;
+
+    private sealed class SpatialGrid
+    {
+        // An element (or query) spanning more cells than this goes to / returns
+        // the loose list instead: bounded work, still exact.
+        private const int MaxCells = 1024;
+
+        private readonly Dictionary<long, List<PenStroke>> _sCells = new();
+        private readonly Dictionary<long, List<ShapeElement>> _hCells = new();
+        private readonly List<PenStroke> _sLoose = new();
+        private readonly List<ShapeElement> _hLoose = new();
+        // Bounds each element was registered with, so removal always hits the
+        // same cells even if the element's geometry has since been edited.
+        private readonly Dictionary<PenStroke, (float x0, float y0, float x1, float y1)> _sReg = new();
+        private readonly Dictionary<ShapeElement, (float x0, float y0, float x1, float y1)> _hReg = new();
+
+        public void Clear()
+        {
+            _sCells.Clear(); _hCells.Clear();
+            _sLoose.Clear(); _hLoose.Clear();
+            _sReg.Clear(); _hReg.Clear();
+        }
+
+        private static long Key(int cx, int cy) => ((long)cx << 32) | (uint)cy;
+
+        private static bool CellRange(float x0, float y0, float x1, float y1,
+                                      out int cx0, out int cy0, out int cx1, out int cy1)
+        {
+            cx0 = cy0 = cx1 = cy1 = 0;
+            if (!float.IsFinite(x0) || !float.IsFinite(y0) || !float.IsFinite(x1) || !float.IsFinite(y1))
+                return false;
+            const float Limit = 1e7f;
+            if (x0 < -Limit || y0 < -Limit || x1 > Limit || y1 > Limit || x1 < x0 || y1 < y0) return false;
+            cx0 = (int)Math.Floor(x0 / GridCell); cy0 = (int)Math.Floor(y0 / GridCell);
+            cx1 = (int)Math.Floor(x1 / GridCell); cy1 = (int)Math.Floor(y1 / GridCell);
+            return ((long)cx1 - cx0 + 1) * ((long)cy1 - cy0 + 1) <= MaxCells;
+        }
+
+        public void Add(PenStroke s, float x0, float y0, float x1, float y1)
+        {
+            if (_sReg.ContainsKey(s)) Remove(s);
+            _sReg[s] = (x0, y0, x1, y1);
+            if (!CellRange(x0, y0, x1, y1, out int cx0, out int cy0, out int cx1, out int cy1))
+            {
+                _sLoose.Add(s);
+                return;
+            }
+            for (int cx = cx0; cx <= cx1; cx++)
+                for (int cy = cy0; cy <= cy1; cy++)
+                {
+                    long k = Key(cx, cy);
+                    if (!_sCells.TryGetValue(k, out var list)) _sCells[k] = list = new List<PenStroke>();
+                    list.Add(s);
+                }
+        }
+
+        public void Add(ShapeElement s, float x0, float y0, float x1, float y1)
+        {
+            if (_hReg.ContainsKey(s)) Remove(s);
+            _hReg[s] = (x0, y0, x1, y1);
+            if (!CellRange(x0, y0, x1, y1, out int cx0, out int cy0, out int cx1, out int cy1))
+            {
+                _hLoose.Add(s);
+                return;
+            }
+            for (int cx = cx0; cx <= cx1; cx++)
+                for (int cy = cy0; cy <= cy1; cy++)
+                {
+                    long k = Key(cx, cy);
+                    if (!_hCells.TryGetValue(k, out var list)) _hCells[k] = list = new List<ShapeElement>();
+                    list.Add(s);
+                }
+        }
+
+        public void Remove(PenStroke s)
+        {
+            if (!_sReg.TryGetValue(s, out var b)) return;
+            _sReg.Remove(s);
+            if (!CellRange(b.x0, b.y0, b.x1, b.y1, out int cx0, out int cy0, out int cx1, out int cy1))
+            {
+                _sLoose.Remove(s);
+                return;
+            }
+            for (int cx = cx0; cx <= cx1; cx++)
+                for (int cy = cy0; cy <= cy1; cy++)
+                {
+                    long k = Key(cx, cy);
+                    if (!_sCells.TryGetValue(k, out var list)) continue;
+                    list.Remove(s);
+                    if (list.Count == 0) _sCells.Remove(k);
+                }
+        }
+
+        public void Remove(ShapeElement s)
+        {
+            if (!_hReg.TryGetValue(s, out var b)) return;
+            _hReg.Remove(s);
+            if (!CellRange(b.x0, b.y0, b.x1, b.y1, out int cx0, out int cy0, out int cx1, out int cy1))
+            {
+                _hLoose.Remove(s);
+                return;
+            }
+            for (int cx = cx0; cx <= cx1; cx++)
+                for (int cy = cy0; cy <= cy1; cy++)
+                {
+                    long k = Key(cx, cy);
+                    if (!_hCells.TryGetValue(k, out var list)) continue;
+                    list.Remove(s);
+                    if (list.Count == 0) _hCells.Remove(k);
+                }
+        }
+
+        public HashSet<PenStroke> QueryStrokes(float x0, float y0, float x1, float y1)
+        {
+            var hit = new HashSet<PenStroke>(_sLoose);
+            if (!CellRange(x0, y0, x1, y1, out int cx0, out int cy0, out int cx1, out int cy1))
+            {
+                foreach (var s in _sReg.Keys) hit.Add(s);   // unbounded query: everything
+                return hit;
+            }
+            for (int cx = cx0; cx <= cx1; cx++)
+                for (int cy = cy0; cy <= cy1; cy++)
+                    if (_sCells.TryGetValue(Key(cx, cy), out var list))
+                        foreach (var s in list) hit.Add(s);
+            return hit;
+        }
+
+        public HashSet<ShapeElement> QueryShapes(float x0, float y0, float x1, float y1)
+        {
+            var hit = new HashSet<ShapeElement>(_hLoose);
+            if (!CellRange(x0, y0, x1, y1, out int cx0, out int cy0, out int cx1, out int cy1))
+            {
+                foreach (var s in _hReg.Keys) hit.Add(s);
+                return hit;
+            }
+            for (int cx = cx0; cx <= cx1; cx++)
+                for (int cy = cy0; cy <= cy1; cy++)
+                    if (_hCells.TryGetValue(Key(cx, cy), out var list))
+                        foreach (var s in list) hit.Add(s);
+            return hit;
+        }
+    }
+
+    private readonly SpatialGrid _grid = new();
+    private NotePage? _gridPage;
+    private bool _gridDirty = true;
+    private int _gridStrokeCount, _gridShapeCount;
+
+    /// <summary>Marks the spatial index stale; the rebuild is lazy, on the next
+    /// query. Needed after an edit that moves elements without changing the
+    /// collection counts (the count check below catches adds and removes).</summary>
+    public void InvalidateSpatialIndex() => _gridDirty = true;
+
+    private static void StrokeIndexBounds(PenStroke s, out float x0, out float y0, out float x1, out float y1)
+    {
+        s.GetBounds(out x0, out y0, out x1, out y1);
+        float pad = s.Size + 8f;
+        x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+    }
+
+    private static void ShapeIndexBounds(ShapeElement s, out float x0, out float y0, out float x1, out float y1)
+    {
+        var r = ShapeBounds(s);
+        double hw = r.Width / 2, hh = r.Height / 2;
+        double cx = r.X + hw, cy = r.Y + hh;
+        // rotation is about the centre, so the bounding circle covers every angle
+        if (Math.Abs(s.Rotation) > 0.01) { double d = Math.Sqrt(hw * hw + hh * hh); hw = hh = d; }
+        double pad = s.Size + 8;
+        x0 = (float)(cx - hw - pad); y0 = (float)(cy - hh - pad);
+        x1 = (float)(cx + hw + pad); y1 = (float)(cy + hh + pad);
+    }
+
+    private void GridAdd(PenStroke s)
+    {
+        StrokeIndexBounds(s, out float x0, out float y0, out float x1, out float y1);
+        _grid.Add(s, x0, y0, x1, y1);
+    }
+
+    private void GridAdd(ShapeElement s)
+    {
+        ShapeIndexBounds(s, out float x0, out float y0, out float x1, out float y1);
+        _grid.Add(s, x0, y0, x1, y1);
+    }
+
+    private SpatialGrid? EnsureGrid()
+    {
+        if (_page == null) return null;
+        if (_page.Strokes.Count + _page.Shapes.Count < GridMinElements)
+        {
+            _gridDirty = true;   // stay cold; build on the first query past the threshold
+            return null;
+        }
+        // The count comparison is the safety net for mutations made outside this
+        // control (undo action bodies, sync-log replay): any add or remove shows
+        // up as a mismatch and forces a rebuild before the query is answered.
+        if (_gridDirty || !ReferenceEquals(_gridPage, _page) ||
+            _gridStrokeCount != _page.Strokes.Count || _gridShapeCount != _page.Shapes.Count)
+        {
+            _grid.Clear();
+            foreach (var s in _page.Strokes) GridAdd(s);
+            foreach (var sh in _page.Shapes) GridAdd(sh);
+            _gridPage = _page;
+            _gridStrokeCount = _page.Strokes.Count;
+            _gridShapeCount = _page.Shapes.Count;
+            _gridDirty = false;
+        }
+        return _grid;
+    }
+
+    /// <summary>Strokes whose padded bounds meet the world rect, or null when the
+    /// index is cold — null means "no filter, scan the whole list".</summary>
+    private HashSet<PenStroke>? StrokeCandidates(float x0, float y0, float x1, float y1)
+        => EnsureGrid()?.QueryStrokes(x0, y0, x1, y1);
+
+    private HashSet<ShapeElement>? ShapeCandidates(float x0, float y0, float x1, float y1)
+        => EnsureGrid()?.QueryShapes(x0, y0, x1, y1);
+
+    // ---- centralised element mutation ----
+    // Every direct add/remove of the page's Strokes/Shapes goes through these so
+    // the grid tracks the page exactly. The tracked counts are stepped, never
+    // reassigned, so a mutation made elsewhere still surfaces as a mismatch.
+    // Adds performed by undo actions arrive via PushAction instead.
+
+    private void InsertStroke(int index, PenStroke s)
+    {
+        if (_page == null) return;
+        _page.Strokes.Insert(Math.Clamp(index, 0, _page.Strokes.Count), s);
+        GridAdd(s);
+        _gridStrokeCount++;
+    }
+
+    private void RemoveStrokeAt(int index)
+    {
+        if (_page == null) return;
+        var s = _page.Strokes[index];
+        _page.Strokes.RemoveAt(index);
+        _grid.Remove(s);
+        _gridStrokeCount--;
+    }
+
+    private void RemoveStroke(PenStroke s)
+    {
+        if (_page == null || !_page.Strokes.Remove(s)) return;
+        _grid.Remove(s);
+        _gridStrokeCount--;
+    }
+
+    private void RemoveShapeAt(int index)
+    {
+        if (_page == null) return;
+        var s = _page.Shapes[index];
+        _page.Shapes.RemoveAt(index);
+        _grid.Remove(s);
+        _gridShapeCount--;
+    }
+
+    /// <summary>Wraps UndoManager.Push: action Do()/Undo() bodies mutate the page
+    /// directly and many move elements without changing counts, so every undoable
+    /// edit invalidates the index.</summary>
+    private void PushAction(IPageAction action, NotePage page, bool alreadyDone = false)
+    {
+        UndoManager.Push(action, page, alreadyDone);
+        _gridDirty = true;
+    }
+
+    // =======================================================================
     // Erasing
     // =======================================================================
     private void EraseAt(Vector2 from, Vector2 to)
     {
         if (_page == null) return;
+        // One candidate query for the whole gesture step. The pad is the widest
+        // query-side tolerance either mode uses; per-element thickness is already
+        // baked into the indexed bounds.
+        float qp = Math.Max(EraserRadius, 8f);
+        float qx0 = Math.Min(from.X, to.X) - qp, qy0 = Math.Min(from.Y, to.Y) - qp;
+        float qx1 = Math.Max(from.X, to.X) + qp, qy1 = Math.Max(from.Y, to.Y) + qp;
+        var shCand = ShapeCandidates(qx0, qy0, qx1, qy1);
+        var stCand = StrokeCandidates(qx0, qy0, qx1, qy1);
         // shapes are erased whole in either mode — but images are never erased
         // (move/delete them with the selection tools instead)
         for (int i = _page.Shapes.Count - 1; i >= 0; i--)
         {
             var sh = _page.Shapes[i];
+            if (shCand != null && !shCand.Contains(sh)) continue;
             if (sh.Kind == ShapeKind.Image) continue;
             float tolS = sh.Size + 8f;
             if (DistToShapeOutline(sh, from) <= tolS || DistToShapeOutline(sh, to) <= tolS)
             {
                 _eraseRemovedShapes.Add((i, sh));
-                _page.Shapes.RemoveAt(i);
+                RemoveShapeAt(i);
                 if (_activeShape == sh) _activeShape = null;
             }
         }
@@ -2188,13 +2481,14 @@ public sealed class InkSurface : UserControl
             for (int i = _page.Strokes.Count - 1; i >= 0; i--)
             {
                 var s = _page.Strokes[i];
+                if (stCand != null && !stCand.Contains(s)) continue;
                 float tol = s.Size + 6f;
                 bool hit = s.Points.Any(p =>
                     GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) <= tol);
                 if (hit)
                 {
                     _eraseRemoved.Add((i, s));
-                    _page.Strokes.RemoveAt(i);
+                    RemoveStrokeAt(i);
                 }
             }
         }
@@ -2207,6 +2501,7 @@ public sealed class InkSurface : UserControl
             for (int i = _page.Strokes.Count - 1; i >= 0; i--)
             {
                 var s = _page.Strokes[i];
+                if (stCand != null && !stCand.Contains(s)) continue;
 
                 bool any = false;
                 foreach (var p in s.Points)
@@ -2227,7 +2522,7 @@ public sealed class InkSurface : UserControl
                 }
                 if (cur.Count > 1) runs.Add(cur);
 
-                _page.Strokes.RemoveAt(i);
+                RemoveStrokeAt(i);
                 // A fragment from earlier in this gesture: its original was
                 // already recorded, so only record genuinely original strokes.
                 if (!_gestureFragments.Remove(s)) _eraseRemoved.Add((i, s));
@@ -2236,7 +2531,7 @@ public sealed class InkSurface : UserControl
                 foreach (var run in runs)
                 {
                     var frag = s.CloneWithPoints(run);
-                    _page.Strokes.Insert(Math.Min(insertAt++, _page.Strokes.Count), frag);
+                    InsertStroke(insertAt++, frag);
                     _gestureFragments.Add(frag);
                 }
             }
@@ -2254,9 +2549,21 @@ public sealed class InkSurface : UserControl
         _selShapes.Clear();
         _selShapeSet.Clear();
         _selTexts.Clear();
+        // Anything the lasso can select must overlap the lasso's bounding box.
+        float lx0 = float.MaxValue, ly0 = float.MaxValue, lx1 = float.MinValue, ly1 = float.MinValue;
+        foreach (var v in poly)
+        {
+            if (v.X < lx0) lx0 = v.X;
+            if (v.Y < ly0) ly0 = v.Y;
+            if (v.X > lx1) lx1 = v.X;
+            if (v.Y > ly1) ly1 = v.Y;
+        }
+        var lsCand = poly.Count > 0 ? StrokeCandidates(lx0, ly0, lx1, ly1) : null;
+        var lhCand = poly.Count > 0 ? ShapeCandidates(lx0, ly0, lx1, ly1) : null;
         foreach (var s in _page.Strokes)
         {
             if (s.Points.Count == 0) continue;
+            if (lsCand != null && !lsCand.Contains(s)) continue;
             int inside = s.Points.Count(p => GeometryUtil.PointInPolygon(new Vector2(p.X, p.Y), poly));
             if (inside > 0 && inside >= s.Points.Count * 0.4)
             {
@@ -2266,6 +2573,7 @@ public sealed class InkSurface : UserControl
         }
         foreach (var sh in _page.Shapes)
         {
+            if (lhCand != null && !lhCand.Contains(sh)) continue;
             var r = ShapeBounds(sh);
             var c = new Vector2((float)(r.X + r.Width / 2), (float)(r.Y + r.Height / 2));
             if (GeometryUtil.PointInPolygon(c, poly)) { _selShapes.Add(sh); _selShapeSet.Add(sh); }
@@ -2503,7 +2811,7 @@ public sealed class InkSurface : UserControl
         var nsh = (_clipShapes ?? new()).Select(s => { var c = CloneShape(s); c.X += dx; c.Y += dy; return c; }).ToList();
         var nt = (_clipTexts ?? new()).Select(t => { var c = CloneText(t); c.X += dx; c.Y += dy; return c; }).ToList();
 
-        UndoManager.Push(new AddMixedAction(ns, nsh, nt), _page);
+        PushAction(new AddMixedAction(ns, nsh, nt), _page);
 
         _selected.Clear(); _selectedSet.Clear();
         _selShapes.Clear(); _selShapeSet.Clear();
@@ -2538,7 +2846,7 @@ public sealed class InkSurface : UserControl
             Kind = ShapeKind.Image, ImagePath = path,
             X = topLeftWorld.X, Y = topLeftWorld.Y, W = w, H = h, Size = 0
         };
-        UndoManager.Push(new AddShapeAction(s), _page);
+        PushAction(new AddShapeAction(s), _page);
         _activeShape = s;
         _canvas.Invalidate();
         ContentChanged?.Invoke();
@@ -3724,8 +4032,10 @@ public sealed class InkSurface : UserControl
     private ShapeElement? HitShape(Vector2 pos, float tol)
     {
         if (_page == null) return null;
+        var cand = ShapeCandidates(pos.X - tol, pos.Y - tol, pos.X + tol, pos.Y + tol);
         for (int i = _page.Shapes.Count - 1; i >= 0; i--)
         {
+            if (cand != null && !cand.Contains(_page.Shapes[i])) continue;
             if (DistToShapeOutline(_page.Shapes[i], pos) <= tol + _page.Shapes[i].Size)
                 return _page.Shapes[i];
         }
@@ -4033,7 +4343,7 @@ public sealed class InkSurface : UserControl
             H = h,
             Size = 0
         };
-        UndoManager.Push(new AddShapeAction(s), _page);
+        PushAction(new AddShapeAction(s), _page);
         _activeShape = s;
         _canvas.Invalidate();
         ContentChanged?.Invoke();
@@ -4184,7 +4494,7 @@ public sealed class InkSurface : UserControl
         {
             s.X = c.X - w / 2; s.Y = c.Y - h / 2; s.W = w; s.H = h;
         }
-        UndoManager.Push(new AddShapeAction(s), _page);
+        PushAction(new AddShapeAction(s), _page);
         _activeShape = s;
         _canvas.Invalidate();
         ContentChanged?.Invoke();
@@ -4242,7 +4552,7 @@ public sealed class InkSurface : UserControl
         if (_page == null) return null;
         FlushTexts(); // save other boxes' live edits before adding a new one
         var t = new TextElement { X = worldPos.X - 4, Y = worldPos.Y - 10, AutoWidth = true };
-        UndoManager.Push(new AddTextAction(t), _page);
+        PushAction(new AddTextAction(t), _page);
         BuildTextUi(t); // add ONLY the new box so existing boxes keep their formatting
         if (_textUi.TryGetValue(t.Id, out var ui))
         {
@@ -4518,7 +4828,7 @@ public sealed class InkSurface : UserControl
         if (_page == null) return;
         FlushTexts();
         var t = new TextElement { X = x, Y = y, Width = Math.Max(60, width), Rtf = rtf };
-        UndoManager.Push(new AddTextAction(t), _page);
+        PushAction(new AddTextAction(t), _page);
         BuildTextUi(t);
         ContentChanged?.Invoke();
     }
@@ -4551,7 +4861,7 @@ public sealed class InkSurface : UserControl
                     TableId = table.Id, TableRow = r, TableCol = c
                 });
 
-        UndoManager.Push(new AddMixedAction(new List<PenStroke>(), new List<ShapeElement> { table }, texts), _page);
+        PushAction(new AddMixedAction(new List<PenStroke>(), new List<ShapeElement> { table }, texts), _page);
         _activeShape = table;
         RebuildTextLayer();
         _canvas.Invalidate();
@@ -4643,7 +4953,7 @@ public sealed class InkSurface : UserControl
                 moves.Add((t, t.X, t.Y, nx, ny));
         }
         if (moves.Count == 0) { RebuildTextLayer(); return; }
-        UndoManager.Push(new RepositionTextsAction(moves), _page);
+        PushAction(new RepositionTextsAction(moves), _page);
         RebuildTextLayer();
     }
 
@@ -4787,7 +5097,7 @@ public sealed class InkSurface : UserControl
         int toColSpan = maxCol - minCol + 1;
         int toRowSpan = maxRow - minRow + 1;
 
-        UndoManager.Push(new CellMergeAction(topLeft, topLeft.CellColSpan, topLeft.CellRowSpan, toColSpan, toRowSpan, hidden), _page);
+        PushAction(new CellMergeAction(topLeft, topLeft.CellColSpan, topLeft.CellRowSpan, toColSpan, toRowSpan, hidden), _page);
         ReflowTableCells(table);
         ClearSelection();
         _canvas.Invalidate();
@@ -4819,7 +5129,7 @@ public sealed class InkSurface : UserControl
             }
         }
 
-        UndoManager.Push(new CellMergeAction(cell, cell.CellColSpan, cell.CellRowSpan, 1, 1, restored), _page);
+        PushAction(new CellMergeAction(cell, cell.CellColSpan, cell.CellRowSpan, 1, 1, restored), _page);
         foreach (var r in restored) _page.Texts.Add(r);
 
         ReflowTableCells(table);
@@ -4839,7 +5149,7 @@ public sealed class InkSurface : UserControl
         {
             actions.Add(new CellStyleAction(cell, cell.FillColor, fillHex, cell.BorderColor, cell.BorderColor, cell.BorderWidth, cell.BorderWidth));
         }
-        UndoManager.Push(new CompositeAction(actions, "Change cell fill"), _page);
+        PushAction(new CompositeAction(actions, "Change cell fill"), _page);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
     }
@@ -4855,7 +5165,7 @@ public sealed class InkSurface : UserControl
         {
             actions.Add(new CellStyleAction(cell, cell.FillColor, cell.FillColor, cell.BorderColor, borderHex, cell.BorderWidth, borderWidth));
         }
-        UndoManager.Push(new CompositeAction(actions, "Change cell border"), _page);
+        PushAction(new CompositeAction(actions, "Change cell border"), _page);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
     }
@@ -4863,7 +5173,7 @@ public sealed class InkSurface : UserControl
     public void TableToggleHeaderRow(ShapeElement table)
     {
         if (_page == null) return;
-        UndoManager.Push(new HeaderRowAction(table, table.HeaderRow, !table.HeaderRow), _page);
+        PushAction(new HeaderRowAction(table, table.HeaderRow, !table.HeaderRow), _page);
 
         // Bold/unbold text of the header row cells
         foreach (var t in _page.Texts)
@@ -4918,7 +5228,7 @@ public sealed class InkSurface : UserControl
             new TableLayoutAction(table, colW, rowH, table.W, table.H, newColW, rowH, table.W + newW, table.H),
             new AddMixedAction(new List<PenStroke>(), new List<ShapeElement>(), newCells)
         };
-        UndoManager.Push(new CompositeAction(acts, "Add table column"), _page);
+        PushAction(new CompositeAction(acts, "Add table column"), _page);
         ReflowTableCells(table);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
@@ -4949,7 +5259,7 @@ public sealed class InkSurface : UserControl
             new TableLayoutAction(table, colW, rowH, table.W, table.H, colW, newRowH, table.W, table.H + newH),
             new AddMixedAction(new List<PenStroke>(), new List<ShapeElement>(), newCells)
         };
-        UndoManager.Push(new CompositeAction(acts, "Add table row"), _page);
+        PushAction(new CompositeAction(acts, "Add table row"), _page);
         ReflowTableCells(table);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
@@ -4975,7 +5285,7 @@ public sealed class InkSurface : UserControl
             new TableGridAction(table, rows, cols, rows - 1, cols),
             new TableLayoutAction(table, colW, rowH, table.W, table.H, colW, newRowH, table.W, table.H - gone)
         };
-        UndoManager.Push(new CompositeAction(acts, "Delete table row"), _page);
+        PushAction(new CompositeAction(acts, "Delete table row"), _page);
         ReflowTableCells(table);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
@@ -5001,7 +5311,7 @@ public sealed class InkSurface : UserControl
             new TableGridAction(table, rows, cols, rows, cols - 1),
             new TableLayoutAction(table, colW, rowH, table.W, table.H, newColW, rowH, table.W - gone, table.H)
         };
-        UndoManager.Push(new CompositeAction(acts, "Delete table column"), _page);
+        PushAction(new CompositeAction(acts, "Delete table column"), _page);
         ReflowTableCells(table);
         _canvas.Invalidate();
         ContentChanged?.Invoke();
@@ -5135,16 +5445,22 @@ public sealed class InkSurface : UserControl
         // ---- text boxes as selectable PDF text ----
         foreach (var t in _page.Texts)
         {
-            var plain = RtfToPlainText(t.Rtf, out float size, out string font);
-            if (string.IsNullOrWhiteSpace(plain)) continue;
-            var lines = plain.Split('\n');
-            for (int li = 0; li < lines.Length; li++)
+            var logical = RtfRunParser.Parse(t.Rtf, 16f, "Lora");
+            // wrap at the box width less the 4px inset DrawTextElement lays out with
+            var visual = WrapRunLines(logical, Math.Max(60, t.Width) - 8);
+            float prevSize = 16f;
+            double baseline = t.Y + 16;
+            for (int li = 0; li < visual.Count; li++)
             {
-                if (lines[li].Length == 0) continue;
+                var line = visual[li];
+                // a mixed-size line sits on the baseline its tallest run needs
+                float size = line.Count > 0 ? line.Max(r => r.Size) : prevSize;
+                prevSize = size;
+                baseline += li == 0 ? size : size * 1.35;
+                if (line.Count == 0) continue;
                 texts.Add(new PdfVectorText(
-                    (float)(t.X + 4),
-                    (float)(t.Y + 16 + size + li * size * 1.35),
-                    size, inkHex, lines[li], font));
+                    (float)(t.X + 4), (float)baseline,
+                    size, inkHex, string.Concat(line.Select(r => r.Text)), line[0].Font, line));
             }
         }
 
@@ -5197,6 +5513,89 @@ public sealed class InkSurface : UserControl
         }
 
         return new PdfVectorPage(w, h, minX, minY, _page.Background, paths, dots, images, texts);
+    }
+
+    /// <summary>Greedy word wrap that respects run boundaries: each token measures
+    /// with its own run's font, size and weight, so a heading-sized word and a
+    /// body-sized word on one line both count for what they actually occupy.
+    /// An empty inner list is a blank line and still consumes a baseline.</summary>
+    private List<List<PdfVectorTextRun>> WrapRunLines(List<List<PdfVectorTextRun>> logical, double maxWidth)
+    {
+        var cache = new Dictionary<(string, float, string, bool, bool), float>();
+        float Measure(string s, PdfVectorTextRun r)
+        {
+            if (string.IsNullOrEmpty(s)) return 0f;
+            var key = (s, r.Size, r.Font, r.Bold, r.Italic);
+            if (cache.TryGetValue(key, out float hit)) return hit;
+            float w;
+            try
+            {
+                using var fmt = new CanvasTextFormat
+                {
+                    FontFamily = string.IsNullOrEmpty(r.Font) ? "Lora" : r.Font,
+                    FontSize = r.Size,
+                    FontWeight = r.Bold ? Microsoft.UI.Text.FontWeights.Bold : Microsoft.UI.Text.FontWeights.Normal,
+                    FontStyle = r.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal
+                };
+                using var tl = new CanvasTextLayout(_canvas, s, fmt, float.MaxValue, float.MaxValue);
+                w = (float)tl.LayoutBounds.Width;
+            }
+            catch { w = s.Length * r.Size * 0.5f; }   // unresolvable family: rough advance
+            cache[key] = w;
+            return w;
+        }
+
+        var outLines = new List<List<PdfVectorTextRun>>();
+        foreach (var line in logical)
+        {
+            if (line.Count == 0) { outLines.Add(new List<PdfVectorTextRun>()); continue; }
+            var visual = new List<PdfVectorTextRun>();
+            var chunk = new System.Text.StringBuilder();
+            double x = 0;
+            foreach (var run in line)
+            {
+                chunk.Clear();
+                foreach (var tok in WrapTokens(run.Text))
+                {
+                    float tw = Measure(tok, run);
+                    // x > 0 guards a single over-long word from looping on empty lines
+                    if (x + tw > maxWidth && x > 0)
+                    {
+                        if (chunk.Length > 0)
+                        {
+                            visual.Add(run with { Text = chunk.ToString().TrimEnd() });
+                            chunk.Clear();
+                        }
+                        outLines.Add(visual);
+                        visual = new List<PdfVectorTextRun>();
+                        var head = tok.TrimStart();
+                        chunk.Append(head);
+                        x = Measure(head, run);
+                    }
+                    else
+                    {
+                        chunk.Append(tok);
+                        x += tw;
+                    }
+                }
+                if (chunk.Length > 0) visual.Add(run with { Text = chunk.ToString() });
+            }
+            outLines.Add(visual);
+        }
+        return outLines;
+    }
+
+    // word plus the whitespace that trails it, so breaks land between words
+    private static IEnumerable<string> WrapTokens(string s)
+    {
+        int i = 0;
+        while (i < s.Length)
+        {
+            int start = i;
+            while (i < s.Length && !char.IsWhiteSpace(s[i])) i++;
+            while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
+            yield return s[start..i];
+        }
     }
 
     private static Rect RectUnion(Rect a, Rect b)
@@ -5638,7 +6037,7 @@ public sealed class InkSurface : UserControl
                         if (Math.Abs(cur[i] - snap[i]) > 0.5) { grew = true; break; }
                 if (!grew) return;
                 var colW = TableColWidths(cellTable).ToList();
-                UndoManager.Push(new TableLayoutAction(cellTable,
+                PushAction(new TableLayoutAction(cellTable,
                     colW, snap, cellTable.W, hSnap,
                     colW, cur, cellTable.W, cellTable.H), _page, alreadyDone: true);
             };
@@ -5827,7 +6226,7 @@ public sealed class InkSurface : UserControl
         {
             if (_page == null) return;
             FlushTexts();
-            UndoManager.Push(new RemoveTextAction(t), _page);
+            PushAction(new RemoveTextAction(t), _page);
             RebuildTextLayer();
             ActiveTextChanged?.Invoke(null);
             ContentChanged?.Invoke();
@@ -5855,7 +6254,7 @@ public sealed class InkSurface : UserControl
             double nx = Canvas.GetLeft(container), ny = Canvas.GetTop(container);
             if (Math.Abs(nx - startX) > 0.5 || Math.Abs(ny - startY) > 0.5)
             {
-                UndoManager.Push(new MoveTextAction(t, startX, startY, nx, ny), _page);
+                PushAction(new MoveTextAction(t, startX, startY, nx, ny), _page);
                 ContentChanged?.Invoke();
             }
         };
@@ -5890,8 +6289,10 @@ public sealed class InkSurface : UserControl
     public PenStroke? HitStroke(Vector2 pos, float tol)
     {
         if (_page == null) return null;
+        var cand = StrokeCandidates(pos.X - tol, pos.Y - tol, pos.X + tol, pos.Y + tol);
         foreach (var s in _page.Strokes)
         {
+            if (cand != null && !cand.Contains(s)) continue;
             // cheap bbox reject before the per-point scan (FindStrokeNear has
             // always done this; HitStroke was the one path that didn't)
             s.GetBounds(out float mnX, out float mnY, out float mxX, out float mxY);
@@ -6003,7 +6404,7 @@ public sealed class InkSurface : UserControl
                     colW[targetCol] = newColW;
                     double newW = shape.W + diff;
 
-                    UndoManager.Push(new TableLayoutAction(shape, oldColW, rowH, shape.W, shape.H, colW, rowH, newW, shape.H), _page);
+                    PushAction(new TableLayoutAction(shape, oldColW, rowH, shape.W, shape.H, colW, rowH, newW, shape.H), _page);
                     ReflowTableCells(shape);
                     _canvas.Invalidate();
                     ContentChanged?.Invoke();
@@ -6052,7 +6453,7 @@ public sealed class InkSurface : UserControl
                     rowH2[targetRow] = newRowH;
                     double newH = shape.H + diff;
 
-                    UndoManager.Push(new TableLayoutAction(shape, colW2, oldRowH, shape.W, shape.H, colW2, rowH2, shape.W, newH), _page);
+                    PushAction(new TableLayoutAction(shape, colW2, oldRowH, shape.W, shape.H, colW2, rowH2, shape.W, newH), _page);
                     ReflowTableCells(shape);
                     _canvas.Invalidate();
                     ContentChanged?.Invoke();
@@ -6063,22 +6464,35 @@ public sealed class InkSurface : UserControl
         }
     }
 
-    public static byte[]? RenderPageThumbnail(NotePage page, int targetWidth, int targetHeight)
+    /// <summary>
+    /// Flattens a page to PNG bytes off the UI thread. <paramref name="cropToContent"/>
+    /// frames the drawn content instead of the page origin — what a gallery cover
+    /// wants, since a wide cover strip of an empty page corner shows nothing.
+    /// Returns null when there is nothing to draw, so callers can fall back.
+    /// </summary>
+    public static byte[]? RenderPageThumbnail(NotePage page, int targetWidth, int targetHeight, bool cropToContent = false)
     {
         var device = CanvasDevice.GetSharedDevice();
         if (device == null) return null;
         try
         {
+            double srcX = 0, srcY = 0, srcW = 1200, srcH = 900;
+            if (cropToContent && !TryContentBounds(page, targetWidth, targetHeight,
+                                                   out srcX, out srcY, out srcW, out srcH))
+                return null;
+
             using var rt = new CanvasRenderTarget(device, targetWidth, targetHeight, 96);
             using (var ds = rt.CreateDrawingSession())
             {
                 var bg = ColorUtil.Parse(page.Background);
                 ds.Clear(bg);
 
-                double w = 1200;
-                double h = 900;
-                float scale = Math.Min((float)(targetWidth / w), (float)(targetHeight / h));
-                ds.Transform = Matrix3x2.CreateScale(scale);
+                // content framing fits exactly; the origin framing letterboxes
+                float scale = cropToContent
+                    ? (float)(targetWidth / srcW)
+                    : Math.Min((float)(targetWidth / srcW), (float)(targetHeight / srcH));
+                ds.Transform = Matrix3x2.CreateTranslation((float)-srcX, (float)-srcY) *
+                               Matrix3x2.CreateScale(scale);
 
                 foreach (var sh in page.Shapes)
                 {
@@ -6093,6 +6507,22 @@ public sealed class InkSurface : UserControl
                     {
                         ds.DrawLine(new Vector2(s.Points[i - 1].X, s.Points[i - 1].Y), new Vector2(s.Points[i].X, s.Points[i].Y), color, s.Size);
                     }
+                }
+
+                // Text carries no colour of its own here — the RTF run colours are
+                // dropped by StripRtf — so contrast against the page background.
+                double lum = (0.299 * bg.R + 0.587 * bg.G + 0.114 * bg.B) / 255.0;
+                var textCol = lum > 0.5
+                    ? Color.FromArgb(255, 0x1B, 0x1A, 0x18)
+                    : Color.FromArgb(255, 0xF4, 0xF2, 0xEC);
+                foreach (var t in page.Texts)
+                {
+                    string txt = StripRtf(t.Rtf);
+                    if (string.IsNullOrEmpty(txt)) continue;
+                    using var layout = new CanvasTextLayout(device, txt,
+                        new CanvasTextFormat { FontSize = 16f },
+                        (float)Math.Max(24, t.Width), 4000);
+                    ds.DrawTextLayout(layout, (float)t.X, (float)t.Y, textCol);
                 }
             }
 
@@ -6112,6 +6542,52 @@ public sealed class InkSurface : UserControl
         {
             return null;
         }
+    }
+
+    // Union of everything drawn on the page, padded and then grown to the
+    // target's aspect ratio so the fit is exact without cropping. Growing in
+    // height anchors the top: notes read downward, so the top is what matters.
+    private static bool TryContentBounds(NotePage page, int targetWidth, int targetHeight,
+                                         out double x, out double y, out double w, out double h)
+    {
+        x = y = w = h = 0;
+        double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
+        void Add(double ax, double ay, double bx, double by)
+        {
+            if (ax < x0) x0 = ax;
+            if (ay < y0) y0 = ay;
+            if (bx > x1) x1 = bx;
+            if (by > y1) y1 = by;
+        }
+
+        foreach (var s in page.Strokes)
+        {
+            if (s.Points.Count == 0) continue;
+            s.GetBounds(out float a, out float b, out float c, out float d);
+            float pad = s.Size * 0.5f;
+            Add(a - pad, b - pad, c + pad, d + pad);
+        }
+        foreach (var sh in page.Shapes)
+            Add(Math.Min(sh.X, sh.X + sh.W), Math.Min(sh.Y, sh.Y + sh.H),
+                Math.Max(sh.X, sh.X + sh.W), Math.Max(sh.Y, sh.Y + sh.H));
+        foreach (var t in page.Texts)
+        {
+            if (string.IsNullOrEmpty(StripRtf(t.Rtf))) continue;
+            Add(t.X, t.Y, t.X + Math.Max(24, t.Width), t.Y + 48);
+        }
+
+        if (x1 <= x0 || y1 <= y0) return false;
+
+        double bw = x1 - x0, bh = y1 - y0;
+        double pad2 = Math.Max(12, Math.Max(bw, bh) * 0.03);
+        x0 -= pad2; y0 -= pad2; bw += pad2 * 2; bh += pad2 * 2;
+
+        double ta = (double)targetWidth / Math.Max(1, targetHeight);
+        if (bw / bh < ta) { double nw = bh * ta; x0 -= (nw - bw) / 2; bw = nw; }
+        else bh = bw / ta;
+
+        x = x0; y = y0; w = bw; h = bh;
+        return true;
     }
 
     private bool TryDrawInkCache(CanvasDrawingSession ds, ICanvasResourceCreator sender,
