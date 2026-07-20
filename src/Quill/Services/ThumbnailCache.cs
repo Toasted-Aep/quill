@@ -1,4 +1,5 @@
 using Quill.Models;
+using Windows.UI;
 
 namespace Quill.Services;
 
@@ -71,12 +72,16 @@ public static class ThumbnailCache
     /// showing (empty page, render failure, disk trouble) — callers keep their
     /// own fallback in that case.
     /// </summary>
-    public static Task<byte[]?> GetAsync(NotePage page, int w, int h, bool cropToContent)
+    public static Task<byte[]?> GetAsync(NotePage page, int w, int h, bool cropToContent, Color? bgOverride = null)
     {
         // The stamp walks the page's lists, so take it on the caller's thread
         // (the UI thread) where those lists are not being mutated underneath us.
         string shape = $"{page.Id:N}-{w}x{h}{(cropToContent ? "c" : "")}";
-        string key = $"{shape}-{Stamp(page)}";
+        // The override colour is part of the picture, so it rides in the key: a
+        // recoloured notebook must re-render its cover. It sits after the stamp,
+        // inside the shape prefix, so Sweep still reaps the old-colour file.
+        string ov = bgOverride is Color oc ? $"o{oc.R:X2}{oc.G:X2}{oc.B:X2}" : "";
+        string key = $"{shape}-{Stamp(page)}{ov}";
 
         lock (Gate)
         {
@@ -97,7 +102,7 @@ public static class ThumbnailCache
             catch { }
 
             byte[]? bytes;
-            try { bytes = Controls.InkSurface.RenderPageThumbnail(page, w, h, cropToContent); }
+            try { bytes = Controls.InkSurface.RenderPageThumbnail(page, w, h, cropToContent, bgOverride); }
             catch { bytes = null; }
             if (bytes == null) return null;
 
