@@ -1,104 +1,77 @@
 # Quill — roadmap
 
-## Shipped recently
+The previous roadmap is complete: every open item (spatial index, async load
+phase 2, gallery→page connected animation, oplog compaction, keyboard presets,
+cover thumbnails, per-run export formatting, i18n groundwork) shipped in the
+Track C batch, alongside five new glow patterns (Aurora, Shimmer, Ember,
+Chase, Heartbeat). This roadmap is organised around what comes next: Art Mode.
 
-**Ink & input**
-- Pen repair mode (Settings): bridges mid-stroke drop-outs from a faulty pen
-  and suppresses lift-bounce dots; deliberate dots still register.
-- Shape resize overhaul: rotated shapes resize about a pinned anchor (no more
-  drifting), polygon vertices anchor sensibly, bigger rotate-handle hit areas.
-- Lasso double-click = leave blank space once, then the pen comes back.
-- Shape recognition settle pulse; custom axis labels on x-y / x-y-z shapes.
+## Art Mode (beta) — the headline
 
-**Look & feel**
-- Window-level Mica (Windows 11) with translucent root; liquid-glass depth
-  tiers (floating docks clearer than chrome); glow engine with Off / Breathe /
-  Circulate modes shared by every glow in the app; accent unified everywhere,
-  with optional accent-follow (active pen or notebook colour).
-- Follow-Windows theme mode; true-black OLED dark theme; text ink follows the
-  page background, not the app theme.
-- Original vector icon set for pen types, minimal-UI buttons and tools.
-- Honours Windows' "Transparency effects" and "Animation effects" settings.
-- Minimal-UI cluster snaps to any edge (middle magnetism) and tucks into a
-  corner pull-out tab; touch mode scales glyphs, not just hit targets.
+Built from scratch on a research dossier (docs/ARTMODE-RESEARCH.md: 115
+findings across brush engines, canvas architecture, compositing, pen input,
+undo/formats, tools, colour). The earlier fork-based attempt was scrapped.
 
-**Features**
-- AI assistant: floating chat with history that SEES the page (PNG snapshot of
-  the actual ink) plus one-shot summarise / action items / smart tags / ask /
-  improve-selection. Providers: Claude, OpenAI, Gemini, or a local
-  OpenAI-compatible server; keys live in the Windows Credential Locker.
-- Ctrl+K command palette (jump to any page, run any common action).
-- Voice dictation via Windows speech into the focused text box.
-- [[Note Name]] links between pages; bare URLs auto-link (Ctrl+Click opens).
-- Typed equations: pixel-perfect MathLive capture tinted to the page,
-  editable in place (right-click → Edit equation).
-- Exports: vector PDF, SVG, HTML (vectors + selectable text) at page /
-  section / notebook scope; per-section Markdown + images; gallery Save… menu.
-- Calculator constants page (g, R, N_A, c, h, k_B… + user-defined).
-- Per-notebook default font/size; custom accent swatches; pen-dock position
-  picker; visual emoji cover picker; configurable autosave; window placement
-  and eraser mode remembered.
-- Comment pins: tap the Comment tool to drop a numbered note pin anywhere,
-  tap a pin to read / edit / resolve / delete it; resolved pins grey out.
-  (Standalone step toward staged collaboration — see COLLABORATION-PLAN.md.)
-- Undo/redo flash-highlight: undoing or redoing pulses an accent highlight
-  over the affected element (bounds reported across the ink/shape/text/mixed
-  action types).
-- Pressure response: Soft / Hard presets or a fully custom curve with three
-  draggable points (outer two slide in x too), interpolated by the engine.
-- OneNote-style two-tone pen row: each pen is a grey body with the pen's own
-  colour on its tip and band; the selected pen (or eraser) lifts out of the row.
-- Ctrl+D duplicates the selection in place; double-tap a table divider to
-  auto-fit that column to its content.
-- CanvasVirtualControl: region-driven rendering; wet ink repaints only the
-  pixels around the fresh segment instead of the whole viewport.
-- View safety: the viewport is clamped to the content region, palm touches
-  near an active pen no longer pan, and pages whose saved view drifted into
-  empty space self-heal on open (the "invisible drawings" fix).
-- MSIX packaging: `-p:Msix=true` builds a signed package with a `.quill` file
-  association; auto-update template via GitHub Releases (docs/PACKAGING.md).
-- Library deserialisation overlaps window construction (async load, phase 1).
-- Offline LaTeX prompt has a live preview; PDF import cap raised to 2000 pages.
-- Collaboration Stages 0+1: per-device operation log (element-level
-  upsert/delete ops appended on every save) and synced-folder sharing — point
-  two devices' storage at one OneDrive/Dropbox folder and edits flow both ways.
-- Text bubbles genuinely grow as you type (measured per keystroke at the
-  typing font size), capped at half the physical screen / the window edge,
-  with per-box snapshotted ceilings; old notes never re-wrap.
-- Equations invert at draw when their ink matches the page brightness; the
-  static-ink cache re-renders crisply when zoom settles; table rotation now
-  carries its cell text.
+Decisions locked with the user:
+- Scope: Tier A ~10 tools (brush, eraser, soft-edge fill, eyedropper,
+  layers + blend modes, selection/transform, colour picker, pan/zoom/rotate +
+  flip, undo, export) — the full sketch→line→flat→shade→adjust→export loop.
+- Pixel formats: hybrid — 8-bit gamma premultiplied for paint layers, FP16
+  linear only for future simulation buffers. Conversion points must be
+  explicit in the design.
+- Pigment mixing behind an interface; licence-clean spectral default
+  (Kubelka-Munk + RGB→reflectance upsampling), Mixbox droppable later.
+- Natural media (impasto relight first, then wet map) is post-beta.
 
-## Next release — big rocks
+Phases (each independently shippable, build- and launch-verified):
+1. **Design** — docs/ARTMODE-V2-DESIGN.md via competing architectures +
+   judge panel + adversarial critique. Supersedes and deletes the stale
+   docs/ARTMODE-ARCHITECTURE.md.
+2. **Core surface** — sparse 128×128 tile store (CPU-authoritative), layer
+   model, above/below composite cache, Art notebook type in the gallery.
+3. **Stroke pipeline** — PenSample normalisation, intermediate-point drain
+   (reverse order!), one-euro + rope stabilisation, Catmull-Rom + arc-length
+   resample, dab engine with partial-dab carry, stroke scratch buffer.
+4. **Undo + format** — tile COW snapshots with a byte budget; crash-safe
+   .artq v2: temp file + flush-to-disk + atomic replace, autosave journal.
+   Writing over the live file is forbidden (it destroyed three paintings).
+5. **Tier-A tools** on the core.
+6. **Colour** — picker, palettes, premultiplied/linear correctness.
+7. **Post-beta** — impasto height + relight, wet map, pigment mixing.
 
-- **Spatial index** (grid buckets) for hit-testing/erasing at high stroke
-  counts — needs stroke/shape mutation centralised first (~27 call sites).
-- **Async library load, phase 2**: the deserialise now runs in parallel with
-  the window's XAML build (shipped); phase 2 is showing the window before the
-  load completes, with startup as a post-load continuation.
+## In flight, needs visual verification
 
-## Next release — medium
+- **Liquid glass v2** (branch `liquid-glass`): height-field refraction
+  (DisplacementMapEffect) + normal-based rim lighting (DistantSpecularEffect)
+  replacing flat acrylic. Compiles and runs; refraction not yet confirmed on
+  screen. Bevel width / specular exponent will need tuning by eye.
+- **Menu animations** (branch `menu-animations`): open rise/scale/fade,
+  implicit close animation, staggered item cascade, hover nudge — attached at
+  the two presenter styles so all ~70 menus inherit it. Compiles; unverified.
 
-- Collaboration Stage 2 (live relay server) — Stages 0 and 1 shipped: every
-  save appends element-level ops to a per-device oplog next to the library,
-  and ops from other devices' logs (arriving via any synced folder) merge in
-  on a 20s timer, element-level last-writer-wins. Verified with a simulated
-  second device. Oplog compaction (files grow forever) is a known follow-up.
-- Gallery card → page connected animation (needs a XAML placeholder target
-  over the Win2D canvas).
-- Toolbar hide/show customisation (choose which tool buttons appear).
-- Alternate keyboard preset layouts (full remapping is deliberately out of
-  scope; the command palette covers most of it).
+## Follow-ups from the Track C batch
 
-## Next release — small
+- i18n completion: gallery strings, the 113 XAML tooltips + 51 menu literals
+  (need x:Name + an ApplyLanguage assignment pass), dialogs, F1 sheet.
+  Turkish/Italian translations need a native-speaker pass.
+- Per-run text COLOUR in vector export (runs now carry size/font/bold/italic;
+  colour is still flattened to the page ink colour — same limitation as the
+  canvas draw path).
+- PDF italic (needs per-run Tm skew without losing Tj advancement) and real
+  bold faces in FontSubsetter (currently synthesised via stroke).
+- Thumbnail pruning: thumbs/ keeps PNGs of deleted pages forever.
+- RenderPageThumbnail draws Line/Arrow shapes as rectangles.
+- SyncLog: delete ops never set Parent (pre-existing; flagged during C4).
+- Oplog vs. backup-restore: restoring library.json from a backup resurrects
+  externally-deleted elements on the next merge. Decide whether restores
+  should stamp a generation the oplog respects.
+- Undo of a SyncLog foreign-merge upsert relies on the count-drift safety net
+  rather than direct index maintenance (known, benign, documented in C1).
 
-- Notebook cover thumbnails in gallery cards (background-rendered, cached).
-- Finish string extraction so the language picker can ship (en/tr/it groundwork
-  exists; most UI text is still code-built English).
+## Known rough edges (carried)
 
-## Known rough edges
-
-- Vector-export text uses the first font size found per box.
-- PDF import rasterises (imported text isn't selectable); cap is 2000 pages.
+- PDF import rasterises (imported text isn't selectable); 2000-page cap.
 - The MSIX is signed with a self-signed dev cert — public distribution needs
   a real code-signing cert or the Store.
+- Collaboration Stage 2 (live relay server) remains future work; Stages 0+1
+  (oplog + synced folder) shipped, now with compaction.
