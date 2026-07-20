@@ -436,4 +436,303 @@ public static class LibraryStore
         lib.Notebooks.Add(nb);
         return lib;
     }
+
+    // =======================================================================
+    // TRASH BIN (#trash)
+    // A deleted notebook drags all of its strokes with it, and library.json is
+    // already 53 MB and rewritten on every 1.5 s autosave — so the bin is a
+    // SEPARATE document (trash.json, next to library.json) written only when
+    // something is actually deleted, restored or purged. Retention lives on the
+    // bin (TrashBin.RetentionDays, default 30) so it is trivial to change.
+    // =======================================================================
+    private static string TrashPath => Path.Combine(Dir, "trash.json");
+    private static TrashBin? _trash;
+    private static readonly object _trashLock = new();
+
+    /// <summary>The lazily-loaded trash bin. Reads trash.json (then its ".bak")
+    /// once; a missing or unreadable file yields an empty bin, never an error —
+    /// losing the bin must never take the library down with it.</summary>
+    public static TrashBin Trash => _trash ??= LoadTrash();
+
+    private static TrashBin LoadTrash()
+    {
+        foreach (var p in new[] { TrashPath, TrashPath + ".bak" })
+        {
+            try
+            {
+                if (File.Exists(p))
+                {
+                    var bin = JsonSerializer.Deserialize<TrashBin>(File.ReadAllText(p), Opts);
+                    if (bin != null) return bin;
+                }
+            }
+            catch { /* try the backup, then fall through to an empty bin */ }
+        }
+        return new TrashBin();
+    }
+
+    // Crash-safe write of trash.json: temp file, atomic replace (rotating the
+    // previous good copy into ".bak"), never an in-place overwrite. Gated on the
+    // same save switch as the library so a failed library load can never cause a
+    // trash write. Deletes are deliberate and infrequent, so this stays synchronous.
+    private static void SaveTrash()
+    {
+        if (!_savingEnabled) return;
+        if (_trash == null) return;
+        string json;
+        try { json = JsonSerializer.Serialize(_trash, Opts); }
+        catch { return; }
+        lock (_trashLock)
+        {
+            try
+            {
+                Directory.CreateDirectory(Dir);
+                var tmp = TrashPath + ".tmp";
+                File.WriteAllText(tmp, json);
+                if (File.Exists(TrashPath))
+                    File.Replace(tmp, TrashPath, TrashPath + ".bak");
+                else
+                    File.Move(tmp, TrashPath);
+            }
+            catch
+            {
+                // atomic path failed (locked file): fall back to a direct write so
+                // the deletion still persists, and never leave a stale ".tmp" of note data.
+                try { File.WriteAllText(TrashPath, json); } catch { }
+                try { if (File.Exists(TrashPath + ".tmp")) File.Delete(TrashPath + ".tmp"); } catch { }
+            }
+        }
+    }
+
+    private static void PushTrash(TrashEntry e)
+    {
+        var bin = Trash;
+        lock (_trashLock)
+        {
+            bin.Items.Insert(0, e);                 // newest first
+            // Hard cap so a bin left untended cannot grow without bound; oldest go first.
+            while (bin.Items.Count > TrashBin.MaxItems)
+                bin.Items.RemoveAt(bin.Items.Count - 1);
+        }
+        SaveTrash();
+    }
+
+    /// <summary>Soft-deletes a notebook: removes it from the library and files it
+    /// in the bin with its original index so Restore can put it back.</summary>
+    public static void DeleteNotebook(Library lib, Notebook nb)
+    {
+        int idx = lib.Notebooks.IndexOf(nb);
+        if (idx < 0) return;
+        lib.Notebooks.RemoveAt(idx);
+        PushTrash(new TrashEntry
+        {
+            Kind = TrashItemKind.Notebook,
+            Name = nb.Name,
+            OriginalIndex = idx,
+            Notebook = nb
+        });
+        PruneRecents(lib);   // its pages are gone from the tree now
+        Save(lib);
+    }
+
+    /// <summary>Soft-deletes a section, remembering its parent notebook and index.</summary>
+    public static void DeleteSection(Library lib, Notebook parent, Section sec)
+    {
+        int idx = parent.Sections.IndexOf(sec);
+        if (idx < 0) return;
+        parent.Sections.RemoveAt(idx);
+        PushTrash(new TrashEntry
+        {
+            Kind = TrashItemKind.Section,
+            Name = sec.Name,
+            ParentNotebookId = parent.Id,
+            OriginalIndex = idx,
+            Section = sec
+        });
+        PruneRecents(lib);
+        Save(lib);
+    }
+
+    /// <summary>Soft-deletes a page, remembering its notebook, section and index.</summary>
+    public static void DeletePage(Library lib, Notebook nb, Section sec, NotePage page)
+    {
+        int idx = sec.Pages.IndexOf(page);
+        if (idx < 0) return;
+        sec.Pages.RemoveAt(idx);
+        PushTrash(new TrashEntry
+        {
+            Kind = TrashItemKind.Page,
+            Name = page.Name,
+            ParentNotebookId = nb.Id,
+            ParentSectionId = sec.Id,
+            OriginalIndex = idx,
+            Page = page
+        });
+        PruneRecents(lib);
+        Save(lib);
+    }
+
+    /// <summary>Restores a bin entry to its original location. If the original
+    /// parent is gone, it falls back to a sensible home (an existing container,
+    /// or a freshly-made "Recovered" one) rather than dropping the item. Returns
+    /// false if the entry is missing or already back in the tree.</summary>
+    public static bool Restore(Library lib, Guid entryId)
+    {
+        var bin = Trash;
+        TrashEntry? e;
+        lock (_trashLock) { e = bin.Items.FirstOrDefault(x => x.Id == entryId); }
+        if (e == null) return false;
+
+        bool ok = e.Kind switch
+        {
+            TrashItemKind.Notebook => RestoreNotebook(lib, e),
+            TrashItemKind.Section  => RestoreSection(lib, e),
+            TrashItemKind.Page     => RestorePage(lib, e),
+            _ => false
+        };
+        if (ok)
+        {
+            lock (_trashLock) { bin.Items.Remove(e); }
+            SaveTrash();
+            Save(lib);
+        }
+        return ok;
+    }
+
+    private static bool RestoreNotebook(Library lib, TrashEntry e)
+    {
+        var nb = e.Notebook;
+        if (nb == null) return false;
+        if (lib.Notebooks.Any(n => n.Id == nb.Id)) return false;   // already present
+        int idx = Math.Clamp(e.OriginalIndex, 0, lib.Notebooks.Count);
+        lib.Notebooks.Insert(idx, nb);
+        return true;
+    }
+
+    private static bool RestoreSection(Library lib, TrashEntry e)
+    {
+        var sec = e.Section;
+        if (sec == null) return false;
+        var parent = lib.Notebooks.FirstOrDefault(n => n.Id == e.ParentNotebookId)
+                     ?? EnsureRecoveryNotebook(lib);
+        if (parent.Sections.Any(s => s.Id == sec.Id)) return false;
+        int idx = Math.Clamp(e.OriginalIndex, 0, parent.Sections.Count);
+        parent.Sections.Insert(idx, sec);
+        return true;
+    }
+
+    private static bool RestorePage(Library lib, TrashEntry e)
+    {
+        var page = e.Page;
+        if (page == null) return false;
+        // Prefer the exact original section; then the section by id anywhere it may
+        // have moved to; finally a recovery home so the page is never lost.
+        Section? sec = lib.Notebooks.FirstOrDefault(n => n.Id == e.ParentNotebookId)
+                          ?.Sections.FirstOrDefault(s => s.Id == e.ParentSectionId)
+                       ?? lib.Notebooks.SelectMany(n => n.Sections)
+                             .FirstOrDefault(s => s.Id == e.ParentSectionId)
+                       ?? EnsureRecoverySection(lib);
+        if (sec.Pages.Any(p => p.Id == page.Id)) return false;
+        int idx = Math.Clamp(e.OriginalIndex, 0, sec.Pages.Count);
+        sec.Pages.Insert(idx, page);
+        return true;
+    }
+
+    private static Notebook EnsureRecoveryNotebook(Library lib)
+    {
+        var nb = lib.Notebooks.FirstOrDefault();
+        if (nb != null) return nb;
+        nb = new Notebook { Name = "Recovered" };
+        lib.Notebooks.Add(nb);
+        return nb;
+    }
+
+    private static Section EnsureRecoverySection(Library lib)
+    {
+        var nb = EnsureRecoveryNotebook(lib);
+        var sec = nb.Sections.FirstOrDefault();
+        if (sec != null) return sec;
+        sec = new Section { Name = "Recovered" };
+        nb.Sections.Add(sec);
+        return sec;
+    }
+
+    /// <summary>Permanently removes one bin entry. Returns true if it existed.</summary>
+    public static bool Purge(Guid entryId)
+    {
+        bool removed;
+        lock (_trashLock) { removed = Trash.Items.RemoveAll(x => x.Id == entryId) > 0; }
+        if (removed) SaveTrash();
+        return removed;
+    }
+
+    /// <summary>Empties the bin permanently.</summary>
+    public static void PurgeAll()
+    {
+        lock (_trashLock)
+        {
+            if (Trash.Items.Count == 0) return;
+            Trash.Items.Clear();
+        }
+        SaveTrash();
+    }
+
+    /// <summary>Age-based auto-purge (default 30 days, see TrashBin.RetentionDays).
+    /// Deliberately gated on the save switch AND a clean load: after a failed or
+    /// empty library load the gate is shut, so a parse failure can never silently
+    /// empty the user's trash. Call after the window has adopted a real library.
+    /// RetentionDays &lt;= 0 disables age purging (MaxItems still caps the bin).</summary>
+    public static int AutoPurgeExpired()
+    {
+        if (!_savingEnabled || LoadFailed) return 0;
+        var bin = Trash;
+        int days = bin.RetentionDays;
+        if (days <= 0) return 0;
+        long cutoff = DateTime.UtcNow.AddDays(-days).Ticks;
+        int removed;
+        lock (_trashLock) { removed = bin.Items.RemoveAll(x => x.DeletedTicks < cutoff); }
+        if (removed > 0) SaveTrash();
+        return removed;
+    }
+
+    // =======================================================================
+    // RECENTLY OPENED (#recents)
+    // Small enough to ride inside Library.Recents (a few KB at the cap) and thus
+    // persisted with the library's own crash-safe write. Newest first, deduped
+    // by page id, capped at RecentPage.MaxRecents, and pruned of dead pages.
+    // =======================================================================
+
+    /// <summary>Records a page open at the top of the recents list, de-duplicating
+    /// by page id and capping the length. Names are cached so the gallery row can
+    /// render without walking the tree.</summary>
+    public static void RecordRecent(Library lib, Notebook nb, Section sec, NotePage page)
+    {
+        var list = lib.Recents ??= new();
+        list.RemoveAll(r => r.PageId == page.Id);   // dedupe: an old entry moves to the top
+        list.Insert(0, new RecentPage
+        {
+            PageId = page.Id,
+            SectionId = sec.Id,
+            NotebookId = nb.Id,
+            PageName = page.Name,
+            NotebookName = nb.Name,
+            OpenedTicks = DateTime.UtcNow.Ticks
+        });
+        while (list.Count > RecentPage.MaxRecents)
+            list.RemoveAt(list.Count - 1);
+        Save(lib);
+    }
+
+    /// <summary>Drops recents whose page no longer exists anywhere in the library
+    /// (deleted or purged). Returns how many were removed. Does not itself save —
+    /// callers that mutate the tree (the Delete* methods) save right after; the
+    /// load path prunes before saving is even enabled.</summary>
+    public static int PruneRecents(Library lib)
+    {
+        var list = lib.Recents;
+        if (list == null || list.Count == 0) return 0;
+        var live = new HashSet<Guid>(
+            lib.Notebooks.SelectMany(n => n.Sections).SelectMany(s => s.Pages).Select(p => p.Id));
+        return list.RemoveAll(r => !live.Contains(r.PageId));
+    }
 }

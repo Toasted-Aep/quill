@@ -53,12 +53,23 @@ public sealed class InkSurface : UserControl
     public float PenSensitivity { get; set; } = 1f;
     public float PenStabiliser { get; set; }
     public List<float>? PenPressureCurve { get; set; }
+    // Two-control-point pressure response (#curve v2). When set it is baked down
+    // to the 6-float legacy curve the width renderer already interprets, so it
+    // drives stroke width without growing per-stroke JSON. null = use the
+    // PenPressureCurve above unchanged.
+    public PressureCurve2? PenPressureResponse { get; set; }
     // Default font + point size applied to newly created text boxes and to the
     // first characters typed into them, so a size/font chosen with no box selected
     // is honoured instead of falling back to the RichEdit default (#2, #8).
     public float PendingFontSize { get; set; } = 16f;
     public string PendingFontFamily { get; set; } = "Lora";
     public EraserMode EraserMode { get; set; } = EraserMode.Object;
+    // How the point-eraser treats what it crosses (§7.c). Object mode always
+    // removes whole strokes; these styles shape the Point-mode geometry result.
+    public EraserStyle EraserStyle { get; set; } = EraserStyle.HardMask;
+    // Eraser radius in world units; 0 = derive from the active pen size exactly
+    // as before. Library.EraserSize feeds this.
+    public double EraserSize { get; set; }
     public bool RulerMode { get; set; }
     // On-screen ruler angle in degrees (any value, not just 15° steps) (#21).
     public double RulerAngle { get; set; }
@@ -154,6 +165,9 @@ public sealed class InkSurface : UserControl
 
     private Vector2 _eraseLast;
     private EraserMode _gestureEraserMode;
+    // Style latched at pen-down so mid-gesture setting changes never split one
+    // erase stroke across two behaviours.
+    private EraserStyle _gestureEraserStyle;
     private List<(int Index, PenStroke Stroke)> _eraseRemoved = new();
     private HashSet<PenStroke> _gestureFragments = new();
 
@@ -987,7 +1001,7 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     // Pointer input
     // =======================================================================
-    private float EraserRadius => Math.Max(8f, PenSize * 2.2f);
+    private float EraserRadius => EraserSize > 0 ? (float)EraserSize : Math.Max(8f, PenSize * 2.2f);
 
     // The pen's eraser tip / inverted end / extra barrel buttons all act as an
     // eraser. Shared by pointer-down routing and the hover-cursor detection.
@@ -1270,6 +1284,7 @@ public sealed class InkSurface : UserControl
                 ClearSelection();
                 _activeShape = null;
                 _gestureEraserMode = EraserMode;
+                _gestureEraserStyle = EraserStyle;
                 _eraseRemoved = new List<(int, PenStroke)>();
                 _eraseRemovedShapes = new List<(int, ShapeElement)>();
                 _gestureFragments = new HashSet<PenStroke>();
@@ -1880,7 +1895,7 @@ public sealed class InkSurface : UserControl
                             Size = PenSize,
                             Sens = PenSensitivity,
                             Points = pts,
-                            PressureCurve = PenPressureCurve != null ? new List<float>(PenPressureCurve) : null
+                            PressureCurve = EffectivePressureCurve()
                         };
                         PushAction(new AddStrokeAction(stroke), _page);
                         changed = true;
@@ -2497,7 +2512,9 @@ public sealed class InkSurface : UserControl
             float r = EraserRadius;
             // Walk the live list backwards so the index is the stroke's real
             // position (no IndexOf) and freshly inserted fragments — placed at
-            // i and above — are never re-examined this pass.
+            // i and above — are never re-examined this pass. Every mutation still
+            // routes through RemoveStrokeAt/InsertStroke so the spatial index and
+            // the stroke-count net stay correct (CONSTRAINT 5).
             for (int i = _page.Strokes.Count - 1; i >= 0; i--)
             {
                 var s = _page.Strokes[i];
@@ -2508,19 +2525,16 @@ public sealed class InkSurface : UserControl
                     if (GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) <= r) { any = true; break; }
                 if (!any) continue;
 
-                var runs = new List<List<StrokePoint>>();
-                var cur = new List<StrokePoint>();
-                foreach (var p in s.Points)
+                // The style shapes the surviving geometry; null = leave this stroke
+                // untouched this step (e.g. Slice with no true crossing).
+                List<List<StrokePoint>>? runs = _gestureEraserStyle switch
                 {
-                    if (GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) > r)
-                        cur.Add(p);
-                    else
-                    {
-                        if (cur.Count > 1) runs.Add(cur);
-                        cur = new List<StrokePoint>();
-                    }
-                }
-                if (cur.Count > 1) runs.Add(cur);
+                    EraserStyle.Slice => SliceRuns(s, from, to),
+                    EraserStyle.Nudge => NudgeRuns(s, from, to, r),
+                    EraserStyle.SoftMask => SoftMaskRuns(s, from, to, r),
+                    _ => HardMaskRuns(s, from, to, r),
+                };
+                if (runs == null) continue;
 
                 RemoveStrokeAt(i);
                 // A fragment from earlier in this gesture: its original was
@@ -2530,12 +2544,141 @@ public sealed class InkSurface : UserControl
                 int insertAt = i;
                 foreach (var run in runs)
                 {
+                    if (run.Count < 1) continue;
                     var frag = s.CloneWithPoints(run);
                     InsertStroke(insertAt++, frag);
                     _gestureFragments.Add(frag);
                 }
             }
         }
+    }
+
+    // ---- eraser styles (§7.c) ---------------------------------------------
+    // Each returns the surviving point-runs for one stroke, or null to leave the
+    // stroke untouched. Styles that alter point data build fresh StrokePoint
+    // objects so the recorded original stays intact for undo; HardMask and Slice
+    // remove no data and may reuse the point references.
+
+    // Hard mask: crisp removal of every point within the eraser radius, keeping
+    // the surviving contiguous runs (today's point eraser).
+    private static List<List<StrokePoint>> HardMaskRuns(PenStroke s, Vector2 from, Vector2 to, float r)
+    {
+        var runs = new List<List<StrokePoint>>();
+        var cur = new List<StrokePoint>();
+        foreach (var p in s.Points)
+        {
+            if (GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) > r)
+                cur.Add(p);
+            else
+            {
+                if (cur.Count > 1) runs.Add(cur);
+                cur = new List<StrokePoint>();
+            }
+        }
+        if (cur.Count > 1) runs.Add(cur);
+        return runs;
+    }
+
+    // Soft mask: hard-remove the core within r, but thin the surviving ink in the
+    // falloff band just outside it by lowering pressure toward the cut, so the
+    // pressure→width renderer tapers the end to a soft point rather than a blunt
+    // cap. Constant-width pens (monoline/highlighter) degrade to a hard edge since
+    // they ignore pressure by design.
+    private static List<List<StrokePoint>> SoftMaskRuns(PenStroke s, Vector2 from, Vector2 to, float r)
+    {
+        float outer = r * 1.7f;
+        var runs = new List<List<StrokePoint>>();
+        var cur = new List<StrokePoint>();
+        foreach (var p in s.Points)
+        {
+            float d = GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to);
+            if (d <= r)
+            {
+                if (cur.Count > 1) runs.Add(cur);
+                cur = new List<StrokePoint>();
+                continue;
+            }
+            if (d < outer)
+            {
+                float f = (d - r) / (outer - r);      // 0 at the cut, 1 at the band edge
+                float taper = 0.12f + 0.88f * f * f;   // ease-in: thins sharply near the cut
+                cur.Add(new StrokePoint(p.X, p.Y, p.Pressure * taper));
+            }
+            else cur.Add(p);
+        }
+        if (cur.Count > 1) runs.Add(cur);
+        return runs;
+    }
+
+    // Slice: cut the stroke into two strokes where the eraser path crosses it,
+    // removing no area. Returns null when the eraser only grazes without a true
+    // crossing, so dragging along a stroke never shatters it.
+    private static List<List<StrokePoint>>? SliceRuns(PenStroke s, Vector2 from, Vector2 to)
+    {
+        var pts = s.Points;
+        if (pts.Count < 4) return null;   // too short to split into two drawable halves
+        for (int i = 1; i < pts.Count; i++)
+        {
+            var a = new Vector2(pts[i - 1].X, pts[i - 1].Y);
+            var b = new Vector2(pts[i].X, pts[i].Y);
+            if (!SegmentsCross(a, b, from, to)) continue;
+            var left = pts.GetRange(0, i);               // points [0 .. i-1]
+            var right = pts.GetRange(i, pts.Count - i);  // points [i .. end]
+            if (left.Count < 2 || right.Count < 2) continue;
+            return new List<List<StrokePoint>> { left, right };
+        }
+        return null;
+    }
+
+    // Nudge: push points out of the eraser's way instead of deleting them. Each
+    // point inside r is displaced onto the eraser rim, away from the nearest point
+    // on the eraser path. One run, no points lost.
+    private static List<List<StrokePoint>> NudgeRuns(PenStroke s, Vector2 from, Vector2 to, float r)
+    {
+        var run = new List<StrokePoint>(s.Points.Count);
+        foreach (var p in s.Points)
+        {
+            var pv = new Vector2(p.X, p.Y);
+            var c = ClosestOnSegment(pv, from, to);
+            var away = pv - c;
+            float d = away.Length();
+            if (d >= r) { run.Add(p); continue; }
+            // A point sitting exactly on the path has no outward direction; push
+            // along the path normal so it still clears the cursor.
+            Vector2 dir = d > 1e-3f ? away / d : PerpUnit(to - from);
+            var np = c + dir * r;
+            run.Add(new StrokePoint(np.X, np.Y, p.Pressure));
+        }
+        return new List<List<StrokePoint>> { run };
+    }
+
+    private static Vector2 ClosestOnSegment(Vector2 p, Vector2 a, Vector2 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared();
+        if (len2 < 1e-6f) return a;
+        float t = Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f);
+        return a + ab * t;
+    }
+
+    private static Vector2 PerpUnit(Vector2 v)
+    {
+        var n = new Vector2(-v.Y, v.X);
+        float len = n.Length();
+        return len > 1e-3f ? n / len : new Vector2(0, 1);
+    }
+
+    // Proper segment-segment crossing test (AB genuinely straddles CD and back).
+    private static bool SegmentsCross(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+    {
+        static float Cross(Vector2 o, Vector2 e, Vector2 p) =>
+            (e.X - o.X) * (p.Y - o.Y) - (e.Y - o.Y) * (p.X - o.X);
+        float d1 = Cross(c, d, a);
+        float d2 = Cross(c, d, b);
+        float d3 = Cross(a, b, c);
+        float d4 = Cross(a, b, d);
+        return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+               ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
     }
 
     // =======================================================================
@@ -3065,7 +3208,7 @@ public sealed class InkSurface : UserControl
                 Size = PenSize,
                 Sens = PenSensitivity,
                 Points = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : (_wet ?? new List<StrokePoint>()),
-                PressureCurve = PenPressureCurve
+                PressureCurve = EffectivePressureCurve()
             };
             DrawStroke(ds, sender, temp, Vector2.Zero, null);
         }
@@ -3429,6 +3572,16 @@ public sealed class InkSurface : UserControl
         pb.EndFigure(CanvasFigureLoop.Open);
         using var geo = CanvasGeometry.CreatePath(pb);
         ds.DrawGeometry(geo, color, width, style);
+    }
+
+    /// <summary>The pressure curve a freshly committed or wet stroke should carry:
+    /// the two-control-point response baked to the 6-float form SegmentWidth already
+    /// interprets when one is set, otherwise a copy of the raw PenPressureCurve. The
+    /// bake keeps per-stroke JSON the same size (library.json is 53 MB).</summary>
+    private List<float>? EffectivePressureCurve()
+    {
+        if (PenPressureResponse != null) return PenPressureResponse.ToLegacyPoints();
+        return PenPressureCurve != null ? new List<float>(PenPressureCurve) : null;
     }
 
     private static float SegmentWidth(PenStroke s, StrokePoint a, StrokePoint b, int index)
