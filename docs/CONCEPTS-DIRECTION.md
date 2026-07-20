@@ -825,3 +825,20 @@ committed order.** Build the new home first; remove the bar last, behind a hidde
 7. **Pack-export licensing UX.** When a user exports a pack to share, default the license to "none"
    (all rights reserved) with an optional picker, or actively prompt for a license + author name to
    seed a healthier sharing ecosystem?
+
+
+---
+
+## Decisions (user, 2026-07-21)
+
+All seven open questions are now settled:
+1. Touch-draw stays a persistent pen-row chip (default taken).
+2. Classic top bar kept as a hidden escape-hatch setting for one release.
+3. Raster paint: later tier, this-device-only with a visible badge; vector
+   paint ships first.
+4. Highlighter auto-layers BEHIND ink.
+5. Layer delete removes content behind a counted confirmation, with Merge
+   Down offered first.
+6. Wheel defaults lower-left with auto handedness flip (default taken).
+7. Pack export defaults to all-rights-reserved with an optional license
+   picker (default taken).
