@@ -58,16 +58,313 @@
   <resheader name="writer">
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
-  <data name="EditHistoryHeader.Text" xml:space="preserve">
-    <value>Edit history</value>
+  <data name="Common.Done" xml:space="preserve">
+    <value>Done</value>
   </data>
-  <data name="BackgroundHeader.Text" xml:space="preserve">
-    <value>Background</value>
+  <data name="Settings.Title" xml:space="preserve">
+    <value>Settings</value>
   </data>
-  <data name="GridSpacingHeader.Text" xml:space="preserve">
-    <value>Grid spacing</value>
+  <data name="Settings.Storage.Header" xml:space="preserve">
+    <value>Notebook storage (universal sync)</value>
   </data>
-  <data name="SearchBoxInput.PlaceholderText" xml:space="preserve">
-    <value>Search notes…</value>
+  <data name="Settings.Storage.Desc" xml:space="preserve">
+    <value>Every version of the app reads and writes notebooks from this one folder, so they always stay in sync.</value>
+  </data>
+  <data name="Settings.Storage.Change" xml:space="preserve">
+    <value>Change folder…</value>
+  </data>
+  <data name="Status.StorageUpdated" xml:space="preserve">
+    <value>Storage folder updated — notebooks now sync from here.</value>
+  </data>
+  <data name="Settings.Font.Header" xml:space="preserve">
+    <value>Default text font &amp; size</value>
+  </data>
+  <data name="Settings.Font.Font" xml:space="preserve">
+    <value>Font</value>
+  </data>
+  <data name="Settings.Font.Size" xml:space="preserve">
+    <value>Size</value>
+  </data>
+  <data name="Settings.Font.Desc" xml:space="preserve">
+    <value>New text boxes start with this font and size.</value>
+  </data>
+  <data name="Settings.Font.UseForNotebook" xml:space="preserve">
+    <value>Use as default for the open notebook</value>
+  </data>
+  <data name="Settings.Font.ClearOverride" xml:space="preserve">
+    <value>Clear notebook override</value>
+  </data>
+  <data name="Status.NoNotebookOpen" xml:space="preserve">
+    <value>No notebook is open.</value>
+  </data>
+  <data name="Status.NotebookFontSet" xml:space="preserve">
+    <value>Text in “{0}” now defaults to {1} {2}.</value>
+  </data>
+  <data name="Status.NotebookFontCleared" xml:space="preserve">
+    <value>“{0}” follows the library-wide font again.</value>
+  </data>
+  <data name="Settings.Startup.Header" xml:space="preserve">
+    <value>Startup</value>
+  </data>
+  <data name="Settings.Startup.Maximised" xml:space="preserve">
+    <value>Start maximised</value>
+  </data>
+  <data name="Settings.Startup.ShowPicker" xml:space="preserve">
+    <value>Show the notebook picker at startup</value>
+  </data>
+  <data name="Settings.Startup.PickerDesc" xml:space="preserve">
+    <value>The picker opens over your last page — press Esc to skip it.</value>
+  </data>
+  <data name="Settings.TouchMode" xml:space="preserve">
+    <value>Touch screen mode (larger buttons)</value>
+  </data>
+  <data name="Settings.Liquid" xml:space="preserve">
+    <value>Liquid glass — panel transparency</value>
+  </data>
+  <data name="Settings.Glow.Header" xml:space="preserve">
+    <value>Glow animation</value>
+  </data>
+  <data name="Settings.Glow.Desc" xml:space="preserve">
+    <value>Breathe and Heartbeat pulse in place; Circulate, Comet and Chase travel the panel rims; Aurora drifts through nearby hues; Shimmer sweeps once every few seconds; Ember flickers like a coal.</value>
+  </data>
+  <data name="Glow.Off" xml:space="preserve">
+    <value>Off</value>
+  </data>
+  <data name="Glow.Breathe" xml:space="preserve">
+    <value>Breathe</value>
+  </data>
+  <data name="Glow.Circulate" xml:space="preserve">
+    <value>Circulate</value>
+  </data>
+  <data name="Glow.Comet" xml:space="preserve">
+    <value>Comet</value>
+  </data>
+  <data name="Glow.Aurora" xml:space="preserve">
+    <value>Aurora</value>
+  </data>
+  <data name="Glow.Shimmer" xml:space="preserve">
+    <value>Shimmer</value>
+  </data>
+  <data name="Glow.Ember" xml:space="preserve">
+    <value>Ember</value>
+  </data>
+  <data name="Glow.Chase" xml:space="preserve">
+    <value>Chase</value>
+  </data>
+  <data name="Glow.Heartbeat" xml:space="preserve">
+    <value>Heartbeat</value>
+  </data>
+  <data name="Settings.Keys.Header" xml:space="preserve">
+    <value>Keyboard shortcuts</value>
+  </data>
+  <data name="Settings.Keys.Desc" xml:space="preserve">
+    <value>Esc, Delete and F1 are the same in every layout. Anything a layout cannot bind is listed on the F1 sheet.</value>
+  </data>
+  <data name="KeyPreset.Quill" xml:space="preserve">
+    <value>Quill default</value>
+  </data>
+  <data name="KeyPreset.OneNote" xml:space="preserve">
+    <value>OneNote-like</value>
+  </data>
+  <data name="KeyPreset.Photoshop" xml:space="preserve">
+    <value>Photoshop-like</value>
+  </data>
+  <data name="Status.KeyPresetActive" xml:space="preserve">
+    <value>{0} shortcuts are active — press F1 for the full list.</value>
+  </data>
+  <data name="Settings.Theme.Header" xml:space="preserve">
+    <value>Theme</value>
+  </data>
+  <data name="Theme.Light" xml:space="preserve">
+    <value>Light</value>
+  </data>
+  <data name="Theme.Dark" xml:space="preserve">
+    <value>Dark</value>
+  </data>
+  <data name="Theme.System" xml:space="preserve">
+    <value>Follow Windows</value>
+  </data>
+  <data name="Settings.Oled" xml:space="preserve">
+    <value>True black dark theme (OLED)</value>
+  </data>
+  <data name="Settings.Autosave" xml:space="preserve">
+    <value>Autosave delay (seconds after you stop editing)</value>
+  </data>
+  <data name="Settings.PenRepair.Dots" xml:space="preserve">
+    <value>Pen repair — ignore stray dots</value>
+  </data>
+  <data name="Settings.PenRepair.DotsDesc" xml:space="preserve">
+    <value>Drops the tiny dot a bouncy pen tip leaves right where a stroke just ended. Deliberate dots (like dotting an i) still register.</value>
+  </data>
+  <data name="Settings.PenRepair.Bridge" xml:space="preserve">
+    <value>Pen repair — bridge lost contact</value>
+  </data>
+  <data name="Settings.PenRepair.BridgeDesc" xml:space="preserve">
+    <value>Continues the same stroke when the pen momentarily loses contact mid-line.</value>
+  </data>
+  <data name="Settings.MotionBlur.Header" xml:space="preserve">
+    <value>Motion blur</value>
+  </data>
+  <data name="Settings.MotionBlur.Desc" xml:space="preserve">
+    <value>Softens the page while it pans or zooms fast, sharpening the instant it stops.</value>
+  </data>
+  <data name="Settings.CommentPins.Header" xml:space="preserve">
+    <value>Always show comment pins</value>
+  </data>
+  <data name="Settings.CommentPins.Desc" xml:space="preserve">
+    <value>Off: pins only appear while the Comment tool is active.</value>
+  </data>
+  <data name="Settings.Toolbar.Header" xml:space="preserve">
+    <value>Toolbar buttons</value>
+  </data>
+  <data name="Settings.Toolbar.Desc" xml:space="preserve">
+    <value>Switch off what you don't use — the top bar stops overflowing.</value>
+  </data>
+  <data name="Tool.ToolSpace" xml:space="preserve">
+    <value>Free space</value>
+  </data>
+  <data name="Tool.TouchDrawToggle" xml:space="preserve">
+    <value>Touch draw (pen mode)</value>
+  </data>
+  <data name="Tool.ToolComment" xml:space="preserve">
+    <value>Comments</value>
+  </data>
+  <data name="Tool.ShapeBtn" xml:space="preserve">
+    <value>Shapes &amp; tables (pen mode)</value>
+  </data>
+  <data name="Tool.MouseModeBtn" xml:space="preserve">
+    <value>Mouse mode (pen mode)</value>
+  </data>
+  <data name="Tool.BtnHistory" xml:space="preserve">
+    <value>History &amp; replay</value>
+  </data>
+  <data name="Tool.VoiceBtn" xml:space="preserve">
+    <value>Voice — recording &amp; dictation</value>
+  </data>
+  <data name="Tool.BtnAi" xml:space="preserve">
+    <value>AI assistant</value>
+  </data>
+  <data name="Tool.ZoomBtn" xml:space="preserve">
+    <value>Zoom</value>
+  </data>
+  <data name="Tool.PageSettingsBtn" xml:space="preserve">
+    <value>Page background &amp; grid</value>
+  </data>
+  <data name="Tool.ExportBtn" xml:space="preserve">
+    <value>Export</value>
+  </data>
+  <data name="Tool.BtnCalc" xml:space="preserve">
+    <value>Calculator</value>
+  </data>
+  <data name="Settings.PenDock.Header" xml:space="preserve">
+    <value>Pen toolbar docked to</value>
+  </data>
+  <data name="PenDock.Bottom" xml:space="preserve">
+    <value>Bottom</value>
+  </data>
+  <data name="PenDock.Top" xml:space="preserve">
+    <value>Top</value>
+  </data>
+  <data name="PenDock.Left" xml:space="preserve">
+    <value>Left</value>
+  </data>
+  <data name="PenDock.Right" xml:space="preserve">
+    <value>Right</value>
+  </data>
+  <data name="Settings.Ai.Header" xml:space="preserve">
+    <value>AI assistant</value>
+  </data>
+  <data name="Settings.Ai.Desc" xml:space="preserve">
+    <value>Summaries, action items, smart tags, questions and a writing assistant over the open page. Your API key is stored in the Windows Credential Locker, never in your notes file.</value>
+  </data>
+  <data name="Settings.Ai.Provider" xml:space="preserve">
+    <value>Provider</value>
+  </data>
+  <data name="Settings.Ai.ProviderNone" xml:space="preserve">
+    <value>None</value>
+  </data>
+  <data name="Settings.Ai.Model" xml:space="preserve">
+    <value>Model (blank = default)</value>
+  </data>
+  <data name="Settings.Ai.Endpoint" xml:space="preserve">
+    <value>Local server URL (OpenAI-compatible, e.g. Ollama / LM Studio)</value>
+  </data>
+  <data name="Settings.Ai.Key" xml:space="preserve">
+    <value>API key</value>
+  </data>
+  <data name="Settings.Ai.SaveKey" xml:space="preserve">
+    <value>Save key</value>
+  </data>
+  <data name="Settings.Ai.KeyLocal" xml:space="preserve">
+    <value>Local servers usually need no key.</value>
+  </data>
+  <data name="Settings.Ai.KeySaved" xml:space="preserve">
+    <value>A key is saved for {0}.</value>
+  </data>
+  <data name="Settings.Ai.KeyMissing" xml:space="preserve">
+    <value>No key saved for {0} yet.</value>
+  </data>
+  <data name="Status.AiPickProvider" xml:space="preserve">
+    <value>Pick a provider first.</value>
+  </data>
+  <data name="Status.AiKeySaved" xml:space="preserve">
+    <value>API key saved securely.</value>
+  </data>
+  <data name="Settings.Accent.Header" xml:space="preserve">
+    <value>Accent colour</value>
+  </data>
+  <data name="Settings.Accent.Desc" xml:space="preserve">
+    <value>Used for the glows, highlights, buttons and selection colours.</value>
+  </data>
+  <data name="Settings.Accent.ClayDefault" xml:space="preserve">
+    <value>Clay (default)</value>
+  </data>
+  <data name="Settings.Accent.Custom" xml:space="preserve">
+    <value>Custom colour (RGB)</value>
+  </data>
+  <data name="Settings.Accent.Mine" xml:space="preserve">
+    <value>My colours</value>
+  </data>
+  <data name="Settings.Accent.SwatchTip" xml:space="preserve">
+    <value>{0} — tap to use, right-click to remove</value>
+  </data>
+  <data name="Settings.Accent.AddTip" xml:space="preserve">
+    <value>Save the current accent colour as one of my colours</value>
+  </data>
+  <data name="Settings.AccentFollow.Header" xml:space="preserve">
+    <value>Accent colour follows</value>
+  </data>
+  <data name="AccentFollow.Manual" xml:space="preserve">
+    <value>My chosen colour</value>
+  </data>
+  <data name="AccentFollow.Pen" xml:space="preserve">
+    <value>The active pen's colour</value>
+  </data>
+  <data name="AccentFollow.Notebook" xml:space="preserve">
+    <value>The open notebook's colour</value>
+  </data>
+  <data name="Settings.Import.Header" xml:space="preserve">
+    <value>Recover / import notebooks</value>
+  </data>
+  <data name="Settings.Import.Recover" xml:space="preserve">
+    <value>Recover my old notebooks (previous location)</value>
+  </data>
+  <data name="Settings.Import.FromFile" xml:space="preserve">
+    <value>Import notebooks from a file…</value>
+  </data>
+  <data name="Settings.Import.Desc" xml:space="preserve">
+    <value>Importing only adds notebooks you don't already have — it never overwrites or deletes your current notes.</value>
+  </data>
+  <data name="Settings.Language.Header" xml:space="preserve">
+    <value>Language</value>
+  </data>
+  <data name="Settings.Language.System" xml:space="preserve">
+    <value>Follow Windows</value>
+  </data>
+  <data name="Settings.Language.Desc" xml:space="preserve">
+    <value>Applies straight away. Anything not yet translated stays in English.</value>
+  </data>
+  <data name="Status.LanguageChanged" xml:space="preserve">
+    <value>Quill is now in {0}.</value>
   </data>
 </root>

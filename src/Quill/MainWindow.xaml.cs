@@ -19,12 +19,21 @@ using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Pickers;
 using Windows.UI;
+using VKey = Windows.System.VirtualKey;
+using VMod = Windows.System.VirtualKeyModifiers;
 
 namespace Quill;
 
 public sealed partial class MainWindow : Window
 {
-    private readonly Library _library;
+    // Async library load, phase 2 (#roadmap): the window is built around this
+    // instance BEFORE library.json has been parsed, and the loaded state is
+    // adopted INTO it (LibraryStore.AdoptInPlace) so no handler has to re-bind.
+    // Until then it only carries the cheap startup hints from settings.json.
+    private readonly Library _library = new();
+    // false until a real, successfully loaded library has been adopted. Every
+    // path that can write checks it, so a failed load can never reach the file.
+    private bool _libraryReady;
     private Notebook? _curNb;
     private Section? _curSec;
     private NotePage? _curPage;
@@ -114,11 +123,11 @@ public sealed partial class MainWindow : Window
         }
         catch { }
 
-        _library = LibraryStore.LoadOrJoin();   // joins the load App started (#roadmap)
-        SyncLog.Initialize(_library);           // op-log shadow: only post-launch edits log (#collab)
-        SeedPens();
-        Surface.PendingFontFamily = _library.DefaultFont;
-        Surface.PendingFontSize = (float)_library.DefaultFontSize;
+        // The library is still parsing on a worker thread. settings.json carries
+        // a mirror of its theme, accent and window placement, so the window can
+        // open in the right skin at the right size instead of snapping when the
+        // real library lands; FinishStartup does everything else (#roadmap).
+        ApplyStartupHints();
 
         BuildFontItems();
         SizeCombo.ItemsSource = FontSizes;
@@ -134,16 +143,12 @@ public sealed partial class MainWindow : Window
         ApplyCalcMode();
         BuildCalcButtons();
         FillConvUnits();
-        RefreshCalcHistory();   // history persists with the library (#47)
-        RestoreCalcVars();      // user variables persist too (#A7)
+        // calc history and variables live in the library — restored in FinishStartup
 
         Surface.TitleClicked += async () => await RenamePageFromTitleAsync();
         Surface.DateClicked += async () => await EditPageDateAsync();
 
-        // notebooks panel: restore size + resize grip
-        NotebookPanel.Width = Math.Clamp(_library.NotebookPanelW, 220, 560);
-        if (_library.NotebookPanelH > 0)
-            NotebookPanel.Height = Math.Clamp(_library.NotebookPanelH, 240, 940);
+        // notebooks panel: resize grip (the saved size is restored in FinishStartup)
         NbGrip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
         NbGrip.ManipulationDelta += (_, e) =>
         {
@@ -165,21 +170,7 @@ public sealed partial class MainWindow : Window
         // switches them on only when GlowMode == "Comet".
         AttachCometRim(PenRow);
         AttachCometRim(NotebookPanel);   // floating panels only — never the docked top bar
-        ApplyGlowMode();
-
-        // restore the last-selected eraser mode (#13-batch2)
-        Surface.EraserMode = _library.LastEraserMode == "Point" ? EraserMode.Point : EraserMode.Object;
-        // the legacy combined pen-repair switch migrates to the split toggles (#6-batch4)
-        if (_library.PenRepair) { _library.PenRepairDots = true; _library.PenRepairBridge = true; _library.PenRepair = false; }
-        Surface.PenRepairDots = _library.PenRepairDots;
-        Surface.PenRepairBridge = _library.PenRepairBridge;
-        Surface.MotionBlur = _library.MotionBlur;
-        Surface.ShowCommentsAlways = _library.ShowCommentPins;
-        // the font list used to say "Amsterdam"; the installed family is
-        // "Amsterdam Handwriting" — migrate saved settings (#9-batch2)
-        if (_library.DefaultFont == "Amsterdam") _library.DefaultFont = "Amsterdam Handwriting";
-        // configurable autosave debounce
-        _saveTimer.Interval = TimeSpan.FromSeconds(Math.Clamp(_library.AutosaveSeconds, 0.5, 10));
+        // the rims stay idle until FinishStartup reads the saved GlowMode
 
         // nothing that escapes the canvas row (unclipped text-box overlays) may
         // paint over or steal clicks from the top bar (#3-batch2)
@@ -248,7 +239,7 @@ public sealed partial class MainWindow : Window
 
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); FadeOut(StatusText, 220); };
-        _zoomTimer.Tick += (_, _) => { _zoomTimer.Stop(); ZoomBorder.Visibility = Visibility.Collapsed; };
+        _zoomTimer.Tick += (_, _) => { _zoomTimer.Stop(); FadeOut(ZoomBorder, 180); };
         Closed += (_, _) => { CaptureWindowPlacement(); SaveNow(); LibraryStore.Flush(); };
 
         // pen panel dragging -> dock to an edge
@@ -298,17 +289,10 @@ public sealed partial class MainWindow : Window
         AudioGrip.ManipulationDelta += (_, e) => JellyDrag(AudioFloatingPanel, e);
         AudioGrip.ManipulationCompleted += (_, _) => { EndCheapDrag(AudioFloatingPanel); JellyRelease(AudioFloatingPanel); };
 
+        // hint-driven, so the very first frame is already the right theme and
+        // accent; FinishStartup re-applies both from the library it loads.
         ApplyTheme();
         try { ApplyAccent(ColorUtil.Parse(_library.AccentColor), refreshTheme: true); } catch { }
-        ApplyLiquidness(_library.Liquidness);
-        ApplyPenDock();
-        BuildTree();
-        BuildPenStrip();
-        OpenStartupPage();
-        SelectTool("Pen");
-        ApplyToolbarVisibility();
-        if (_library.Pens.Count > 0) ApplyPreset(_library.Pens[0]);
-        UpdateUndoButtons();
 
         ConfigureCustomTitleBar();
 
@@ -330,16 +314,14 @@ public sealed partial class MainWindow : Window
         if (_library.StartFullscreen)
             try { if (AppWindow.Presenter is OverlappedPresenter sop) sop.Maximize(); } catch { }
         UpdateFullscreenIcon();
-        if (_library.StartOnGallery) ShowGallery(launcher: true);
-
-        // touch mode needs the visual tree, so apply it after first layout (#36)
-        RootGrid.Loaded += (_, _) => { if (_library.TouchMode) ApplyTouchMode(true); UpdateScreenMetrics(); };
+        // the startup picker needs notebooks, and touch mode needs the saved
+        // flag — both happen in FinishStartup (#31, #36)
+        RootGrid.Loaded += (_, _) => UpdateScreenMetrics();
 
         // Stage 1 collaboration (#collab): every 20s, apply ops other devices
         // appended to their oplog files in the (synced) library folder.
         _syncTimer.Interval = TimeSpan.FromSeconds(20);
         _syncTimer.Tick += (_, _) => RunForeignMerge();
-        _syncTimer.Start();
         // keep the real monitor width current so a NEW text box caps at half the
         // physical screen; existing boxes snapshot their own cap at creation and
         // are left untouched by a later resize (#15)
@@ -353,9 +335,172 @@ public sealed partial class MainWindow : Window
                 fl.Opened += (_, _) => { if (fl.Content is FrameworkElement root) PopIn(root, 0.9, 280); };
         }
 
-        ShowStatus("Right-click a pen to edit its type, colour, size and pressure response. F11 toggles full screen.");
-        _uiReady = true;
+        // The veil is opaque, so pointer input cannot reach the half-built UI,
+        // and no accelerators exist yet (ApplyKeyPreset runs in FinishStartup) —
+        // but Tab can still walk into the toolbars underneath. Refuse focus
+        // outright until the library has landed.
+        // The veil's own buttons are the one exception: the error state has to
+        // stay reachable from the keyboard.
+        RootGrid.GettingFocus += (_, e) =>
+        {
+            if (_libraryReady || e.NewFocusedElement == null) return;
+            var f = e.NewFocusedElement;
+            if (ReferenceEquals(f, LoadRetryBtn) || ReferenceEquals(f, LoadFolderBtn) ||
+                ReferenceEquals(f, LoadQuitBtn)) return;
+            e.TryCancel();
+        };
+
+        // The window is ready to show. Everything that needs the library runs as
+        // a continuation of the load App.OnLaunched started (#roadmap).
+        _ = BeginLibraryLoadAsync();
     }
+
+    // =======================================================================
+    // Async library load, phase 2 (#roadmap)
+    // =======================================================================
+
+    // Cheap synchronous skin: settings.json mirrors the handful of library
+    // fields that decide what the first frame looks like, so the window never
+    // opens light-then-dark or small-then-restored.
+    private void ApplyStartupHints()
+    {
+        var h = LibraryStore.Settings.Ui ?? new LibraryStore.UiHints();
+        _library.Theme = h.Theme;
+        _library.OledBlack = h.OledBlack;
+        _library.AccentColor = h.Accent;
+        _library.WinX = h.WinX;
+        _library.WinY = h.WinY;
+        _library.WinW = h.WinW;
+        _library.WinH = h.WinH;
+        _library.WinMaximized = h.WinMaximized;
+        _library.StartFullscreen = h.StartFullscreen;
+    }
+
+    private async Task BeginLibraryLoadAsync()
+    {
+        Library loaded;
+        try { loaded = await LibraryStore.LoadAsync(); }
+        catch (Exception ex) { ShowLibraryError(ex.Message); return; }
+
+        // A library that exists but will not parse must NOT become an empty one:
+        // the save gate stays shut and the veil turns into an error state, so no
+        // autosave, page switch or close handler can write over the real file.
+        if (LibraryStore.LoadFailed)
+        {
+            ShowLibraryError(LibraryStore.LoadError ?? "The library file could not be read.");
+            return;
+        }
+
+        LibraryStore.AdoptInPlace(_library, loaded);
+        SyncLog.Initialize(_library);   // op-log shadow: only post-launch edits log (#collab)
+        LibraryStore.EnableSaving();    // the single point where writing becomes legal
+        FinishStartup();
+    }
+
+    // The half of the constructor that needs a real library.
+    private void FinishStartup()
+    {
+        _libraryReady = true;
+
+        Loc.SetLanguage(_library.Language);   // before anything captures a string (#C7)
+
+        SeedPens();
+        Surface.PendingFontFamily = _library.DefaultFont;
+        Surface.PendingFontSize = (float)_library.DefaultFontSize;
+        RefreshCalcHistory();   // history persists with the library (#47)
+        RestoreCalcVars();      // user variables persist too (#A7)
+
+        NotebookPanel.Width = Math.Clamp(_library.NotebookPanelW, 220, 560);
+        if (_library.NotebookPanelH > 0)
+            NotebookPanel.Height = Math.Clamp(_library.NotebookPanelH, 240, 940);
+
+        ApplyGlowMode();
+        ApplyKeyPreset();   // installs the saved shortcut layout and its F1 sheet (C5)
+
+        // restore the last-selected eraser mode (#13-batch2)
+        Surface.EraserMode = _library.LastEraserMode == "Point" ? EraserMode.Point : EraserMode.Object;
+        // the legacy combined pen-repair switch migrates to the split toggles (#6-batch4)
+        if (_library.PenRepair) { _library.PenRepairDots = true; _library.PenRepairBridge = true; _library.PenRepair = false; }
+        Surface.PenRepairDots = _library.PenRepairDots;
+        Surface.PenRepairBridge = _library.PenRepairBridge;
+        Surface.MotionBlur = _library.MotionBlur;
+        Surface.ShowCommentsAlways = _library.ShowCommentPins;
+        // the font list used to say "Amsterdam"; the installed family is
+        // "Amsterdam Handwriting" — migrate saved settings (#9-batch2)
+        if (_library.DefaultFont == "Amsterdam") _library.DefaultFont = "Amsterdam Handwriting";
+        // configurable autosave debounce
+        _saveTimer.Interval = TimeSpan.FromSeconds(Math.Clamp(_library.AutosaveSeconds, 0.5, 10));
+
+        // the hints were only a mirror; re-apply from the library itself so a
+        // stale settings.json cannot leave the window in the wrong skin
+        ApplyTheme();
+        try { ApplyAccent(ColorUtil.Parse(_library.AccentColor), refreshTheme: true); } catch { }
+        ApplyLiquidness(_library.Liquidness);
+        ApplyPenDock();
+        BuildTree();
+        BuildPenStrip();
+        OpenStartupPage();
+        SelectTool("Pen");
+        ApplyToolbarVisibility();
+        if (_library.Pens.Count > 0) ApplyPreset(_library.Pens[0]);
+        UpdateUndoButtons();
+
+        // touch mode needs the visual tree; the load can land either side of it (#36)
+        if (_library.TouchMode)
+        {
+            if (RootGrid.IsLoaded) ApplyTouchMode(true);
+            else RootGrid.Loaded += (_, _) => ApplyTouchMode(true);
+        }
+        UpdateScreenMetrics();
+
+        _syncTimer.Start();
+        _uiReady = true;
+
+        // the legacy import ran while the save gate was shut; persist it now
+        if (LibraryStore.PendingImportSave) ScheduleSave();
+        if (_library.StartOnGallery) ShowGallery(launcher: true);
+
+        HideVeil();
+        ShowStatus("Right-click a pen to edit its type, colour, size and pressure response. F11 toggles full screen.");
+    }
+
+    private void HideVeil()
+    {
+        if (LoadingVeil.Visibility != Visibility.Visible) return;
+        FadeTo(LoadingVeil, 0, 180, collapseAtEnd: true);
+    }
+
+    // The veil becomes the error state rather than dismissing: _libraryReady
+    // stays false and LibraryStore.EnableSaving is never called, so nothing in
+    // the app can overwrite a library we merely failed to read.
+    private void ShowLibraryError(string message)
+    {
+        LoadingBusy.Visibility = Visibility.Collapsed;
+        LoadingErrorText.Text = message;
+        LoadingError.Visibility = Visibility.Visible;
+        LoadingVeil.Visibility = Visibility.Visible;
+        LoadingVeil.Opacity = 1;
+    }
+
+    private async void LoadRetry_Click(object sender, RoutedEventArgs e)
+    {
+        LoadingError.Visibility = Visibility.Collapsed;
+        LoadingBusy.Visibility = Visibility.Visible;
+        LibraryStore.ResetPendingLoad();   // really re-read the disk
+        await BeginLibraryLoadAsync();
+    }
+
+    private void LoadOpenFolder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(LibraryStore.Dir) { UseShellExecute = true });
+        }
+        catch { }
+    }
+
+    private void LoadQuit_Click(object sender, RoutedEventArgs e) => Close();
 
     // ---- unified glow engine (#1/#4-batch3): ONE timer drives every glow
     // brush (shared rims + per-card hover glows), so Breathe is a pure sine
@@ -421,11 +566,20 @@ public sealed partial class MainWindow : Window
         // Comet is now a dashed rim runner, not a brush animation: flip the
         // overlay rectangles on only for Comet (and only when motion is allowed);
         // every other mode collapses them so they cost nothing.
-        bool cometOn = !_reduceMotion && _library.GlowMode == "Comet";
+        // Comet and Chase share the rim runner; they differ only in the dash
+        // layout — Chase tiles 4 evenly spaced heads with short tails where
+        // Comet runs one head with a long one.
+        bool chase = _library.GlowMode == "Chase";
+        bool rimOn = !_reduceMotion && (chase || _library.GlowMode == "Comet");
         // the static rim is the accent mixed 45% toward white (see ApplyAccent);
         // the comet must be that exact colour, since it replaces it (#anim)
         var rimAccent = Mix(_accentCurrent ?? ColorUtil.Parse(_library.AccentColor), Colors.White, 0.45);
-        foreach (var rim in _cometRims) { rim.SetColor(rimAccent); rim.SetActive(cometOn); }
+        foreach (var rim in _cometRims)
+        {
+            rim.SetColor(rimAccent);
+            if (rimOn) rim.Configure(chase ? 4 : 1, chase ? 0.30 : 0.34, chase ? 14 : CometRim.Segments);
+            rim.SetActive(rimOn);
+        }
         if (_reduceMotion || _library.GlowMode == "Off") _glowTimer.Stop();
         else _glowTimer.Start();
     }
@@ -462,10 +616,75 @@ public sealed partial class MainWindow : Window
             double band = (_glowT / 4.5) % 1.0;   // brisk enough that the motion clearly reads
             var seen = new HashSet<LinearGradientBrush>();
             foreach (var b in GlowBrushes()) { seen.Add(b); CirculateStops(b, band); }
-            // hover glows come and go — drop snapshots of brushes that left the
-            // engine so the dictionary can't pin them alive forever
-            foreach (var dead in _circSnapshot.Keys.Where(k => !seen.Contains(k)).ToList())
-                _circSnapshot.Remove(dead);
+            PruneSnapshots(seen);
+        }
+        else if (mode == "Aurora")
+        {
+            // Two speeds from two brush-level properties: the axis TRANSLATES at
+            // one rate while its SPAN breathes at another, so the three analogous
+            // bands slide across each other instead of moving as one rigid
+            // pattern — the colour mix changes even where the drift alone would
+            // repeat. Stops are baked once (see EnsureAuroraStops).
+            double drift = (_glowT / 11.0) % 1.0;
+            double span = 1.0 + 0.30 * Math.Sin(_glowT * (2 * Math.PI / 17.0));
+            var seen = new HashSet<LinearGradientBrush>();
+            foreach (var b in GlowBrushes())
+            {
+                seen.Add(b);
+                EnsureAuroraStops(b);
+                b.StartPoint = new Point(drift, drift * 0.6);
+                b.EndPoint = new Point(drift + span, drift * 0.6 + span);
+            }
+            PruneSnapshots(seen);
+            opacity = 0.80 + 0.14 * Math.Sin(_glowT * (2 * Math.PI / 7.3));   // never dark
+        }
+        else if (mode == "Shimmer")
+        {
+            // One fast sweep, then a long rest. The narrow specular band is baked
+            // into the stops; the sweep is the axis sliding it across the panel.
+            const double SweepSec = 0.85, RestSec = 4.6;
+            double ph = _glowT % (SweepSec + RestSec);
+            double p = ph < SweepSec ? ph / SweepSec : 1.0;
+            double e = p * p * p * (p * (p * 6 - 15) + 10);   // smootherstep: eases in AND out
+            double pos = -0.55 + 1.85 * e;                    // starts and ends off the panel
+            var seen = new HashSet<LinearGradientBrush>();
+            foreach (var b in GlowBrushes())
+            {
+                seen.Add(b);
+                EnsureShimmerStops(b);
+                b.StartPoint = new Point(-pos, -pos * 0.35);
+                b.EndPoint = new Point(1 - pos, 1 - pos * 0.35);
+            }
+            PruneSnapshots(seen);
+        }
+        else if (mode == "Ember")
+        {
+            // Smoothed value noise, not white noise: a fixed lattice sampled
+            // through a smootherstep interpolant, two octaves. A third, much
+            // slower channel is thresholded to gate the occasional surge.
+            double n = 0.65 * ValueNoise(_glowT * 0.55) + 0.35 * ValueNoise(_glowT * 1.6 + 31.7);
+            double surge = Math.Max(0, ValueNoise(_glowT * 0.17 + 77.3) - 0.62) / 0.38;
+            var seen = new HashSet<LinearGradientBrush>();
+            foreach (var b in GlowBrushes()) { seen.Add(b); EnsureEmberStops(b); }
+            PruneSnapshots(seen);
+            opacity = Math.Min(1.0, 0.66 + 0.20 * n + 0.26 * surge * surge);
+        }
+        else if (mode == "Chase")
+        {
+            opacity = 0.95;
+            // Same rim runner as Comet, reconfigured in ApplyGlowMode into four
+            // evenly spaced heads; the lap is slower because four heads now pass
+            // any point per lap.
+            double ht = (_glowT / 6.0) % 1.0;
+            foreach (var rim in _cometRims) rim.SetProgress(ht);
+        }
+        else if (mode == "Heartbeat")
+        {
+            // 60bpm double thump: systole, a weaker diastole, then rest.
+            // Brightness only — nothing travels.
+            double ph = _glowT % 1.0;
+            double beat = Thump(ph, 0.00, 1.00) + Thump(ph, 0.26, 0.52);
+            opacity = 0.62 + 0.36 * Math.Min(1.0, beat);
         }
         if (_rippleStartMs >= 0)
         {
@@ -514,6 +733,142 @@ public sealed partial class MainWindow : Window
         // Repeat tiles the comet; the 1 -> 0 wrap forms the crisp leading edge
         b.StartPoint = new Point(band, band);
         b.EndPoint = new Point(band + 1, band + 1);
+    }
+
+    // Aurora/Shimmer/Ember also rebuild their stops ONCE and then animate only
+    // brush-level properties (or nothing but Opacity), for the same caching
+    // reason spelled out in CirculateStops. They share Circulate's snapshot
+    // dictionary so RestoreCirculateStops undoes every one of them.
+    private static bool TakeSnapshot(LinearGradientBrush b, out List<(double O, Color C)> snap)
+    {
+        if (_circSnapshot.TryGetValue(b, out var have)) { snap = have; return false; }
+        snap = b.GradientStops.Select(gs => (gs.Offset, gs.Color)).ToList();
+        _circSnapshot[b] = snap;
+        return true;
+    }
+
+    // hover glows come and go — drop snapshots of brushes that left the engine
+    // so the dictionary can't pin them alive forever
+    private static void PruneSnapshots(HashSet<LinearGradientBrush> seen)
+    {
+        foreach (var dead in _circSnapshot.Keys.Where(k => !seen.Contains(k)).ToList())
+            _circSnapshot.Remove(dead);
+    }
+
+    // Three broad, overlapping analogous bands either side of the brush's own
+    // hue. Offset 1 reproduces offset 0 exactly so Repeat tiles seamlessly, and
+    // the alpha floor keeps every band lit — Aurora is never fully dark.
+    private static void EnsureAuroraStops(LinearGradientBrush b)
+    {
+        if (!TakeSnapshot(b, out var snap) || snap.Count == 0) return;
+        const int N = 24;
+        b.GradientStops.Clear();
+        for (int i = 0; i < N; i++)
+        {
+            double off = i / (double)(N - 1);
+            var orig = SampleStops(snap, off);
+            double h = off * 2 * Math.PI;
+            var c = RotateHue(orig, 26 * Math.Sin(h) + 14 * Math.Sin(2 * h + 1.1));
+            double lift = 0.72 + 0.28 * (0.5 + 0.5 * Math.Sin(h - 0.7));
+            byte a = (byte)Math.Clamp(orig.A * lift, 0, 255);
+            b.GradientStops.Add(new GradientStop { Offset = off, Color = Color.FromArgb(a, c.R, c.G, c.B) });
+        }
+        b.SpreadMethod = GradientSpreadMethod.Repeat;
+    }
+
+    // A narrow white-hot band on an otherwise resting gradient. Pad is safe
+    // here (unlike the wash described in CirculateStops) because BOTH ends
+    // carry the brush's own resting colour, not the highlight.
+    private static void EnsureShimmerStops(LinearGradientBrush b)
+    {
+        if (!TakeSnapshot(b, out var snap) || snap.Count == 0) return;
+        const int N = 41;
+        b.GradientStops.Clear();
+        for (int i = 0; i < N; i++)
+        {
+            double off = i / (double)(N - 1);
+            var orig = SampleStops(snap, off);
+            double d = Math.Abs(off - 0.5) / 0.085;
+            double spec = d >= 1 ? 0 : Math.Pow(1 - d, 2.0);
+            var c = Mix(orig, Colors.White, 0.85 * spec);
+            byte a = (byte)Math.Clamp(orig.A * (0.55 + 1.9 * spec), 0, 255);
+            b.GradientStops.Add(new GradientStop { Offset = off, Color = Color.FromArgb(a, c.R, c.G, c.B) });
+        }
+        b.SpreadMethod = GradientSpreadMethod.Pad;
+    }
+
+    // Ember only warms the palette toward coal-amber; the flicker is Opacity.
+    private static void EnsureEmberStops(LinearGradientBrush b)
+    {
+        if (!TakeSnapshot(b, out var snap) || snap.Count == 0) return;
+        const int N = 12;
+        b.GradientStops.Clear();
+        for (int i = 0; i < N; i++)
+        {
+            double off = i / (double)(N - 1);
+            var orig = SampleStops(snap, off);
+            var c = Mix(orig, Color.FromArgb(255, 255, 148, 62), 0.42);
+            b.GradientStops.Add(new GradientStop { Offset = off, Color = Color.FromArgb(orig.A, c.R, c.G, c.B) });
+        }
+        b.SpreadMethod = GradientSpreadMethod.Pad;
+    }
+
+    // Fixed lattice, wrapped at both ends so the noise is seamless. Sampling it
+    // through smootherstep is what turns it from static into a slow wander.
+    private static readonly double[] _noiseLattice = BuildNoiseLattice();
+
+    private static double[] BuildNoiseLattice()
+    {
+        var r = new Random(4242);
+        var a = new double[257];
+        for (int i = 0; i < 256; i++) a[i] = r.NextDouble();
+        a[256] = a[0];
+        return a;
+    }
+
+    private static double ValueNoise(double t)
+    {
+        t %= 256.0;
+        if (t < 0) t += 256.0;
+        int i = (int)t;
+        double f = t - i;
+        f = f * f * f * (f * (f * 6 - 15) + 10);
+        return _noiseLattice[i] + (_noiseLattice[i + 1] - _noiseLattice[i]) * f;
+    }
+
+    // One heartbeat lobe: fast attack, slower decay, zero outside its window.
+    private static double Thump(double ph, double at, double amp)
+    {
+        double d = ph - at;
+        if (d < 0 || d > 0.22) return 0;
+        double u = d / 0.22;
+        return amp * Math.Pow(1 - u, 2.6) * Math.Min(1, u / 0.12);
+    }
+
+    // Hue rotation via HSV. Alpha is the caller's business.
+    private static Color RotateHue(Color c, double degrees)
+    {
+        double r = c.R / 255.0, g = c.G / 255.0, bl = c.B / 255.0;
+        double max = Math.Max(r, Math.Max(g, bl)), min = Math.Min(r, Math.Min(g, bl));
+        double d = max - min, v = max, sat = max <= 0 ? 0 : d / max;
+        double h;
+        if (d <= 1e-6) h = 0;
+        else if (max == r) h = 60 * (((g - bl) / d) % 6);
+        else if (max == g) h = 60 * ((bl - r) / d + 2);
+        else h = 60 * ((r - g) / d + 4);
+        h = (h + degrees) % 360;
+        if (h < 0) h += 360;
+        double cc = v * sat, x = cc * (1 - Math.Abs(h / 60 % 2 - 1)), m = v - cc;
+        double rr, gg, bb;
+        if (h < 60) { rr = cc; gg = x; bb = 0; }
+        else if (h < 120) { rr = x; gg = cc; bb = 0; }
+        else if (h < 180) { rr = 0; gg = cc; bb = x; }
+        else if (h < 240) { rr = 0; gg = x; bb = cc; }
+        else if (h < 300) { rr = x; gg = 0; bb = cc; }
+        else { rr = cc; gg = 0; bb = x; }
+        return Color.FromArgb(255, (byte)Math.Round((rr + m) * 255),
+                                   (byte)Math.Round((gg + m) * 255),
+                                   (byte)Math.Round((bb + m) * 255));
     }
 
     // Comet no longer touches the glow brushes at all — it is a dashed rim
@@ -594,8 +949,12 @@ public sealed partial class MainWindow : Window
     private sealed class CometRim
     {
         private const double Thick = 2.5;
-        private const int Segments = 36;        // short segments so no banding is visible
+        public const int Segments = 36;         // short segments so no banding is visible
         private const double TrailFrac = 0.34;  // comet occupies ~a third of the rim
+        private int _heads = 1;                 // Chase tiles the dash pattern N times
+        private double _trailFrac = TrailFrac;
+        private int _live = Segments;           // segments actually drawn (shorter tail = fewer)
+        private double _headPeriod;             // dash-pattern period, in thickness units
         private readonly Rectangle[] _segs = new Rectangle[Segments];
         private readonly Border _host;
         private readonly Brush? _restBorder;
@@ -674,8 +1033,11 @@ public sealed partial class MainWindow : Window
             // circle from the four quarter arcs.
             double perimPx = 2 * (w - 2 * r) + 2 * (h - 2 * r) + 2 * Math.PI * r;
             _perimUnits = perimPx / Thick;
-            _segUnits = TrailFrac * _perimUnits / Segments;
-            double gap = Math.Max(0.01, _perimUnits - _segUnits);
+            // one dash period per head: the pattern tiles _heads times around
+            // the rim, which is what puts the heads at even spacing for free.
+            _headPeriod = _perimUnits / _heads;
+            _segUnits = _trailFrac * _headPeriod / _live;
+            double gap = Math.Max(0.01, _headPeriod - _segUnits);
             foreach (var s in _segs)
             {
                 s.StrokeDashArray = new DoubleCollection { _segUnits, gap };
@@ -691,15 +1053,40 @@ public sealed partial class MainWindow : Window
         {
             if (!_active || _perimUnits <= 0) return;
             double off = -t01 * _perimUnits;
-            for (int i = 0; i < Segments; i++)
+            for (int i = 0; i < _live; i++)
                 _segs[i].StrokeDashOffset = off + i * _segUnits;
+        }
+
+        // Reshape the runner: how many heads travel the rim, how much of one
+        // head's spacing the tail spans, and how many segments render it.
+        public void Configure(int heads, double trailFrac, int live)
+        {
+            _heads = Math.Max(1, heads);
+            _trailFrac = Math.Clamp(trailFrac, 0.02, 0.9);
+            _live = Math.Clamp(live, 2, Segments);
+            // steeper decay for a multi-head chase, so each tail dies before the
+            // next head arrives; the single comet keeps its long gentle falloff.
+            double exp = _heads > 1 ? 1.9 : 1.3;
+            for (int i = 0; i < Segments; i++)
+            {
+                double u = Math.Min(1.0, i / (double)(_live - 1));
+                _fade[i] = i < _live ? Math.Pow(0.5 * (1 + Math.Cos(Math.PI * u)), exp) : 0;
+                _segs[i].Opacity = _fade[i];
+            }
+            Recompute(_segs[0].ActualWidth, _segs[0].ActualHeight);
+            ApplyVisibility();
+        }
+
+        private void ApplyVisibility()
+        {
+            for (int i = 0; i < Segments; i++)
+                _segs[i].Visibility = _active && i < _live ? Visibility.Visible : Visibility.Collapsed;
         }
 
         public void SetActive(bool on)
         {
             _active = on;
-            var v = on ? Visibility.Visible : Visibility.Collapsed;
-            foreach (var s in _segs) s.Visibility = v;
+            ApplyVisibility();
             // only ONE glow on the edge: the panel's static rim steps aside so
             // the comet is the sole light travelling it (#anim)
             _host.BorderBrush = on ? new SolidColorBrush(Colors.Transparent) : _restBorder;
@@ -737,6 +1124,7 @@ public sealed partial class MainWindow : Window
     // next launch can restore it (#14-batch2).
     private void CaptureWindowPlacement()
     {
+        if (!_libraryReady) return;   // no real library to record the placement into
         try
         {
             if (AppWindow.Presenter is OverlappedPresenter op)
@@ -764,6 +1152,13 @@ public sealed partial class MainWindow : Window
 
     private void FadeTo(FrameworkElement el, double to, int ms, bool collapseAtEnd)
     {
+        // reduced motion: jump to the end state, exactly as the failure path does
+        if (_reduceMotion)
+        {
+            el.Opacity = collapseAtEnd ? 1 : to;
+            if (collapseAtEnd) el.Visibility = Visibility.Collapsed;
+            return;
+        }
         int ver = _fadeVer.TryGetValue(el, out var v) ? v + 1 : 1;
         _fadeVer[el] = ver;
         try
@@ -853,6 +1248,7 @@ public sealed partial class MainWindow : Window
     // Only used on elements that don't drag via their transform.
     private void SlideNudge(FrameworkElement el, double fromX, double fromY)
     {
+        if (_reduceMotion) return;
         try
         {
             EnsureCT(el);
@@ -879,6 +1275,7 @@ public sealed partial class MainWindow : Window
     /// size with a watery overshoot. Safe on elements that also drag.</summary>
     private void PopIn(FrameworkElement el, double from = 0.9, int ms = 300)
     {
+        if (_reduceMotion) return;
         try
         {
             EnsureCT(el);
@@ -901,10 +1298,147 @@ public sealed partial class MainWindow : Window
         catch { }
     }
 
+    /// <summary>Uniform scale about the centre. `from` null animates from the
+    /// element's current scale. Open and close pass mirrored values so the two
+    /// read as one motion reversed.</summary>
+    private void SwellScale(FrameworkElement el, double? from, double to, int ms)
+    {
+        // reduced motion: the resting state is unscaled, whichever leg this was
+        if (_reduceMotion)
+        {
+            if (el.RenderTransform is CompositeTransform rest) { rest.ScaleX = 1; rest.ScaleY = 1; }
+            return;
+        }
+        try
+        {
+            EnsureCT(el);
+            el.RenderTransformOrigin = new Point(0.5, 0.5);
+            foreach (var prop in new[] { "ScaleX", "ScaleY" })
+            {
+                var a = new DoubleAnimation
+                {
+                    From = from, To = to,
+                    Duration = new Duration(TimeSpan.FromMilliseconds(ms)),
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(a, el);
+                Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
+                var sb = new Storyboard();
+                sb.Children.Add(a);
+                sb.Begin();
+            }
+        }
+        catch { }
+    }
+
     private void FadeOut(FrameworkElement el, int ms = 140)
     {
         if (el.Visibility != Visibility.Visible) return;
         FadeTo(el, 0, ms, collapseAtEnd: true);
+    }
+
+    // =======================================================================
+    // Connected card → page transition (C3). The page is a Win2D canvas and
+    // cannot be animated as a XAML element, so MorphCard stands in for it: it
+    // starts on the activated card's bounds, travels to the page bounds, and
+    // fades out onto the live surface — and runs in reverse when the gallery
+    // comes back. Only the frame and fill morph; the card's contents are
+    // deliberately absent so the aspect stretch between a 188x134 card and a
+    // full page never shows.
+    // =======================================================================
+    private Rect _morphSource;              // last activated card, in CanvasArea space
+    private Color _morphAccent = Colors.Gray;
+    private int _morphVer;
+
+    /// <summary>Bounds of an element in CanvasArea coordinates, or null when it
+    /// is not laid out. Must be read while the element is still visible.</summary>
+    private Rect? BoundsInCanvas(FrameworkElement? el)
+    {
+        if (el == null || el.ActualWidth <= 0 || el.ActualHeight <= 0) return null;
+        try
+        {
+            var p = el.TransformToVisual(CanvasArea).TransformPoint(new Point(0, 0));
+            return new Rect(p.X, p.Y, el.ActualWidth, el.ActualHeight);
+        }
+        catch { return null; }
+    }
+
+    private Rect PageBounds() => new(0, 0, CanvasArea.ActualWidth, CanvasArea.ActualHeight);
+
+    /// <summary>Grows the activated card into the page and remembers it as the
+    /// anchor for the return leg.</summary>
+    private void MorphCardToPage(Rect? source, Color accent)
+    {
+        if (source is not Rect r) return;
+        _morphSource = r;
+        _morphAccent = accent;
+        if (_reduceMotion) return;
+        RunMorph(r, PageBounds(), 340);
+    }
+
+    /// <summary>Return leg: the page contracts onto the card it was opened from.</summary>
+    private void MorphPageToCard()
+    {
+        if (_reduceMotion || _morphSource.Width <= 0) return;
+        RunMorph(PageBounds(), _morphSource, 260);
+    }
+
+    // The placeholder RESTS at `to`, and the transform starts it on `from`, so
+    // scale 1 / translate 0 is always the finished frame in both directions.
+    private void RunMorph(Rect from, Rect to, int ms)
+    {
+        if (from.Width <= 0 || from.Height <= 0 || to.Width <= 0 || to.Height <= 0) return;
+        int ver = ++_morphVer;
+        try
+        {
+            Canvas.SetLeft(MorphCard, to.X);
+            Canvas.SetTop(MorphCard, to.Y);
+            MorphCard.Width = to.Width;
+            MorphCard.Height = to.Height;
+            MorphCard.BorderBrush = new SolidColorBrush(_morphAccent);
+            MorphCard.RenderTransformOrigin = new Point(0, 0);
+            EnsureCT(MorphCard);
+            MorphHost.Opacity = 1;
+            MorphHost.Visibility = Visibility.Visible;
+
+            foreach (var (prop, start) in new[]
+                     {
+                         ("ScaleX", from.Width / to.Width), ("ScaleY", from.Height / to.Height),
+                         ("TranslateX", from.X - to.X),     ("TranslateY", from.Y - to.Y)
+                     })
+                MorphTrack(prop, start, prop[0] == 'S' ? 1 : 0, ms);
+
+            // opaque through most of the travel, then hand over to the canvas
+            var fade = new DoubleAnimation
+            {
+                From = 1, To = 0,
+                BeginTime = TimeSpan.FromMilliseconds(ms * 0.55),
+                Duration = new Duration(TimeSpan.FromMilliseconds(ms * 0.45)),
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseIn }
+            };
+            Storyboard.SetTarget(fade, MorphHost);
+            Storyboard.SetTargetProperty(fade, "Opacity");
+            var sb = new Storyboard();
+            sb.Children.Add(fade);
+            sb.Completed += (_, _) => { if (_morphVer == ver) MorphHost.Visibility = Visibility.Collapsed; };
+            sb.Begin();
+        }
+        catch { MorphHost.Visibility = Visibility.Collapsed; }
+    }
+
+    private void MorphTrack(string prop, double from, double to, int ms)
+    {
+        var a = new DoubleAnimation
+        {
+            From = from, To = to,
+            Duration = new Duration(TimeSpan.FromMilliseconds(ms)),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+        Storyboard.SetTarget(a, MorphCard);
+        Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
+        var sb = new Storyboard();
+        sb.Children.Add(a);
+        sb.Begin();
     }
 
     private void BarScroll_Wheel(object sender, PointerRoutedEventArgs e)
@@ -920,12 +1454,16 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     private void ScheduleSave()
     {
+        // Before the library is adopted — and forever, if the load failed — the
+        // model in memory is a placeholder; never let it queue a write.
+        if (!_libraryReady) return;
         _saveTimer.Stop();
         _saveTimer.Start();
     }
 
     private void SaveNow()
     {
+        if (!_libraryReady) return;
         Surface.FlushTexts();
         LibraryStore.Save(_library);
     }
@@ -960,6 +1498,27 @@ public sealed partial class MainWindow : Window
 
     private bool ResolvedDark() =>
         _library.Theme == "System" ? SystemPrefersDark() : _library.Theme == "Dark";
+
+    // Code-built UI captures its strings at build time exactly the way it
+    // captures theme colours, so a language change has to repaint the same set of
+    // surfaces ApplyTheme does. Anything still declared in XAML stays English
+    // until it is extracted.
+    private void ApplyLanguage()
+    {
+        Loc.SetLanguage(_library.Language);
+        if (!_uiReady) return;
+        try
+        {
+            BuildTree();
+            BuildPenStrip();
+            ApplyKeyPreset();   // the F1 sheet is built from localized labels
+            if (GalleryPanel.Visibility == Visibility.Visible) BuildGallery();
+            Surface.Refresh();
+        }
+        catch { }
+        var name = Loc.Languages.FirstOrDefault(l => l.Tag == Loc.Current).Name ?? Loc.Current;
+        ShowStatus(Loc.T("Status.LanguageChanged", name));
+    }
 
     private void ApplyTheme()
     {
@@ -2979,32 +3538,16 @@ public sealed partial class MainWindow : Window
     // (welcome title + "Continue where I left off").
     private void ShowGallery(bool launcher, Notebook? nb = null)
     {
+        // return leg of the connected transition: the page contracts onto the
+        // card it was opened from, under the gallery fading in (C3)
+        if (!launcher && GalleryPanel.Visibility != Visibility.Visible) MorphPageToCard();
         _galleryLauncher = launcher;
         _galleryNb = nb;
         BuildGallery();
         // mirror of CloseGallery's dissolve: settle inward from 1.035 with the
         // same Sine curve, so open and close read as one motion reversed
         FadeIn(GalleryPanel, 220, pop: false);
-        try
-        {
-            EnsureCT(GalleryPanel);
-            GalleryPanel.RenderTransformOrigin = new Point(0.5, 0.5);
-            foreach (var prop in new[] { "ScaleX", "ScaleY" })
-            {
-                var a = new DoubleAnimation
-                {
-                    From = 1.035, To = 1.0,
-                    Duration = new Duration(TimeSpan.FromMilliseconds(180)),
-                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut }
-                };
-                Storyboard.SetTarget(a, GalleryPanel);
-                Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
-                var sb = new Storyboard();
-                sb.Children.Add(a);
-                sb.Begin();
-            }
-        }
-        catch { }
+        SwellScale(GalleryPanel, 1.035, 1.0, 180);
         // start-screen top bar: settings takes the hamburger's spot, crumb hides
         BtnSidebar.Visibility = Visibility.Collapsed;
         BtnSettings.Visibility = Visibility.Visible;
@@ -3014,26 +3557,7 @@ public sealed partial class MainWindow : Window
     private void CloseGallery()
     {
         // liquid dissolve: the glass swells slightly as it fades away (#51)
-        try
-        {
-            EnsureCT(GalleryPanel);
-            GalleryPanel.RenderTransformOrigin = new Point(0.5, 0.5);
-            foreach (var prop in new[] { "ScaleX", "ScaleY" })
-            {
-                var a = new DoubleAnimation
-                {
-                    To = 1.035,
-                    Duration = new Duration(TimeSpan.FromMilliseconds(180)),
-                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseOut }
-                };
-                Storyboard.SetTarget(a, GalleryPanel);
-                Storyboard.SetTargetProperty(a, $"(UIElement.RenderTransform).(CompositeTransform.{prop})");
-                var sb = new Storyboard();
-                sb.Children.Add(a);
-                sb.Begin();
-            }
-        }
-        catch { }
+        SwellScale(GalleryPanel, null, 1.035, 180);
         FadeOut(GalleryPanel, 160);
         _galleryLauncher = false;
         _galleryNb = null;
@@ -3311,6 +3835,20 @@ public sealed partial class MainWindow : Window
         var strip = new Border { Background = new SolidColorBrush(col), CornerRadius = new CornerRadius(12, 12, 0, 0) };
         var stripGrid = new Grid();
         strip.Child = stripGrid;
+
+        // Cover thumbnail of the notebook's first page. It fills in behind the
+        // emoji/lock badges once the worker has it; until then — and for a
+        // locked, empty or unrenderable notebook — the colour block stands alone.
+        var coverPage = nb.PasswordHash == null
+            ? nb.Sections.SelectMany(s => s.Pages).FirstOrDefault()
+            : null;
+        if (coverPage != null)
+        {
+            var cover = new Image { Stretch = Stretch.UniformToFill, Opacity = 0 };
+            stripGrid.Children.Add(cover);
+            LoadThumbAsync(cover, coverPage, 376, 120, true, 0.92);
+        }
+
         if (nb.CoverEmoji != null)
         {
             stripGrid.Children.Add(new TextBlock
@@ -3357,12 +3895,12 @@ public sealed partial class MainWindow : Window
         // hover polish: the card glows in ITS OWN colour and keeps breathing (#51, #8-batch2)
         AttachHoverGlow(card, col, card.BorderBrush, new Thickness(1), new Thickness(1.6));
 
-        card.ContextFlyout = BuildCardFlyout(nb);
+        card.ContextFlyout = BuildCardFlyout(nb, card);
         ToolTipService.SetToolTip(card, "Click to browse sections & pages · right-click for more");
         return card;
     }
 
-    private MenuFlyout BuildCardFlyout(Notebook nb)
+    private MenuFlyout BuildCardFlyout(Notebook nb, FrameworkElement card)
     {
         var fly = new MenuFlyout();
 
@@ -3370,8 +3908,10 @@ public sealed partial class MainWindow : Window
         openItem.Click += async (_, _) =>
         {
             if (!await EnsureUnlockedAsync(nb)) return;
+            var from = BoundsInCanvas(card);
             OpenNotebook(nb);
             CloseGallery();
+            MorphCardToPage(from, ColorUtil.Parse(nb.Color));
         };
         fly.Items.Add(openItem);
         fly.Items.Add(new MenuFlyoutSeparator());
@@ -3522,7 +4062,7 @@ public sealed partial class MainWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Right,
                 Padding = new Thickness(10, 4, 10, 4)
             };
-            addPg.Click += async (_, _) => await GalleryNewPageAsync(nb, s0);
+            addPg.Click += async (_, _) => await GalleryNewPageAsync(nb, s0, addPg);
             header.Children.Add(addPg);
             stack.Children.Add(header);
 
@@ -3565,6 +4105,35 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // Fills a gallery Image from the disk thumbnail cache. Fire-and-forget by
+    // design: the card is already on screen and simply gains its picture, and
+    // every failure path leaves the caller's own fallback showing.
+    private async void LoadThumbAsync(Image target, NotePage page, int w, int h, bool crop, double opacity)
+    {
+        byte[]? bytes;
+        try { bytes = await ThumbnailCache.GetAsync(page, w, h, crop); }
+        catch { return; }
+        if (bytes == null || bytes.Length == 0) return;
+
+        try
+        {
+            var bmi = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+            using (var ms = new Windows.Storage.Streams.InMemoryRandomAccessStream())
+            {
+                using (var writer = new Windows.Storage.Streams.DataWriter(ms.GetOutputStreamAt(0)))
+                {
+                    writer.WriteBytes(bytes);
+                    await writer.StoreAsync();
+                }
+                ms.Seek(0);
+                await bmi.SetSourceAsync(ms);
+            }
+            target.Source = bmi;
+            target.Opacity = opacity;
+        }
+        catch { }
+    }
+
     private FrameworkElement MakePageChip(Notebook nb, Section sec, NotePage pg, Brush bg, Brush ink)
     {
         bool current = ReferenceEquals(pg, _curPage);
@@ -3573,32 +4142,7 @@ public sealed partial class MainWindow : Window
         var img = new Image { Width = 160, Height = 100, Stretch = Stretch.UniformToFill, Margin = new Thickness(0, 0, 0, 6) };
         inner.Children.Add(img);
 
-        Task.Run(() =>
-        {
-            var bytes = Quill.Controls.InkSurface.RenderPageThumbnail(pg, 160, 100);
-            if (bytes != null)
-            {
-                DispatcherQueue.TryEnqueue(async () =>
-                {
-                    try
-                    {
-                        var bmi = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                        using (var ms = new Windows.Storage.Streams.InMemoryRandomAccessStream())
-                        {
-                            using (var writer = new Windows.Storage.Streams.DataWriter(ms.GetOutputStreamAt(0)))
-                            {
-                                writer.WriteBytes(bytes);
-                                await writer.StoreAsync();
-                            }
-                            ms.Seek(0);
-                            await bmi.SetSourceAsync(ms);
-                        }
-                        img.Source = bmi;
-                    }
-                    catch { }
-                });
-            }
-        });
+        LoadThumbAsync(img, pg, 320, 200, false, 1.0);
 
         inner.Children.Add(new TextBlock
         {
@@ -3628,9 +4172,12 @@ public sealed partial class MainWindow : Window
 
         chip.Click += (_, _) =>
         {
+            // measured while the gallery is still up, then grown into the page (C3)
+            var from = BoundsInCanvas(chip);
             BuildTree();
             SwitchToPage(nb, sec, pg);
             CloseGallery();
+            MorphCardToPage(from, ColorUtil.Parse(nb.Color));
         };
 
         var fly = new MenuFlyout();
@@ -3674,7 +4221,7 @@ public sealed partial class MainWindow : Window
         return glowWrap;
     }
 
-    private async Task GalleryNewPageAsync(Notebook nb, Section sec)
+    private async Task GalleryNewPageAsync(Notebook nb, Section sec, FrameworkElement? origin = null)
     {
         var name = await PromptAsync("New page", $"Page {sec.Pages.Count + 1}");
         if (name == null) return;
@@ -3682,8 +4229,10 @@ public sealed partial class MainWindow : Window
         sec.Pages.Add(pg);
         BuildTree();
         ScheduleSave();
+        var from = BoundsInCanvas(origin);
         SwitchToPage(nb, sec, pg);   // creating a page means "work on it now"
         CloseGallery();
+        MorphCardToPage(from, ColorUtil.Parse(nb.Color));
     }
 
     private async void GalleryNewSection_Click(object sender, RoutedEventArgs e)
@@ -3702,9 +4251,11 @@ public sealed partial class MainWindow : Window
         var (nb, sec, pg) = FindPageById(_library.LastPageId);
         if (pg == null) { CloseGallery(); return; }
         if (!await EnsureUnlockedAsync(nb!)) return;
+        var from = BoundsInCanvas(GalleryContinueBtn);
         BuildTree();
         SwitchToPage(nb!, sec!, pg);
         CloseGallery();
+        MorphCardToPage(from, ColorUtil.Parse(nb!.Color));
     }
 
     private void OpenNotebook(Notebook nb)
@@ -3744,15 +4295,25 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     // Settings page — central storage folder + recover/import notebooks
     // =======================================================================
+    // The panel is code-built, so it captures its strings at build time exactly
+    // the way the gallery captures theme colours. Switching language therefore
+    // closes and re-presents the dialog rather than trying to patch it in place.
     private async void Settings_Click(object sender, RoutedEventArgs e)
     {
+        while (await ShowSettingsDialogAsync()) { }
+    }
+
+    // Returns true when the language changed and the dialog should be reopened.
+    private async Task<bool> ShowSettingsDialogAsync()
+    {
+        bool languageChanged = false;
         var panel = new StackPanel { Spacing = 10, Width = 480 };
 
-        panel.Children.Add(new TextBlock { Text = "Notebook storage (universal sync)", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15 });
-        panel.Children.Add(new TextBlock { Text = "Every version of the app reads and writes notebooks from this one folder, so they always stay in sync.", FontSize = 12, Opacity = 0.75, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Storage.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15 });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Storage.Desc"), FontSize = 12, Opacity = 0.75, TextWrapping = TextWrapping.Wrap });
         var folderText = new TextBlock { Text = LibraryStore.Dir, FontSize = 12, Opacity = 0.9, TextWrapping = TextWrapping.Wrap, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas") };
         panel.Children.Add(folderText);
-        var changeBtn = new Button { Content = "Change folder…", HorizontalAlignment = HorizontalAlignment.Left };
+        var changeBtn = new Button { Content = Loc.T("Settings.Storage.Change"), HorizontalAlignment = HorizontalAlignment.Left };
         changeBtn.Click += async (_, _) =>
         {
             var f = await PickFolderAsync();
@@ -3760,12 +4321,34 @@ public sealed partial class MainWindow : Window
             Surface.FlushTexts();
             LibraryStore.SetDataFolder(f, _library);
             folderText.Text = LibraryStore.Dir;
-            ShowStatus("Storage folder updated — notebooks now sync from here.");
+            ShowStatus(Loc.T("Status.StorageUpdated"));
         };
         panel.Children.Add(changeBtn);
 
+        // ---- language (#C7) ----
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Language.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        var langBox = new ComboBox { Width = 220 };
+        langBox.Items.Add(new ComboBoxItem { Content = Loc.T("Settings.Language.System"), Tag = "" });
+        foreach (var (tag, name) in Loc.Languages)
+            langBox.Items.Add(new ComboBoxItem { Content = name, Tag = tag });
+        foreach (ComboBoxItem it in langBox.Items)
+            if ((string)it.Tag == _library.Language) { langBox.SelectedItem = it; break; }
+        if (langBox.SelectedItem == null) langBox.SelectedIndex = 0;
+        langBox.SelectionChanged += (_, _) =>
+        {
+            if (langBox.SelectedItem is not ComboBoxItem ci || ci.Tag is not string tag) return;
+            if (tag == _library.Language) return;
+            _library.Language = tag;
+            ApplyLanguage();
+            ScheduleSave();
+            languageChanged = true;
+            _settingsDialog?.Hide();   // the while-loop in Settings_Click reopens it
+        };
+        panel.Children.Add(langBox);
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Language.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
         // ---- default text font & size ----
-        panel.Children.Add(new TextBlock { Text = "Default text font & size", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Font.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         var defFont = new ComboBox { Width = 200 };
         foreach (var f in Fonts)
@@ -3792,47 +4375,47 @@ public sealed partial class MainWindow : Window
         }
         defSize.SelectionChanged += (_, _) => { if (defSize.SelectedItem is string s2) ApplyDefaultSize(s2); };
         defSize.TextSubmitted += (cb, args) => { ApplyDefaultSize(args.Text); };
-        row.Children.Add(new TextBlock { Text = "Font", VerticalAlignment = VerticalAlignment.Center, FontSize = 12 });
+        row.Children.Add(new TextBlock { Text = Loc.T("Settings.Font.Font"), VerticalAlignment = VerticalAlignment.Center, FontSize = 12 });
         row.Children.Add(defFont);
-        row.Children.Add(new TextBlock { Text = "Size", VerticalAlignment = VerticalAlignment.Center, FontSize = 12 });
+        row.Children.Add(new TextBlock { Text = Loc.T("Settings.Font.Size"), VerticalAlignment = VerticalAlignment.Center, FontSize = 12 });
         row.Children.Add(defSize);
         panel.Children.Add(row);
-        panel.Children.Add(new TextBlock { Text = "New text boxes start with this font and size.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Font.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
         var nbFontRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        var nbFontBtn = new Button { Content = "Use as default for the open notebook", FontSize = 12 };
+        var nbFontBtn = new Button { Content = Loc.T("Settings.Font.UseForNotebook"), FontSize = 12 };
         nbFontBtn.Click += (_, _) =>
         {
-            if (_curNb == null) { ShowStatus("No notebook is open."); return; }
+            if (_curNb == null) { ShowStatus(Loc.T("Status.NoNotebookOpen")); return; }
             _curNb.DefaultFont = _library.DefaultFont;
             _curNb.DefaultFontSize = _library.DefaultFontSize;
             ScheduleSave();
-            ShowStatus($"Text in “{_curNb.Name}” now defaults to {_curNb.DefaultFont} {(int)_curNb.DefaultFontSize.GetValueOrDefault()}.");
+            ShowStatus(Loc.T("Status.NotebookFontSet", _curNb.Name, _curNb.DefaultFont, (int)_curNb.DefaultFontSize.GetValueOrDefault()));
         };
-        var nbFontClear = new Button { Content = "Clear notebook override", FontSize = 12 };
+        var nbFontClear = new Button { Content = Loc.T("Settings.Font.ClearOverride"), FontSize = 12 };
         nbFontClear.Click += (_, _) =>
         {
-            if (_curNb == null) { ShowStatus("No notebook is open."); return; }
+            if (_curNb == null) { ShowStatus(Loc.T("Status.NoNotebookOpen")); return; }
             _curNb.DefaultFont = null;
             _curNb.DefaultFontSize = null;
             ScheduleSave();
-            ShowStatus($"“{_curNb.Name}” follows the library-wide font again.");
+            ShowStatus(Loc.T("Status.NotebookFontCleared", _curNb.Name));
         };
         nbFontRow.Children.Add(nbFontBtn);
         nbFontRow.Children.Add(nbFontClear);
         panel.Children.Add(nbFontRow);
 
         // ---- startup behaviour ----
-        panel.Children.Add(new TextBlock { Text = "Startup", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
-        var fsToggle = new ToggleSwitch { Header = "Start maximised", IsOn = _library.StartFullscreen };
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Startup.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        var fsToggle = new ToggleSwitch { Header = Loc.T("Settings.Startup.Maximised"), IsOn = _library.StartFullscreen };
         fsToggle.Toggled += (_, _) => { _library.StartFullscreen = fsToggle.IsOn; ScheduleSave(); };
         panel.Children.Add(fsToggle);
-        var pickerToggle = new ToggleSwitch { Header = "Show the notebook picker at startup", IsOn = _library.StartOnGallery };
+        var pickerToggle = new ToggleSwitch { Header = Loc.T("Settings.Startup.ShowPicker"), IsOn = _library.StartOnGallery };
         pickerToggle.Toggled += (_, _) => { _library.StartOnGallery = pickerToggle.IsOn; ScheduleSave(); };
         panel.Children.Add(pickerToggle);
-        panel.Children.Add(new TextBlock { Text = "The picker opens over your last page — press Esc to skip it.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Startup.PickerDesc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- touch-screen mode (#36) ----
-        var touchToggle = new ToggleSwitch { Header = "Touch screen mode (larger buttons)", IsOn = _library.TouchMode };
+        var touchToggle = new ToggleSwitch { Header = Loc.T("Settings.TouchMode"), IsOn = _library.TouchMode };
         touchToggle.Toggled += (_, _) =>
         {
             _library.TouchMode = touchToggle.IsOn;
@@ -3846,7 +4429,7 @@ public sealed partial class MainWindow : Window
         {
             Minimum = 0, Maximum = 100, StepFrequency = 5,
             Value = _library.Liquidness * 100,
-            Header = "Liquid glass — panel transparency"
+            Header = Loc.T("Settings.Liquid")
         };
         liquidSlider.ValueChanged += (_, args) =>
         {
@@ -3857,21 +4440,44 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(liquidSlider);
 
         // ---- glow animation (#4-batch2) ----
-        var glowBox = new ComboBox { Header = "Glow animation", Width = 220 };
-        foreach (var mode in new[] { "Off", "Breathe", "Circulate", "Comet" }) glowBox.Items.Add(mode);
-        glowBox.SelectedItem = _library.GlowMode is "Off" or "Circulate" or "Comet" ? _library.GlowMode : "Breathe";
+        // the mode names are persisted ids, so the label is localized and the id
+        // rides along in Tag — same shape as the theme and key-preset boxes below
+        var glowBox = new ComboBox { Header = Loc.T("Settings.Glow.Header"), Width = 220 };
+        foreach (var mode in new[] { "Off", "Breathe", "Circulate", "Comet",
+                                     "Aurora", "Shimmer", "Ember", "Chase", "Heartbeat" })
+            glowBox.Items.Add(new ComboBoxItem { Content = Loc.T("Glow." + mode), Tag = mode });
+        foreach (ComboBoxItem it in glowBox.Items)
+            if ((string)it.Tag == _library.GlowMode) { glowBox.SelectedItem = it; break; }
+        if (glowBox.SelectedItem == null) glowBox.SelectedIndex = 1;   // Breathe
         glowBox.SelectionChanged += (_, _) =>
         {
-            if (glowBox.SelectedItem is string gm)
+            if (glowBox.SelectedItem is ComboBoxItem ci && ci.Tag is string gm)
             { _library.GlowMode = gm; ApplyGlowMode(); ScheduleSave(); }
         };
         panel.Children.Add(glowBox);
-        panel.Children.Add(new TextBlock { Text = "Circulate makes the highlight travel around the panel rims instead of fading in and out.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Glow.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- keyboard layout (C5) ----
+        var keyBox = new ComboBox { Header = Loc.T("Settings.Keys.Header"), Width = 220 };
+        foreach (var (tag, key) in KeyPresetOptions)
+            keyBox.Items.Add(new ComboBoxItem { Content = Loc.T(key), Tag = tag });
+        foreach (ComboBoxItem it in keyBox.Items)
+            if ((string)it.Tag == KeyPresetId(_library.KeyPreset)) { keyBox.SelectedItem = it; break; }
+        keyBox.SelectionChanged += (_, _) =>
+        {
+            if (keyBox.SelectedItem is not ComboBoxItem ci || ci.Tag is not string kp) return;
+            _library.KeyPreset = kp;
+            ApplyKeyPreset();   // rebinds live; no restart
+            ScheduleSave();
+            ShowStatus(Loc.T("Status.KeyPresetActive", KeyPresetLabel(kp)));
+        };
+        panel.Children.Add(keyBox);
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Keys.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- theme mode (#10-roadmap) ----
-        var themeBox = new ComboBox { Header = "Theme", Width = 220 };
-        foreach (var (tag, label) in new[] { ("Light", "Light"), ("Dark", "Dark"), ("System", "Follow Windows") })
-            themeBox.Items.Add(new ComboBoxItem { Content = label, Tag = tag });
+        var themeBox = new ComboBox { Header = Loc.T("Settings.Theme.Header"), Width = 220 };
+        foreach (var tag in new[] { "Light", "Dark", "System" })
+            themeBox.Items.Add(new ComboBoxItem { Content = Loc.T("Theme." + tag), Tag = tag });
         foreach (ComboBoxItem it in themeBox.Items)
             if ((string)it.Tag == _library.Theme) { themeBox.SelectedItem = it; break; }
         if (themeBox.SelectedItem == null) themeBox.SelectedIndex = 1;
@@ -3883,7 +4489,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(themeBox);
 
         // ---- true black for OLED (#32-batch2) ----
-        var oledToggle = new ToggleSwitch { Header = "True black dark theme (OLED)", IsOn = _library.OledBlack };
+        var oledToggle = new ToggleSwitch { Header = Loc.T("Settings.Oled"), IsOn = _library.OledBlack };
         oledToggle.Toggled += (_, _) =>
         {
             _library.OledBlack = oledToggle.IsOn;
@@ -3897,7 +4503,7 @@ public sealed partial class MainWindow : Window
         {
             Minimum = 0.5, Maximum = 10, StepFrequency = 0.5,
             Value = Math.Clamp(_library.AutosaveSeconds, 0.5, 10),
-            Header = "Autosave delay (seconds after you stop editing)"
+            Header = Loc.T("Settings.Autosave")
         };
         autosaveSlider.ValueChanged += (_, args) =>
         {
@@ -3908,7 +4514,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(autosaveSlider);
 
         // ---- pen repair (#2-batch2) ----
-        var penFixDots = new ToggleSwitch { Header = "Pen repair — ignore stray dots", IsOn = _library.PenRepairDots };
+        var penFixDots = new ToggleSwitch { Header = Loc.T("Settings.PenRepair.Dots"), IsOn = _library.PenRepairDots };
         penFixDots.Toggled += (_, _) =>
         {
             _library.PenRepairDots = penFixDots.IsOn;
@@ -3916,9 +4522,9 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         };
         panel.Children.Add(penFixDots);
-        panel.Children.Add(new TextBlock { Text = "Drops the tiny dot a bouncy pen tip leaves right where a stroke just ended. Deliberate dots (like dotting an i) still register.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.PenRepair.DotsDesc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
-        var penFixBridge = new ToggleSwitch { Header = "Pen repair — bridge lost contact", IsOn = _library.PenRepairBridge };
+        var penFixBridge = new ToggleSwitch { Header = Loc.T("Settings.PenRepair.Bridge"), IsOn = _library.PenRepairBridge };
         penFixBridge.Toggled += (_, _) =>
         {
             _library.PenRepairBridge = penFixBridge.IsOn;
@@ -3926,10 +4532,10 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         };
         panel.Children.Add(penFixBridge);
-        panel.Children.Add(new TextBlock { Text = "Continues the same stroke when the pen momentarily loses contact mid-line.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.PenRepair.BridgeDesc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- motion blur (#A5) ----
-        var motionBlur = new ToggleSwitch { Header = "Motion blur", IsOn = _library.MotionBlur };
+        var motionBlur = new ToggleSwitch { Header = Loc.T("Settings.MotionBlur.Header"), IsOn = _library.MotionBlur };
         motionBlur.Toggled += (_, _) =>
         {
             _library.MotionBlur = motionBlur.IsOn;
@@ -3937,10 +4543,10 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         };
         panel.Children.Add(motionBlur);
-        panel.Children.Add(new TextBlock { Text = "Softens the page while it pans or zooms fast, sharpening the instant it stops.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.MotionBlur.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- comment pins outside comment mode (#A3) ----
-        var pinsToggle = new ToggleSwitch { Header = "Always show comment pins", IsOn = _library.ShowCommentPins };
+        var pinsToggle = new ToggleSwitch { Header = Loc.T("Settings.CommentPins.Header"), IsOn = _library.ShowCommentPins };
         pinsToggle.Toggled += (_, _) =>
         {
             _library.ShowCommentPins = pinsToggle.IsOn;
@@ -3949,15 +4555,15 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         };
         panel.Children.Add(pinsToggle);
-        panel.Children.Add(new TextBlock { Text = "Off: pins only appear while the Comment tool is active.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.CommentPins.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- toolbar buttons (#topbar) ----
-        panel.Children.Add(new TextBlock { Text = "Toolbar buttons", FontFamily = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["HeadingFont"], FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 0) });
-        panel.Children.Add(new TextBlock { Text = "Switch off what you don't use — the top bar stops overflowing.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
-        foreach (var (key, label) in OptionalTools)
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Toolbar.Header"), FontFamily = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["HeadingFont"], FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Toolbar.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        foreach (var key in OptionalTools)
         {
             var k = key;
-            var cb = new CheckBox { Content = label, IsChecked = !_library.HiddenTools.Contains(k), MinHeight = 0, Margin = new Thickness(0, 2, 0, 2) };
+            var cb = new CheckBox { Content = Loc.T("Tool." + k), IsChecked = !_library.HiddenTools.Contains(k), MinHeight = 0, Margin = new Thickness(0, 2, 0, 2) };
             void Toggle()
             {
                 if (cb.IsChecked == true) _library.HiddenTools.Remove(k);
@@ -3972,43 +4578,52 @@ public sealed partial class MainWindow : Window
 
         // ---- pen dock position (#cust-roadmap): the drag gesture already works;
         //      this makes the four dock sides discoverable without dragging ----
-        var dockBox = new ComboBox { Header = "Pen toolbar docked to", Width = 220 };
-        foreach (var d in new[] { "Bottom", "Top", "Left", "Right" }) dockBox.Items.Add(d);
-        dockBox.SelectedItem = _library.PenDock is "Top" or "Left" or "Right" ? _library.PenDock : "Bottom";
+        var dockBox = new ComboBox { Header = Loc.T("Settings.PenDock.Header"), Width = 220 };
+        foreach (var d in new[] { "Bottom", "Top", "Left", "Right" })
+            dockBox.Items.Add(new ComboBoxItem { Content = Loc.T("PenDock." + d), Tag = d });
+        string curDock = _library.PenDock is "Top" or "Left" or "Right" ? _library.PenDock : "Bottom";
+        foreach (ComboBoxItem it in dockBox.Items)
+            if ((string)it.Tag == curDock) { dockBox.SelectedItem = it; break; }
         dockBox.SelectionChanged += (_, _) =>
         {
-            if (dockBox.SelectedItem is string d)
+            if (dockBox.SelectedItem is ComboBoxItem ci && ci.Tag is string d)
             { _library.PenDock = d; ApplyPenDock(); ScheduleSave(); }
         };
         panel.Children.Add(dockBox);
 
         // ---- AI assistant (#25-batch2) ----
-        panel.Children.Add(new TextBlock { Text = "AI assistant", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
-        panel.Children.Add(new TextBlock { Text = "Summaries, action items, smart tags, questions and a writing assistant over the open page. Your API key is stored in the Windows Credential Locker, never in your notes file.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
-        var aiProviderBox = new ComboBox { Header = "Provider", Width = 220 };
-        foreach (var prov in new[] { "None", "Claude", "OpenAI", "Gemini", "Local" }) aiProviderBox.Items.Add(prov);
-        aiProviderBox.SelectedItem = _library.AiProvider is "Claude" or "OpenAI" or "Gemini" or "Local" ? _library.AiProvider : "None";
-        var aiModelBox = new TextBox { Header = "Model (blank = default)", Text = _library.AiModel, Width = 300, HorizontalAlignment = HorizontalAlignment.Left };
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Ai.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Ai.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        // provider ids are also the vendors' names, so only "None" is translated
+        var aiProviderBox = new ComboBox { Header = Loc.T("Settings.Ai.Provider"), Width = 220 };
+        foreach (var prov in new[] { "None", "Claude", "OpenAI", "Gemini", "Local" })
+            aiProviderBox.Items.Add(new ComboBoxItem { Content = prov == "None" ? Loc.T("Settings.Ai.ProviderNone") : prov, Tag = prov });
+        string curProv = _library.AiProvider is "Claude" or "OpenAI" or "Gemini" or "Local" ? _library.AiProvider : "None";
+        foreach (ComboBoxItem it in aiProviderBox.Items)
+            if ((string)it.Tag == curProv) { aiProviderBox.SelectedItem = it; break; }
+        var aiModelBox = new TextBox { Header = Loc.T("Settings.Ai.Model"), Text = _library.AiModel, Width = 300, HorizontalAlignment = HorizontalAlignment.Left };
         var aiEndpointBox = new TextBox
         {
-            Header = "Local server URL (OpenAI-compatible, e.g. Ollama / LM Studio)",
+            Header = Loc.T("Settings.Ai.Endpoint"),
             PlaceholderText = "http://localhost:11434/v1",
             Text = _library.AiEndpoint,
             Visibility = _library.AiProvider == "Local" ? Visibility.Visible : Visibility.Collapsed
         };
-        var aiKeyBox = new PasswordBox { Header = "API key", Width = 300, HorizontalAlignment = HorizontalAlignment.Left };
+        var aiKeyBox = new PasswordBox { Header = Loc.T("Settings.Ai.Key"), Width = 300, HorizontalAlignment = HorizontalAlignment.Left };
         var aiKeyState = new TextBlock { FontSize = 12, Opacity = 0.7 };
+        string SelectedProvider() =>
+            (aiProviderBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "None";
         void RefreshKeyState()
         {
-            var prov = aiProviderBox.SelectedItem as string ?? "None";
+            var prov = SelectedProvider();
             aiKeyState.Text = prov is "None" ? "" :
-                prov == "Local" ? "Local servers usually need no key." :
-                AiService.GetKey(prov) != null ? "A key is saved for " + prov + "." : "No key saved for " + prov + " yet.";
+                prov == "Local" ? Loc.T("Settings.Ai.KeyLocal") :
+                AiService.GetKey(prov) != null ? Loc.T("Settings.Ai.KeySaved", prov) : Loc.T("Settings.Ai.KeyMissing", prov);
         }
         RefreshKeyState();
         aiProviderBox.SelectionChanged += (_, _) =>
         {
-            var prov = aiProviderBox.SelectedItem as string ?? "None";
+            var prov = SelectedProvider();
             _library.AiProvider = prov;
             aiEndpointBox.Visibility = prov == "Local" ? Visibility.Visible : Visibility.Collapsed;
             aiModelBox.PlaceholderText = AiService.DefaultModel(prov);
@@ -4017,15 +4632,15 @@ public sealed partial class MainWindow : Window
         };
         aiModelBox.TextChanged += (_, _) => { _library.AiModel = aiModelBox.Text.Trim(); ScheduleSave(); };
         aiEndpointBox.TextChanged += (_, _) => { _library.AiEndpoint = aiEndpointBox.Text.Trim(); ScheduleSave(); };
-        var aiKeySave = new Button { Content = "Save key", FontSize = 12 };
+        var aiKeySave = new Button { Content = Loc.T("Settings.Ai.SaveKey"), FontSize = 12 };
         aiKeySave.Click += (_, _) =>
         {
-            var prov = aiProviderBox.SelectedItem as string ?? "None";
-            if (prov is "None") { ShowStatus("Pick a provider first."); return; }
+            var prov = SelectedProvider();
+            if (prov is "None") { ShowStatus(Loc.T("Status.AiPickProvider")); return; }
             AiService.SetKey(prov, aiKeyBox.Password);
             aiKeyBox.Password = "";
             RefreshKeyState();
-            ShowStatus("API key saved securely.");
+            ShowStatus(Loc.T("Status.AiKeySaved"));
         };
         var aiKeyRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         aiKeyRow.Children.Add(aiKeyBox);
@@ -4037,8 +4652,8 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(aiKeyState);
 
         // ---- accent colour (#33) ----
-        panel.Children.Add(new TextBlock { Text = "Accent colour", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
-        panel.Children.Add(new TextBlock { Text = "Used for the glows, highlights, buttons and selection colours.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Accent.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Accent.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
         var accentPicker = new ColorPicker
         {
             IsAlphaEnabled = false,
@@ -4057,17 +4672,17 @@ public sealed partial class MainWindow : Window
                 Background = new SolidColorBrush(ColorUtil.Parse(h)),
                 BorderBrush = new SolidColorBrush(Color.FromArgb(90, 128, 128, 128))
             };
-            ToolTipService.SetToolTip(sw, h == "#D97757" ? "Clay (default)" : h);
+            ToolTipService.SetToolTip(sw, h == "#D97757" ? Loc.T("Settings.Accent.ClayDefault") : h);
             sw.Click += (_, _) => accentPicker.Color = ColorUtil.Parse(h);   // fires ColorChanged
             swatchRow.Children.Add(sw);
         }
         panel.Children.Add(swatchRow);
-        var accentExp = new Expander { Header = "Custom colour (RGB)", Content = accentPicker, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var accentExp = new Expander { Header = Loc.T("Settings.Accent.Custom"), Content = accentPicker, HorizontalAlignment = HorizontalAlignment.Stretch };
         panel.Children.Add(accentExp);
         accentPicker.ColorChanged += (_, args) => SetAccent(args.NewColor);
 
         // ---- user-saved custom colours (#5-batch2): a second, user-curated row ----
-        panel.Children.Add(new TextBlock { Text = "My colours", FontSize = 12, Opacity = 0.8, Margin = new Thickness(0, 6, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Accent.Mine"), FontSize = 12, Opacity = 0.8, Margin = new Thickness(0, 6, 0, 0) });
         var customRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         void RebuildCustomRow()
         {
@@ -4081,13 +4696,13 @@ public sealed partial class MainWindow : Window
                     Background = new SolidColorBrush(ColorUtil.Parse(h)),
                     BorderBrush = new SolidColorBrush(Color.FromArgb(90, 128, 128, 128))
                 };
-                ToolTipService.SetToolTip(sw, h + " — tap to use, right-click to remove");
+                ToolTipService.SetToolTip(sw, Loc.T("Settings.Accent.SwatchTip", h));
                 sw.Click += (_, _) => accentPicker.Color = ColorUtil.Parse(h);
                 sw.RightTapped += (_, _) => { _library.CustomColors.Remove(h); ScheduleSave(); RebuildCustomRow(); };
                 customRow.Children.Add(sw);
             }
             var add = new Button { Width = 36, Height = 26, Content = new TextBlock { Text = "+", FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center }, Padding = new Thickness(0) };
-            ToolTipService.SetToolTip(add, "Save the current accent colour as one of my colours");
+            ToolTipService.SetToolTip(add, Loc.T("Settings.Accent.AddTip"));
             add.Click += (_, _) =>
             {
                 var hex = $"#{accentPicker.Color.R:X2}{accentPicker.Color.G:X2}{accentPicker.Color.B:X2}";
@@ -4105,9 +4720,9 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(customRow);
 
         // ---- accent follows pen / notebook (#6-batch2) ----
-        var followBox = new ComboBox { Header = "Accent colour follows", Width = 220 };
-        foreach (var (tag, label) in new[] { ("Manual", "My chosen colour"), ("Pen", "The active pen's colour"), ("Notebook", "The open notebook's colour") })
-            followBox.Items.Add(new ComboBoxItem { Content = label, Tag = tag });
+        var followBox = new ComboBox { Header = Loc.T("Settings.AccentFollow.Header"), Width = 220 };
+        foreach (var tag in new[] { "Manual", "Pen", "Notebook" })
+            followBox.Items.Add(new ComboBoxItem { Content = Loc.T("AccentFollow." + tag), Tag = tag });
         foreach (ComboBoxItem it in followBox.Items)
             if ((string)it.Tag == _library.AccentFollow) { followBox.SelectedItem = it; break; }
         if (followBox.SelectedItem == null) followBox.SelectedIndex = 0;
@@ -4130,14 +4745,14 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(followBox);
 
-        panel.Children.Add(new TextBlock { Text = "Recover / import notebooks", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
-        var recoverBtn = new Button { Content = "Recover my old notebooks (previous location)", HorizontalAlignment = HorizontalAlignment.Left };
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Import.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
+        var recoverBtn = new Button { Content = Loc.T("Settings.Import.Recover"), HorizontalAlignment = HorizontalAlignment.Left };
         recoverBtn.Click += (_, _) => ImportFromLegacy();
         panel.Children.Add(recoverBtn);
-        var importBtn = new Button { Content = "Import notebooks from a file…", HorizontalAlignment = HorizontalAlignment.Left };
+        var importBtn = new Button { Content = Loc.T("Settings.Import.FromFile"), HorizontalAlignment = HorizontalAlignment.Left };
         importBtn.Click += async (_, _) => { var p = await PickJsonFileAsync(); if (p != null) ImportFromFile(p); };
         panel.Children.Add(importBtn);
-        panel.Children.Add(new TextBlock { Text = "Importing only adds notebooks you don't already have — it never overwrites or deletes your current notes.", FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Import.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // scrollable so every section (incl. the colour picker) stays reachable
         var scroller = new ScrollViewer
@@ -4149,9 +4764,21 @@ public sealed partial class MainWindow : Window
             MaxHeight = 540,
             Padding = new Thickness(0, 0, 12, 0)
         };
-        var dlg = new ContentDialog { Title = "Settings", Content = scroller, CloseButtonText = "Done", XamlRoot = RootGrid.XamlRoot };
-        await dlg.ShowAsync();
+        var dlg = new ContentDialog
+        {
+            Title = Loc.T("Settings.Title"),
+            Content = scroller,
+            CloseButtonText = Loc.T("Common.Done"),
+            XamlRoot = RootGrid.XamlRoot
+        };
+        _settingsDialog = dlg;
+        try { await dlg.ShowAsync(); } finally { _settingsDialog = null; }
+        return languageChanged;
     }
+
+    // Held only while the Settings dialog is up, so the language picker can
+    // dismiss it and let ShowSettingsDialogAsync's caller present a fresh one.
+    private ContentDialog? _settingsDialog;
 
     private async Task<string?> PickFolderAsync()
     {
@@ -4560,7 +5187,7 @@ public sealed partial class MainWindow : Window
         if (pct != _lastZoomPct)
         {
             _lastZoomPct = pct;
-            ZoomBorder.Visibility = Visibility.Visible;
+            FadeIn(ZoomBorder, 120, pop: false);
             _zoomTimer.Stop();
             _zoomTimer.Start();
         }
@@ -4986,6 +5613,228 @@ public sealed partial class MainWindow : Window
     }
 
     private void Shortcuts_Close(object sender, TappedRoutedEventArgs e) => FadeOut(ShortcutsPanel, 140);
+
+    // =======================================================================
+    // KEYBOARD PRESETS (C5)
+    // The accelerators live here rather than in XAML so the preset is the only
+    // source of truth for both the live bindings and the F1 sheet — the sheet
+    // is generated from the accelerators that actually got installed, so it
+    // cannot claim a key that no longer works. Per-command remapping is out of
+    // scope; Ctrl+K reaches every command by name.
+    // =======================================================================
+    private sealed record KeyBind(string Id, VKey Key, VMod Mods);
+
+    private const VMod Ctrl = VMod.Control;
+    private const VMod CtrlShift = VMod.Control | VMod.Shift;
+
+    // Esc, Delete and F1 are identical in every preset on purpose: they are the
+    // escape hatches, and a preset that moved them could strand the user.
+    private static readonly Dictionary<string, KeyBind[]> KeyPresets = new()
+    {
+        ["Quill"] = new[]
+        {
+            new KeyBind("Undo", VKey.Z, Ctrl),
+            new KeyBind("Redo", VKey.Y, Ctrl),
+            new KeyBind("Cut", VKey.X, Ctrl),
+            new KeyBind("Copy", VKey.C, Ctrl),
+            new KeyBind("Paste", VKey.V, Ctrl),
+            new KeyBind("PastePlain", VKey.V, CtrlShift),
+            new KeyBind("Duplicate", VKey.D, Ctrl),
+            new KeyBind("Delete", VKey.Delete, VMod.None),
+            new KeyBind("Search", VKey.F, Ctrl),
+            new KeyBind("Palette", VKey.K, Ctrl),
+            new KeyBind("Fullscreen", VKey.F11, VMod.None),
+            new KeyBind("Shortcuts", VKey.F1, VMod.None),
+            new KeyBind("Escape", VKey.Escape, VMod.None),
+            new KeyBind("ToolPen", VKey.P, VMod.None),
+            new KeyBind("ToolText", VKey.T, VMod.None),
+            new KeyBind("ToolSelect", VKey.L, VMod.None),
+            new KeyBind("ToolSpace", VKey.S, VMod.None),
+        },
+        ["OneNote"] = new[]
+        {
+            new KeyBind("Undo", VKey.Z, Ctrl),
+            new KeyBind("Redo", VKey.Y, Ctrl),
+            new KeyBind("Cut", VKey.X, Ctrl),
+            new KeyBind("Copy", VKey.C, Ctrl),
+            new KeyBind("Paste", VKey.V, Ctrl),
+            new KeyBind("PastePlain", VKey.V, CtrlShift),
+            new KeyBind("Duplicate", VKey.D, Ctrl),
+            new KeyBind("Delete", VKey.Delete, VMod.None),
+            new KeyBind("Search", VKey.E, Ctrl),          // OneNote searches with Ctrl+E
+            new KeyBind("Palette", VKey.K, Ctrl),
+            new KeyBind("Fullscreen", VKey.F11, VMod.None),
+            new KeyBind("Shortcuts", VKey.F1, VMod.None),
+            new KeyBind("Escape", VKey.Escape, VMod.None),
+            // OneNote never steals bare letters — they belong to the text box.
+            new KeyBind("ToolPen", VKey.P, CtrlShift),
+            new KeyBind("ToolText", VKey.T, CtrlShift),
+            new KeyBind("ToolSelect", VKey.L, CtrlShift),
+            new KeyBind("ToolSpace", VKey.S, CtrlShift),
+        },
+        ["Photoshop"] = new[]
+        {
+            new KeyBind("Undo", VKey.Z, Ctrl),
+            new KeyBind("Redo", VKey.Z, CtrlShift),       // Photoshop steps forward with Ctrl+Shift+Z
+            new KeyBind("Cut", VKey.X, Ctrl),
+            new KeyBind("Copy", VKey.C, Ctrl),
+            new KeyBind("Paste", VKey.V, Ctrl),
+            new KeyBind("PastePlain", VKey.V, CtrlShift),
+            new KeyBind("Duplicate", VKey.J, Ctrl),       // "duplicate layer"
+            new KeyBind("Delete", VKey.Delete, VMod.None),
+            new KeyBind("Search", VKey.F, Ctrl),
+            new KeyBind("Palette", VKey.K, Ctrl),
+            new KeyBind("Fullscreen", VKey.F, VMod.None),
+            new KeyBind("Shortcuts", VKey.F1, VMod.None),
+            new KeyBind("Escape", VKey.Escape, VMod.None),
+            new KeyBind("ToolPen", VKey.B, VMod.None),    // brush
+            new KeyBind("ToolText", VKey.T, VMod.None),
+            new KeyBind("ToolSelect", VKey.L, VMod.None), // lasso
+            new KeyBind("ToolSpace", VKey.H, VMod.None),  // hand
+        },
+    };
+
+    // id -> resource key; the visible label comes from Loc so the picker and the
+    // F1 sheet both follow the chosen language.
+    private static readonly (string Id, string LocKey)[] KeyPresetOptions =
+    {
+        ("Quill", "KeyPreset.Quill"),
+        ("OneNote", "KeyPreset.OneNote"),
+        ("Photoshop", "KeyPreset.Photoshop"),
+    };
+
+    // Label + handler per command id, in the order the F1 sheet lists them.
+    private (string Id, string Label, TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs> Run)[] KeyCommands => new (string, string, TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs>)[]
+    {
+        ("Fullscreen", "Full screen", FullscreenAccel_Invoked),
+        ("Escape", "Close picker / leave full screen", EscAccel_Invoked),
+        ("Shortcuts", "This sheet", ShortcutsAccel_Invoked),
+        ("Search", "Search all notes", SearchAccel_Invoked),
+        ("Palette", "Command palette", PaletteAccel_Invoked),
+        ("Undo", "Undo", UndoAccel_Invoked),
+        ("Redo", "Redo", RedoAccel_Invoked),
+        ("Copy", "Copy (ink, images and text)", CopyAccel_Invoked),
+        ("Cut", "Cut", CutAccel_Invoked),
+        ("Paste", "Paste", PasteAccel_Invoked),
+        ("PastePlain", "Paste as plain text", PastePlainTextAccel_Invoked),
+        ("Duplicate", "Duplicate the selection", DuplicateAccel_Invoked),
+        ("Delete", "Remove the selection", DeleteAccel_Invoked),
+        ("ToolPen", "Pen tool", ToolPenAccel_Invoked),
+        ("ToolText", "Text tool", ToolTextAccel_Invoked),
+        ("ToolSelect", "Lasso tool", ToolSelectAccel_Invoked),
+        ("ToolSpace", "Insert-space tool", ToolSpaceAccel_Invoked),
+    };
+
+    private void ToolPenAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs a) => ToolAccel("Pen", a);
+    private void ToolTextAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs a) => ToolAccel("Text", a);
+    private void ToolSelectAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs a) => ToolAccel("Select", a);
+    private void ToolSpaceAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs a) => ToolAccel("FreeSpace", a);
+
+    private void ToolAccel(string tag, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        // Presets that bind bare letters must still let those letters be typed.
+        if (TextBoxFocused) { args.Handled = false; return; }
+        SelectTool(tag);
+        args.Handled = true;
+    }
+
+    // Combos Windows owns outright: binding one produces an accelerator that
+    // never fires, which is exactly the silent breakage this step must avoid.
+    private static bool IsReservedCombo(VKey k, VMod m)
+    {
+        if (m.HasFlag(VMod.Windows)) return true;
+        if (m.HasFlag(VMod.Menu) && (k == VKey.F4 || k == VKey.Tab || k == VKey.Escape)) return true;
+        if (m.HasFlag(Ctrl) && k == VKey.Escape) return true;
+        return false;
+    }
+
+    private static string ComboText(VKey k, VMod m)
+    {
+        var sb = new System.Text.StringBuilder();
+        if (m.HasFlag(Ctrl)) sb.Append("Ctrl+");
+        if (m.HasFlag(VMod.Menu)) sb.Append("Alt+");
+        if (m.HasFlag(VMod.Shift)) sb.Append("Shift+");
+        if (m.HasFlag(VMod.Windows)) sb.Append("Win+");
+        sb.Append(k switch
+        {
+            VKey.Escape => "Esc",
+            VKey.Delete => "Del",
+            _ => k.ToString()
+        });
+        return sb.ToString();
+    }
+
+    private static string KeyPresetId(string? s) =>
+        s != null && KeyPresets.ContainsKey(s) ? s : "Quill";
+
+    private static string KeyPresetLabel(string id) =>
+        Loc.T(KeyPresetOptions.FirstOrDefault(o => o.Id == id).LocKey ?? "KeyPreset.Quill");
+
+    // Rebuilds the live accelerators and the F1 sheet from the saved preset.
+    // Safe to call at any time — switching presets is just another call.
+    private void ApplyKeyPreset()
+    {
+        string id = KeyPresetId(_library.KeyPreset);
+        _library.KeyPreset = id;
+
+        RootGrid.KeyboardAccelerators.Clear();
+        var rows = new List<(string Combo, string Label)>();
+        var dropped = new List<string>();
+        var taken = new Dictionary<(VKey, VMod), string>();
+
+        var commands = KeyCommands;
+        foreach (var b in KeyPresets[id])
+        {
+            var cmd = commands.FirstOrDefault(c => c.Id == b.Id);
+            if (cmd.Run == null) continue;
+            string combo = ComboText(b.Key, b.Mods);
+
+            if (IsReservedCombo(b.Key, b.Mods))
+            {
+                dropped.Add($"{cmd.Label} — {combo} belongs to Windows, so it is unbound");
+                continue;
+            }
+            // First entry wins; the later one loses and says so on the F1 sheet
+            // rather than installing a second accelerator that never runs.
+            if (taken.TryGetValue((b.Key, b.Mods), out string? owner))
+            {
+                dropped.Add($"{cmd.Label} — {combo} already runs {owner}, so it is unbound");
+                continue;
+            }
+
+            taken[(b.Key, b.Mods)] = cmd.Label;
+            var acc = new KeyboardAccelerator { Key = b.Key, Modifiers = b.Mods };
+            acc.Invoked += cmd.Run;
+            RootGrid.KeyboardAccelerators.Add(acc);
+            rows.Add((combo, cmd.Label));
+        }
+
+        BuildShortcutsSheet(id, rows, dropped);
+    }
+
+    private void BuildShortcutsSheet(string id, List<(string Combo, string Label)> rows, List<string> dropped)
+    {
+        ShortcutsPresetLine.Text = $"{KeyPresetLabel(id)} layout — change it in Settings";
+        ShortcutsKeyRows.Children.Clear();
+
+        // Foreground is deliberately left unset: these rows are rebuilt only on a
+        // preset change, so a captured brush would survive a theme flip stale.
+        foreach (var (combo, label) in rows)
+        {
+            var tb = new TextBlock { FontSize = 13 };
+            tb.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = combo, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+            tb.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = "   " + label });
+            ShortcutsKeyRows.Children.Add(tb);
+        }
+        foreach (var d in dropped)
+            ShortcutsKeyRows.Children.Add(new TextBlock
+            {
+                Text = "! " + d,
+                FontSize = 12,
+                Opacity = 0.75,
+                TextWrapping = TextWrapping.Wrap
+            });
+    }
 
     // Search entry point on the gallery (#19-batch2) — reuses the one search flyout.
     private void GallerySearch_Click(object sender, RoutedEventArgs e)
@@ -6199,20 +7048,11 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     // ---- toolbar visibility (#topbar) ------------------------------------
     // Two independent filters: the user's own show/hide choices, and context
     // (pen-only buttons are pointless while the text or lasso tool is active).
-    private static readonly (string Key, string Label)[] OptionalTools =
+    // Element names only; the checkbox labels live in Strings as "Tool.<name>".
+    private static readonly string[] OptionalTools =
     {
-        ("ToolSpace",       "Free space"),
-        ("TouchDrawToggle", "Touch draw (pen mode)"),
-        ("ToolComment",     "Comments"),
-        ("ShapeBtn",        "Shapes & tables (pen mode)"),
-        ("MouseModeBtn",    "Mouse mode (pen mode)"),
-        ("BtnHistory",      "History & replay"),
-        ("VoiceBtn",        "Voice — recording & dictation"),
-        ("BtnAi",           "AI assistant"),
-        ("ZoomBtn",         "Zoom"),
-        ("PageSettingsBtn", "Page background & grid"),
-        ("ExportBtn",       "Export"),
-        ("BtnCalc",         "Calculator"),
+        "ToolSpace", "TouchDrawToggle", "ToolComment", "ShapeBtn", "MouseModeBtn",
+        "BtnHistory", "VoiceBtn", "BtnAi", "ZoomBtn", "PageSettingsBtn", "ExportBtn", "BtnCalc",
     };
 
     private void ApplyToolbarVisibility()
@@ -7087,9 +7927,14 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         CalcDeg.Visibility = sci ? Visibility.Visible : Visibility.Collapsed;
         Calc2nd.Visibility = sci ? Visibility.Visible : Visibility.Collapsed;
         CalcHyp.Visibility = sci ? Visibility.Visible : Visibility.Collapsed;
-        ProgHost.Visibility = m == "Programmer" ? Visibility.Visible : Visibility.Collapsed;
-        GraphHost.Visibility = m == "Graphing" ? Visibility.Visible : Visibility.Collapsed;
-        ConvHost.Visibility = m == "Converter" ? Visibility.Visible : Visibility.Collapsed;
+        // the mode hosts share one slot: the outgoing one must collapse on the
+        // spot or the panel jumps taller for the length of a fade
+        foreach (var (host, wanted) in new (FrameworkElement, bool)[]
+                 { (ProgHost, m == "Programmer"), (GraphHost, m == "Graphing"), (ConvHost, m == "Converter") })
+        {
+            if (!wanted) { host.Visibility = Visibility.Collapsed; host.Opacity = 1; }
+            else FadeIn(host, 150, pop: false, slideY: 8);
+        }
         CalcError.Text = "";
         if (m == "Graphing") GraphCanvas.Invalidate();
     }
@@ -8360,14 +9205,10 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
     private void BtnAudioRecording_Click(object sender, RoutedEventArgs e)
     {
-        if (BtnAudioRecording.IsChecked == true)
-        {
-            AudioFloatingPanel.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            AudioFloatingPanel.Visibility = Visibility.Collapsed;
-        }
+        // no slide: the panel is draggable, and a translate animation would
+        // snap it back off wherever the user parked it
+        if (BtnAudioRecording.IsChecked == true) FadeIn(AudioFloatingPanel, 160);
+        else FadeOut(AudioFloatingPanel, 130);
     }
 
 }

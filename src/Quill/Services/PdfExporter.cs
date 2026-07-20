@@ -9,7 +9,11 @@ public record PdfPageImage(int PixelWidth, int PixelHeight, byte[] Bgra8Pixels);
 public record PdfVectorPath(List<(float X, float Y)> Points, string Color, float Width, bool Closed, float Alpha);
 public record PdfVectorDot(float X, float Y, float R, string Color);
 public record PdfVectorImage(double X, double Y, double W, double H, int PixW, int PixH, byte[] Bgra8);
-public record PdfVectorText(float X, float Y, float Size, string Color, string Text, string Font);
+public record PdfVectorTextRun(string Text, float Size, string Font, bool Bold, bool Italic);
+// One visual line. Text/Size/Font mirror the first run so older single-format
+// consumers keep working; Runs carries the per-run formatting the emitters use.
+public record PdfVectorText(float X, float Y, float Size, string Color, string Text, string Font,
+                            List<PdfVectorTextRun>? Runs = null);
 public record PdfVectorPage(double Width, double Height, double OffsetX, double OffsetY, string Background,
                             List<PdfVectorPath> Paths, List<PdfVectorDot> Dots,
                             List<PdfVectorImage> Images, List<PdfVectorText> Texts);
@@ -118,12 +122,17 @@ public static class PdfExporter
         }
         void BeginObj() => offsets.Add(ms.Position);
 
+        // A line's runs may each name a different family, so walk runs not lines.
+        static IEnumerable<PdfVectorTextRun> RunsOf(PdfVectorText t) =>
+            t.Runs is { Count: > 0 } r ? r : new List<PdfVectorTextRun> { new(t.Text, t.Size, t.Font, false, false) };
+
         // 1. Find all unique fonts used across all pages
         var fontFamilies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var pg in pages)
             foreach (var t in pg.Texts)
-                if (!string.IsNullOrEmpty(t.Font))
-                    fontFamilies.Add(t.Font);
+                foreach (var r in RunsOf(t))
+                    if (!string.IsNullOrEmpty(r.Font))
+                        fontFamilies.Add(r.Font);
 
         var fontMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var fontObjectsList = new List<PdfFontResource>();
@@ -140,9 +149,10 @@ public static class PdfExporter
             var chars = new HashSet<char>();
             foreach (var pg in pages)
                 foreach (var t in pg.Texts)
-                    if (string.Equals(t.Font, fontName, StringComparison.OrdinalIgnoreCase))
-                        foreach (var c in t.Text)
-                            chars.Add(c);
+                    foreach (var r in RunsOf(t))
+                        if (string.Equals(r.Font, fontName, StringComparison.OrdinalIgnoreCase))
+                            foreach (var c in r.Text)
+                                chars.Add(c);
 
             var ttfBytes = FontSubsetter.SubsetFont(fontName, chars);
             if (ttfBytes != null)
@@ -295,18 +305,41 @@ public static class PdfExporter
 
             foreach (var t in pg.Texts)
             {
-                if (string.IsNullOrWhiteSpace(t.Text)) continue;
-                string fRes = "F0";
-                if (!string.IsNullOrEmpty(t.Font) && fontMap.TryGetValue(t.Font, out int fId))
-                {
-                    var matching = fontObjectsList.FirstOrDefault(x => x.FontId == fId);
-                    if (matching != null) fRes = matching.ResName;
-                }
+                var runs = RunsOf(t).ToList();
+                if (runs.All(r => string.IsNullOrWhiteSpace(r.Text))) continue;
 
-                sb.Append($"BT /{fRes} ").Append(Num(t.Size * k)).Append(" Tf ")
-                  .Append(Rgb(t.Color, "rg")).Append(' ')
-                  .Append($"1 0 0 1 {X(t.X)} {Y(t.Y)} Tm (")
-                  .Append(EscapePdfText(t.Text)).Append(") Tj ET\n");
+                // One BT block per line with Tm set once: each Tj advances the text
+                // matrix by its own string's width, so runs of differing size follow
+                // one another correctly without us measuring anything.
+                sb.Append("BT ").Append(Rgb(t.Color, "rg")).Append(' ')
+                  .Append(Rgb(t.Color, "RG")).Append(' ')
+                  .Append($"1 0 0 1 {X(t.X)} {Y(t.Y)} Tm\n");
+
+                bool boldOn = false;
+                foreach (var r in runs)
+                {
+                    if (r.Text.Length == 0) continue;
+                    string fRes = "F0";
+                    if (!string.IsNullOrEmpty(r.Font) && fontMap.TryGetValue(r.Font, out int fId))
+                    {
+                        var matching = fontObjectsList.FirstOrDefault(x => x.FontId == fId);
+                        if (matching != null) fRes = matching.ResName;
+                    }
+
+                    // FontSubsetter maps a family to a single file, so there is no bold
+                    // face to switch to; stroke the fill instead. Glyph advances come
+                    // from /Widths either way, so the run flow is unchanged.
+                    if (r.Bold != boldOn)
+                    {
+                        sb.Append(r.Bold ? $"{Num(r.Size * k * 0.03)} w 2 Tr\n" : "0 Tr\n");
+                        boldOn = r.Bold;
+                    }
+
+                    sb.Append($"/{fRes} ").Append(Num(r.Size * k)).Append(" Tf (")
+                      .Append(EscapePdfText(r.Text)).Append(") Tj\n");
+                }
+                if (boldOn) sb.Append("0 Tr\n");
+                sb.Append("ET\n");
             }
 
             byte[] raw = Encoding.ASCII.GetBytes(sb.ToString());
