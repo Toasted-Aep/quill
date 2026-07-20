@@ -581,7 +581,16 @@ public sealed partial class MainWindow : Window
             rim.SetActive(rimOn);
         }
         if (_reduceMotion || _library.GlowMode == "Off") _glowTimer.Stop();
-        else _glowTimer.Start();
+        else
+        {
+            _glowTimer.Start();
+            // Paint the first animated frame NOW rather than a whole tick (40ms)
+            // later: when the glow surface is (re)built — or the gallery first
+            // appears right after this runs in FinishStartup — the animated modes
+            // set their brush-level state this frame instead of showing a static
+            // rim until the timer catches up (#anim).
+            GlowTick();
+        }
     }
 
     private void GlowTick()
@@ -3772,7 +3781,10 @@ public sealed partial class MainWindow : Window
             if (glow == null)
             {
                 glow = MakeColorGlowBrush(col);
-                glow.Opacity = 0;
+                // First light on the NEXT frame, not a ramp interval (33ms) later:
+                // start at the first eased step so the glow appears immediately and
+                // the ramp keeps easing it the rest of the way in (#anim).
+                glow.Opacity = 0.11;
                 joined = false;
                 SetBorder(glow, restThickness);   // paint-only hover: geometry never changes
             }
@@ -3846,7 +3858,9 @@ public sealed partial class MainWindow : Window
         {
             var cover = new Image { Stretch = Stretch.UniformToFill, Opacity = 0 };
             stripGrid.Children.Add(cover);
-            LoadThumbAsync(cover, coverPage, 376, 120, true, 0.92);
+            // Composite the preview over the notebook colour (not the dark page bg)
+            // so the card keeps reading as its identity colour (#coverfix).
+            LoadThumbAsync(cover, coverPage, 376, 120, true, 0.92, col);
         }
 
         if (nb.CoverEmoji != null)
@@ -4108,10 +4122,10 @@ public sealed partial class MainWindow : Window
     // Fills a gallery Image from the disk thumbnail cache. Fire-and-forget by
     // design: the card is already on screen and simply gains its picture, and
     // every failure path leaves the caller's own fallback showing.
-    private async void LoadThumbAsync(Image target, NotePage page, int w, int h, bool crop, double opacity)
+    private async void LoadThumbAsync(Image target, NotePage page, int w, int h, bool crop, double opacity, Color? bgOverride = null)
     {
         byte[]? bytes;
-        try { bytes = await ThumbnailCache.GetAsync(page, w, h, crop); }
+        try { bytes = await ThumbnailCache.GetAsync(page, w, h, crop, bgOverride); }
         catch { return; }
         if (bytes == null || bytes.Length == 0) return;
 

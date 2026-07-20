@@ -6470,7 +6470,7 @@ public sealed class InkSurface : UserControl
     /// wants, since a wide cover strip of an empty page corner shows nothing.
     /// Returns null when there is nothing to draw, so callers can fall back.
     /// </summary>
-    public static byte[]? RenderPageThumbnail(NotePage page, int targetWidth, int targetHeight, bool cropToContent = false)
+    public static byte[]? RenderPageThumbnail(NotePage page, int targetWidth, int targetHeight, bool cropToContent = false, Color? backgroundOverride = null)
     {
         var device = CanvasDevice.GetSharedDevice();
         if (device == null) return null;
@@ -6484,8 +6484,20 @@ public sealed class InkSurface : UserControl
             using var rt = new CanvasRenderTarget(device, targetWidth, targetHeight, 96);
             using (var ds = rt.CreateDrawingSession())
             {
-                var bg = ColorUtil.Parse(page.Background);
+                // A cover thumbnail composites the ink OVER the notebook's identity
+                // colour, not the page's own (usually dark) background, so the card
+                // reads as "notebook colour with a preview of ink on it" (#coverfix).
+                var bg = backgroundOverride ?? ColorUtil.Parse(page.Background);
                 ds.Clear(bg);
+
+                // With an override the page's ink can vanish against the notebook
+                // colour, so pick ONE contrast ink from the fill's luminance and
+                // draw the whole preview in it; the true page keeps its own colours.
+                Color? forceInk = backgroundOverride is Color ob
+                    ? ((0.299 * ob.R + 0.587 * ob.G + 0.114 * ob.B) / 255.0 > 0.5
+                        ? Color.FromArgb(255, 0x1B, 0x1A, 0x18)
+                        : Color.FromArgb(255, 0xF4, 0xF2, 0xEC))
+                    : (Color?)null;
 
                 // content framing fits exactly; the origin framing letterboxes
                 float scale = cropToContent
@@ -6496,13 +6508,13 @@ public sealed class InkSurface : UserControl
 
                 foreach (var sh in page.Shapes)
                 {
-                    var color = ColorUtil.Parse(sh.Color);
+                    var color = forceInk ?? ColorUtil.Parse(sh.Color);
                     ds.DrawRectangle(new Rect(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H)), color, Math.Max(1f, sh.Size));
                 }
 
                 foreach (var s in page.Strokes)
                 {
-                    var color = ColorUtil.Parse(s.Color);
+                    var color = forceInk ?? ColorUtil.Parse(s.Color);
                     for (int i = 1; i < s.Points.Count; i++)
                     {
                         ds.DrawLine(new Vector2(s.Points[i - 1].X, s.Points[i - 1].Y), new Vector2(s.Points[i].X, s.Points[i].Y), color, s.Size);
@@ -6512,9 +6524,9 @@ public sealed class InkSurface : UserControl
                 // Text carries no colour of its own here — the RTF run colours are
                 // dropped by StripRtf — so contrast against the page background.
                 double lum = (0.299 * bg.R + 0.587 * bg.G + 0.114 * bg.B) / 255.0;
-                var textCol = lum > 0.5
+                var textCol = forceInk ?? (lum > 0.5
                     ? Color.FromArgb(255, 0x1B, 0x1A, 0x18)
-                    : Color.FromArgb(255, 0xF4, 0xF2, 0xEC);
+                    : Color.FromArgb(255, 0xF4, 0xF2, 0xEC));
                 foreach (var t in page.Texts)
                 {
                     string txt = StripRtf(t.Rtf);
