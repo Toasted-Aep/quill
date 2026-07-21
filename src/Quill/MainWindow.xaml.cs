@@ -539,6 +539,93 @@ public sealed partial class MainWindow : Window
                     _glowClients.RemoveAt(i);
     }
 
+    // The window that owns the timer, so the static per-card hover helpers can
+    // ask the live engine what mode it is in and how far through it is.
+    private static MainWindow? _glowHost;
+
+    // Hover glows are born mid-animation, and that used to read as lag three
+    // times over: the brush started at an opacity below the visible threshold,
+    // it only JOINED the engine once the fade-in had fully finished — so the
+    // mode's animation appeared to "load" a third of a second after the pointer
+    // arrived — and an animated mode could then park it on a dark part of its
+    // cycle (Circulate's travelling head needs a whole 4.5s lap to come round).
+    // So a hover brush is now seeded with the live phase SYNCHRONOUSLY on enter,
+    // is built with a much brighter alpha floor, and is never driven below
+    // HoverGlowFloor: the animation rides on top of an already-lit card (#anim).
+    private const double HoverSeedOpacity = 0.55;
+    private const double HoverGlowFloor = 0.72;
+
+    // weak keys: a card torn down while hovered must not pin its brush alive
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<LinearGradientBrush, object> _hoverGlows = new();
+    private static bool IsHoverGlow(LinearGradientBrush b) => _hoverGlows.TryGetValue(b, out _);
+    private static bool GlowReducedMotion => _glowHost?._reduceMotion ?? false;
+
+    // Circulate's head is in one place at a time, so a card hovered mid-lap gets
+    // its OWN phase offset: the head starts on that card and travels on from
+    // there instead of the card waiting out the rest of the lap in the dark.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<LinearGradientBrush, object> _glowPhase = new();
+    private static double PhaseOffset(LinearGradientBrush b) => _glowPhase.TryGetValue(b, out var o) ? (double)o : 0.0;
+
+    private static void SeedHoverGlow(LinearGradientBrush b)
+    {
+        _hoverGlows.AddOrUpdate(b, b);
+        _glowHost?.SeedHoverGlowPhase(b);
+    }
+
+    // Handed back once the fade-out has finished. The brush lives as long as its
+    // card, so its designed stops have to be put back — an animated mode rebuilt
+    // them in place, and re-seeding on the next hover would otherwise snapshot
+    // the animated stops as if they were the original.
+    private static void ReleaseHoverGlow(LinearGradientBrush b)
+    {
+        _hoverGlows.Remove(b);
+        _glowPhase.Remove(b);
+        if (!_circSnapshot.TryGetValue(b, out var snap)) return;
+        try
+        {
+            b.GradientStops.Clear();
+            foreach (var (o, c) in snap)
+                b.GradientStops.Add(new GradientStop { Offset = o, Color = c });
+            b.SpreadMethod = GradientSpreadMethod.Pad;
+            b.StartPoint = new Point(0, 0);
+            b.EndPoint = new Point(1, 1);
+        }
+        catch { }
+        _circSnapshot.Remove(b);
+    }
+
+    // Paints the current frame of the live mode onto a brush that has only just
+    // been lit, so it never has to wait for the next 40ms tick — or, far worse,
+    // for a travelling light to reach it — to look like the rest of the app.
+    // Mirrors what GlowTick does for every mode that animates the stops.
+    private void SeedHoverGlowPhase(LinearGradientBrush b)
+    {
+        if (_reduceMotion) return;
+        switch (_library.GlowMode)
+        {
+            case "Circulate":
+                // start the head mid-card, then carry on with the global lap
+                double band = (_glowT / 4.5) % 1.0;
+                _glowPhase.Remove(b);
+                _glowPhase.Add(b, 0.5 - band);
+                CirculateStops(b, 0.5);
+                break;
+            case "Aurora":
+                EnsureAuroraStops(b);
+                double drift = (_glowT / 11.0) % 1.0;
+                double span = 1.0 + 0.30 * Math.Sin(_glowT * (2 * Math.PI / 17.0));
+                b.StartPoint = new Point(drift, drift * 0.6);
+                b.EndPoint = new Point(drift + span, drift * 0.6 + span);
+                break;
+            case "Shimmer":
+                EnsureShimmerStops(b);
+                break;
+            case "Ember":
+                EnsureEmberStops(b);
+                break;
+        }
+    }
+
     private static IEnumerable<LinearGradientBrush> GlowBrushes()
     {
         var res = Application.Current.Resources;
@@ -559,6 +646,7 @@ public sealed partial class MainWindow : Window
 
     private void ApplyGlowMode()
     {
+        _glowHost = this;   // the static hover helpers read the mode through this
         if (_glowTimer == null)
         {
             _glowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
@@ -631,7 +719,8 @@ public sealed partial class MainWindow : Window
             // chrome). Stops stay in [0,1], so nothing can wash out (#4).
             double band = (_glowT / 4.5) % 1.0;   // brisk enough that the motion clearly reads
             var seen = new HashSet<LinearGradientBrush>();
-            foreach (var b in GlowBrushes()) { seen.Add(b); CirculateStops(b, band); }
+            // hover glows carry their own offset so the head starts on the card
+            foreach (var b in GlowBrushes()) { seen.Add(b); CirculateStops(b, (band + PhaseOffset(b)) % 1.0); }
             PruneSnapshots(seen);
         }
         else if (mode == "Aurora")
@@ -708,7 +797,11 @@ public sealed partial class MainWindow : Window
             if (rt >= 1) _rippleStartMs = -1;
             else opacity *= 0.25 + 0.75 * rt;
         }
-        foreach (var b in GlowBrushes()) b.Opacity = opacity;
+        // a hovered card keeps a floor under it: Breathe's trough and Ember's
+        // lulls are fine on the shared rims, but the card under the pointer has
+        // to stay obviously lit for as long as it is hovered (#anim)
+        foreach (var b in GlowBrushes())
+            b.Opacity = IsHoverGlow(b) ? Math.Max(opacity, HoverGlowFloor) : opacity;
         if (mode == "Off" && _rippleStartMs < 0) _glowTimer!.Stop();
     }
 
@@ -741,7 +834,11 @@ public sealed partial class MainWindow : Window
                 double intensity = behindHead < 0.42
                     ? Math.Pow(1 - behindHead / 0.42, 2.2)       // long accelerating tail
                     : 0;                                          // faint far side
-                byte a = (byte)Math.Clamp(orig.A * (0.10 + 1.25 * intensity), 0, 255);
+                // the shared rims may go nearly dark between passes; a hover glow
+                // may not — it is lit the moment you point at the card and stays
+                // lit, with the head simply riding over that baseline (#anim)
+                double floor = IsHoverGlow(b) ? 0.62 : 0.10;
+                byte a = (byte)Math.Clamp(orig.A * (floor + 1.25 * intensity), 0, 255);
                 b.GradientStops.Add(new GradientStop { Offset = off, Color = Color.FromArgb(a, orig.R, orig.G, orig.B) });
             }
             b.SpreadMethod = GradientSpreadMethod.Repeat;
@@ -764,10 +861,13 @@ public sealed partial class MainWindow : Window
     }
 
     // hover glows come and go — drop snapshots of brushes that left the engine
-    // so the dictionary can't pin them alive forever
+    // so the dictionary can't pin them alive forever. A hover glow seeded on
+    // enter is not in the engine yet and must be spared, or it would be
+    // re-snapshotted on top of its own animated stops; ReleaseHoverGlow drops it
+    // when the fade-out finishes (#anim).
     private static void PruneSnapshots(HashSet<LinearGradientBrush> seen)
     {
-        foreach (var dead in _circSnapshot.Keys.Where(k => !seen.Contains(k)).ToList())
+        foreach (var dead in _circSnapshot.Keys.Where(k => !seen.Contains(k) && !IsHoverGlow(k)).ToList())
             _circSnapshot.Remove(dead);
     }
 
@@ -3849,11 +3949,21 @@ public sealed partial class MainWindow : Window
         }
         // One brush + one timer for the element's whole lifetime: the glow eases
         // IN on enter and OUT on exit, and a re-entry mid-fade simply reverses
-        // direction instead of stacking brushes/timers (#anim).
-        LinearGradientBrush? glow = null;
+        // direction instead of stacking brushes/timers (#anim). The brush is built
+        // WITH the card, not on first hover, so pointing at a card costs nothing
+        // but a seed and a repaint.
+        var glow = MakeColorGlowBrush(col);
         Microsoft.UI.Dispatching.DispatcherQueueTimer? ramp = null;
         double target = 0;
         bool joined = false;
+        bool lit = false;       // the glow brush is currently painted on the border
+
+        void Extinguish()
+        {
+            SetBorder(restBrush, restThickness);
+            ReleaseHoverGlow(glow);   // hands the brush back and restores its designed stops
+            lit = false;
+        }
 
         void EnsureRamp()
         {
@@ -3862,9 +3972,10 @@ public sealed partial class MainWindow : Window
             ramp.Interval = TimeSpan.FromMilliseconds(33);
             ramp.Tick += (_, _) =>
             {
-                if (glow == null) { ramp!.Stop(); return; }
-                // out is a touch slower than in — the classic ease asymmetry
-                double step = target > glow.Opacity ? 0.11 : -0.07;
+                if (!lit) { ramp!.Stop(); return; }
+                // in is brisk — from the seed the card is fully lit inside ~100ms —
+                // while out stays slow: the classic ease asymmetry
+                double step = target > glow.Opacity ? 0.22 : -0.07;
                 double next = glow.Opacity + step;
                 if ((step > 0 && next >= target) || (step < 0 && next <= target)) next = target;
                 glow.Opacity = next;
@@ -3876,33 +3987,49 @@ public sealed partial class MainWindow : Window
                 else if (next <= 0)
                 {
                     ramp!.Stop();
-                    SetBorder(restBrush, restThickness);
-                    glow = null;
+                    Extinguish();
                 }
             };
         }
 
         el.PointerEntered += (_, _) =>
         {
-            if (glow == null)
+            // Lit AND already animating on the frame the pointer arrives. Seeding is
+            // synchronous: it paints the live phase of the current mode onto the
+            // brush and gives it a bright full-perimeter baseline, so there is no
+            // dark period to wait out and no "the animation loads a moment later".
+            // The previous attempt only raised the starting opacity, which could not
+            // help — the brush did not join the engine until the fade-in had FINISHED
+            // (~300ms), and with an animated mode there was no light at the card yet
+            // to make brighter (#anim).
+            SeedHoverGlow(glow);
+            if (!lit)
             {
-                glow = MakeColorGlowBrush(col);
-                // First light on the NEXT frame, not a ramp interval (33ms) later:
-                // start at the first eased step so the glow appears immediately and
-                // the ramp keeps easing it the rest of the way in (#anim).
-                glow.Opacity = 0.11;
-                joined = false;
+                glow.Opacity = HoverSeedOpacity;
+                lit = true;
                 SetBorder(glow, restThickness);   // paint-only hover: geometry never changes
             }
             target = 1;
+            if (GlowReducedMotion)
+            {
+                // reduced motion: the end state, immediately, with no ramp at all
+                ramp?.Stop();
+                glow.Opacity = 1;
+                if (!joined) { RegisterGlowBrush(glow); joined = true; }
+                return;
+            }
+            // the engine is NOT joined yet: the ramp owns Opacity until it reaches
+            // 1, and the seed above already put the mode's live frame on the stops,
+            // so there is nothing visible to wait for in the meantime
             EnsureRamp();
             ramp!.Start();
         };
         el.PointerExited += (_, _) =>
         {
-            if (glow == null) { SetBorder(restBrush, restThickness); return; }
+            if (!lit) { SetBorder(restBrush, restThickness); return; }
             if (joined) { UnregisterGlowBrush(glow); joined = false; }   // let the fade own the opacity
             target = 0;
+            if (GlowReducedMotion) { ramp?.Stop(); Extinguish(); return; }
             EnsureRamp();
             ramp!.Start();
         };
@@ -4423,13 +4550,32 @@ public sealed partial class MainWindow : Window
     }
 
     // Trash entry point (U3): shows only when the bin has content.
+    // Drawn in the same language as the toolbar icons: a 24-unit box, filled
+    // bands about 1.6 wide, square corners, and a hollow body punched out by a
+    // second subpath, exactly like the shape and select icons.
+    private const string TrashIconData =
+        "M3.4 5.2 H20.6 V6.8 H3.4 Z M9.6 2.8 H14.4 V5.2 H9.6 Z " +                  // lid + handle
+        "M5.6 7.6 H18.4 L17.3 21.2 H6.7 Z M7.3 9.2 L8.2 19.6 H15.8 L16.7 9.2 Z " +  // tapered can, hollowed
+        "M10.2 11.2 H11.4 L11.1 17.8 H9.9 Z M12.6 11.2 H13.8 L14.1 17.8 H12.9 Z";   // two ribs
+
     private void BuildTrashRow()
     {
         int n = LibraryStore.Trash.Items.Count;
         if (n == 0) return;
+        // the Viewbox takes the 24-unit drawing down to the 12pt text beside it
+        // without giving up any of the vector's crispness
+        var icon = new PathIcon { Width = 24, Height = 24 };
+        try { icon.Data = ParseGeometry(TrashIconData); } catch { }
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
+        row.Children.Add(new Viewbox
+        {
+            Child = icon, Width = 14, Height = 14, Stretch = Stretch.Uniform,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        row.Children.Add(new TextBlock { Text = $"Trash ({n})", VerticalAlignment = VerticalAlignment.Center });
         var btn = new Button
         {
-            Content = $"🗑 Trash ({n})",
+            Content = row,
             FontSize = 12,
             Margin = new Thickness(0, 0, 0, 12)
         };
@@ -7770,11 +7916,14 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
             try { Walk(root); } catch { }
         // the minimal-UI and full-screen buttons live in the pinned strip, not
-        // the scrolling top bar; the gallery search button sits beside New
+        // the scrolling top bar; the gallery icon buttons sit beside New
         // notebook / Close, which must stay normal size — enlarge only these
-        // three so they match the rest of touch mode (#touch)
+        // four so they match the rest of touch mode (#touch). The app-menu
+        // button gets exactly the search button's numbers: the two are meant to
+        // be the same size in every mode (#topbar)
         try { Walk(TopBarPinned); } catch { }
         try { GallerySearchBtn.MinWidth = on ? 44 : 0; GallerySearchBtn.MinHeight = on ? 42 : 0; } catch { }
+        try { GalleryAppMenuBtn.MinWidth = on ? 44 : 0; GalleryAppMenuBtn.MinHeight = on ? 42 : 0; } catch { }
     }
 
 
