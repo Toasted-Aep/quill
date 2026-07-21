@@ -1,7 +1,5 @@
 # Quill — pen-first lecture notes for Windows 11
 
-*(formerly LectureInk, briefly Fluent Ink — fully renamed to Quill. On first run the app automatically adopts existing notes from `Documents\LectureInk`; nothing is deleted.)*
-
 A WinUI 3 (Windows App SDK) drawing/notes app built from your design spec.
 Ink rendering is custom, on a GPU-accelerated Win2D canvas, with pressure-aware
 pen physics, so it feels closer to OneNote than to a toy canvas demo.
