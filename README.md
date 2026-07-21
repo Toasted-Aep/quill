@@ -22,8 +22,6 @@ is conservative.
 
 Notes are auto-saved to `Documents\Quill\library.json` by default (debounced,
 plus on page switch and app close); the folder is configurable in Settings.
-Existing `Documents\LectureInk` or `%LocalAppData%\LectureInk` notes are
-migrated automatically on first run (copy-only — originals stay put).
 
 ## What's implemented (vs the spec)
 
