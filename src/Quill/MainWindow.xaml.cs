@@ -400,6 +400,9 @@ public sealed partial class MainWindow : Window
     // The half of the constructor that needs a real library.
     private void FinishStartup()
     {
+        // age out old trash entries (30-day retention); the service refuses to
+        // run this until a real library load has succeeded
+        try { LibraryStore.AutoPurgeExpired(); } catch { }
         _libraryReady = true;
 
         Loc.SetLanguage(_library.Language);   // before anything captures a string (#C7)
@@ -2977,6 +2980,7 @@ public sealed partial class MainWindow : Window
 
     private void SwitchToPage(Notebook nb, Section sec, NotePage page)
     {
+        if (_uiReady) { LibraryStore.RecordRecent(_library, nb, sec, page); ScheduleSave(); }
         bool pageChanged = !ReferenceEquals(_curPage, page);
         if (_curPage != null) SaveNow();
         _curNb = nb;
@@ -3151,21 +3155,21 @@ public sealed partial class MainWindow : Window
         switch (content)
         {
             case Notebook nb:
-                if (!await ConfirmAsync($"Delete notebook “{nb.Name}” and everything inside it?")) return;
-                _library.Notebooks.Remove(nb);
+                if (!await ConfirmAsync($"Move notebook “{nb.Name}” and everything inside it to the trash?")) return;
+                LibraryStore.DeleteNotebook(_library, nb);
                 break;
             case Section sec:
             {
-                if (!await ConfirmAsync($"Delete section “{sec.Name}” and all its pages?")) return;
+                if (!await ConfirmAsync($"Move section “{sec.Name}” and all its pages to the trash?")) return;
                 var owner = _library.Notebooks.FirstOrDefault(n => n.Sections.Contains(sec));
-                owner?.Sections.Remove(sec);
+                if (owner != null) LibraryStore.DeleteSection(_library, owner, sec);
                 break;
             }
             case NotePage pg:
             {
-                if (!await ConfirmAsync($"Delete page “{pg.Name}”?")) return;
-                var (_, sec2) = FindContext(pg);
-                sec2?.Pages.Remove(pg);
+                if (!await ConfirmAsync($"Move page “{pg.Name}” to the trash?")) return;
+                var (nb2, sec2) = FindContext(pg);
+                if (nb2 != null && sec2 != null) LibraryStore.DeletePage(_library, nb2, sec2, pg);
                 break;
             }
         }
@@ -3789,6 +3793,9 @@ public sealed partial class MainWindow : Window
         }
         else GalleryContinueBtn.Visibility = Visibility.Collapsed;
 
+        BuildRecentsRow();
+        BuildTrashRow();
+
         // ungrouped notebooks first
         var ungrouped = _library.Notebooks.Where(n => string.IsNullOrEmpty(n.Folder)).ToList();
         if (ungrouped.Count > 0) GalleryHost.Children.Add(BuildCardRow(ungrouped));
@@ -4091,8 +4098,8 @@ public sealed partial class MainWindow : Window
         delItem.Click += async (_, _) =>
         {
             if (!await EnsureUnlockedAsync(nb)) return;
-            if (!await ConfirmAsync($"Delete notebook “{nb.Name}” and everything inside it?")) return;
-            _library.Notebooks.Remove(nb);
+            if (!await ConfirmAsync($"Move notebook “{nb.Name}” and everything inside it to the trash?")) return;
+            LibraryStore.DeleteNotebook(_library, nb);
             _selNode = null;
             BuildTree();
             if (_curPage == null || FindContext(_curPage).Item1 == null) OpenFirstPage();
@@ -4180,8 +4187,8 @@ public sealed partial class MainWindow : Window
             var delSec = new MenuFlyoutItem { Text = "Delete section…" };
             delSec.Click += async (_, _) =>
             {
-                if (!await ConfirmAsync($"Delete section “{s0.Name}” and all its pages?")) return;
-                nb.Sections.Remove(s0);
+                if (!await ConfirmAsync($"Move section “{s0.Name}” and all its pages to the trash?")) return;
+                LibraryStore.DeleteSection(_library, nb, s0);
                 ScheduleSave(); BuildTree();
                 if (_curPage != null && FindContext(_curPage).Item1 == null) OpenFirstPage();
                 BuildGallery();
@@ -4297,8 +4304,9 @@ public sealed partial class MainWindow : Window
         var del = new MenuFlyoutItem { Text = "Delete page…" };
         del.Click += async (_, _) =>
         {
-            if (!await ConfirmAsync($"Delete page “{pg.Name}”?")) return;
-            sec.Pages.Remove(pg);
+            if (!await ConfirmAsync($"Move page “{pg.Name}” to the trash?")) return;
+            var (delNb, _) = FindContext(pg);
+            if (delNb != null) LibraryStore.DeletePage(_library, delNb, sec, pg);
             ScheduleSave(); BuildTree();
             if (ReferenceEquals(pg, _curPage)) OpenFirstPage();
             BuildGallery();
@@ -4343,6 +4351,151 @@ public sealed partial class MainWindow : Window
         BuildTree();
         ScheduleSave();
         BuildGallery();   // stay in the picker so a page can be added next
+    }
+
+    // "Recently opened" strip (U3): up to eight chips under the header, straight
+    // back into a page without drilling notebook -> section -> page.
+    private void BuildRecentsRow()
+    {
+        var recents = _library.Recents;
+        if (recents == null || recents.Count == 0) return;
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        int shown = 0;
+        foreach (var r in recents)
+        {
+            if (shown >= 8) break;
+            var (nb, sec, pg) = FindPageById(r.PageId);
+            if (pg == null || nb!.PasswordHash != null) continue;   // gone or locked: skip
+            shown++;
+
+            var chip = new Button
+            {
+                Padding = new Thickness(12, 8, 12, 8),
+                CornerRadius = new CornerRadius(10),
+                Content = new StackPanel
+                {
+                    Children =
+                    {
+                        new TextBlock { Text = pg.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                                        TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 160 },
+                        new TextBlock { Text = $"{nb.Name} ▸ {sec!.Name}", FontSize = 11, Opacity = 0.65,
+                                        TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 160 },
+                    }
+                }
+            };
+            var target = (nb, sec, pg);
+            chip.Click += (_, _) => { SwitchToPage(target.nb, target.sec!, target.pg); CloseGallery(); };
+            row.Children.Add(chip);
+        }
+        if (shown == 0) return;
+
+        GalleryHost.Children.Add(new TextBlock
+        {
+            Text = "Recent",
+            FontSize = 15,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 6)
+        });
+        var scroll = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalScrollMode = ScrollMode.Auto,
+            Content = row,
+            Margin = new Thickness(0, 0, 0, 14)
+        };
+        GalleryHost.Children.Add(scroll);
+    }
+
+    // Trash entry point (U3): shows only when the bin has content.
+    private void BuildTrashRow()
+    {
+        int n = LibraryStore.Trash.Items.Count;
+        if (n == 0) return;
+        var btn = new Button
+        {
+            Content = $"🗑 Trash ({n})",
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 12)
+        };
+        btn.Click += async (_, _) => await ShowTrashDialogAsync();
+        GalleryHost.Children.Add(btn);
+    }
+
+    private async System.Threading.Tasks.Task ShowTrashDialogAsync()
+    {
+        var listPanel = new StackPanel { Spacing = 6 };
+
+        void Rebuild()
+        {
+            listPanel.Children.Clear();
+            foreach (var entry in LibraryStore.Trash.Items.OrderByDescending(x => x.DeletedTicks).ToList())
+            {
+                var row = new Grid { ColumnSpacing = 8 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var age = DateTime.UtcNow - new DateTime(entry.DeletedTicks, DateTimeKind.Utc);
+                var info = new StackPanel();
+                info.Children.Add(new TextBlock { Text = entry.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+                info.Children.Add(new TextBlock
+                {
+                    Text = $"{entry.Kind} · deleted {(age.TotalDays >= 1 ? $"{(int)age.TotalDays}d" : age.TotalHours >= 1 ? $"{(int)age.TotalHours}h" : "just now")} ago",
+                    FontSize = 11,
+                    Opacity = 0.65
+                });
+                row.Children.Add(info);
+
+                var restore = new Button { Content = "Restore", FontSize = 12 };
+                Grid.SetColumn(restore, 1);
+                var entryId = entry.Id;
+                restore.Click += (_, _) =>
+                {
+                    if (LibraryStore.Restore(_library, entryId))
+                    {
+                        BuildTree(); BuildGallery(); Rebuild();
+                        ShowStatus($"Restored “{entry.Name}”.");
+                    }
+                };
+                row.Children.Add(restore);
+
+                var purge = new Button { Content = "Delete forever", FontSize = 12 };
+                Grid.SetColumn(purge, 2);
+                purge.Click += (_, _) => { LibraryStore.Purge(entryId); Rebuild(); };
+                row.Children.Add(purge);
+
+                listPanel.Children.Add(row);
+            }
+            if (listPanel.Children.Count == 0)
+                listPanel.Children.Add(new TextBlock { Text = "The trash is empty.", Opacity = 0.7 });
+        }
+        Rebuild();
+
+        var dlg = new ContentDialog
+        {
+            Title = "Trash",
+            Content = new ScrollViewer { Content = listPanel, MaxHeight = 420 },
+            PrimaryButtonText = "Empty trash",
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        dlg.PrimaryButtonClick += async (_, dargs) =>
+        {
+            var deferral = dargs.GetDeferral();
+            dargs.Cancel = true;   // stay open; the list refreshes to show it emptied
+            if (await ConfirmAsync("Permanently delete everything in the trash? This cannot be undone."))
+            {
+                LibraryStore.PurgeAll();
+                Rebuild();
+                BuildGallery();
+            }
+            deferral.Complete();
+        };
+        await dlg.ShowAsync();
+        BuildGallery();   // the trash button count may have changed
     }
 
     private async void GalleryContinue_Click(object sender, RoutedEventArgs e)
