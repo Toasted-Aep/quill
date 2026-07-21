@@ -298,6 +298,8 @@
                                         <x:String>Dotted</x:String>
                                         <x:String>Squares</x:String>
                                         <x:String>Row lines</x:String>
+                                        <x:String>Isometric</x:String>
+                                        <x:String>Triangle</x:String>
                                     </RadioButtons>
                                     <TextBlock x:Uid="GridSpacingHeader" Text="Grid spacing" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
                                     <Slider x:Name="SpacingSlider" Minimum="16" Maximum="96" StepFrequency="4"
@@ -311,6 +313,30 @@
                                         <Button Tag="#E2A93B" Click="GridColorPreset_Click" ToolTipService.ToolTip="Amber" Width="34" Height="28" Background="#E2A93B" BorderBrush="Gray"/>
                                         <Button Tag="#D96D6D" Click="GridColorPreset_Click" ToolTipService.ToolTip="Red" Width="34" Height="28" Background="#D96D6D" BorderBrush="Gray"/>
                                     </StackPanel>
+                                    <TextBlock Text="Perspective guides" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
+                                    <ComboBox x:Name="PerspectiveCombo" HorizontalAlignment="Stretch" SelectionChanged="PerspectiveCombo_SelectionChanged">
+                                        <ComboBoxItem Content="Off"/>
+                                        <ComboBoxItem Content="1-point"/>
+                                        <ComboBoxItem Content="2-point"/>
+                                        <ComboBoxItem Content="3-point"/>
+                                    </ComboBox>
+                                    <Button x:Name="PerspectiveRecentreBtn" Click="PerspectiveRecentre_Click" FontSize="12"
+                                            HorizontalAlignment="Stretch" Content="Re-centre vanishing points on this view"/>
+
+                                    <TextBlock Text="Page size" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold"/>
+                                    <ComboBox x:Name="PageSizeCombo" HorizontalAlignment="Stretch" SelectionChanged="PageSizeCombo_SelectionChanged"/>
+                                    <CheckBox x:Name="PageLandscapeCheck" Content="Landscape" Checked="PageLandscape_Changed" Unchecked="PageLandscape_Changed"/>
+                                    <StackPanel x:Name="CustomSizePanel" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
+                                        <NumberBox x:Name="CustomWidthBox" Header="W" Minimum="1" Maximum="20000" Width="86" SpinButtonPlacementMode="Compact" ValueChanged="CustomSize_Changed"/>
+                                        <NumberBox x:Name="CustomHeightBox" Header="H" Minimum="1" Maximum="20000" Width="86" SpinButtonPlacementMode="Compact" ValueChanged="CustomSize_Changed"/>
+                                        <ComboBox x:Name="CustomUnitCombo" Header="Unit" Width="72" SelectionChanged="CustomSize_Changed">
+                                            <ComboBoxItem Content="px"/>
+                                            <ComboBoxItem Content="mm"/>
+                                            <ComboBoxItem Content="in"/>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <TextBlock x:Name="PageSizeInfo" FontSize="11" Opacity="0.65" TextWrapping="Wrap"/>
+
                                     <Button Click="SetDefaultGrid_Click" FontSize="12" HorizontalAlignment="Stretch"
                                             Content="Use this grid for all new pages"/>
                                     <Button Click="SetNotebookDefaultGrid_Click" FontSize="12" HorizontalAlignment="Stretch"

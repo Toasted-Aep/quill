@@ -400,6 +400,9 @@ public sealed partial class MainWindow : Window
     // The half of the constructor that needs a real library.
     private void FinishStartup()
     {
+        // age out old trash entries (30-day retention); the service refuses to
+        // run this until a real library load has succeeded
+        try { LibraryStore.AutoPurgeExpired(); } catch { }
         _libraryReady = true;
 
         Loc.SetLanguage(_library.Language);   // before anything captures a string (#C7)
@@ -419,6 +422,10 @@ public sealed partial class MainWindow : Window
 
         // restore the last-selected eraser mode (#13-batch2)
         Surface.EraserMode = _library.LastEraserMode == "Point" ? EraserMode.Point : EraserMode.Object;
+        Surface.EraserStyle = _library.LastEraserStyle;
+        Surface.EraserSize = _library.EraserSize;
+        // the eyedropper shortcut samples wherever the pointer last was
+        Surface.PointerMoved += (_, pe) => _lastCanvasPt = pe.GetCurrentPoint(Surface).Position;
         // the legacy combined pen-repair switch migrates to the split toggles (#6-batch4)
         if (_library.PenRepair) { _library.PenRepairDots = true; _library.PenRepairBridge = true; _library.PenRepair = false; }
         Surface.PenRepairDots = _library.PenRepairDots;
@@ -2219,6 +2226,45 @@ public sealed partial class MainWindow : Window
         rbObject.Checked += (_, _) => { Surface.EraserMode = EraserMode.Object; _library.LastEraserMode = "Object"; ScheduleSave(); SelectTool("Eraser"); };
         panel.Children.Add(rbPoint);
         panel.Children.Add(rbObject);
+
+        // Point-mode styles (E1): how the geometry under the eraser is treated.
+        panel.Children.Add(new TextBlock { Text = "Point eraser style", FontSize = 12, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 6, 0, 0) });
+        var styleNames = new (EraserStyle St, string Label)[]
+        {
+            (EraserStyle.HardMask, "Hard - crisp removal"),
+            (EraserStyle.SoftMask, "Soft - feathered edge"),
+            (EraserStyle.Slice,    "Slice - cut strokes in two"),
+            (EraserStyle.Nudge,    "Nudge - push ink aside"),
+        };
+        foreach (var (st, label) in styleNames)
+        {
+            var rb = new RadioButton { Content = label, FontSize = 12, GroupName = "EraserStyle", IsChecked = Surface.EraserStyle == st };
+            rb.Checked += (_, _) =>
+            {
+                Surface.EraserStyle = st;
+                _library.LastEraserStyle = st;
+                ScheduleSave();
+                SelectTool("Eraser");
+            };
+            panel.Children.Add(rb);
+        }
+
+        var sizeLabel = new TextBlock { FontSize = 12, Margin = new Thickness(0, 6, 0, 0) };
+        var sizeSlider = new Slider { Minimum = 0, Maximum = 80, StepFrequency = 2, Value = _library.EraserSize };
+        void SyncSizeLabel() => sizeLabel.Text = _library.EraserSize <= 0
+            ? "Eraser size: auto (follows pen size)"
+            : $"Eraser size: {_library.EraserSize:0}";
+        SyncSizeLabel();
+        sizeSlider.ValueChanged += (_, args) =>
+        {
+            _library.EraserSize = args.NewValue;
+            Surface.EraserSize = args.NewValue;
+            SyncSizeLabel();
+            ScheduleSave();
+        };
+        panel.Children.Add(sizeLabel);
+        panel.Children.Add(sizeSlider);
+
         fly.Content = panel;
         chip.ContextFlyout = fly;
 
@@ -2428,7 +2474,7 @@ public sealed partial class MainWindow : Window
             var modeCombo = new ComboBox
             {
                 Header = "Pressure response",
-                ItemsSource = new[] { "Soft (thickens easily)", "Hard (needs pressure)", "Custom curve" },
+                ItemsSource = new[] { "Soft (thickens easily)", "Hard (needs pressure)", "Custom curve", "Simple (2 points)" },
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
             var curveHost = new Grid { Width = cvW, Height = cvH, HorizontalAlignment = HorizontalAlignment.Left };
@@ -2528,24 +2574,78 @@ public sealed partial class MainWindow : Window
             };
             curveHost.PointerReleased += (s2, e2) => { dragKnob = -1; curveHost.ReleasePointerCaptures(); };
 
+            // Simple mode (#curve v2): two pinned control points - output at zero
+            // pressure and output at full pressure - plus a bend. Baked down to
+            // the legacy 6-float list so the renderer needs no change.
+            var simplePanel = new StackPanel { Spacing = 4, Visibility = Visibility.Collapsed };
+            var zeroLabel = new TextBlock { FontSize = 12 };
+            var zeroSlider = new Slider { Minimum = 0, Maximum = 100, StepFrequency = 5 };
+            var fullLabel = new TextBlock { FontSize = 12 };
+            var fullSlider = new Slider { Minimum = 10, Maximum = 100, StepFrequency = 5 };
+            var bendLabel = new TextBlock { FontSize = 12 };
+            var bendSlider = new Slider { Minimum = -100, Maximum = 100, StepFrequency = 10 };
+            simplePanel.Children.Add(zeroLabel); simplePanel.Children.Add(zeroSlider);
+            simplePanel.Children.Add(fullLabel); simplePanel.Children.Add(fullSlider);
+            simplePanel.Children.Add(bendLabel); simplePanel.Children.Add(bendSlider);
+
+            void SyncSimpleLabels()
+            {
+                zeroLabel.Text = $"Width at zero pressure: {zeroSlider.Value:0}%";
+                fullLabel.Text = $"Width at full pressure: {fullSlider.Value:0}%";
+                bendLabel.Text = bendSlider.Value switch
+                {
+                    < -5 => $"Response: eases in ({-bendSlider.Value:0}%)",
+                    > 5 => $"Response: jumps early ({bendSlider.Value:0}%)",
+                    _ => "Response: linear"
+                };
+            }
+            void LoadSimple()
+            {
+                var r = p.PressureResponse ?? PressureCurve2.FromLegacy(p.PressureCurve) ?? new PressureCurve2();
+                zeroSlider.Value = Math.Clamp(r.Out0 * 100, 0, 100);
+                fullSlider.Value = Math.Clamp(r.Out100 * 100, 10, 100);
+                bendSlider.Value = Math.Clamp(r.Bend * 100, -100, 100);
+                SyncSimpleLabels();
+            }
+            void CommitSimple()
+            {
+                var r = p.PressureResponse ??= new PressureCurve2();
+                r.Out0 = (float)zeroSlider.Value / 100f;
+                r.Out100 = (float)fullSlider.Value / 100f;
+                r.Bend = (float)bendSlider.Value / 100f;
+                p.PressureCurve = r.ToLegacyPoints();
+                if (_activePresetId == p.Id) Surface.PenPressureCurve = p.PressureCurve;
+                SyncSimpleLabels();
+                ScheduleSave();
+            }
+
             bool syncingCurve = true;
-            modeCombo.SelectedIndex = p.PressureCurve is { Count: >= 6 } ? 2
+            modeCombo.SelectedIndex = p.PressureResponse != null ? 3
+                : p.PressureCurve is { Count: >= 6 } ? 2
                 : p.PressureCurve is { Count: >= 3 } lm ? (lm[1] > 0.5f ? 0 : 1)
                 : 2;   // null (linear) shows Custom with the identity diagonal, untouched until dragged
             curveHost.Visibility = modeCombo.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
             curveCaption.Visibility = curveHost.Visibility;
+            simplePanel.Visibility = modeCombo.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
+            if (modeCombo.SelectedIndex == 3) LoadSimple();
+            zeroSlider.ValueChanged += (_, _) => { if (!syncingCurve) CommitSimple(); };
+            fullSlider.ValueChanged += (_, _) => { if (!syncingCurve) CommitSimple(); };
+            bendSlider.ValueChanged += (_, _) => { if (!syncingCurve) CommitSimple(); };
             modeCombo.SelectionChanged += (_, _) =>
             {
                 if (syncingCurve) return;
+                if (modeCombo.SelectedIndex != 3) p.PressureResponse = null;
                 switch (modeCombo.SelectedIndex)
                 {
                     case 0: p.PressureCurve = new List<float> { 0f, 0.6f, 1f }; break;
                     case 1: p.PressureCurve = new List<float> { 0f, 0.2f, 1f }; break;
                     case 2: CommitCurve(); break;   // adopt the drawn points
+                    case 3: LoadSimple(); CommitSimple(); break;
                 }
                 if (_activePresetId == p.Id) Surface.PenPressureCurve = p.PressureCurve;
                 curveHost.Visibility = modeCombo.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
                 curveCaption.Visibility = curveHost.Visibility;
+                simplePanel.Visibility = modeCombo.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
                 ScheduleSave();
             };
             syncingCurve = false;
@@ -2554,6 +2654,7 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(modeCombo);
             panel.Children.Add(curveHost);
             panel.Children.Add(curveCaption);
+            panel.Children.Add(simplePanel);
 
             panel.Children.Add(new TextBlock
             {
@@ -2888,6 +2989,7 @@ public sealed partial class MainWindow : Window
 
     private void SwitchToPage(Notebook nb, Section sec, NotePage page)
     {
+        if (_uiReady) { LibraryStore.RecordRecent(_library, nb, sec, page); ScheduleSave(); }
         bool pageChanged = !ReferenceEquals(_curPage, page);
         if (_curPage != null) SaveNow();
         _curNb = nb;
@@ -2918,8 +3020,9 @@ public sealed partial class MainWindow : Window
         Surface.PendingFontSize = efSize;
 
         _syncingUi = true;
-        GridRadios.SelectedIndex = (int)page.Grid;
+        GridRadios.SelectedIndex = Math.Max(0, Array.IndexOf(GridKindMap, page.Grid));
         SpacingSlider.Value = page.GridSpacing;
+        SyncPageSizeUi(page);
         BgPicker.Color = ColorUtil.Parse(page.Background);
         _syncingUi = false;
 
@@ -3061,21 +3164,21 @@ public sealed partial class MainWindow : Window
         switch (content)
         {
             case Notebook nb:
-                if (!await ConfirmAsync($"Delete notebook “{nb.Name}” and everything inside it?")) return;
-                _library.Notebooks.Remove(nb);
+                if (!await ConfirmAsync($"Move notebook “{nb.Name}” and everything inside it to the trash?")) return;
+                LibraryStore.DeleteNotebook(_library, nb);
                 break;
             case Section sec:
             {
-                if (!await ConfirmAsync($"Delete section “{sec.Name}” and all its pages?")) return;
+                if (!await ConfirmAsync($"Move section “{sec.Name}” and all its pages to the trash?")) return;
                 var owner = _library.Notebooks.FirstOrDefault(n => n.Sections.Contains(sec));
-                owner?.Sections.Remove(sec);
+                if (owner != null) LibraryStore.DeleteSection(_library, owner, sec);
                 break;
             }
             case NotePage pg:
             {
-                if (!await ConfirmAsync($"Delete page “{pg.Name}”?")) return;
-                var (_, sec2) = FindContext(pg);
-                sec2?.Pages.Remove(pg);
+                if (!await ConfirmAsync($"Move page “{pg.Name}” to the trash?")) return;
+                var (nb2, sec2) = FindContext(pg);
+                if (nb2 != null && sec2 != null) LibraryStore.DeletePage(_library, nb2, sec2, pg);
                 break;
             }
         }
@@ -3699,6 +3802,9 @@ public sealed partial class MainWindow : Window
         }
         else GalleryContinueBtn.Visibility = Visibility.Collapsed;
 
+        BuildRecentsRow();
+        BuildTrashRow();
+
         // ungrouped notebooks first
         var ungrouped = _library.Notebooks.Where(n => string.IsNullOrEmpty(n.Folder)).ToList();
         if (ungrouped.Count > 0) GalleryHost.Children.Add(BuildCardRow(ungrouped));
@@ -4006,8 +4112,8 @@ public sealed partial class MainWindow : Window
         delItem.Click += async (_, _) =>
         {
             if (!await EnsureUnlockedAsync(nb)) return;
-            if (!await ConfirmAsync($"Delete notebook “{nb.Name}” and everything inside it?")) return;
-            _library.Notebooks.Remove(nb);
+            if (!await ConfirmAsync($"Move notebook “{nb.Name}” and everything inside it to the trash?")) return;
+            LibraryStore.DeleteNotebook(_library, nb);
             _selNode = null;
             BuildTree();
             if (_curPage == null || FindContext(_curPage).Item1 == null) OpenFirstPage();
@@ -4095,8 +4201,8 @@ public sealed partial class MainWindow : Window
             var delSec = new MenuFlyoutItem { Text = "Delete section…" };
             delSec.Click += async (_, _) =>
             {
-                if (!await ConfirmAsync($"Delete section “{s0.Name}” and all its pages?")) return;
-                nb.Sections.Remove(s0);
+                if (!await ConfirmAsync($"Move section “{s0.Name}” and all its pages to the trash?")) return;
+                LibraryStore.DeleteSection(_library, nb, s0);
                 ScheduleSave(); BuildTree();
                 if (_curPage != null && FindContext(_curPage).Item1 == null) OpenFirstPage();
                 BuildGallery();
@@ -4212,8 +4318,9 @@ public sealed partial class MainWindow : Window
         var del = new MenuFlyoutItem { Text = "Delete page…" };
         del.Click += async (_, _) =>
         {
-            if (!await ConfirmAsync($"Delete page “{pg.Name}”?")) return;
-            sec.Pages.Remove(pg);
+            if (!await ConfirmAsync($"Move page “{pg.Name}” to the trash?")) return;
+            var (delNb, _) = FindContext(pg);
+            if (delNb != null) LibraryStore.DeletePage(_library, delNb, sec, pg);
             ScheduleSave(); BuildTree();
             if (ReferenceEquals(pg, _curPage)) OpenFirstPage();
             BuildGallery();
@@ -4258,6 +4365,240 @@ public sealed partial class MainWindow : Window
         BuildTree();
         ScheduleSave();
         BuildGallery();   // stay in the picker so a page can be added next
+    }
+
+    // "Recently opened" strip (U3): up to eight chips under the header, straight
+    // back into a page without drilling notebook -> section -> page.
+    private void BuildRecentsRow()
+    {
+        var recents = _library.Recents;
+        if (recents == null || recents.Count == 0) return;
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        int shown = 0;
+        foreach (var r in recents)
+        {
+            if (shown >= 8) break;
+            var (nb, sec, pg) = FindPageById(r.PageId);
+            if (pg == null || nb!.PasswordHash != null) continue;   // gone or locked: skip
+            shown++;
+
+            var chip = new Button
+            {
+                Padding = new Thickness(12, 8, 12, 8),
+                CornerRadius = new CornerRadius(10),
+                Content = new StackPanel
+                {
+                    Children =
+                    {
+                        new TextBlock { Text = pg.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                                        TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 160 },
+                        new TextBlock { Text = $"{nb.Name} ▸ {sec!.Name}", FontSize = 11, Opacity = 0.65,
+                                        TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 160 },
+                    }
+                }
+            };
+            var target = (nb, sec, pg);
+            chip.Click += (_, _) => { SwitchToPage(target.nb, target.sec!, target.pg); CloseGallery(); };
+            row.Children.Add(chip);
+        }
+        if (shown == 0) return;
+
+        GalleryHost.Children.Add(new TextBlock
+        {
+            Text = "Recent",
+            FontSize = 15,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 6)
+        });
+        var scroll = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalScrollMode = ScrollMode.Auto,
+            Content = row,
+            Margin = new Thickness(0, 0, 0, 14)
+        };
+        GalleryHost.Children.Add(scroll);
+    }
+
+    // Trash entry point (U3): shows only when the bin has content.
+    private void BuildTrashRow()
+    {
+        int n = LibraryStore.Trash.Items.Count;
+        if (n == 0) return;
+        var btn = new Button
+        {
+            Content = $"🗑 Trash ({n})",
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 12)
+        };
+        btn.Click += async (_, _) => await ShowTrashDialogAsync();
+        GalleryHost.Children.Add(btn);
+    }
+
+    private async System.Threading.Tasks.Task ShowTrashDialogAsync()
+    {
+        var listPanel = new StackPanel { Spacing = 6 };
+
+        void Rebuild()
+        {
+            listPanel.Children.Clear();
+            foreach (var entry in LibraryStore.Trash.Items.OrderByDescending(x => x.DeletedTicks).ToList())
+            {
+                var row = new Grid { ColumnSpacing = 8 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var age = DateTime.UtcNow - new DateTime(entry.DeletedTicks, DateTimeKind.Utc);
+                var info = new StackPanel();
+                info.Children.Add(new TextBlock { Text = entry.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+                info.Children.Add(new TextBlock
+                {
+                    Text = $"{entry.Kind} · deleted {(age.TotalDays >= 1 ? $"{(int)age.TotalDays}d" : age.TotalHours >= 1 ? $"{(int)age.TotalHours}h" : "just now")} ago",
+                    FontSize = 11,
+                    Opacity = 0.65
+                });
+                row.Children.Add(info);
+
+                var restore = new Button { Content = "Restore", FontSize = 12 };
+                Grid.SetColumn(restore, 1);
+                var entryId = entry.Id;
+                restore.Click += (_, _) =>
+                {
+                    if (LibraryStore.Restore(_library, entryId))
+                    {
+                        BuildTree(); BuildGallery(); Rebuild();
+                        ShowStatus($"Restored “{entry.Name}”.");
+                    }
+                };
+                row.Children.Add(restore);
+
+                var purge = new Button { Content = "Delete forever", FontSize = 12 };
+                Grid.SetColumn(purge, 2);
+                purge.Click += (_, _) => { LibraryStore.Purge(entryId); Rebuild(); };
+                row.Children.Add(purge);
+
+                listPanel.Children.Add(row);
+            }
+            if (listPanel.Children.Count == 0)
+                listPanel.Children.Add(new TextBlock { Text = "The trash is empty.", Opacity = 0.7 });
+        }
+        Rebuild();
+
+        var dlg = new ContentDialog
+        {
+            Title = "Trash",
+            Content = new ScrollViewer { Content = listPanel, MaxHeight = 420 },
+            PrimaryButtonText = "Empty trash",
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = RootGrid.XamlRoot
+        };
+        dlg.PrimaryButtonClick += async (_, dargs) =>
+        {
+            var deferral = dargs.GetDeferral();
+            dargs.Cancel = true;   // stay open; the list refreshes to show it emptied
+            if (await ConfirmAsync("Permanently delete everything in the trash? This cannot be undone."))
+            {
+                LibraryStore.PurgeAll();
+                Rebuild();
+                BuildGallery();
+            }
+            deferral.Complete();
+        };
+        await dlg.ShowAsync();
+        BuildGallery();   // the trash button count may have changed
+    }
+
+    // Capture dialog for a shortcut rebind (U4). Shows the chord live; refuses
+    // Windows-reserved combos; a combo already in use warns with its owner and
+    // asks the SAME chord again to confirm stealing (the loser is explicitly
+    // unbound rather than silently shadowed).
+    private async System.Threading.Tasks.Task CaptureBindingAsync(string commandId, string commandLabel)
+    {
+        var status = new TextBlock { FontSize = 12, Opacity = 0.75, TextWrapping = TextWrapping.Wrap };
+        var chordText = new TextBlock { FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                                        HorizontalAlignment = HorizontalAlignment.Center, Text = "…" };
+        var body = new StackPanel
+        {
+            Spacing = 10, MinWidth = 300,
+            Children =
+            {
+                new TextBlock { Text = $"Press the new shortcut for “{commandLabel}”.", TextWrapping = TextWrapping.Wrap },
+                chordText, status
+            }
+        };
+        var dlg = new ContentDialog
+        {
+            Title = "Rebind shortcut",
+            Content = body,
+            CloseButtonText = "Cancel",
+            SecondaryButtonText = "Remove binding",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = RootGrid.XamlRoot
+        };
+
+        (VKey Key, VMod Mods)? pendingSteal = null;
+        string? stealVictim = null;
+
+        void OnKeyDown(object s2, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs ke)
+        {
+            var key = (VKey)ke.Key;
+            if (key is VKey.Control or VKey.Shift or VKey.Menu or VKey.LeftWindows or VKey.RightWindows) return;
+            ke.Handled = true;
+
+            var mods = VMod.None;
+            var down = Windows.UI.Core.CoreVirtualKeyStates.Down;
+            if ((Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VKey.Control) & down) == down) mods |= Ctrl;
+            if ((Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VKey.Shift) & down) == down) mods |= VMod.Shift;
+            if ((Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VKey.Menu) & down) == down) mods |= VMod.Menu;
+
+            chordText.Text = ComboText(key, mods);
+
+            if (IsReservedCombo(key, mods))
+            {
+                status.Text = "That combination belongs to Windows and cannot be used.";
+                return;
+            }
+
+            var owner = EffectiveBinds(KeyPresetId(_library.KeyPreset))
+                .FirstOrDefault(b => b.Key == key && b.Mods == mods && b.Id != commandId);
+            if (owner != null && (pendingSteal == null || pendingSteal.Value.Key != key || pendingSteal.Value.Mods != mods))
+            {
+                string ownerLabel = KeyCommands.FirstOrDefault(c => c.Id == owner.Id).Label ?? owner.Id;
+                status.Text = $"{ComboText(key, mods)} already runs “{ownerLabel}”. Press it again to move it here (that command becomes unbound), or press a different combination.";
+                pendingSteal = (key, mods);
+                stealVictim = owner.Id;
+                return;
+            }
+
+            _library.KeyOverrides.RemoveAll(o => o.CommandId == commandId);
+            _library.KeyOverrides.Add(new KeyOverride { CommandId = commandId, Key = key.ToString(), Mods = ModsToString(mods) });
+            if (pendingSteal != null && stealVictim != null &&
+                pendingSteal.Value.Key == key && pendingSteal.Value.Mods == mods)
+            {
+                _library.KeyOverrides.RemoveAll(o => o.CommandId == stealVictim);
+                _library.KeyOverrides.Add(new KeyOverride { CommandId = stealVictim, Disabled = true });
+            }
+            ApplyKeyPreset();
+            ScheduleSave();
+            dlg.Hide();
+        }
+
+        body.KeyDown += OnKeyDown;
+        dlg.Opened += (_, _) => body.Focus(FocusState.Programmatic);
+        body.IsTabStop = true;
+
+        var result = await dlg.ShowAsync();
+        if (result == ContentDialogResult.Secondary)
+        {
+            _library.KeyOverrides.RemoveAll(o => o.CommandId == commandId);
+            _library.KeyOverrides.Add(new KeyOverride { CommandId = commandId, Disabled = true });
+            ApplyKeyPreset();
+            ScheduleSave();
+        }
     }
 
     private async void GalleryContinue_Click(object sender, RoutedEventArgs e)
@@ -4487,6 +4828,78 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(keyBox);
         panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Keys.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- per-command rebinding (U4) ----
+        var customList = new StackPanel { Spacing = 4 };
+        var customExp = new Expander
+        {
+            Header = "Customise shortcuts",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Content = customList
+        };
+
+        void RebuildCustomRows()
+        {
+            customList.Children.Clear();
+            string pid = KeyPresetId(_library.KeyPreset);
+            var eff = EffectiveBinds(pid);
+            foreach (var cmd in KeyCommands)
+            {
+                var row = new Grid { ColumnSpacing = 8 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                row.Children.Add(new TextBlock { Text = cmd.Label, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                                                 TextTrimming = TextTrimming.CharacterEllipsis });
+
+                var ov = _library.KeyOverrides.FirstOrDefault(o => o.CommandId == cmd.Id);
+                var bind = eff.FirstOrDefault(b => b.Id == cmd.Id);   // KeyBind is a record class: null = unbound
+                string comboText = ov is { Disabled: true } ? "unbound"
+                    : bind != null ? ComboText(bind.Key, bind.Mods) : "unbound";
+                var comboLabel = new TextBlock
+                {
+                    Text = comboText, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                    Opacity = ov != null ? 1.0 : 0.65,
+                    FontWeight = ov != null ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal
+                };
+                Grid.SetColumn(comboLabel, 1);
+                row.Children.Add(comboLabel);
+
+                var rebind = new Button { Content = "Rebind", FontSize = 11, Padding = new Thickness(8, 3, 8, 3) };
+                Grid.SetColumn(rebind, 2);
+                var cmdId = cmd.Id; var cmdLabel = cmd.Label;
+                rebind.Click += async (_, _) => { await CaptureBindingAsync(cmdId, cmdLabel); RebuildCustomRows(); };
+                row.Children.Add(rebind);
+
+                var reset = new Button { Content = "Reset", FontSize = 11, Padding = new Thickness(8, 3, 8, 3),
+                                         Visibility = ov != null ? Visibility.Visible : Visibility.Collapsed };
+                Grid.SetColumn(reset, 3);
+                reset.Click += (_, _) =>
+                {
+                    _library.KeyOverrides.RemoveAll(o => o.CommandId == cmdId);
+                    ApplyKeyPreset(); ScheduleSave(); RebuildCustomRows();
+                };
+                row.Children.Add(reset);
+
+                customList.Children.Add(row);
+            }
+
+            var resetAll = new Button { Content = "Reset all to preset defaults", FontSize = 12,
+                                        Margin = new Thickness(0, 6, 0, 0),
+                                        Visibility = _library.KeyOverrides.Count > 0 ? Visibility.Visible : Visibility.Collapsed };
+            resetAll.Click += (_, _) =>
+            {
+                _library.KeyOverrides.Clear();
+                ApplyKeyPreset(); ScheduleSave(); RebuildCustomRows();
+            };
+            customList.Children.Add(resetAll);
+        }
+        RebuildCustomRows();
+        keyBox.SelectionChanged += (_, _) => RebuildCustomRows();   // presets change the base the rows show
+        panel.Children.Add(customExp);
 
         // ---- theme mode (#10-roadmap) ----
         var themeBox = new ComboBox { Header = Loc.T("Settings.Theme.Header"), Width = 220 };
@@ -5298,12 +5711,144 @@ public sealed partial class MainWindow : Window
         ShowStatus("New pages in this notebook will start with this grid.");
     }
 
+    // Single owner of the picker-row <-> GridType relation (CONCEPTS-DIRECTION
+    // 7.4): the enum serialises by integer, so the picker must never be a bare
+    // index cast that a reordered list could silently repoint.
+    private static readonly GridType[] GridKindMap =
+        { GridType.None, GridType.Dotted, GridType.Square, GridType.Lines, GridType.Isometric, GridType.Triangle };
+
     private void GridRadios_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_syncingUi || _curPage == null || GridRadios.SelectedIndex < 0) return;
-        _curPage.Grid = (GridType)GridRadios.SelectedIndex;
+        if (GridRadios.SelectedIndex < GridKindMap.Length)
+            _curPage.Grid = GridKindMap[GridRadios.SelectedIndex];
         Surface.Refresh();
         ScheduleSave();
+    }
+
+    // ---- page size + perspective (U1, CONCEPTS-DIRECTION 7) ----
+
+    private void EnsurePageSizeCombo()
+    {
+        if (PageSizeCombo.Items.Count > 0) return;
+        foreach (var d in PageSizes.Table)
+            PageSizeCombo.Items.Add(new ComboBoxItem { Content = d.Name, Tag = d.Preset });
+    }
+
+    private void SyncPageSizeUi(NotePage page)
+    {
+        EnsurePageSizeCombo();
+        int idx = Array.FindIndex(PageSizes.Table, d => d.Preset == page.PageSize);
+        PageSizeCombo.SelectedIndex = Math.Max(0, idx);
+        PageLandscapeCheck.IsChecked = page.PageLandscape;
+        CustomSizePanel.Visibility = page.PageSize == PageSizePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
+        CustomWidthBox.Value = page.PageWidth > 0 ? page.PageWidth : 800;
+        CustomHeightBox.Value = page.PageHeight > 0 ? page.PageHeight : 1100;
+        CustomUnitCombo.SelectedIndex = (int)page.PageUnit;
+        PerspectiveCombo.SelectedIndex = Math.Clamp(page.Perspective?.Vps.Count ?? 0, 0, 3);
+        PerspectiveRecentreBtn.Visibility = page.Perspective == null ? Visibility.Collapsed : Visibility.Visible;
+        UpdatePageSizeInfo(page);
+    }
+
+    private void UpdatePageSizeInfo(NotePage page)
+    {
+        if (PageSizes.TryResolve(page, out double w, out double h))
+            PageSizeInfo.Text = $"{w:0} x {h:0} world units ({w / 96.0:0.##} x {h / 96.0:0.##} in)";
+        else
+            PageSizeInfo.Text = "Infinite canvas - no page boundary.";
+    }
+
+    private void PageSizeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingUi || _curPage == null) return;
+        if ((PageSizeCombo.SelectedItem as ComboBoxItem)?.Tag is not PageSizePreset preset) return;
+        _curPage.PageSize = preset;
+        CustomSizePanel.Visibility = preset == PageSizePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
+        if (preset == PageSizePreset.Custom && _curPage.PageWidth <= 0)
+        {
+            _curPage.PageWidth = CustomWidthBox.Value;
+            _curPage.PageHeight = CustomHeightBox.Value;
+            _curPage.PageUnit = (PageSizeUnit)Math.Max(0, CustomUnitCombo.SelectedIndex);
+        }
+        UpdatePageSizeInfo(_curPage);
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    private void PageLandscape_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_syncingUi || _curPage == null) return;
+        _curPage.PageLandscape = PageLandscapeCheck.IsChecked == true;
+        UpdatePageSizeInfo(_curPage);
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    private void CustomSize_Changed(object sender, object e)
+    {
+        if (_syncingUi || _curPage == null || _curPage.PageSize != PageSizePreset.Custom) return;
+        if (!double.IsNaN(CustomWidthBox.Value)) _curPage.PageWidth = CustomWidthBox.Value;
+        if (!double.IsNaN(CustomHeightBox.Value)) _curPage.PageHeight = CustomHeightBox.Value;
+        _curPage.PageUnit = (PageSizeUnit)Math.Max(0, CustomUnitCombo.SelectedIndex);
+        UpdatePageSizeInfo(_curPage);
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    private void PerspectiveCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingUi || _curPage == null || PerspectiveCombo.SelectedIndex < 0) return;
+        int vps = PerspectiveCombo.SelectedIndex;   // 0 = off, else VP count
+        if (vps == 0)
+        {
+            _curPage.Perspective = null;
+        }
+        else
+        {
+            _curPage.Perspective ??= new PerspectiveDef();
+            PlacePerspectivePoints(_curPage.Perspective, vps);
+        }
+        PerspectiveRecentreBtn.Visibility = _curPage.Perspective == null ? Visibility.Collapsed : Visibility.Visible;
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    private void PerspectiveRecentre_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curPage?.Perspective == null) return;
+        PlacePerspectivePoints(_curPage.Perspective, _curPage.Perspective.Vps.Count);
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    // Sensible starting geometry from the current view: horizon through the view
+    // centre, VPs spread wide so guide fans cross the page usefully. Dragging the
+    // pins on canvas is a later increment; re-centre covers repositioning.
+    private void PlacePerspectivePoints(PerspectiveDef def, int vpCount)
+    {
+        float z = Surface.ViewZoom;
+        var off = Surface.ViewOffset;
+        double vw = Surface.ActualWidth, vh = Surface.ActualHeight;
+        double cx = (vw * 0.5 - off.X) / z, cy = (vh * 0.5 - off.Y) / z;
+        double halfW = vw * 0.5 / z;
+
+        def.HorizonY = cy;
+        def.Vps.Clear();
+        switch (Math.Clamp(vpCount, 1, 3))
+        {
+            case 1:
+                def.Vps.Add(new CanvasPoint(cx, cy));
+                break;
+            case 2:
+                def.Vps.Add(new CanvasPoint(cx - halfW * 1.3, cy));
+                def.Vps.Add(new CanvasPoint(cx + halfW * 1.3, cy));
+                break;
+            case 3:
+                def.Vps.Add(new CanvasPoint(cx - halfW * 1.3, cy));
+                def.Vps.Add(new CanvasPoint(cx + halfW * 1.3, cy));
+                def.Vps.Add(new CanvasPoint(cx, cy + vh / z * 1.4));
+                break;
+        }
     }
 
     private void GridColorPreset_Click(object sender, RoutedEventArgs e)
@@ -5664,6 +6209,7 @@ public sealed partial class MainWindow : Window
             new KeyBind("ToolText", VKey.T, VMod.None),
             new KeyBind("ToolSelect", VKey.L, VMod.None),
             new KeyBind("ToolSpace", VKey.S, VMod.None),
+            new KeyBind("Eyedrop", VKey.I, VMod.None),
         },
         ["OneNote"] = new[]
         {
@@ -5684,6 +6230,7 @@ public sealed partial class MainWindow : Window
             new KeyBind("ToolPen", VKey.P, CtrlShift),
             new KeyBind("ToolText", VKey.T, CtrlShift),
             new KeyBind("ToolSelect", VKey.L, CtrlShift),
+            new KeyBind("Eyedrop", VKey.I, CtrlShift),
             new KeyBind("ToolSpace", VKey.S, CtrlShift),
         },
         ["Photoshop"] = new[]
@@ -5705,6 +6252,7 @@ public sealed partial class MainWindow : Window
             new KeyBind("ToolText", VKey.T, VMod.None),
             new KeyBind("ToolSelect", VKey.L, VMod.None), // lasso
             new KeyBind("ToolSpace", VKey.H, VMod.None),  // hand
+            new KeyBind("Eyedrop", VKey.I, VMod.None),
         },
     };
 
@@ -5737,7 +6285,30 @@ public sealed partial class MainWindow : Window
         ("ToolText", "Text tool", ToolTextAccel_Invoked),
         ("ToolSelect", "Lasso tool", ToolSelectAccel_Invoked),
         ("ToolSpace", "Insert-space tool", ToolSpaceAccel_Invoked),
+        ("Eyedrop", "Pick the colour under the pointer", EyedropAccel_Invoked),
     };
+
+    // Eyedropper (U2): samples the authored colour under the last pointer
+    // position on the canvas and makes it the active pen's colour. Logical
+    // sampling lives in InkSurface.SampleColorAt.
+    private Windows.Foundation.Point _lastCanvasPt;
+
+    private void EyedropAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (TextBoxFocused) { args.Handled = false; return; }
+        args.Handled = true;
+        var c = Surface.SampleColorAt(new System.Numerics.Vector2((float)_lastCanvasPt.X, (float)_lastCanvasPt.Y));
+        if (c == null) return;
+        var preset = ActivePreset();
+        if (preset != null)
+        {
+            preset.Color = ColorUtil.ToHex(c.Value);
+            BuildPenStrip();
+            ScheduleSave();
+        }
+        Surface.PenColor = c.Value;
+        ShowStatus($"Picked {ColorUtil.ToHex(c.Value)}");
+    }
 
     private void ToolPenAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs a) => ToolAccel("Pen", a);
     private void ToolTextAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs a) => ToolAccel("Text", a);
@@ -5797,7 +6368,7 @@ public sealed partial class MainWindow : Window
         var taken = new Dictionary<(VKey, VMod), string>();
 
         var commands = KeyCommands;
-        foreach (var b in KeyPresets[id])
+        foreach (var b in EffectiveBinds(id))
         {
             var cmd = commands.FirstOrDefault(c => c.Id == b.Id);
             if (cmd.Run == null) continue;
@@ -5824,6 +6395,42 @@ public sealed partial class MainWindow : Window
         }
 
         BuildShortcutsSheet(id, rows, dropped);
+    }
+
+    // Preset binds with the user's per-command overrides layered on (U4).
+    // Overrides come FIRST so a user rebind wins any combo tie against a preset
+    // entry - the losing preset bind lands on the F1 sheet's unbound list.
+    private List<KeyBind> EffectiveBinds(string presetId)
+    {
+        var eff = new List<KeyBind>();
+        var overridden = new HashSet<string>();
+        foreach (var ov in _library.KeyOverrides)
+        {
+            overridden.Add(ov.CommandId);
+            if (ov.Disabled) continue;
+            if (Enum.TryParse<VKey>(ov.Key, out var k))
+                eff.Add(new KeyBind(ov.CommandId, k, ParseMods(ov.Mods)));
+        }
+        foreach (var b in KeyPresets[presetId])
+            if (!overridden.Contains(b.Id)) eff.Add(b);
+        return eff;
+    }
+
+    private static VMod ParseMods(string mods)
+    {
+        var m = VMod.None;
+        foreach (var part in mods.Split('+', StringSplitOptions.RemoveEmptyEntries))
+            if (Enum.TryParse<VMod>(part, out var one)) m |= one;
+        return m;
+    }
+
+    private static string ModsToString(VMod m)
+    {
+        var parts = new List<string>();
+        if (m.HasFlag(Ctrl)) parts.Add("Control");
+        if (m.HasFlag(VMod.Menu)) parts.Add("Menu");
+        if (m.HasFlag(VMod.Shift)) parts.Add("Shift");
+        return string.Join("+", parts);
     }
 
     private void BuildShortcutsSheet(string id, List<(string Combo, string Label)> rows, List<string> dropped)
