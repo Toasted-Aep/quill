@@ -419,6 +419,10 @@ public sealed partial class MainWindow : Window
 
         // restore the last-selected eraser mode (#13-batch2)
         Surface.EraserMode = _library.LastEraserMode == "Point" ? EraserMode.Point : EraserMode.Object;
+        Surface.EraserStyle = _library.LastEraserStyle;
+        Surface.EraserSize = _library.EraserSize;
+        // the eyedropper shortcut samples wherever the pointer last was
+        Surface.PointerMoved += (_, pe) => _lastCanvasPt = pe.GetCurrentPoint(Surface).Position;
         // the legacy combined pen-repair switch migrates to the split toggles (#6-batch4)
         if (_library.PenRepair) { _library.PenRepairDots = true; _library.PenRepairBridge = true; _library.PenRepair = false; }
         Surface.PenRepairDots = _library.PenRepairDots;
@@ -2210,6 +2214,45 @@ public sealed partial class MainWindow : Window
         rbObject.Checked += (_, _) => { Surface.EraserMode = EraserMode.Object; _library.LastEraserMode = "Object"; ScheduleSave(); SelectTool("Eraser"); };
         panel.Children.Add(rbPoint);
         panel.Children.Add(rbObject);
+
+        // Point-mode styles (E1): how the geometry under the eraser is treated.
+        panel.Children.Add(new TextBlock { Text = "Point eraser style", FontSize = 12, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 6, 0, 0) });
+        var styleNames = new (EraserStyle St, string Label)[]
+        {
+            (EraserStyle.HardMask, "Hard - crisp removal"),
+            (EraserStyle.SoftMask, "Soft - feathered edge"),
+            (EraserStyle.Slice,    "Slice - cut strokes in two"),
+            (EraserStyle.Nudge,    "Nudge - push ink aside"),
+        };
+        foreach (var (st, label) in styleNames)
+        {
+            var rb = new RadioButton { Content = label, FontSize = 12, GroupName = "EraserStyle", IsChecked = Surface.EraserStyle == st };
+            rb.Checked += (_, _) =>
+            {
+                Surface.EraserStyle = st;
+                _library.LastEraserStyle = st;
+                ScheduleSave();
+                SelectTool("Eraser");
+            };
+            panel.Children.Add(rb);
+        }
+
+        var sizeLabel = new TextBlock { FontSize = 12, Margin = new Thickness(0, 6, 0, 0) };
+        var sizeSlider = new Slider { Minimum = 0, Maximum = 80, StepFrequency = 2, Value = _library.EraserSize };
+        void SyncSizeLabel() => sizeLabel.Text = _library.EraserSize <= 0
+            ? "Eraser size: auto (follows pen size)"
+            : $"Eraser size: {_library.EraserSize:0}";
+        SyncSizeLabel();
+        sizeSlider.ValueChanged += (_, args) =>
+        {
+            _library.EraserSize = args.NewValue;
+            Surface.EraserSize = args.NewValue;
+            SyncSizeLabel();
+            ScheduleSave();
+        };
+        panel.Children.Add(sizeLabel);
+        panel.Children.Add(sizeSlider);
+
         fly.Content = panel;
         chip.ContextFlyout = fly;
 
@@ -2419,7 +2462,7 @@ public sealed partial class MainWindow : Window
             var modeCombo = new ComboBox
             {
                 Header = "Pressure response",
-                ItemsSource = new[] { "Soft (thickens easily)", "Hard (needs pressure)", "Custom curve" },
+                ItemsSource = new[] { "Soft (thickens easily)", "Hard (needs pressure)", "Custom curve", "Simple (2 points)" },
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
             var curveHost = new Grid { Width = cvW, Height = cvH, HorizontalAlignment = HorizontalAlignment.Left };
@@ -2519,24 +2562,78 @@ public sealed partial class MainWindow : Window
             };
             curveHost.PointerReleased += (s2, e2) => { dragKnob = -1; curveHost.ReleasePointerCaptures(); };
 
+            // Simple mode (#curve v2): two pinned control points - output at zero
+            // pressure and output at full pressure - plus a bend. Baked down to
+            // the legacy 6-float list so the renderer needs no change.
+            var simplePanel = new StackPanel { Spacing = 4, Visibility = Visibility.Collapsed };
+            var zeroLabel = new TextBlock { FontSize = 12 };
+            var zeroSlider = new Slider { Minimum = 0, Maximum = 100, StepFrequency = 5 };
+            var fullLabel = new TextBlock { FontSize = 12 };
+            var fullSlider = new Slider { Minimum = 10, Maximum = 100, StepFrequency = 5 };
+            var bendLabel = new TextBlock { FontSize = 12 };
+            var bendSlider = new Slider { Minimum = -100, Maximum = 100, StepFrequency = 10 };
+            simplePanel.Children.Add(zeroLabel); simplePanel.Children.Add(zeroSlider);
+            simplePanel.Children.Add(fullLabel); simplePanel.Children.Add(fullSlider);
+            simplePanel.Children.Add(bendLabel); simplePanel.Children.Add(bendSlider);
+
+            void SyncSimpleLabels()
+            {
+                zeroLabel.Text = $"Width at zero pressure: {zeroSlider.Value:0}%";
+                fullLabel.Text = $"Width at full pressure: {fullSlider.Value:0}%";
+                bendLabel.Text = bendSlider.Value switch
+                {
+                    < -5 => $"Response: eases in ({-bendSlider.Value:0}%)",
+                    > 5 => $"Response: jumps early ({bendSlider.Value:0}%)",
+                    _ => "Response: linear"
+                };
+            }
+            void LoadSimple()
+            {
+                var r = p.PressureResponse ?? PressureCurve2.FromLegacy(p.PressureCurve) ?? new PressureCurve2();
+                zeroSlider.Value = Math.Clamp(r.Out0 * 100, 0, 100);
+                fullSlider.Value = Math.Clamp(r.Out100 * 100, 10, 100);
+                bendSlider.Value = Math.Clamp(r.Bend * 100, -100, 100);
+                SyncSimpleLabels();
+            }
+            void CommitSimple()
+            {
+                var r = p.PressureResponse ??= new PressureCurve2();
+                r.Out0 = (float)zeroSlider.Value / 100f;
+                r.Out100 = (float)fullSlider.Value / 100f;
+                r.Bend = (float)bendSlider.Value / 100f;
+                p.PressureCurve = r.ToLegacyPoints();
+                if (_activePresetId == p.Id) Surface.PenPressureCurve = p.PressureCurve;
+                SyncSimpleLabels();
+                ScheduleSave();
+            }
+
             bool syncingCurve = true;
-            modeCombo.SelectedIndex = p.PressureCurve is { Count: >= 6 } ? 2
+            modeCombo.SelectedIndex = p.PressureResponse != null ? 3
+                : p.PressureCurve is { Count: >= 6 } ? 2
                 : p.PressureCurve is { Count: >= 3 } lm ? (lm[1] > 0.5f ? 0 : 1)
                 : 2;   // null (linear) shows Custom with the identity diagonal, untouched until dragged
             curveHost.Visibility = modeCombo.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
             curveCaption.Visibility = curveHost.Visibility;
+            simplePanel.Visibility = modeCombo.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
+            if (modeCombo.SelectedIndex == 3) LoadSimple();
+            zeroSlider.ValueChanged += (_, _) => { if (!syncingCurve) CommitSimple(); };
+            fullSlider.ValueChanged += (_, _) => { if (!syncingCurve) CommitSimple(); };
+            bendSlider.ValueChanged += (_, _) => { if (!syncingCurve) CommitSimple(); };
             modeCombo.SelectionChanged += (_, _) =>
             {
                 if (syncingCurve) return;
+                if (modeCombo.SelectedIndex != 3) p.PressureResponse = null;
                 switch (modeCombo.SelectedIndex)
                 {
                     case 0: p.PressureCurve = new List<float> { 0f, 0.6f, 1f }; break;
                     case 1: p.PressureCurve = new List<float> { 0f, 0.2f, 1f }; break;
                     case 2: CommitCurve(); break;   // adopt the drawn points
+                    case 3: LoadSimple(); CommitSimple(); break;
                 }
                 if (_activePresetId == p.Id) Surface.PenPressureCurve = p.PressureCurve;
                 curveHost.Visibility = modeCombo.SelectedIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
                 curveCaption.Visibility = curveHost.Visibility;
+                simplePanel.Visibility = modeCombo.SelectedIndex == 3 ? Visibility.Visible : Visibility.Collapsed;
                 ScheduleSave();
             };
             syncingCurve = false;
@@ -2545,6 +2642,7 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(modeCombo);
             panel.Children.Add(curveHost);
             panel.Children.Add(curveCaption);
+            panel.Children.Add(simplePanel);
 
             panel.Children.Add(new TextBlock
             {
@@ -5783,6 +5881,7 @@ public sealed partial class MainWindow : Window
             new KeyBind("ToolText", VKey.T, VMod.None),
             new KeyBind("ToolSelect", VKey.L, VMod.None),
             new KeyBind("ToolSpace", VKey.S, VMod.None),
+            new KeyBind("Eyedrop", VKey.I, VMod.None),
         },
         ["OneNote"] = new[]
         {
@@ -5803,6 +5902,7 @@ public sealed partial class MainWindow : Window
             new KeyBind("ToolPen", VKey.P, CtrlShift),
             new KeyBind("ToolText", VKey.T, CtrlShift),
             new KeyBind("ToolSelect", VKey.L, CtrlShift),
+            new KeyBind("Eyedrop", VKey.I, CtrlShift),
             new KeyBind("ToolSpace", VKey.S, CtrlShift),
         },
         ["Photoshop"] = new[]
@@ -5824,6 +5924,7 @@ public sealed partial class MainWindow : Window
             new KeyBind("ToolText", VKey.T, VMod.None),
             new KeyBind("ToolSelect", VKey.L, VMod.None), // lasso
             new KeyBind("ToolSpace", VKey.H, VMod.None),  // hand
+            new KeyBind("Eyedrop", VKey.I, VMod.None),
         },
     };
 
@@ -5856,7 +5957,30 @@ public sealed partial class MainWindow : Window
         ("ToolText", "Text tool", ToolTextAccel_Invoked),
         ("ToolSelect", "Lasso tool", ToolSelectAccel_Invoked),
         ("ToolSpace", "Insert-space tool", ToolSpaceAccel_Invoked),
+        ("Eyedrop", "Pick the colour under the pointer", EyedropAccel_Invoked),
     };
+
+    // Eyedropper (U2): samples the authored colour under the last pointer
+    // position on the canvas and makes it the active pen's colour. Logical
+    // sampling lives in InkSurface.SampleColorAt.
+    private Windows.Foundation.Point _lastCanvasPt;
+
+    private void EyedropAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (TextBoxFocused) { args.Handled = false; return; }
+        args.Handled = true;
+        var c = Surface.SampleColorAt(new System.Numerics.Vector2((float)_lastCanvasPt.X, (float)_lastCanvasPt.Y));
+        if (c == null) return;
+        var preset = ActivePreset();
+        if (preset != null)
+        {
+            preset.Color = ColorUtil.ToHex(c.Value);
+            BuildPenStrip();
+            ScheduleSave();
+        }
+        Surface.PenColor = c.Value;
+        ShowStatus($"Picked {ColorUtil.ToHex(c.Value)}");
+    }
 
     private void ToolPenAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs a) => ToolAccel("Pen", a);
     private void ToolTextAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs a) => ToolAccel("Text", a);
