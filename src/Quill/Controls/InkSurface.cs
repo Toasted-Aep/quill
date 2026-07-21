@@ -53,12 +53,23 @@ public sealed class InkSurface : UserControl
     public float PenSensitivity { get; set; } = 1f;
     public float PenStabiliser { get; set; }
     public List<float>? PenPressureCurve { get; set; }
+    // Two-control-point pressure response (#curve v2). When set it is baked down
+    // to the 6-float legacy curve the width renderer already interprets, so it
+    // drives stroke width without growing per-stroke JSON. null = use the
+    // PenPressureCurve above unchanged.
+    public PressureCurve2? PenPressureResponse { get; set; }
     // Default font + point size applied to newly created text boxes and to the
     // first characters typed into them, so a size/font chosen with no box selected
     // is honoured instead of falling back to the RichEdit default (#2, #8).
     public float PendingFontSize { get; set; } = 16f;
     public string PendingFontFamily { get; set; } = "Lora";
     public EraserMode EraserMode { get; set; } = EraserMode.Object;
+    // How the point-eraser treats what it crosses (§7.c). Object mode always
+    // removes whole strokes; these styles shape the Point-mode geometry result.
+    public EraserStyle EraserStyle { get; set; } = EraserStyle.HardMask;
+    // Eraser radius in world units; 0 = derive from the active pen size exactly
+    // as before. Library.EraserSize feeds this.
+    public double EraserSize { get; set; }
     public bool RulerMode { get; set; }
     // On-screen ruler angle in degrees (any value, not just 15° steps) (#21).
     public double RulerAngle { get; set; }
@@ -154,6 +165,9 @@ public sealed class InkSurface : UserControl
 
     private Vector2 _eraseLast;
     private EraserMode _gestureEraserMode;
+    // Style latched at pen-down so mid-gesture setting changes never split one
+    // erase stroke across two behaviours.
+    private EraserStyle _gestureEraserStyle;
     private List<(int Index, PenStroke Stroke)> _eraseRemoved = new();
     private HashSet<PenStroke> _gestureFragments = new();
 
@@ -987,7 +1001,7 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     // Pointer input
     // =======================================================================
-    private float EraserRadius => Math.Max(8f, PenSize * 2.2f);
+    private float EraserRadius => EraserSize > 0 ? (float)EraserSize : Math.Max(8f, PenSize * 2.2f);
 
     // The pen's eraser tip / inverted end / extra barrel buttons all act as an
     // eraser. Shared by pointer-down routing and the hover-cursor detection.
@@ -1270,6 +1284,7 @@ public sealed class InkSurface : UserControl
                 ClearSelection();
                 _activeShape = null;
                 _gestureEraserMode = EraserMode;
+                _gestureEraserStyle = EraserStyle;
                 _eraseRemoved = new List<(int, PenStroke)>();
                 _eraseRemovedShapes = new List<(int, ShapeElement)>();
                 _gestureFragments = new HashSet<PenStroke>();
@@ -1880,7 +1895,7 @@ public sealed class InkSurface : UserControl
                             Size = PenSize,
                             Sens = PenSensitivity,
                             Points = pts,
-                            PressureCurve = PenPressureCurve != null ? new List<float>(PenPressureCurve) : null
+                            PressureCurve = EffectivePressureCurve()
                         };
                         PushAction(new AddStrokeAction(stroke), _page);
                         changed = true;
@@ -2497,7 +2512,9 @@ public sealed class InkSurface : UserControl
             float r = EraserRadius;
             // Walk the live list backwards so the index is the stroke's real
             // position (no IndexOf) and freshly inserted fragments — placed at
-            // i and above — are never re-examined this pass.
+            // i and above — are never re-examined this pass. Every mutation still
+            // routes through RemoveStrokeAt/InsertStroke so the spatial index and
+            // the stroke-count net stay correct (CONSTRAINT 5).
             for (int i = _page.Strokes.Count - 1; i >= 0; i--)
             {
                 var s = _page.Strokes[i];
@@ -2508,19 +2525,16 @@ public sealed class InkSurface : UserControl
                     if (GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) <= r) { any = true; break; }
                 if (!any) continue;
 
-                var runs = new List<List<StrokePoint>>();
-                var cur = new List<StrokePoint>();
-                foreach (var p in s.Points)
+                // The style shapes the surviving geometry; null = leave this stroke
+                // untouched this step (e.g. Slice with no true crossing).
+                List<List<StrokePoint>>? runs = _gestureEraserStyle switch
                 {
-                    if (GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) > r)
-                        cur.Add(p);
-                    else
-                    {
-                        if (cur.Count > 1) runs.Add(cur);
-                        cur = new List<StrokePoint>();
-                    }
-                }
-                if (cur.Count > 1) runs.Add(cur);
+                    EraserStyle.Slice => SliceRuns(s, from, to),
+                    EraserStyle.Nudge => NudgeRuns(s, from, to, r),
+                    EraserStyle.SoftMask => SoftMaskRuns(s, from, to, r),
+                    _ => HardMaskRuns(s, from, to, r),
+                };
+                if (runs == null) continue;
 
                 RemoveStrokeAt(i);
                 // A fragment from earlier in this gesture: its original was
@@ -2530,12 +2544,141 @@ public sealed class InkSurface : UserControl
                 int insertAt = i;
                 foreach (var run in runs)
                 {
+                    if (run.Count < 1) continue;
                     var frag = s.CloneWithPoints(run);
                     InsertStroke(insertAt++, frag);
                     _gestureFragments.Add(frag);
                 }
             }
         }
+    }
+
+    // ---- eraser styles (§7.c) ---------------------------------------------
+    // Each returns the surviving point-runs for one stroke, or null to leave the
+    // stroke untouched. Styles that alter point data build fresh StrokePoint
+    // objects so the recorded original stays intact for undo; HardMask and Slice
+    // remove no data and may reuse the point references.
+
+    // Hard mask: crisp removal of every point within the eraser radius, keeping
+    // the surviving contiguous runs (today's point eraser).
+    private static List<List<StrokePoint>> HardMaskRuns(PenStroke s, Vector2 from, Vector2 to, float r)
+    {
+        var runs = new List<List<StrokePoint>>();
+        var cur = new List<StrokePoint>();
+        foreach (var p in s.Points)
+        {
+            if (GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) > r)
+                cur.Add(p);
+            else
+            {
+                if (cur.Count > 1) runs.Add(cur);
+                cur = new List<StrokePoint>();
+            }
+        }
+        if (cur.Count > 1) runs.Add(cur);
+        return runs;
+    }
+
+    // Soft mask: hard-remove the core within r, but thin the surviving ink in the
+    // falloff band just outside it by lowering pressure toward the cut, so the
+    // pressure→width renderer tapers the end to a soft point rather than a blunt
+    // cap. Constant-width pens (monoline/highlighter) degrade to a hard edge since
+    // they ignore pressure by design.
+    private static List<List<StrokePoint>> SoftMaskRuns(PenStroke s, Vector2 from, Vector2 to, float r)
+    {
+        float outer = r * 1.7f;
+        var runs = new List<List<StrokePoint>>();
+        var cur = new List<StrokePoint>();
+        foreach (var p in s.Points)
+        {
+            float d = GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to);
+            if (d <= r)
+            {
+                if (cur.Count > 1) runs.Add(cur);
+                cur = new List<StrokePoint>();
+                continue;
+            }
+            if (d < outer)
+            {
+                float f = (d - r) / (outer - r);      // 0 at the cut, 1 at the band edge
+                float taper = 0.12f + 0.88f * f * f;   // ease-in: thins sharply near the cut
+                cur.Add(new StrokePoint(p.X, p.Y, p.Pressure * taper));
+            }
+            else cur.Add(p);
+        }
+        if (cur.Count > 1) runs.Add(cur);
+        return runs;
+    }
+
+    // Slice: cut the stroke into two strokes where the eraser path crosses it,
+    // removing no area. Returns null when the eraser only grazes without a true
+    // crossing, so dragging along a stroke never shatters it.
+    private static List<List<StrokePoint>>? SliceRuns(PenStroke s, Vector2 from, Vector2 to)
+    {
+        var pts = s.Points;
+        if (pts.Count < 4) return null;   // too short to split into two drawable halves
+        for (int i = 1; i < pts.Count; i++)
+        {
+            var a = new Vector2(pts[i - 1].X, pts[i - 1].Y);
+            var b = new Vector2(pts[i].X, pts[i].Y);
+            if (!SegmentsCross(a, b, from, to)) continue;
+            var left = pts.GetRange(0, i);               // points [0 .. i-1]
+            var right = pts.GetRange(i, pts.Count - i);  // points [i .. end]
+            if (left.Count < 2 || right.Count < 2) continue;
+            return new List<List<StrokePoint>> { left, right };
+        }
+        return null;
+    }
+
+    // Nudge: push points out of the eraser's way instead of deleting them. Each
+    // point inside r is displaced onto the eraser rim, away from the nearest point
+    // on the eraser path. One run, no points lost.
+    private static List<List<StrokePoint>> NudgeRuns(PenStroke s, Vector2 from, Vector2 to, float r)
+    {
+        var run = new List<StrokePoint>(s.Points.Count);
+        foreach (var p in s.Points)
+        {
+            var pv = new Vector2(p.X, p.Y);
+            var c = ClosestOnSegment(pv, from, to);
+            var away = pv - c;
+            float d = away.Length();
+            if (d >= r) { run.Add(p); continue; }
+            // A point sitting exactly on the path has no outward direction; push
+            // along the path normal so it still clears the cursor.
+            Vector2 dir = d > 1e-3f ? away / d : PerpUnit(to - from);
+            var np = c + dir * r;
+            run.Add(new StrokePoint(np.X, np.Y, p.Pressure));
+        }
+        return new List<List<StrokePoint>> { run };
+    }
+
+    private static Vector2 ClosestOnSegment(Vector2 p, Vector2 a, Vector2 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared();
+        if (len2 < 1e-6f) return a;
+        float t = Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f);
+        return a + ab * t;
+    }
+
+    private static Vector2 PerpUnit(Vector2 v)
+    {
+        var n = new Vector2(-v.Y, v.X);
+        float len = n.Length();
+        return len > 1e-3f ? n / len : new Vector2(0, 1);
+    }
+
+    // Proper segment-segment crossing test (AB genuinely straddles CD and back).
+    private static bool SegmentsCross(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+    {
+        static float Cross(Vector2 o, Vector2 e, Vector2 p) =>
+            (e.X - o.X) * (p.Y - o.Y) - (e.Y - o.Y) * (p.X - o.X);
+        float d1 = Cross(c, d, a);
+        float d2 = Cross(c, d, b);
+        float d3 = Cross(a, b, c);
+        float d4 = Cross(a, b, d);
+        return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+               ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
     }
 
     // =======================================================================
@@ -2966,6 +3109,8 @@ public sealed class InkSurface : UserControl
                        regionT;
 
         DrawGrid(ds, bg);
+        DrawPerspective(ds, bg);
+        DrawArtboard(ds, bg);
         DrawPageTitle(ds, bg);
 
         // World rectangle of THIS REGION — anything fully outside it is skipped,
@@ -3065,7 +3210,7 @@ public sealed class InkSurface : UserControl
                 Size = PenSize,
                 Sens = PenSensitivity,
                 Points = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : (_wet ?? new List<StrokePoint>()),
-                PressureCurve = PenPressureCurve
+                PressureCurve = EffectivePressureCurve()
             };
             DrawStroke(ds, sender, temp, Vector2.Zero, null);
         }
@@ -3259,7 +3404,213 @@ public sealed class InkSurface : UserControl
                 for (float y = startY; y < br.Y; y += spacing)
                     ds.DrawLine(new Vector2(tl.X, y), new Vector2(br.X, y), gridColor, lw);
                 break;
+            case GridType.Isometric:
+                // centered-rectangular lattice (m*0.866s, n*0.5s), (m+n) even: the
+                // three nearest-neighbour line families sit at 30/90/150 deg with a
+                // uniform perpendicular spacing of 0.866s, so cells are true rhombi
+                DrawLineFamily(ds, tl, br, 30f, spacing * 0.8660254f, gridColor, lw);
+                DrawLineFamily(ds, tl, br, 90f, spacing * 0.8660254f, gridColor, lw);
+                DrawLineFamily(ds, tl, br, 150f, spacing * 0.8660254f, gridColor, lw);
+                break;
+            case GridType.Triangle:
+                // equilateral tiling with side s: families at 0/60/120, each with
+                // perpendicular spacing equal to the triangle height 0.866s
+                DrawLineFamily(ds, tl, br, 0f, spacing * 0.8660254f, gridColor, lw);
+                DrawLineFamily(ds, tl, br, 60f, spacing * 0.8660254f, gridColor, lw);
+                DrawLineFamily(ds, tl, br, 120f, spacing * 0.8660254f, gridColor, lw);
+                break;
         }
+    }
+
+    // One parallel family of construction lines: direction angleDeg, adjacent
+    // lines perpDist apart, clipped to the visible world rect. Lines are
+    // generated in world space so the view transform keeps them stable under
+    // pan and zoom.
+    private static void DrawLineFamily(CanvasDrawingSession ds, Vector2 tl, Vector2 br,
+                                       float angleDeg, float perpDist, Color color, float lw)
+    {
+        float a = angleDeg * MathF.PI / 180f;
+        var dir = new Vector2(MathF.Cos(a), MathF.Sin(a));
+        var nrm = new Vector2(-dir.Y, dir.X);
+
+        // range of the normal coordinate over the four visible corners
+        Span<Vector2> c = stackalloc Vector2[4] { tl, new(br.X, tl.Y), br, new(tl.X, br.Y) };
+        float kMin = float.MaxValue, kMax = float.MinValue, tMin = float.MaxValue, tMax = float.MinValue;
+        foreach (var p in c)
+        {
+            float k = Vector2.Dot(p, nrm); kMin = MathF.Min(kMin, k); kMax = MathF.Max(kMax, k);
+            float t = Vector2.Dot(p, dir); tMin = MathF.Min(tMin, t); tMax = MathF.Max(tMax, t);
+        }
+        for (float k = MathF.Floor(kMin / perpDist) * perpDist; k <= kMax; k += perpDist)
+        {
+            var p0 = nrm * k + dir * tMin;
+            var p1 = nrm * k + dir * tMax;
+            ds.DrawLine(p0, p1, color, lw);
+        }
+    }
+
+    // Perspective construction overlay (CONCEPTS-DIRECTION 7.4). Not a GridType:
+    // it coexists with any grid and draws when the page carries a PerspectiveDef.
+    // Guides are on-screen construction aids and deliberately do not export.
+    private void DrawPerspective(CanvasDrawingSession ds, Color bg)
+    {
+        var def = _page?.Perspective;
+        if (def == null || def.Vps.Count == 0) return;
+
+        var tl = ToWorld(new Vector2(0, 0));
+        var br = ToWorld(new Vector2((float)ActualWidth, (float)ActualHeight));
+        var col = ColorUtil.IsDark(bg)
+            ? Color.FromArgb(56, 255, 255, 255)
+            : Color.FromArgb(40, 0, 0, 0);
+        float lw = 1f / ViewZoom;
+        float spacing = (float)Math.Max(8, _page!.GridSpacing);
+        int vpCount = Math.Min(def.Vps.Count, 3);
+
+        // horizon for 1- and 2-point; a 3-point set has nothing straight left
+        if (vpCount < 3 && (float)def.HorizonY >= tl.Y && (float)def.HorizonY <= br.Y)
+            ds.DrawLine(new Vector2(tl.X, (float)def.HorizonY), new Vector2(br.X, (float)def.HorizonY),
+                        col, lw * 1.6f);
+
+        if (vpCount == 1)
+        {
+            // 1-point keeps both true axes as gridded families
+            DrawLineFamily(ds, tl, br, 90f, spacing, col, lw);
+            DrawLineFamily(ds, tl, br, 0f, spacing, col, lw);
+        }
+        else if (vpCount == 2)
+        {
+            DrawLineFamily(ds, tl, br, 90f, spacing, col, lw);   // verticals stay true
+        }
+
+        int rays = Math.Clamp(def.RayCount, 4, 96);
+        for (int i = 0; i < vpCount; i++)
+        {
+            var vp = new Vector2((float)def.Vps[i].X, (float)def.Vps[i].Y);
+            bool inside = vp.X >= tl.X && vp.X <= br.X && vp.Y >= tl.Y && vp.Y <= br.Y;
+
+            // angular window the viewport subtends from this VP (full circle when
+            // the VP is on screen)
+            float a0 = 0f, a1 = MathF.PI * 2f;
+            if (!inside)
+            {
+                Span<Vector2> corners = stackalloc Vector2[4] { tl, new(br.X, tl.Y), br, new(tl.X, br.Y) };
+                float lo = float.MaxValue, hi = float.MinValue;
+                float baseA = MathF.Atan2(((tl.Y + br.Y) * 0.5f) - vp.Y, ((tl.X + br.X) * 0.5f) - vp.X);
+                foreach (var corner in corners)
+                {
+                    float rel = MathF.Atan2(corner.Y - vp.Y, corner.X - vp.X) - baseA;
+                    while (rel > MathF.PI) rel -= MathF.PI * 2f;
+                    while (rel < -MathF.PI) rel += MathF.PI * 2f;
+                    lo = MathF.Min(lo, rel); hi = MathF.Max(hi, rel);
+                }
+                a0 = baseA + lo; a1 = baseA + hi;
+            }
+
+            for (int r = 0; r < rays; r++)
+            {
+                float ang = a0 + (a1 - a0) * (rays == 1 ? 0.5f : r / (float)(rays - 1));
+                var d = new Vector2(MathF.Cos(ang), MathF.Sin(ang));
+                if (ClipRay(vp, d, tl, br, out var q0, out var q1))
+                    ds.DrawLine(q0, q1, col, lw);
+            }
+        }
+    }
+
+    // Clips the ray origin + t*dir (t >= 0) to a rect; false when it misses.
+    private static bool ClipRay(Vector2 o, Vector2 d, Vector2 tl, Vector2 br,
+                                out Vector2 p0, out Vector2 p1)
+    {
+        float t0 = 0f, t1 = float.MaxValue;
+        p0 = p1 = o;
+        Span<float> pp = stackalloc float[4] { -d.X, d.X, -d.Y, d.Y };
+        Span<float> qq = stackalloc float[4] { o.X - tl.X, br.X - o.X, o.Y - tl.Y, br.Y - o.Y };
+        for (int i = 0; i < 4; i++)
+        {
+            if (MathF.Abs(pp[i]) < 1e-9f) { if (qq[i] < 0) return false; continue; }
+            float t = qq[i] / pp[i];
+            if (pp[i] < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+            else { if (t < t0) return false; if (t < t1) t1 = t; }
+        }
+        if (t1 == float.MaxValue) return false;
+        p0 = o + d * t0; p1 = o + d * t1;
+        return true;
+    }
+
+    // Eyedropper (U2 wires the tool): returns the colour under a SCREEN point.
+    // Sampling is logical rather than a GPU readback - it hit-tests the top-most
+    // element and returns its true authored colour, which is what a picker wants
+    // (a pixel read would return antialiased blends at stroke edges). Draw order
+    // is shapes below ink, so strokes win; within each list, later = on top.
+    public Color? SampleColorAt(Vector2 screenPt)
+    {
+        if (_page == null) return null;
+        var w = ToWorld(screenPt);
+        float slop = 3f / ViewZoom;   // small screen-constant tolerance
+
+        var stCand = StrokeCandidates(w.X - 24, w.Y - 24, w.X + 24, w.Y + 24);
+        for (int i = _page.Strokes.Count - 1; i >= 0; i--)
+        {
+            var st = _page.Strokes[i];
+            if (stCand != null && !stCand.Contains(st)) continue;
+            float r = st.Size * 0.5f + slop;
+            var pts = st.Points;
+            for (int j = 0; j + 1 < pts.Count; j++)
+            {
+                var a = new Vector2(pts[j].X, pts[j].Y);
+                var b = new Vector2(pts[j + 1].X, pts[j + 1].Y);
+                var ab = b - a;
+                float len2 = ab.LengthSquared();
+                float t = len2 < 1e-6f ? 0f : Math.Clamp(Vector2.Dot(w - a, ab) / len2, 0f, 1f);
+                if (Vector2.DistanceSquared(w, a + ab * t) <= r * r)
+                {
+                    try { return ColorUtil.Parse(st.Color); } catch { return null; }
+                }
+            }
+        }
+
+        var shCand = ShapeCandidates(w.X - 24, w.Y - 24, w.X + 24, w.Y + 24);
+        for (int i = _page.Shapes.Count - 1; i >= 0; i--)
+        {
+            var sh = _page.Shapes[i];
+            if (shCand != null && !shCand.Contains(sh)) continue;
+            var b = ShapeBounds(sh);
+            if (w.X < b.Left - slop || w.X > b.Right + slop ||
+                w.Y < b.Top - slop || w.Y > b.Bottom + slop) continue;
+            try { return ColorUtil.Parse(sh.Color); } catch { }
+        }
+
+        try { return ColorUtil.Parse(_page.Background); } catch { return null; }
+    }
+
+    // Finite pages draw their artboard: a boundary plus a scrim over everything
+    // outside it. The canvas stays fully usable beyond the edge - the scrim only
+    // signals what an export will include (CONCEPTS-DIRECTION 7.1).
+    private void DrawArtboard(CanvasDrawingSession ds, Color bg)
+    {
+        var ab = _page == null ? null : PageSizes.ResolveArtboard(_page);
+        if (ab == null) return;
+
+        var tl = ToWorld(new Vector2(0, 0));
+        var br = ToWorld(new Vector2((float)ActualWidth, (float)ActualHeight));
+        float w = (float)ab.W, h = (float)ab.H;
+
+        var scrim = ColorUtil.IsDark(bg)
+            ? Color.FromArgb(96, 0, 0, 0)
+            : Color.FromArgb(34, 40, 38, 34);
+        // four side rects rather than a clipped layer: cheaper, and tile-safe
+        if (tl.Y < 0) ds.FillRectangle(tl.X, tl.Y, br.X - tl.X, MathF.Min(0, br.Y) - tl.Y, scrim);
+        if (br.Y > h) ds.FillRectangle(tl.X, MathF.Max(h, tl.Y), br.X - tl.X, br.Y - MathF.Max(h, tl.Y), scrim);
+        float bandT = MathF.Max(0, tl.Y), bandB = MathF.Min(h, br.Y);
+        if (bandB > bandT)
+        {
+            if (tl.X < 0) ds.FillRectangle(tl.X, bandT, MathF.Min(0, br.X) - tl.X, bandB - bandT, scrim);
+            if (br.X > w) ds.FillRectangle(MathF.Max(w, tl.X), bandT, br.X - MathF.Max(w, tl.X), bandB - bandT, scrim);
+        }
+
+        var edge = ColorUtil.IsDark(bg)
+            ? Color.FromArgb(120, 255, 255, 255)
+            : Color.FromArgb(110, 0, 0, 0);
+        ds.DrawRectangle(0, 0, w, h, edge, 1f / ViewZoom);
     }
 
     private void DrawPageTitle(CanvasDrawingSession ds, Color bg)
@@ -3429,6 +3780,16 @@ public sealed class InkSurface : UserControl
         pb.EndFigure(CanvasFigureLoop.Open);
         using var geo = CanvasGeometry.CreatePath(pb);
         ds.DrawGeometry(geo, color, width, style);
+    }
+
+    /// <summary>The pressure curve a freshly committed or wet stroke should carry:
+    /// the two-control-point response baked to the 6-float form SegmentWidth already
+    /// interprets when one is set, otherwise a copy of the raw PenPressureCurve. The
+    /// bake keeps per-stroke JSON the same size (library.json is 53 MB).</summary>
+    private List<float>? EffectivePressureCurve()
+    {
+        if (PenPressureResponse != null) return PenPressureResponse.ToLegacyPoints();
+        return PenPressureCurve != null ? new List<float>(PenPressureCurve) : null;
     }
 
     private static float SegmentWidth(PenStroke s, StrokePoint a, StrokePoint b, int index)
