@@ -2909,8 +2909,9 @@ public sealed partial class MainWindow : Window
         Surface.PendingFontSize = efSize;
 
         _syncingUi = true;
-        GridRadios.SelectedIndex = (int)page.Grid;
+        GridRadios.SelectedIndex = Math.Max(0, Array.IndexOf(GridKindMap, page.Grid));
         SpacingSlider.Value = page.GridSpacing;
+        SyncPageSizeUi(page);
         BgPicker.Color = ColorUtil.Parse(page.Background);
         _syncingUi = false;
 
@@ -5284,12 +5285,144 @@ public sealed partial class MainWindow : Window
         ShowStatus("New pages in this notebook will start with this grid.");
     }
 
+    // Single owner of the picker-row <-> GridType relation (CONCEPTS-DIRECTION
+    // 7.4): the enum serialises by integer, so the picker must never be a bare
+    // index cast that a reordered list could silently repoint.
+    private static readonly GridType[] GridKindMap =
+        { GridType.None, GridType.Dotted, GridType.Square, GridType.Lines, GridType.Isometric, GridType.Triangle };
+
     private void GridRadios_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_syncingUi || _curPage == null || GridRadios.SelectedIndex < 0) return;
-        _curPage.Grid = (GridType)GridRadios.SelectedIndex;
+        if (GridRadios.SelectedIndex < GridKindMap.Length)
+            _curPage.Grid = GridKindMap[GridRadios.SelectedIndex];
         Surface.Refresh();
         ScheduleSave();
+    }
+
+    // ---- page size + perspective (U1, CONCEPTS-DIRECTION 7) ----
+
+    private void EnsurePageSizeCombo()
+    {
+        if (PageSizeCombo.Items.Count > 0) return;
+        foreach (var d in PageSizes.Table)
+            PageSizeCombo.Items.Add(new ComboBoxItem { Content = d.Name, Tag = d.Preset });
+    }
+
+    private void SyncPageSizeUi(NotePage page)
+    {
+        EnsurePageSizeCombo();
+        int idx = Array.FindIndex(PageSizes.Table, d => d.Preset == page.PageSize);
+        PageSizeCombo.SelectedIndex = Math.Max(0, idx);
+        PageLandscapeCheck.IsChecked = page.PageLandscape;
+        CustomSizePanel.Visibility = page.PageSize == PageSizePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
+        CustomWidthBox.Value = page.PageWidth > 0 ? page.PageWidth : 800;
+        CustomHeightBox.Value = page.PageHeight > 0 ? page.PageHeight : 1100;
+        CustomUnitCombo.SelectedIndex = (int)page.PageUnit;
+        PerspectiveCombo.SelectedIndex = Math.Clamp(page.Perspective?.Vps.Count ?? 0, 0, 3);
+        PerspectiveRecentreBtn.Visibility = page.Perspective == null ? Visibility.Collapsed : Visibility.Visible;
+        UpdatePageSizeInfo(page);
+    }
+
+    private void UpdatePageSizeInfo(NotePage page)
+    {
+        if (PageSizes.TryResolve(page, out double w, out double h))
+            PageSizeInfo.Text = $"{w:0} x {h:0} world units ({w / 96.0:0.##} x {h / 96.0:0.##} in)";
+        else
+            PageSizeInfo.Text = "Infinite canvas - no page boundary.";
+    }
+
+    private void PageSizeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingUi || _curPage == null) return;
+        if ((PageSizeCombo.SelectedItem as ComboBoxItem)?.Tag is not PageSizePreset preset) return;
+        _curPage.PageSize = preset;
+        CustomSizePanel.Visibility = preset == PageSizePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
+        if (preset == PageSizePreset.Custom && _curPage.PageWidth <= 0)
+        {
+            _curPage.PageWidth = CustomWidthBox.Value;
+            _curPage.PageHeight = CustomHeightBox.Value;
+            _curPage.PageUnit = (PageSizeUnit)Math.Max(0, CustomUnitCombo.SelectedIndex);
+        }
+        UpdatePageSizeInfo(_curPage);
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    private void PageLandscape_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_syncingUi || _curPage == null) return;
+        _curPage.PageLandscape = PageLandscapeCheck.IsChecked == true;
+        UpdatePageSizeInfo(_curPage);
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    private void CustomSize_Changed(object sender, object e)
+    {
+        if (_syncingUi || _curPage == null || _curPage.PageSize != PageSizePreset.Custom) return;
+        if (!double.IsNaN(CustomWidthBox.Value)) _curPage.PageWidth = CustomWidthBox.Value;
+        if (!double.IsNaN(CustomHeightBox.Value)) _curPage.PageHeight = CustomHeightBox.Value;
+        _curPage.PageUnit = (PageSizeUnit)Math.Max(0, CustomUnitCombo.SelectedIndex);
+        UpdatePageSizeInfo(_curPage);
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    private void PerspectiveCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingUi || _curPage == null || PerspectiveCombo.SelectedIndex < 0) return;
+        int vps = PerspectiveCombo.SelectedIndex;   // 0 = off, else VP count
+        if (vps == 0)
+        {
+            _curPage.Perspective = null;
+        }
+        else
+        {
+            _curPage.Perspective ??= new PerspectiveDef();
+            PlacePerspectivePoints(_curPage.Perspective, vps);
+        }
+        PerspectiveRecentreBtn.Visibility = _curPage.Perspective == null ? Visibility.Collapsed : Visibility.Visible;
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    private void PerspectiveRecentre_Click(object sender, RoutedEventArgs e)
+    {
+        if (_curPage?.Perspective == null) return;
+        PlacePerspectivePoints(_curPage.Perspective, _curPage.Perspective.Vps.Count);
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    // Sensible starting geometry from the current view: horizon through the view
+    // centre, VPs spread wide so guide fans cross the page usefully. Dragging the
+    // pins on canvas is a later increment; re-centre covers repositioning.
+    private void PlacePerspectivePoints(PerspectiveDef def, int vpCount)
+    {
+        float z = Surface.ViewZoom;
+        var off = Surface.ViewOffset;
+        double vw = Surface.ActualWidth, vh = Surface.ActualHeight;
+        double cx = (vw * 0.5 - off.X) / z, cy = (vh * 0.5 - off.Y) / z;
+        double halfW = vw * 0.5 / z;
+
+        def.HorizonY = cy;
+        def.Vps.Clear();
+        switch (Math.Clamp(vpCount, 1, 3))
+        {
+            case 1:
+                def.Vps.Add(new CanvasPoint(cx, cy));
+                break;
+            case 2:
+                def.Vps.Add(new CanvasPoint(cx - halfW * 1.3, cy));
+                def.Vps.Add(new CanvasPoint(cx + halfW * 1.3, cy));
+                break;
+            case 3:
+                def.Vps.Add(new CanvasPoint(cx - halfW * 1.3, cy));
+                def.Vps.Add(new CanvasPoint(cx + halfW * 1.3, cy));
+                def.Vps.Add(new CanvasPoint(cx, cy + vh / z * 1.4));
+                break;
+        }
     }
 
     private void GridColorPreset_Click(object sender, RoutedEventArgs e)
