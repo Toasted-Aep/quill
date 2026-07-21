@@ -4498,6 +4498,95 @@ public sealed partial class MainWindow : Window
         BuildGallery();   // the trash button count may have changed
     }
 
+    // Capture dialog for a shortcut rebind (U4). Shows the chord live; refuses
+    // Windows-reserved combos; a combo already in use warns with its owner and
+    // asks the SAME chord again to confirm stealing (the loser is explicitly
+    // unbound rather than silently shadowed).
+    private async System.Threading.Tasks.Task CaptureBindingAsync(string commandId, string commandLabel)
+    {
+        var status = new TextBlock { FontSize = 12, Opacity = 0.75, TextWrapping = TextWrapping.Wrap };
+        var chordText = new TextBlock { FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                                        HorizontalAlignment = HorizontalAlignment.Center, Text = "…" };
+        var body = new StackPanel
+        {
+            Spacing = 10, MinWidth = 300,
+            Children =
+            {
+                new TextBlock { Text = $"Press the new shortcut for “{commandLabel}”.", TextWrapping = TextWrapping.Wrap },
+                chordText, status
+            }
+        };
+        var dlg = new ContentDialog
+        {
+            Title = "Rebind shortcut",
+            Content = body,
+            CloseButtonText = "Cancel",
+            SecondaryButtonText = "Remove binding",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = RootGrid.XamlRoot
+        };
+
+        (VKey Key, VMod Mods)? pendingSteal = null;
+        string? stealVictim = null;
+
+        void OnKeyDown(object s2, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs ke)
+        {
+            var key = (VKey)ke.Key;
+            if (key is VKey.Control or VKey.Shift or VKey.Menu or VKey.LeftWindows or VKey.RightWindows) return;
+            ke.Handled = true;
+
+            var mods = VMod.None;
+            var down = Windows.UI.Core.CoreVirtualKeyStates.Down;
+            if ((Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VKey.Control) & down) == down) mods |= Ctrl;
+            if ((Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VKey.Shift) & down) == down) mods |= VMod.Shift;
+            if ((Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VKey.Menu) & down) == down) mods |= VMod.Menu;
+
+            chordText.Text = ComboText(key, mods);
+
+            if (IsReservedCombo(key, mods))
+            {
+                status.Text = "That combination belongs to Windows and cannot be used.";
+                return;
+            }
+
+            var owner = EffectiveBinds(KeyPresetId(_library.KeyPreset))
+                .FirstOrDefault(b => b.Key == key && b.Mods == mods && b.Id != commandId);
+            if (owner != null && (pendingSteal == null || pendingSteal.Value.Key != key || pendingSteal.Value.Mods != mods))
+            {
+                string ownerLabel = KeyCommands.FirstOrDefault(c => c.Id == owner.Id).Label ?? owner.Id;
+                status.Text = $"{ComboText(key, mods)} already runs “{ownerLabel}”. Press it again to move it here (that command becomes unbound), or press a different combination.";
+                pendingSteal = (key, mods);
+                stealVictim = owner.Id;
+                return;
+            }
+
+            _library.KeyOverrides.RemoveAll(o => o.CommandId == commandId);
+            _library.KeyOverrides.Add(new KeyOverride { CommandId = commandId, Key = key.ToString(), Mods = ModsToString(mods) });
+            if (pendingSteal != null && stealVictim != null &&
+                pendingSteal.Value.Key == key && pendingSteal.Value.Mods == mods)
+            {
+                _library.KeyOverrides.RemoveAll(o => o.CommandId == stealVictim);
+                _library.KeyOverrides.Add(new KeyOverride { CommandId = stealVictim, Disabled = true });
+            }
+            ApplyKeyPreset();
+            ScheduleSave();
+            dlg.Hide();
+        }
+
+        body.KeyDown += OnKeyDown;
+        dlg.Opened += (_, _) => body.Focus(FocusState.Programmatic);
+        body.IsTabStop = true;
+
+        var result = await dlg.ShowAsync();
+        if (result == ContentDialogResult.Secondary)
+        {
+            _library.KeyOverrides.RemoveAll(o => o.CommandId == commandId);
+            _library.KeyOverrides.Add(new KeyOverride { CommandId = commandId, Disabled = true });
+            ApplyKeyPreset();
+            ScheduleSave();
+        }
+    }
+
     private async void GalleryContinue_Click(object sender, RoutedEventArgs e)
     {
         var (nb, sec, pg) = FindPageById(_library.LastPageId);
@@ -4725,6 +4814,78 @@ public sealed partial class MainWindow : Window
         };
         panel.Children.Add(keyBox);
         panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Keys.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // ---- per-command rebinding (U4) ----
+        var customList = new StackPanel { Spacing = 4 };
+        var customExp = new Expander
+        {
+            Header = "Customise shortcuts",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Content = customList
+        };
+
+        void RebuildCustomRows()
+        {
+            customList.Children.Clear();
+            string pid = KeyPresetId(_library.KeyPreset);
+            var eff = EffectiveBinds(pid);
+            foreach (var cmd in KeyCommands)
+            {
+                var row = new Grid { ColumnSpacing = 8 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                row.Children.Add(new TextBlock { Text = cmd.Label, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                                                 TextTrimming = TextTrimming.CharacterEllipsis });
+
+                var ov = _library.KeyOverrides.FirstOrDefault(o => o.CommandId == cmd.Id);
+                var bind = eff.FirstOrDefault(b => b.Id == cmd.Id);   // KeyBind is a record class: null = unbound
+                string comboText = ov is { Disabled: true } ? "unbound"
+                    : bind != null ? ComboText(bind.Key, bind.Mods) : "unbound";
+                var comboLabel = new TextBlock
+                {
+                    Text = comboText, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                    Opacity = ov != null ? 1.0 : 0.65,
+                    FontWeight = ov != null ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal
+                };
+                Grid.SetColumn(comboLabel, 1);
+                row.Children.Add(comboLabel);
+
+                var rebind = new Button { Content = "Rebind", FontSize = 11, Padding = new Thickness(8, 3, 8, 3) };
+                Grid.SetColumn(rebind, 2);
+                var cmdId = cmd.Id; var cmdLabel = cmd.Label;
+                rebind.Click += async (_, _) => { await CaptureBindingAsync(cmdId, cmdLabel); RebuildCustomRows(); };
+                row.Children.Add(rebind);
+
+                var reset = new Button { Content = "Reset", FontSize = 11, Padding = new Thickness(8, 3, 8, 3),
+                                         Visibility = ov != null ? Visibility.Visible : Visibility.Collapsed };
+                Grid.SetColumn(reset, 3);
+                reset.Click += (_, _) =>
+                {
+                    _library.KeyOverrides.RemoveAll(o => o.CommandId == cmdId);
+                    ApplyKeyPreset(); ScheduleSave(); RebuildCustomRows();
+                };
+                row.Children.Add(reset);
+
+                customList.Children.Add(row);
+            }
+
+            var resetAll = new Button { Content = "Reset all to preset defaults", FontSize = 12,
+                                        Margin = new Thickness(0, 6, 0, 0),
+                                        Visibility = _library.KeyOverrides.Count > 0 ? Visibility.Visible : Visibility.Collapsed };
+            resetAll.Click += (_, _) =>
+            {
+                _library.KeyOverrides.Clear();
+                ApplyKeyPreset(); ScheduleSave(); RebuildCustomRows();
+            };
+            customList.Children.Add(resetAll);
+        }
+        RebuildCustomRows();
+        keyBox.SelectionChanged += (_, _) => RebuildCustomRows();   // presets change the base the rows show
+        panel.Children.Add(customExp);
 
         // ---- theme mode (#10-roadmap) ----
         var themeBox = new ComboBox { Header = Loc.T("Settings.Theme.Header"), Width = 220 };
@@ -6193,7 +6354,7 @@ public sealed partial class MainWindow : Window
         var taken = new Dictionary<(VKey, VMod), string>();
 
         var commands = KeyCommands;
-        foreach (var b in KeyPresets[id])
+        foreach (var b in EffectiveBinds(id))
         {
             var cmd = commands.FirstOrDefault(c => c.Id == b.Id);
             if (cmd.Run == null) continue;
@@ -6220,6 +6381,42 @@ public sealed partial class MainWindow : Window
         }
 
         BuildShortcutsSheet(id, rows, dropped);
+    }
+
+    // Preset binds with the user's per-command overrides layered on (U4).
+    // Overrides come FIRST so a user rebind wins any combo tie against a preset
+    // entry - the losing preset bind lands on the F1 sheet's unbound list.
+    private List<KeyBind> EffectiveBinds(string presetId)
+    {
+        var eff = new List<KeyBind>();
+        var overridden = new HashSet<string>();
+        foreach (var ov in _library.KeyOverrides)
+        {
+            overridden.Add(ov.CommandId);
+            if (ov.Disabled) continue;
+            if (Enum.TryParse<VKey>(ov.Key, out var k))
+                eff.Add(new KeyBind(ov.CommandId, k, ParseMods(ov.Mods)));
+        }
+        foreach (var b in KeyPresets[presetId])
+            if (!overridden.Contains(b.Id)) eff.Add(b);
+        return eff;
+    }
+
+    private static VMod ParseMods(string mods)
+    {
+        var m = VMod.None;
+        foreach (var part in mods.Split('+', StringSplitOptions.RemoveEmptyEntries))
+            if (Enum.TryParse<VMod>(part, out var one)) m |= one;
+        return m;
+    }
+
+    private static string ModsToString(VMod m)
+    {
+        var parts = new List<string>();
+        if (m.HasFlag(Ctrl)) parts.Add("Control");
+        if (m.HasFlag(VMod.Menu)) parts.Add("Menu");
+        if (m.HasFlag(VMod.Shift)) parts.Add("Shift");
+        return string.Join("+", parts);
     }
 
     private void BuildShortcutsSheet(string id, List<(string Combo, string Label)> rows, List<string> dropped)
