@@ -720,7 +720,8 @@ public static class LibraryStore
         });
         while (list.Count > RecentPage.MaxRecents)
             list.RemoveAt(list.Count - 1);
-        Save(lib);
+        // persistence rides the caller's debounced save - a page flip must not
+        // trigger a full multi-MB library write by itself
     }
 
     /// <summary>Drops recents whose page no longer exists anywhere in the library
