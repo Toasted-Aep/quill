@@ -30,6 +30,12 @@
     <Content Include="Assets\app.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- app.ico stays the window/taskbar icon; the in-app mark is the 512px
+         raster of icon.svg, which ms-appx: can only reach if it is deployed
+         beside the exe in the unpackaged build (#topbar) -->
+    <Content Include="Assets\icon_512.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <!-- UI strings (#C7). The .resw files keep their MRT layout, but Loc parses

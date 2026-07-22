@@ -4430,13 +4430,32 @@ public sealed partial class MainWindow : Window
     }
 
     // Trash entry point (U3): shows only when the bin has content.
+    // Drawn in the same language as the toolbar icons: a 24-unit box, filled
+    // bands about 1.6 wide, square corners, and a hollow body punched out by a
+    // second subpath, exactly like the shape and select icons.
+    private const string TrashIconData =
+        "M3.4 5.2 H20.6 V6.8 H3.4 Z M9.6 2.8 H14.4 V5.2 H9.6 Z " +                  // lid + handle
+        "M5.6 7.6 H18.4 L17.3 21.2 H6.7 Z M7.3 9.2 L8.2 19.6 H15.8 L16.7 9.2 Z " +  // tapered can, hollowed
+        "M10.2 11.2 H11.4 L11.1 17.8 H9.9 Z M12.6 11.2 H13.8 L14.1 17.8 H12.9 Z";   // two ribs
+
     private void BuildTrashRow()
     {
         int n = LibraryStore.Trash.Items.Count;
         if (n == 0) return;
+        // the Viewbox takes the 24-unit drawing down to the 12pt text beside it
+        // without giving up any of the vector's crispness
+        var icon = new PathIcon { Width = 24, Height = 24 };
+        try { icon.Data = ParseGeometry(TrashIconData); } catch { }
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
+        row.Children.Add(new Viewbox
+        {
+            Child = icon, Width = 14, Height = 14, Stretch = Stretch.Uniform,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        row.Children.Add(new TextBlock { Text = $"Trash ({n})", VerticalAlignment = VerticalAlignment.Center });
         var btn = new Button
         {
-            Content = $"🗑 Trash ({n})",
+            Content = row,
             FontSize = 12,
             Margin = new Thickness(0, 0, 0, 12)
         };
@@ -7777,11 +7796,14 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         foreach (var root in new FrameworkElement[] { TopBarScroll, FormatBarScroll, PenRow, MinimalButtons, CalcPanel, NotebookPanel })
             try { Walk(root); } catch { }
         // the minimal-UI and full-screen buttons live in the pinned strip, not
-        // the scrolling top bar; the gallery search button sits beside New
+        // the scrolling top bar; the gallery icon buttons sit beside New
         // notebook / Close, which must stay normal size — enlarge only these
-        // three so they match the rest of touch mode (#touch)
+        // four so they match the rest of touch mode (#touch). The app-menu
+        // button gets exactly the search button's numbers: the two are meant to
+        // be the same size in every mode (#topbar)
         try { Walk(TopBarPinned); } catch { }
         try { GallerySearchBtn.MinWidth = on ? 44 : 0; GallerySearchBtn.MinHeight = on ? 42 : 0; } catch { }
+        try { GalleryAppMenuBtn.MinWidth = on ? 44 : 0; GalleryAppMenuBtn.MinHeight = on ? 42 : 0; } catch { }
     }
 
 
