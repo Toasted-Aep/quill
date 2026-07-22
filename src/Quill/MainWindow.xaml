@@ -967,14 +967,18 @@
                         </StackPanel>
                         <StackPanel x:Name="GalleryHeaderRow" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" VerticalAlignment="Center">
                             <!-- the app menu, moved off the top bar (#topbar). It sets nothing
-                                 that GallerySearchBtn does not also set, so both take the same
-                                 default button metrics, and the image gets the same 14x14
-                                 content box the search glyph measures to. Source is the 512px
-                                 master with NO decode cap — decoding it down to icon size is
-                                 exactly what made the old mark look soft. -->
+                                 that GallerySearchBtn does not also set — no Width, Height,
+                                 Padding, CornerRadius, Margin or alignment — so both take the
+                                 identical default button metrics. The image is 16x16 because
+                                 that is what GallerySearchBtn's FontIcon at FontSize="14"
+                                 actually measures to (Segoe Fluent Icons' box is 1.14em, not
+                                 1em); at 14 the button came out 2 DIP narrower and shorter,
+                                 which is the size mismatch the user reported. Source is the
+                                 512px master with NO DecodePixel cap — decoding it down to
+                                 icon size is exactly what made the old mark look soft. -->
                             <Button x:Name="GalleryAppMenuBtn"
                                     ToolTipService.ToolTip="Quill — app menu">
-                                <Image Source="ms-appx:///Assets/icon_512.png" Width="14" Height="14"/>
+                                <Image Source="ms-appx:///Assets/icon_512.png" Width="16" Height="16"/>
                                 <Button.Flyout>
                                     <MenuFlyout>
                                         <MenuFlyoutItem Text="Settings…" Click="Settings_Click">
