@@ -26,7 +26,7 @@ namespace Quill.Controls;
 /// direction. Pen input always draws; touch pans/pinches (unless touch-draw
 /// is on); mouse pans with the wheel or middle-drag.
 /// </summary>
-public sealed partial class InkSurface : UserControl
+public sealed class InkSurface : UserControl
 {
     private readonly CanvasVirtualControl _canvas;
     private readonly Canvas _textLayer;
@@ -349,8 +349,6 @@ public sealed partial class InkSurface : UserControl
                 _canvas.Invalidate();
             }
         };
-        PaintProbeInit();   // TEMPORARY, Phase 1a — see InkSurface.PaintProbe.cs
-
         Unloaded += (_, _) => { FlushPaint(); _canvas.RemoveFromVisualTree(); };
     }
 
@@ -1280,6 +1278,9 @@ public sealed partial class InkSurface : UserControl
                 _lastMoveMs = Environment.TickCount64;
                 _shapeAdjust = false;
                 _adjustShape = null;
+                // Oil paints raster dabs instead of a vector stroke; _wet still
+                // accumulates so the existing invalidation maths keeps working.
+                if (Pen == PenType.Oil && !RulerMode) BeginOilStroke(pos, props.Pressure);
                 _holdTimer.Start();
                 break;
 
@@ -1637,6 +1638,9 @@ public sealed partial class InkSurface : UserControl
                         float minGap = 0.7f / ViewZoom;
                         if (Math.Abs(v.X - last.X) + Math.Abs(v.Y - last.Y) < minGap) continue;
                         _wet.Add(new StrokePoint(v.X, v.Y, ip.Properties.Pressure));
+                        // dabs are walked per intermediate point, so the carry
+                        // spans pointer events exactly as it spans segments
+                        if (OilGestureActive) ExtendOilStroke(v, ip.Properties.Pressure);
                     }
                     // The virtual-control win (#cvc): while inking, repaint ONLY
                     // the pixels around the fresh segment instead of the whole
@@ -1869,6 +1873,13 @@ public sealed partial class InkSurface : UserControl
                         PushAction(new AddShapeAction(sh), _page);
                         changed = true;
                     }
+                    break;
+                }
+                // Oil committed its dabs into the tile store; there is no vector
+                // stroke to add and nothing for the ink cache to rebuild.
+                if (OilGestureActive)
+                {
+                    EndOilStroke();
                     break;
                 }
                 var pts = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : FinalizeStroke(_wet ?? new List<StrokePoint>());
@@ -3086,11 +3097,70 @@ public sealed partial class InkSurface : UserControl
         for (int ty = t0y; ty <= t1y; ty++)
             for (int tx = t0x; tx <= t1x; tx++)
             {
-                if (!_paint.TryGet(tx, ty, out var tile)) continue;   // sparse: unallocated = nothing
-                ds.DrawImage(tile.Colour,
-                             new Rect(tx * (double)ts, ty * (double)ts, ts, ts),
-                             new Rect(0, 0, ts, ts), 1f, interp);
+                var world = new Rect(tx * (double)ts, ty * (double)ts, ts, ts);
+                var src = new Rect(0, 0, ts, ts);
+                // settled paint comes through the cached lit tile, so steady
+                // state is one DrawImage per visible tile (§3.3)
+                if (_paint.TryGet(tx, ty, out var tile))
+                    ds.DrawImage(tile.EnsureLit(_canvas), world, src, 1f, interp);
+                // the live gesture's scratch draws straight on top so the wet
+                // stroke appears immediately; it is lit when it commits (§1.3)
+                if (_oil != null && _oil.TryGetScratchColour(tx, ty, out var wet))
+                    ds.DrawImage(wet, world, src, 1f, interp);
             }
+    }
+
+    // ---- oil brush (OILPAINT §2) ------------------------------------------
+    private OilBrush? _oil;
+
+    private OilBrush EnsureOil(NotePage page)
+    {
+        var store = EnsurePaintStore(page);
+        if (_oil == null || !ReferenceEquals(_oilStore, store))
+        {
+            _oil?.Dispose();
+            _oil = new OilBrush(store);
+            _oilStore = store;
+        }
+        return _oil;
+    }
+    private PaintTileStore? _oilStore;
+
+    /// <summary>True while an oil gesture owns the pen, so the vector wet-stroke
+    /// preview and the committed PenStroke are both suppressed.</summary>
+    private bool OilGestureActive => _oil is { Active: true };
+
+    private void BeginOilStroke(Vector2 pos, float pressure)
+    {
+        if (_page == null) return;
+        var brush = EnsureOil(_page);
+        brush.ResetBrushCache();     // pick up the current pen colour
+        brush.Color = PenColor;
+        brush.Diameter = MathF.Max(1f, PenSize);
+        brush.Begin(pos, pressure);
+    }
+
+    private void ExtendOilStroke(Vector2 pos, float pressure)
+    {
+        if (_oil == null || !_oil.Active) return;
+        _oil.Extend(_canvas, pos, pressure);
+        // §1.3: a gesture that spreads past the scratch budget flushes and
+        // starts a fresh segment rather than holding 3 MiB per touched tile
+        if (_oil.NeedsMidGestureFlush)
+        {
+            var flushed = _oil.CommitScratch(_canvas);
+            if (flushed.HasValue) InvalidateWorldRect(flushed.Value);
+        }
+    }
+
+    private void EndOilStroke()
+    {
+        if (_oil == null || !_oil.Active || _page == null) return;
+        var bounds = _oil.End(_canvas);
+        _page.HasPaint = true;
+        if (bounds.HasValue) InvalidateWorldRect(bounds.Value);
+        else _canvas.Invalidate();
+        ContentChanged?.Invoke();   // persists HasPaint; the spatial index is untouched
     }
 
     private void OpenPaintForPage(NotePage page)
@@ -3284,7 +3354,9 @@ public sealed partial class InkSurface : UserControl
             }
         }
 
-        if (_gestureTool == ToolType.Pen)
+        // Oil's wet stroke is the scratch buffer drawn in DrawPaint, not a
+        // vector preview — drawing both would double the mark.
+        if (_gestureTool == ToolType.Pen && !OilGestureActive)
         {
             var temp = new PenStroke
             {

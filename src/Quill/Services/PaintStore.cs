@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Graphics.Canvas;
+using Microsoft.Graphics.Canvas.Effects;
 using Microsoft.UI.Dispatching;
 using Windows.Foundation;
 using Windows.Graphics.DirectX;
@@ -32,6 +33,15 @@ public sealed class PaintTile : IDisposable
     /// <summary>Set whenever pixels change; cleared once the bytes reach disk.</summary>
     internal bool Dirty;
 
+    // Lit cache (§3.3): the six-node lighting graph is re-rendered only when the
+    // tile's pixels change, so steady state is one DrawImage per visible tile —
+    // the same class of cost as the existing ink cache.
+    private CanvasRenderTarget? _lit;
+    private bool _litDirty = true;
+
+    /// <summary>Call after any change to Colour or Height.</summary>
+    public void InvalidateLit() { _litDirty = true; Dirty = true; }
+
     public Rect WorldRect => new(Tx * (double)PaintTileStore.TileSize,
                                  Ty * (double)PaintTileStore.TileSize,
                                  PaintTileStore.TileSize, PaintTileStore.TileSize);
@@ -55,10 +65,87 @@ public sealed class PaintTile : IDisposable
         using (var ds = Height.CreateDrawingSession()) ds.Clear(clear);
     }
 
+    /// <summary>
+    /// The impasto lighting graph (§3.3), rendered into the cached lit tile.
+    /// One sun for the whole app, shared with LiquidGlass: 135° upper-left at a
+    /// 30° raking elevation, because low elevation is what makes thickness read.
+    /// </summary>
+    public ICanvasImage EnsureLit(ICanvasResourceCreator rc)
+    {
+        if (_lit != null && !_litDirty) return _lit;
+        _lit ??= new CanvasRenderTarget(rc, PaintTileStore.TileSize, PaintTileStore.TileSize, 96f,
+                                        DirectXPixelFormat.B8G8R8A8UIntNormalized,
+                                        CanvasAlphaMode.Premultiplied);
+        try
+        {
+            using var diff = new DistantDiffuseEffect
+            {
+                Source = Height,
+                Azimuth = PaintTileStore.LightAzimuth,
+                Elevation = PaintTileStore.LightElevation,
+                HeightMapScale = PaintTileStore.HMax,   // normalised height -> world units, 1 texel = 1 w.u.
+                DiffuseAmount = 1f,
+                LightColor = Windows.UI.Color.FromArgb(255, 255, 255, 255),
+            };
+            using var spec = new DistantSpecularEffect
+            {
+                Source = Height,
+                Azimuth = PaintTileStore.LightAzimuth,
+                Elevation = PaintTileStore.LightElevation,
+                HeightMapScale = PaintTileStore.HMax,
+                SpecularExponent = 12f,     // broader than glass's 22 — wet oil, not glass
+                SpecularAmount = 0.55f,
+                LightColor = Windows.UI.Color.FromArgb(255, 255, 255, 255),
+            };
+            using var ambient = new ColorMatrixEffect { Source = diff, ColorMatrix = AmbientLift(0.45f) };
+            using var body = new BlendEffect { Mode = BlendEffectMode.Multiply, Background = Colour, Foreground = ambient };
+            using var lit = new BlendEffect { Mode = BlendEffectMode.Screen, Background = body, Foreground = spec };
+            // The lighting effects emit alpha = 1, so the chain runs OPAQUE and the
+            // paint's own alpha is restored exactly once at the end. Masking each
+            // term first would give a + a(1-a) on soft edges (0.5 -> 0.75) and
+            // visibly inflate them.
+            using var masked = new CompositeEffect { Mode = CanvasComposite.DestinationIn };
+            masked.Sources.Add(lit);
+            masked.Sources.Add(Colour);
+            using var final = new ColorMatrixEffect
+            {
+                Source = masked,
+                ColorMatrix = Identity,
+                ClampOutput = true,          // Direct2D does NOT clamp at FLOAT precision
+                BufferPrecision = CanvasBufferPrecision.Precision16Float,
+            };
+            using var ds = _lit.CreateDrawingSession();
+            ds.Blend = CanvasBlend.Copy;
+            ds.Clear(Windows.UI.Color.FromArgb(0, 0, 0, 0));
+            ds.DrawImage(final);
+            _litDirty = false;
+        }
+        catch
+        {
+            // never let a lighting failure blank the paint — fall back to flat colour
+            return Colour;
+        }
+        return _lit;
+    }
+
+    private static readonly Matrix5x4 Identity = new()
+    {
+        M11 = 1f, M22 = 1f, M33 = 1f, M44 = 1f,
+    };
+
+    /// <summary>rgb' = Ka + (1-Ka)*rgb, so unlit paint is ambient-lifted rather
+    /// than black. Alpha is passed through untouched.</summary>
+    private static Matrix5x4 AmbientLift(float ka) => new()
+    {
+        M11 = 1f - ka, M22 = 1f - ka, M33 = 1f - ka, M44 = 1f,
+        M51 = ka, M52 = ka, M53 = ka,
+    };
+
     public void Dispose()
     {
         try { Colour.Dispose(); } catch { }
         try { Height.Dispose(); } catch { }
+        try { _lit?.Dispose(); } catch { }
     }
 }
 
@@ -73,6 +160,19 @@ public sealed class PaintTileStore : IDisposable
 {
     public const int TileSize = PaintTileCodec.TileSize;
     public const float HMax = 6.0f;          // world units of paint at h = 1.0
+
+    // One sun for the whole app — the SAME azimuth LiquidGlass passes to the
+    // same Win2D DistantSpecular effect over the same alpha-carried height
+    // field, so paint impasto and glass chrome never disagree about the light.
+    // NB: the spec labels 135° "upper-left", but a controlled dome probe shows
+    // Win2D's lighting azimuth is measured in image space (Y down), so 135°
+    // actually rakes from the LOWER-left — and LiquidGlass, feeding the identical
+    // convention, renders the same way. Consistency is the spec's overriding
+    // rule ("exactly one light direction"), so the shared value is kept as-is; a
+    // true upper-left highlight would be azimuth ~3.927f (225°) applied to BOTH
+    // features together, which is a cross-cutting change beyond this phase.
+    public const float LightAzimuth = 2.3561945f;    // matches LiquidGlass (Math.PI * 0.75)
+    public const float LightElevation = 0.5235988f;  //  30°, deliberately low so the light rakes
 
     private readonly Dictionary<(int, int), PaintTile> _tiles = new();
     private readonly DispatcherQueue? _ui;
