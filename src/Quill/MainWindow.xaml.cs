@@ -3863,15 +3863,16 @@ public sealed partial class MainWindow : Window
             ramp.Tick += (_, _) =>
             {
                 if (glow == null) { ramp!.Stop(); return; }
-                // out is a touch slower than in — the classic ease asymmetry
-                double step = target > glow.Opacity ? 0.11 : -0.07;
+                // out is a touch slower than in — the classic ease asymmetry.
+                // In reaches full in ~3 ticks (~100ms); the old 0.11 took ~8
+                // ticks (~264ms), which read as the glow arriving late (#glowlag).
+                double step = target > glow.Opacity ? 0.26 : -0.07;
                 double next = glow.Opacity + step;
                 if ((step > 0 && next >= target) || (step < 0 && next <= target)) next = target;
                 glow.Opacity = next;
                 if (next >= 1)
                 {
                     ramp!.Stop();
-                    if (!joined) { RegisterGlowBrush(glow); joined = true; }   // breathe only once fully in
                 }
                 else if (next <= 0)
                 {
@@ -3890,10 +3891,16 @@ public sealed partial class MainWindow : Window
                 // First light on the NEXT frame, not a ramp interval (33ms) later:
                 // start at the first eased step so the glow appears immediately and
                 // the ramp keeps easing it the rest of the way in (#anim).
-                glow.Opacity = 0.11;
-                joined = false;
+                glow.Opacity = 0.22;
                 SetBorder(glow, restThickness);   // paint-only hover: geometry never changes
             }
+            // Join the glow engine on ENTER so animated modes (Aurora, Breathe,
+            // Shimmer…) drive the brush from the first frame. Registering only
+            // once the fade completed left ~0.26s where the border was a frozen
+            // gradient — which is exactly the "glow kicks in late" report
+            // (#glowlag). Re-entry mid-fade-out re-joins here too, since the
+            // exit handler unregisters.
+            if (!joined) { RegisterGlowBrush(glow); joined = true; }
             target = 1;
             EnsureRamp();
             ramp!.Start();
