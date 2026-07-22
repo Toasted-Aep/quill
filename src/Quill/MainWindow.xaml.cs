@@ -240,7 +240,7 @@ public sealed partial class MainWindow : Window
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); FadeOut(StatusText, 220); };
         _zoomTimer.Tick += (_, _) => { _zoomTimer.Stop(); FadeOut(ZoomBorder, 180); };
-        Closed += (_, _) => { CaptureWindowPlacement(); SaveNow(); LibraryStore.Flush(); };
+        Closed += (_, _) => { CaptureWindowPlacement(); SaveNow(); Surface.FlushPaint(); LibraryStore.Flush(); };
 
         // pen panel dragging -> dock to an edge
         PenGrip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
