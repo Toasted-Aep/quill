@@ -299,6 +299,12 @@ public class NotePage
     public long AudioStartTicks { get; set; }
     // Comment pins (#roadmap: staged collaboration — comments ship standalone).
     public List<PageComment> Comments { get; set; } = new();
+    // Raster paint lives in %LOCALAPPDATA%, keyed by page id (OILPAINT §4.1);
+    // this is the only field it adds here. WhenWritingDefault is mandatory, not
+    // decorative: without it every page writes "HasPaint":false into a 53 MB
+    // library.json and changes every page's hash, forcing a sync op per page.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool HasPaint { get; set; }
 
     public override string ToString() => Name;
 }

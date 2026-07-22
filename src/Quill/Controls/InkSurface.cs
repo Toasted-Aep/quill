@@ -26,7 +26,7 @@ namespace Quill.Controls;
 /// direction. Pen input always draws; touch pans/pinches (unless touch-draw
 /// is on); mouse pans with the wheel or middle-drag.
 /// </summary>
-public sealed class InkSurface : UserControl
+public sealed partial class InkSurface : UserControl
 {
     private readonly CanvasVirtualControl _canvas;
     private readonly Canvas _textLayer;
@@ -349,7 +349,9 @@ public sealed class InkSurface : UserControl
                 _canvas.Invalidate();
             }
         };
-        Unloaded += (_, _) => _canvas.RemoveFromVisualTree();
+        PaintProbeInit();   // TEMPORARY, Phase 1a — see InkSurface.PaintProbe.cs
+
+        Unloaded += (_, _) => { FlushPaint(); _canvas.RemoveFromVisualTree(); };
     }
 
     // =======================================================================
@@ -570,6 +572,7 @@ public sealed class InkSurface : UserControl
         ViewOffset = new Vector2((float)page.ViewX, (float)page.ViewY);
         ViewZoom = Math.Clamp((float)page.ViewZoom, 0.1f, 8f);
         _contentMaxDirty = true;
+        OpenPaintForPage(page);   // flushes the outgoing page's tiles, loads this one's (§4.4)
         // Heal cells eaten by the old empty-box cleanup (#cellfix): every grid
         // slot of every table needs a TextElement, EXCEPT slots covered by a
         // merged cell's span (merges legitimately remove hidden cells).
@@ -3057,6 +3060,81 @@ public sealed class InkSurface : UserControl
         return MathF.Min((_blurVelocity - BlurVelocityMin) / 900f, 5f);
     }
 
+    // =======================================================================
+    // Raster paint (OILPAINT §1). Sparse world-aligned 512² tiles, composited
+    // between shapes and ink. Paint carries no identity, so it is deliberately
+    // NOT in the spatial index — EnsureGrid never sees it (§6.2).
+    // =======================================================================
+    private PaintTileStore? _paint;
+
+    /// <summary>Number of resident paint tiles and the GPU bytes they hold —
+    /// surfaced for the substrate memory measurement.</summary>
+    public (int Tiles, long Bytes) PaintMemory => _paint == null ? (0, 0L) : (_paint.TileCount, _paint.ResidentBytes);
+
+    private void DrawPaint(CanvasDrawingSession ds, float visMinX, float visMinY, float visMaxX, float visMaxY)
+    {
+        if (_paint == null || _paint.TileCount == 0) return;
+        // ds.Transform is ALREADY world-space here (scale * translate * regionT).
+        // Do not touch it: the tiles draw at their world rects and pan/zoom fall
+        // out of the composed transform for free. Clobbering it is exactly what
+        // made ink invisible at every non-origin tile (#inkfix2).
+        const int ts = PaintTileStore.TileSize;
+        int t0x = PaintTileStore.TileIndex(visMinX), t1x = PaintTileStore.TileIndex(visMaxX);
+        int t0y = PaintTileStore.TileIndex(visMinY), t1y = PaintTileStore.TileIndex(visMaxY);
+        var interp = ViewZoom < 0.9f ? CanvasImageInterpolation.MultiSampleLinear
+                                     : CanvasImageInterpolation.Linear;
+        for (int ty = t0y; ty <= t1y; ty++)
+            for (int tx = t0x; tx <= t1x; tx++)
+            {
+                if (!_paint.TryGet(tx, ty, out var tile)) continue;   // sparse: unallocated = nothing
+                ds.DrawImage(tile.Colour,
+                             new Rect(tx * (double)ts, ty * (double)ts, ts, ts),
+                             new Rect(0, 0, ts, ts), 1f, interp);
+            }
+    }
+
+    private void OpenPaintForPage(NotePage page)
+    {
+        try
+        {
+            // the outgoing page's pixels must reach disk before its store dies
+            _paint?.FlushBlocking();
+            _paint?.Dispose();
+            _paint = null;
+            if (!page.HasPaint && !PaintTileStore.HasStoredPaint(page.Id)) return;
+            var store = new PaintTileStore(page.Id);
+            // Each landed tile invalidates only its own world rect, so ink is on
+            // screen immediately and paint fades in tile by tile (§4.4).
+            store.TileLoaded += world => InvalidateWorldRect(world);
+            _paint = store;
+            store.BeginLoad(_canvas);
+        }
+        catch { _paint = null; }
+    }
+
+    /// <summary>Screen-space invalidation of a world rectangle.</summary>
+    private void InvalidateWorldRect(Rect world)
+    {
+        var tl = world.X * ViewZoom + ViewOffset.X;
+        var tp = world.Y * ViewZoom + ViewOffset.Y;
+        InvalidateScreenRect(new Rect(tl - 2, tp - 2,
+                                      world.Width * ViewZoom + 4, world.Height * ViewZoom + 4));
+    }
+
+    /// <summary>App close / explicit save: block briefly so a debounced paint
+    /// write cannot be lost with the process.</summary>
+    public void FlushPaint() => _paint?.FlushBlocking();
+
+    /// <summary>Store for the live page, created on first mark.</summary>
+    private PaintTileStore EnsurePaintStore(NotePage page)
+    {
+        if (_paint != null) return _paint;
+        var store = new PaintTileStore(page.Id);
+        store.TileLoaded += world => InvalidateWorldRect(world);
+        _paint = store;
+        return store;
+    }
+
     // Renders the region into an intermediate target, then composites it through
     // a GaussianBlurEffect. Only runs while blurred, so the steady-state draw
     // path pays nothing.
@@ -3136,6 +3214,11 @@ public sealed class InkSurface : UserControl
                 DrawShape(ds, sh);
             }
         }
+
+        // Raster paint (OILPAINT §1.2) sits ABOVE shapes and images and BELOW
+        // all vector ink: notes are annotations over a painting and must stay
+        // legible, and it leaves the ink cache below completely untouched.
+        DrawPaint(ds, visMinX, visMinY, visMaxX, visMaxY);
 
         // Big pages draw settled ink from the offscreen cache (#43); anything
         // that offsets strokes (replay, selection move, free space) falls back
