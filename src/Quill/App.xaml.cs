@@ -26,13 +26,6 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        // TEMPORARY, Phase 1a substrate proof: redirect this PROCESS at a
-        // throwaway library so the probe never touches the user's notes. Only
-        // the in-memory setting changes; settings.json is not rewritten unless
-        // the window closes gracefully. Remove with InkSurface.PaintProbe.cs.
-        var probeData = Environment.GetEnvironmentVariable("QUILL_PAINT_PROBE_DATA");
-        if (!string.IsNullOrEmpty(probeData)) Services.LibraryStore.Settings.DataFolder = probeData;
-
         // Deserialising a big library overlaps the window's XAML construction
         // instead of running after it (#roadmap: async library load).
         Services.LibraryStore.BeginLoad();

@@ -5,7 +5,10 @@ namespace Quill.Models;
 public enum PenType
 {
     Standard, Brush, Fountain, Highlighter, Pencil, Marker, Calligraphy,
-    Crayon, Watercolor, Monoline, Rollerball, Gel, Ballpoint, FeltTip
+    Crayon, Watercolor, Monoline, Rollerball, Gel, Ballpoint, FeltTip,
+    // APPENDED, never inserted: PenType serialises as its integer, so adding a
+    // member anywhere but the end silently repaints every saved stroke.
+    Oil
 }
 public enum ToolType { Pen, Eraser, Select, Text, FreeSpace }
 // How the mouse behaves while the Pen tool is active. Auto = "normal mouse"
@@ -365,6 +368,10 @@ public class Library
     public List<Notebook> Notebooks { get; set; } = new();
     public List<string> Folders { get; set; } = new();   // gallery folders (#16)
     public List<PenPreset> Pens { get; set; } = new();
+    // One-time seed of the Oil preset, so EXISTING libraries (whose Pens list is
+    // already non-empty and therefore skips SeedPens) still get the brush once.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool OilPenSeeded { get; set; }
     public string DefaultBackground { get; set; } = "#FAF9F5";
     public GridType DefaultGrid { get; set; } = GridType.None;
     public double DefaultGridSpacing { get; set; } = 32;

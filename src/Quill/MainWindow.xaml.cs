@@ -2022,6 +2022,7 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     private void SeedPens()
     {
+        OilBrush.SeedOilPreset(_library);   // one-time; reaches existing libraries too
         if (_library.Pens.Count > 0) return;
         _library.Pens.AddRange(new[]
         {
