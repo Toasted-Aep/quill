@@ -392,6 +392,11 @@ public sealed partial class MainWindow : Window
         }
 
         LibraryStore.AdoptInPlace(_library, loaded);
+        // library.json carries the settings block of whichever instance wrote it
+        // last, which may be a stale snapshot that reverts a setting changed
+        // elsewhere. settings.json is rewritten the moment a setting changes, so
+        // it is the fresher of the two and wins for settings (#settings-persistence).
+        LibraryStore.ApplySettings(_library);
         SyncLog.Initialize(_library);   // op-log shadow: only post-launch edits log (#collab)
         LibraryStore.EnableSaving();    // the single point where writing becomes legal
         FinishStartup();
@@ -1473,6 +1478,10 @@ public sealed partial class MainWindow : Window
         // Before the library is adopted — and forever, if the load failed — the
         // model in memory is a placeholder; never let it queue a write.
         if (!_libraryReady) return;
+        // Settings are tiny and must not depend on the debounced multi-MB library
+        // write landing: mirror them now, so closing, crashing or another instance
+        // clobbering library.json cannot lose them. No-ops unless one changed.
+        LibraryStore.PersistSettings(_library);
         _saveTimer.Stop();
         _saveTimer.Start();
     }
