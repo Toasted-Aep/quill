@@ -19,6 +19,14 @@ public static class LibraryStore
         // snap to dark, and open at the default size before jumping to the
         // remembered one (#roadmap: async library load, phase 2).
         public UiHints Ui { get; set; } = new();
+        // Full mirror of every library-level SETTING (see SettingFields).
+        // library.json is a 53 MB whole-file overwrite, so any instance that has
+        // it open rewrites the settings block from the snapshot it loaded and
+        // silently reverts changes made anywhere else. Settings therefore live
+        // here too, in a file small enough to rewrite the moment one changes.
+        // null = never mirrored, which SEEDS from the library instead of
+        // overwriting it (so adding this could not wipe existing settings).
+        public Dictionary<string, JsonElement>? Settings { get; set; }
     }
 
     public sealed class UiHints
@@ -307,7 +315,7 @@ public static class LibraryStore
     public static void Save(Library lib)
     {
         if (!_savingEnabled) return;
-        SyncHints(lib);
+        PersistSettings(lib);
         // Serialise on the caller's (UI) thread so the model can't mutate
         // mid-write, then push the actual file IO to a worker (#52).
         string json;
@@ -315,33 +323,107 @@ public static class LibraryStore
         catch { return; } // unserializable model: never crash the app on save
         // Stage 0 op log: diff against the shadow and append change ops (#collab)
         try { SyncLog.OnSaved(lib); } catch { }
-        _lastWrite = Task.Run(() => WriteAll(json));
+        // Chain, don't race: independent Task.Run writes serialise on _writeLock
+        // but acquire it in arbitrary order, so an OLDER json could land after a
+        // newer one and silently revert it. Chaining also makes Flush's single
+        // wait cover every queued write instead of only the last one queued.
+        _lastWrite = _lastWrite.ContinueWith(_ => WriteAll(json),
+            CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
 
-    // Keep the startup hints in settings.json in step with the library. Written
-    // only when something actually changed, so an autosave every 1.5s does not
-    // turn into a second file write.
-    private static void SyncHints(Library lib)
+    // Which Library properties are SETTINGS rather than note content. Everything
+    // the user can change from the Settings panel (and the toolbars that write
+    // back into the library) belongs here; notes, folders, recents and calculator
+    // state stay in library.json alone.
+    private static readonly string[] SettingFields =
+    {
+        "DefaultBackground", "DefaultGrid", "DefaultGridSpacing", "DefaultPaper",
+        "Theme", "Language", "DefaultFont", "DefaultFontSize", "PenDock",
+        "NotebookPanelW", "NotebookPanelH", "StartFullscreen", "StartOnGallery",
+        "AccentColor", "TouchMode", "Liquidness", "RecentColors", "CustomColors",
+        "LastEraserMode", "LastEraserStyle", "EraserSize", "GlowMode",
+        "AccentFollow", "KeyPreset", "OledBlack", "AutosaveSeconds",
+        "PenRepair", "PenRepairDots", "PenRepairBridge", "MotionBlur",
+        "ShowCommentPins", "HiddenTools", "KeyOverrides", "Pens",
+        "AiProvider", "AiModel", "AiEndpoint",
+        "WinX", "WinY", "WinW", "WinH", "WinMaximized"
+    };
+
+    private static IEnumerable<System.Reflection.PropertyInfo> SettingProps()
+    {
+        foreach (var n in SettingFields)
+        {
+            var p = typeof(Library).GetProperty(n);
+            if (p != null && p.CanRead && p.CanWrite) yield return p;
+        }
+    }
+
+    /// <summary>Mirrors the library's settings into settings.json. Called on every
+    /// save AND the moment a setting changes, so a settings change is durable
+    /// without waiting for — or depending on — the debounced 53 MB library write.
+    /// Writes only when a value actually changed, so a 1.5s autosave does not turn
+    /// into a second file write.</summary>
+    public static void PersistSettings(Library lib)
     {
         try
         {
-            var h = Settings.Ui ??= new UiHints();
-            if (h.Theme == lib.Theme && h.OledBlack == lib.OledBlack && h.Accent == lib.AccentColor &&
-                h.WinX == lib.WinX && h.WinY == lib.WinY && h.WinW == lib.WinW && h.WinH == lib.WinH &&
-                h.WinMaximized == lib.WinMaximized && h.StartFullscreen == lib.StartFullscreen) return;
-            h.Theme = lib.Theme; h.OledBlack = lib.OledBlack; h.Accent = lib.AccentColor;
-            h.WinX = lib.WinX; h.WinY = lib.WinY; h.WinW = lib.WinW; h.WinH = lib.WinH;
-            h.WinMaximized = lib.WinMaximized; h.StartFullscreen = lib.StartFullscreen;
+            var cur = Settings.Settings;
+            var next = new Dictionary<string, JsonElement>();
+            bool changed = cur == null;
+            foreach (var p in SettingProps())
+            {
+                var el = JsonSerializer.SerializeToElement(p.GetValue(lib), Opts);
+                next[p.Name] = el;
+                if (!changed && (!cur!.TryGetValue(p.Name, out var old) ||
+                                 old.GetRawText() != el.GetRawText())) changed = true;
+            }
+            if (!changed) return;
+            Settings.Settings = next;
+            SyncUiHints(lib);
             SaveSettings();
         }
         catch { }
+    }
+
+    /// <summary>Applies the mirrored settings onto a freshly loaded library, so a
+    /// library.json written by another instance from ITS stale snapshot cannot
+    /// revert a setting. On the first run after the mirror was introduced nothing
+    /// is stored yet, and then the library SEEDS the mirror rather than the other
+    /// way round — adding this can never wipe settings the user already had.</summary>
+    public static void ApplySettings(Library lib)
+    {
+        try
+        {
+            var stored = Settings.Settings;
+            if (stored == null) { PersistSettings(lib); return; }
+            foreach (var p in SettingProps())
+            {
+                if (!stored.TryGetValue(p.Name, out var el)) continue;
+                // a hand-edited or older settings.json must never break startup
+                try { p.SetValue(lib, JsonSerializer.Deserialize(el.GetRawText(), p.PropertyType, Opts)); }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
+    // The early-paint hints are read before library.json has parsed at all, so
+    // they are kept in step whenever the mirror is written.
+    private static void SyncUiHints(Library lib)
+    {
+        var h = Settings.Ui ??= new UiHints();
+        h.Theme = lib.Theme; h.OledBlack = lib.OledBlack; h.Accent = lib.AccentColor;
+        h.WinX = lib.WinX; h.WinY = lib.WinY; h.WinW = lib.WinW; h.WinH = lib.WinH;
+        h.WinMaximized = lib.WinMaximized; h.StartFullscreen = lib.StartFullscreen;
     }
 
     /// <summary>Blocks briefly until the last queued write hits disk — called
     /// on app close so a fire-and-forget save can't be lost.</summary>
     public static void Flush()
     {
-        try { _lastWrite.Wait(4000); } catch { }
+        // 53 MB plus a rolling snapshot does not always finish in 4s, and a
+        // close that gives up early loses every change since the last save.
+        try { _lastWrite.Wait(15000); } catch { }
     }
 
     private static void WriteAll(string json)
