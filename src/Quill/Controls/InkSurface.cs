@@ -170,6 +170,14 @@ public sealed class InkSurface : UserControl
     private EraserStyle _gestureEraserStyle;
     private List<(int Index, PenStroke Stroke)> _eraseRemoved = new();
     private HashSet<PenStroke> _gestureFragments = new();
+    // Pre-erase snapshot of every paint tile this eraser gesture cuts into, keyed
+    // by tile, recorded the first time each tile is touched (OILPAINT-SPEC §6.2).
+    // Non-null only while an eraser gesture with paint on the page is live.
+    private Dictionary<(int Tx, int Ty), (bool Existed, byte[]? ColourZ, byte[]? HeightZ)>? _paintEraseBefore;
+
+    // §6.1: the running paint-undo history is capped at 128 MB, trimmed from the
+    // oldest paint actions; vector undo is never trimmed.
+    private const long PaintUndoCapBytes = 128L * 1024 * 1024;
 
     private List<Vector2>? _lasso;
     private readonly List<PenStroke> _selected = new();
@@ -1292,6 +1300,9 @@ public sealed class InkSurface : UserControl
                 _eraseRemoved = new List<(int, PenStroke)>();
                 _eraseRemovedShapes = new List<(int, ShapeElement)>();
                 _gestureFragments = new HashSet<PenStroke>();
+                // The eraser rubs paint away too (§6.2); arm the per-tile snapshot
+                // only when this page actually has resident paint to cut into.
+                _paintEraseBefore = _paint != null ? new() : null;
                 _eraseLast = pos;
                 EraseAt(pos, pos);
                 break;
@@ -1922,23 +1933,37 @@ public sealed class InkSurface : UserControl
             }
             case ToolType.Eraser:
             {
+                // Collect this gesture's vector and paint erase into one list.
+                // A single-type erase still pushes exactly one action (unchanged
+                // from before); only when the pass also cut paint — or spanned
+                // strokes AND shapes — is it bundled into one CompositeAction, so
+                // vector + raster erase undo together in one step (§6.2).
+                var eraseActs = new List<IPageAction>();
                 if (_eraseRemoved.Count > 0)
                 {
                     if (_gestureEraserMode == EraserMode.Object)
-                        PushAction(new RemoveStrokesAction(_eraseRemoved), _page, alreadyDone: true);
+                        eraseActs.Add(new RemoveStrokesAction(_eraseRemoved));
                     else
                     {
                         var added = _gestureFragments.Where(f => _page.Strokes.Contains(f)).ToList();
-                        PushAction(new ReplaceStrokesAction(_eraseRemoved, added), _page, alreadyDone: true);
+                        eraseActs.Add(new ReplaceStrokesAction(_eraseRemoved, added));
                     }
-                    changed = true;
                 }
                 if (_eraseRemovedShapes.Count > 0)
                 {
-                    PushAction(new RemoveShapesAction(_eraseRemovedShapes), _page, alreadyDone: true);
+                    eraseActs.Add(new RemoveShapesAction(_eraseRemovedShapes));
                     _eraseRemovedShapes = new List<(int, ShapeElement)>();
-                    changed = true;
                 }
+                var paintErase = BuildPaintEraseAction();
+                if (paintErase != null) eraseActs.Add(paintErase);
+
+                if (eraseActs.Count == 1)
+                    PushAction(eraseActs[0], _page, alreadyDone: true);
+                else if (eraseActs.Count > 1)
+                    PushAction(new CompositeAction(eraseActs, "Erase"), _page, alreadyDone: true);
+                if (paintErase != null) UndoManager.TrimBottom(PaintUndoCapBytes);
+                if (eraseActs.Count > 0) changed = true;
+                _paintEraseBefore = null;
                 break;
             }
             case ToolType.Select:
@@ -2565,6 +2590,46 @@ public sealed class InkSurface : UserControl
                 }
             }
         }
+
+        // Raster paint is not in the spatial index, so the eraser rubs it away by
+        // cutting DestinationOut dabs into the tiles along this step (§6.2). Both
+        // eraser modes erase paint the same way — paint has no "object" to slice.
+        ErasePaint(from, to);
+    }
+
+    /// <summary>Cut the eraser path out of the resident paint tiles, snapshotting
+    /// each tile once for undo (§6.2). No-op when the page has no paint.</summary>
+    private void ErasePaint(Vector2 from, Vector2 to)
+    {
+        if (_paint == null || _paintEraseBefore == null) return;
+        float r = EraserRadius;
+        _paint.EraseSegment(_canvas, from, to, r, tile =>
+        {
+            var key = (tile.Tx, tile.Ty);
+            if (_paintEraseBefore.ContainsKey(key)) return;
+            _paintEraseBefore[key] = (true,
+                PaintTileCodec.CompressRaw(tile.Colour.GetPixelBytes()),
+                PaintTileCodec.CompressRaw(tile.Height.GetPixelBytes()));
+        });
+    }
+
+    /// <summary>Build the paint-erase undo step for the gesture just finished, or
+    /// null if no paint was cut. The after-state is read back here, at pen-up.</summary>
+    private IPageAction? BuildPaintEraseAction()
+    {
+        if (_paint == null || _paintEraseBefore == null || _paintEraseBefore.Count == 0) return null;
+        var caps = new List<PaintTileCapture>(_paintEraseBefore.Count);
+        foreach (var ((tx, ty), before) in _paintEraseBefore)
+        {
+            byte[]? ac = null, ah = null;
+            if (_paint.TryGet(tx, ty, out var t))
+            {
+                ac = PaintTileCodec.CompressRaw(t.Colour.GetPixelBytes());
+                ah = PaintTileCodec.CompressRaw(t.Height.GetPixelBytes());
+            }
+            caps.Add(new PaintTileCapture(tx, ty, before.Existed, before.ColourZ, before.HeightZ, ac, ah));
+        }
+        return new PaintTilesAction(_paint, _canvas, caps, null, "Erase paint");
     }
 
     // ---- eraser styles (§7.c) ---------------------------------------------
@@ -3156,7 +3221,16 @@ public sealed class InkSurface : UserControl
     private void EndOilStroke()
     {
         if (_oil == null || !_oil.Active || _page == null) return;
-        var bounds = _oil.End(_canvas);
+        var bounds = _oil.End(_canvas);         // composites the scratch onto the canvas
+        // One undo action for the whole stroke: the tiles it touched, captured
+        // before the commit and read back after, share the SAME undo stack as
+        // vector ink so Ctrl+Z / the dial removes whichever edit was most recent.
+        var caps = _oil.TakeUndoCaptures(_canvas);
+        if (caps != null && caps.Count > 0 && _paint != null)
+        {
+            PushAction(new PaintTilesAction(_paint, _canvas, caps, bounds), _page, alreadyDone: true);
+            UndoManager.TrimBottom(PaintUndoCapBytes);
+        }
         _page.HasPaint = true;
         if (bounds.HasValue) InvalidateWorldRect(bounds.Value);
         else _canvas.Invalidate();
