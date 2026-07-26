@@ -2,137 +2,194 @@ namespace Quill.Models;
 
 /// <summary>
 /// One Copic marker: the published code ("B21", "BG000", "N5"), the family
-/// prefix it belongs to, and an approximate sRGB rendering of the ink.
+/// prefix it belongs to, and the calibrated sRGB rendering of the ink.
 /// </summary>
 /// <remarks>
-/// The hex values are eyeballed from published swatch charts rather than
-/// measured, so they are close but not colour-managed matches for the real
-/// markers. They are ordered correctly within each family — the blending
-/// number still runs light-to-dark — which is what the ring layout relies on.
+/// The hex values are the dialled-in set lifted verbatim from Quill's own
+/// working web colour wheel — the source of truth — rather than eyeballed
+/// swatch-chart guesses. Colours keep the reference's order inside each slice
+/// (index 0 is the innermost ring), which is what the concentric layout relies
+/// on: the blending number still runs light-to-dark down a family.
 /// </remarks>
 public readonly record struct CopicSwatch(string Code, string Family, byte R, byte G, byte B);
+
+/// <summary>
+/// One 10° angular column of the outer wheel: its colours stack radially,
+/// index 0 innermost. <see cref="StartAngle"/>/<see cref="EndAngle"/> are the
+/// reference's SVG-style degrees (0° = east, clockwise, -90° = top).
+/// </summary>
+public sealed record CopicSlice(double StartAngle, double EndAngle, CopicSwatch[] Colors);
+
+/// A colour family holding a contiguous run of 10° slices (R spans 3, BG 4, E 5).
+public sealed record CopicSector(string Id, string Name, CopicSlice[] Slices);
+
+/// A grouped run of swatches on one of the two inner rings (accents/core, greys).
+public sealed record CopicCategory(string Name, CopicSwatch[] Colors);
 
 /// <summary>
 /// The Copic marker table, as code. It is static reference data — a palette,
 /// not user data — so it deliberately does not live in library.json.
 ///
-/// The table is authored as one compact "CODE:RRGGBB" run per family so the
-/// source stays readable; <see cref="All"/> is the parsed array everything
-/// else consumes. Families appear in <see cref="Families"/> in wheel order
-/// (warm → cool → neutral), which is the order the swatch ring lays them out.
+/// The data mirrors the reference wheel's three tiers exactly, because the ring
+/// geometry is driven by that structure:
+///   • Tier 1 (inner arc)  — accents + core, a 144° arc split into 3 groups.
+///   • Tier 2 (grey ring)  — the four Copic grey families, a full circle.
+///   • Tier 3+ (outer)     — 11 colour families laid out as 36 contiguous 10°
+///                           slices running -90°→270°, each slice a radial
+///                           column whose depth is however many inks it holds.
+///
+/// Each run is authored as compact "CODE:RRGGBB" tokens so the source stays
+/// readable; the parsed <see cref="CopicSwatch"/> arrays are what everything
+/// else consumes.
 /// </summary>
 public static class CopicPalette
 {
-    // Family order around the ring: a hue sweep, with the four grey families
-    // (fluorescents aside) parked together at the end so the neutrals read as
-    // one block rather than interrupting the spectrum.
-    private static readonly (string Family, string Data)[] Raw =
+    // ── Tier 1 (inner arc): accents + core numbers/names ──
+    private static readonly (string Name, string Data)[] Tier1Raw =
     {
-        ("Y", "Y0000:FCF8DE Y000:FDF8D2 Y00:FCF6C4 Y02:FBF2AE Y04:F2EC72 Y06:FBF06A Y08:FCE84A " +
-              "Y11:FCF4C8 Y13:FAF0A2 Y15:FBE470 Y17:F8DC4E Y18:F8E33E Y19:FBE23C " +
-              "Y21:FBEBC4 Y23:F6E2B0 Y26:EED08A Y28:C6A05E Y32:F2DEB6 Y35:F8D874 Y38:F8DC8E"),
-
-        ("YG", "YG0000:F0F6DC YG00:EAF0B8 YG01:E2EEC0 YG03:DCEEA8 YG05:CCE694 YG06:C4E484 YG07:96CE4E " +
-               "YG09:86C84E YG11:E4F0CE YG13:DCEAA4 YG17:52B058 YG21:F2F0BE YG23:E4EC94 YG25:CAE07E " +
-               "YG41:DCEEDC YG45:BEE0C0 YG61:C4D8B4 YG63:B0CE9E YG67:86B478 YG91:DCDCB4 YG93:D8D6A2 " +
-               "YG95:C2C078 YG97:98944E YG99:5E6E38"),
-
-        ("G", "G0000:EDF6EC G000:E6F4E4 G00:DCF0DC G02:C0E4C4 G03:A8DCA8 G05:4EB878 G07:46B06A " +
-              "G09:4CBE72 G12:CCE8C0 G14:86C86A G16:3EB474 G17:009A62 G19:00A05E G20:E8F0D4 " +
-              "G21:C8E4B4 G24:C0DCA0 G28:2E8452 G29:1E5E3C G40:E0EDD8 G43:C4DCAE G46:6E9A6A " +
-              "G82:C6D2A8 G85:A0BC9E G94:7E8A5E G99:5E6E3A"),
-
-        ("BG", "BG0000:E8F5F0 BG000:E3F3EE BG00:D9EEEC BG01:BCE4E8 BG02:B7E4E6 BG05:6FCBD6 BG07:22B3B8 " +
-               "BG09:12B5B0 BG10:DCEDE7 BG11:CFE9E6 BG13:BFE5E1 BG15:93D8CE BG18:35B0A0 BG23:ADDDD2 " +
-               "BG32:BFE0D6 BG34:A5DCCE BG45:B4E1DA BG49:00A6A0 BG53:4EBAB0 BG57:2C8F8C BG70:D8E5DE " +
-               "BG72:4E8C8A BG75:3E7472 BG78:2F5C5C BG90:D5DCD6 BG93:B4C1BA BG96:6E8C82 BG99:4A7A72"),
-
-        ("B", "B0000:E8F5F8 B000:E4F2F6 B00:DCEEF3 B01:D2EAF2 B02:A8D8EC B04:56B4DE B05:4BB1DC " +
-              "B06:1FA6DC B12:C8E7F2 B14:61BCE3 B16:2CADE0 B18:2C6BA8 B21:DCEBF5 B23:9DC5E6 " +
-              "B24:86C7E8 B26:6EA5D6 B28:2C5D96 B29:1F63A8 B32:DDEAF0 B34:7FBEE0 B37:2A5C86 " +
-              "B39:35558F B41:DCEDF5 B45:7FB6DA B52:9FB8C8 B60:DCDDEC B63:A9B4D8 B66:6D7CB0 " +
-              "B69:3A5E97 B79:3B4B96 B91:D5E0E8 B93:A9C6D8 B95:7FA3BC B97:3E6E92 B99:274B69"),
-
-        ("BV", "BV0000:EDEAF2 BV000:EAE5F0 BV00:DCD8EC BV01:C4C0E0 BV02:B7B4DA BV04:8E8FC4 BV08:9A7FBE " +
-               "BV11:DCD8EA BV13:7C7FB6 BV17:6E6FAA BV20:DDE0EE BV23:C3C6DA BV25:8E8CA4 BV29:3E4360 " +
-               "BV31:E2E3EE BV34:8189A6"),
-
-        ("V", "V0000:F4EEF6 V000:F2E8F4 V01:EEDCEC V04:E4B8DA V05:DEA6D2 V06:CE8FC8 V09:8E4EA8 " +
-              "V12:EFDCEE V15:D0A6D8 V17:A87EC4 V20:DED4E4 V22:B8A8CA V25:9C8AB4 V28:6E5C82 " +
-              "V91:E8D2DE V93:DCB4CE V95:B47EA8 V99:4E3450"),
-
-        ("RV", "RV0000:FBEFF4 RV000:F9EAF2 RV00:F6DCEA RV02:F8CEE0 RV04:F58AAE RV06:EE6C9E RV09:E24C8E " +
-               "RV10:FCE8F0 RV11:F9CFE0 RV13:F6BAD4 RV14:F186B0 RV17:DC6EA8 RV19:D4459A RV21:FBDCDC " +
-               "RV23:F5A8C0 RV25:EE79A8 RV29:E8386E RV32:F8CBD0 RV34:F09EB2 RV42:F6BEBE RV52:DC9AB8 " +
-               "RV55:C86EA0 RV63:C08AAE RV66:A44272 RV69:93476E RV91:EDD4DE RV93:E0AEC4 RV95:C48AA6 " +
-               "RV99:66435A"),
-
-        ("R", "R0000:FCF0EC R000:FDEDEA R00:FCE6E2 R01:FBDDD8 R02:FBD6CE R05:F4715C R08:EE5442 " +
-              "R11:FBDCD2 R12:F9C6B4 R14:EE7A72 R17:EE7256 R20:F8CEC6 R21:F4B4AC R22:F6BEBA " +
-              "R24:EF7E7E R27:E8484E R29:E2003C R30:FCE0DA R32:F6B8AC R35:EC6E76 R37:D45464 " +
-              "R39:C43E62 R43:DE6C82 R46:D4425C R56:C0728A R59:A8425E R81:EFA8B8 R83:E88EA4 " +
-              "R85:D66284 R89:8E2340"),
-
-        ("YR", "YR0000:FDF2E2 YR000:FDF0DC YR00:FCE6D2 YR01:FCDCC2 YR02:FCE0C4 YR04:FBBC5C YR07:F4834E " +
-               "YR09:F26E32 YR12:FBDC9E YR14:FBC864 YR15:FAD48E YR16:FBB03E YR18:F26A2E YR20:FCE8CC " +
-               "YR21:FAE0B6 YR23:F6D08E YR24:F4E2A0 YR27:C4562E YR30:FBEEDC YR31:FCE4BE YR61:FBD8C4 " +
-               "YR65:F9AE5E YR68:EF6E28 YR82:FBC8A0"),
-
-        ("E", "E0000:FBF3EA E000:FCEFE6 E00:FBE8DC E01:FADDD0 E02:F8D9C8 E04:D8A0AE E07:C4785C " +
-              "E08:B4614A E09:C0603F E11:F6D8C0 E13:E0AE93 E15:DCA184 E17:A85F49 E18:7E4632 " +
-              "E19:A44B34 E21:F8DCC0 E23:D5A184 E25:C89A76 E27:8C6A50 E29:6E432C E30:F0E4CE " +
-              "E31:EAD9BE E33:E3C9A2 E34:E0C39A E35:DCBB99 E37:B98B54 E39:A8703E E40:EFE6D8 " +
-              "E41:F7EDDF E42:EFE3CC E43:DDCFAE E44:C3B295 E47:8A6E4E E49:5E4830 E50:F4E9E6 " +
-              "E51:F7E7D2 E53:EDDCB8 E55:E2CFA6 E57:A67F4E E59:7E6A55 E70:E6DCD4 E71:DCC9BC " +
-              "E74:9A8070 E77:6E5847 E79:4E3B2E E81:EEDDB8 E84:A18F66 E87:6A5540 E89:56422F " +
-              "E93:FBD3B4 E95:F5BE8F E97:E09A5E E99:B4592C"),
-
-        ("F", "FY1:F5EE5A FYG1:C6E24A FYR1:FBA85A FRV1:F86FA8 FV2:7E6ED8 FB2:2AA8E0 FBG2:35C6D6"),
-
-        ("C", "C00:F0F2F4 C0:E6EAEC C1:DCE0E3 C2:CBD1D6 C3:B7BFC5 C4:A0A9B0 " +
-              "C5:8B959C C6:767F87 C7:5C666D C8:464E55 C9:333A40 C10:22282C"),
-
-        ("N", "N0:F2F2F1 N1:E6E6E5 N2:DCDCDA N3:CBCBC9 N4:B8B8B6 N5:A3A3A0 " +
-              "N6:8E8E8B N7:767674 N8:5C5C5A N9:464644 N10:2E2E2C"),
-
-        ("T", "T0:F1F1EE T1:E7E6E2 T2:DBDAD5 T3:CBC9C3 T4:B9B7B0 T5:A5A29B " +
-              "T6:8F8C85 T7:77746D T8:5D5A54 T9:47443F T10:302E2A"),
-
-        ("W", "W00:F2F0EC W0:EBE8E2 W1:E2DED7 W2:D6D1C8 W3:C6C0B6 W4:B2ABA0 " +
-              "W5:9C948A W6:857D73 W7:6C645B W8:544D46 W9:3E3831 W10:2A251F"),
+        ("Accents",     "FV2:5c6ac4 FB2:0085cc FBG2:00a8c6 FYG2:8cb82b FYG1:a4cf2a FY1:ffcc00 FYR1:ff8800 FRV1:e35b96"),
+        ("CoreNumbers", "0:ffffff 100:111315 110:0a0b0d"),
+        ("CoreNames",   "White:ffffff Black:000000"),
     };
 
-    /// Every swatch, grouped by family in wheel order.
-    public static readonly CopicSwatch[] All = Parse();
+    // ── Tier 2 (grey ring): Toner, Warm, Neutral, Cool ──
+    private static readonly (string Name, string Data)[] Tier2Raw =
+    {
+        ("Toner",   "T0:eaecee T1:dcdee1 T2:cdcfd3 T3:bebfc4 T4:acadb2 T5:98999e T6:818287 T7:696a6f T8:505155 T9:37383a T10:202022"),
+        ("Warm",    "W00:f6f4ee W0:eae7de W1:ded9cd W2:d0cabc W3:c0b8aa W4:afa697 W5:9c9283 W6:877c6c W7:706556 W8:584d3e W9:403627 W10:2b2214"),
+        ("Neutral", "N10:1d2126 N9:343940 N8:4f555e N7:6a707b N6:848b97 N5:9da4b0 N4:b3b9c2 N3:c5cad2 N2:d4d8de N1:e2e5e9 N0:eef0f2"),
+        ("Cool",    "C10:0f1722 C9:202d3f C8:36465c C7:4f6178 C6:677b93 C5:8094ab C4:98abc1 C3:adbed0 C2:c1cfdc C1:d3dde6 C0:e2e9f0 C00:f0f4f8"),
+    };
 
-    /// Family prefixes in wheel order.
-    public static readonly string[] Families = Raw.Select(r => r.Family).ToArray();
+    // ── Tier 3+ (outer rings): 11 families as 36 contiguous 10° slices ──
+    // Sequence R → RV → V → BV → B → BG → G → YG → Y → E → YR, -90°→270°.
+    private static readonly (string Id, string Name, (double A0, double A1, string Data)[] Slices)[] SectorsRaw =
+    {
+        ("red", "Red", new (double, double, string)[]
+        {
+            (-90, -80, "R89:58101a R59:9d2238 R46:d91d3c R39:b3224b R29:e10619 R17:ee543c R08:f43333"),
+            (-80, -70, "R85:aa4257 R56:b85c6c R43:e86e7a R37:d6484e R27:ee322b R14:f59683 R12:f7aa9a"),
+            (-70, -60, "R83:c56b82 R81:e8a3b5 R35:e34e56 R32:f89a91 R24:f9685a R22:ff9f92 R21:ffb6ab R20:ffc9c2 R11:ffd7cf R01:ffb2b2 R00:ffd0d0 R000:ffe3e3 R0000:fff4f4"),
+        }),
+        ("red-violet", "Red Violet", new (double, double, string)[]
+        {
+            (-60, -50, "RV29:d72866 RV25:ef7da3 RV23:f8b4cb RV14:ee6ea9 RV13:f59cc6 RV11:f8c2db RV10:fadbe9"),
+            (-50, -40, "RV19:ad2972 RV17:c5428a RV06:e55db1 RV04:ef87c8 RV02:f4b1dc RV00:f7d3ec RV000:fae6f4 RV0000:fdf2fa"),
+            (-40, -30, "RV09:d2399a"),
+        }),
+        ("violet", "Violet", new (double, double, string)[]
+        {
+            (-30, -20, "V99:261b2a V95:775775 V93:a68ca2 V91:e0d3df"),
+            (-20, -10, "V28:5b3c67 V25:7f598b V22:b395bd V20:e1d5e6"),
+            (-10, 0, "V17:633d73 V15:8c5b9e V12:c7a3d1 V09:7e2d82 V06:ad67a6 V05:c48bbd V04:c78bb9 V01:e5c4de V000:f4e3f0 V0000:faeef7"),
+        }),
+        ("blue-violet", "Blue Violet", new (double, double, string)[]
+        {
+            (0, 10, "B45:4f7cc4 B41:b5cced B79:27386e B69:2a3b68 B66:4c5c8e B63:8797c4 B60:d3dded"),
+            (10, 20, "B52:859ec9 BV39:36374f BV29:1b2c45 BV17:595eb4 BV08:6850aa BV04:8774c4 BV02:a998da BV01:c5b6e6 BV00:ded3f2 BV000:eae3f7 BV0000:f4effa"),
+            (20, 30, "BV99:222838 BV97:3e485e BV95:63708a BV93:95a1b8 BV91:d2d9e6 BV34:8f93a8 BV31:cad2e3 BV25:7280a3 BV23:9aa5c4 BV20:d0d7e6"),
+        }),
+        ("blue", "Blue", new (double, double, string)[]
+        {
+            (30, 40, "B18:007bbd B16:00a3df B14:5bbfe6 B12:a6d8eb"),
+            (40, 50, "B29:00438c B28:1759a1 B26:2b7ec0 B24:519fd6 B23:76b1dd B21:cbe4f4"),
+            (50, 60, "B39:184768 B37:1c638a B34:63afd1 B32:bfe1ed"),
+        }),
+        ("blue-green", "Blue Green", new (double, double, string)[]
+        {
+            (60, 70, "BG34:66c4b8 BG49:009fae BG99:39694e B06:0085cc"),
+            (70, 80, "BG32:97d6cd BG45:6ac9d6 BG57:3cb0c1 BG96:689c7f B05:1e9cd1"),
+            (80, 90, "BG53:87cbd4 BG78:356a64 BG75:679b94 BG93:9dc2ab B04:4cb3dc"),
+            (90, 100, "BG72:9bc2bc BG70:cfdedb BG90:d0ddd4 B02:7ec9e6 B01:a1d9ee B00:c1e7f4 B000:d9f0f7 B0000:eaf6fa"),
+        }),
+        ("green", "Green", new (double, double, string)[]
+        {
+            (100, 110, "G99:3b5c2a G97:52783d G95:77995c G93:a7c48c G91:d3e3be G46:67a950 G43:b8d6a4 G28:00793c G24:96ca9a G21:b9dbbc G20:eaf4e5"),
+            (110, 120, "G19:009d43 G17:37b54a G16:1bb55c G14:8cd585 G12:cee8cb"),
+            (120, 130, "G09:139828 G07:32b444 G05:61c86c G03:81d489 G02:a1dba7 G00:c5e8c9 G000:def2e0 G0000:eef8ef"),
+        }),
+        ("yellow-green", "Yellow Green", new (double, double, string)[]
+        {
+            (130, 140, "YG99:4c5c2d YG97:63783a YG95:88a04c YG93:b5c482 YG91:e0e8b8 YG67:779e3d YG63:a6c76e"),
+            (140, 150, "YG45:8ec449 YG41:cee9d6 YG25:d6e969 YG23:e7f394 YG21:f5fbbf YG13:cde497 YG11:e0f0c7"),
+            (150, 160, "YG17:95c635 YG09:81b835 YG07:9fcd34 YG05:b7da53 YG03:cae37c YG01:dbeca1 YG00:e8f3c4 YG0000:f7fbe6"),
+        }),
+        ("yellow", "Yellow", new (double, double, string)[]
+        {
+            (160, 170, "Y38:e69d37 Y28:dfb768 Y19:ffc125 Y18:ffcd00 Y17:ffd82c Y15:ffe763 Y13:fff397 Y11:fffac9"),
+            (170, 180, "Y08:fde000 Y06:ffe91e Y04:ffee47 Y02:fff074 Y00:fff6a4 Y000:fffbca Y0000:fffde6"),
+            (180, 190, "Y35:ffc125 Y26:e8c576 Y23:ffe590 Y21:fff2bb"),
+        }),
+        ("earth", "Earth", new (double, double, string)[]
+        {
+            (190, 200, "E99:5c310c E89:58101a E79:48203c E59:5a2512 E49:442216 E39:633215 E29:5f2710 E19:aa3110 E09:952a12 E08:ad4025 E07:bd533b E04:be8c89 E02:f2bd9d E01:f8d2b8 E00:fbe2cf E000:fceee2 E0000:fef7f1"),
+            (200, 210, "E97:6b3c16 E87:634739 E77:634739 E57:6b4c38 E47:775a48 E37:986128 E27:c57849 E18:5a2512 E17:873c24 E15:cb8153 E13:e2ac85 E11:f5d3b8"),
+            (210, 220, "E95:875324 E84:7a5e4b E74:806456 E55:967963 E44:8d7362 E35:bd8e57 E25:aa643a E23:e0a374 E21:fadbb8"),
+            (220, 230, "E93:ad7648 E81:a68c78 E71:9e8983 E53:b59a84 E43:dfcdb1 E34:cbb08d E33:dfb787 E31:eedbbd"),
+            (230, 240, "E70:dfd2cf E51:f5e8da E42:e8d7c3 E41:f4e7d7 E50:eee2e4 E40:f7ede2 E30:f3e1c6"),
+        }),
+        ("yellow-red", "Yellow Red", new (double, double, string)[]
+        {
+            (240, 250, "YR68:e85309 YR27:df621b YR18:f48800 YR09:f1640a"),
+            (250, 260, "YR82:e0a068 YR31:f7d391 YR24:f7aa43 YR16:ffaa35 YR07:f98434"),
+            (260, 270, "YR65:f27c24 YR30:f9e0b8 YR23:f4ba6d YR15:ffb54d YR04:ffa96b YR02:ffc69a YR01:ffd0aa YR00:ffdbbf YR000:ffeada YR0000:fff6ed"),
+        }),
+    };
 
-    private static CopicSwatch[] Parse()
+    /// The inner accent/core arc, in reference order.
+    public static readonly CopicCategory[] Tier1Categories =
+        Tier1Raw.Select(t => new CopicCategory(t.Name, ParseRow(t.Data))).ToArray();
+
+    /// The grey ring's four families, in reference order.
+    public static readonly CopicCategory[] Tier2GrayCategories =
+        Tier2Raw.Select(t => new CopicCategory(t.Name, ParseRow(t.Data))).ToArray();
+
+    /// The 11 outer colour families, each a run of 10° slices, in wheel order.
+    public static readonly CopicSector[] Sectors =
+        SectorsRaw.Select(s => new CopicSector(s.Id, s.Name,
+            s.Slices.Select(sl => new CopicSlice(sl.A0, sl.A1, ParseRow(sl.Data))).ToArray())).ToArray();
+
+    /// Every swatch across all three tiers, flattened — for nearest-colour lookup.
+    public static readonly CopicSwatch[] All = BuildAll();
+
+    private static CopicSwatch[] BuildAll()
     {
         var list = new List<CopicSwatch>(384);
-        foreach (var (family, data) in Raw)
+        foreach (var c in Tier1Categories) list.AddRange(c.Colors);
+        foreach (var c in Tier2GrayCategories) list.AddRange(c.Colors);
+        foreach (var s in Sectors)
+            foreach (var sl in s.Slices)
+                list.AddRange(sl.Colors);
+        return list.ToArray();
+    }
+
+    private static CopicSwatch[] ParseRow(string data)
+    {
+        var list = new List<CopicSwatch>();
+        foreach (var token in data.Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
-            foreach (var token in data.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-            {
-                int colon = token.IndexOf(':');
-                if (colon < 0) continue;   // a typo must not take the palette down
-                string code = token[..colon];
-                string hex = token[(colon + 1)..];
-                if (hex.Length != 6) continue;
-                list.Add(new CopicSwatch(
-                    code, family,
-                    Convert.ToByte(hex[..2], 16),
-                    Convert.ToByte(hex.Substring(2, 2), 16),
-                    Convert.ToByte(hex.Substring(4, 2), 16)));
-            }
+            int colon = token.IndexOf(':');
+            if (colon < 0) continue;   // a typo must not take the palette down
+            string code = token[..colon];
+            string hex = token[(colon + 1)..];
+            if (hex.Length != 6) continue;
+            list.Add(new CopicSwatch(
+                code, FamilyOf(code),
+                Convert.ToByte(hex[..2], 16),
+                Convert.ToByte(hex.Substring(2, 2), 16),
+                Convert.ToByte(hex.Substring(4, 2), 16)));
         }
         return list.ToArray();
     }
 
-    /// The swatches of one family, in published (light → dark) order.
-    public static CopicSwatch[] Of(string family) =>
-        All.Where(s => s.Family == family).ToArray();
+    // The family is the leading run of letters ("BV0000" → "BV", "R89" → "R").
+    // Pure numbers (0, 100, 110) are core neutrals rather than a hue family.
+    private static string FamilyOf(string code)
+    {
+        int i = 0;
+        while (i < code.Length && char.IsLetter(code[i])) i++;
+        return i == 0 ? "Core" : code[..i];
+    }
 
     /// The closest swatch to an arbitrary colour, so the ring can show where a
     /// hand-mixed HSL/RGB colour lands. Plain squared distance in sRGB is good
