@@ -17,6 +17,14 @@ public interface IPageAction
     Rect? AffectedBounds(NotePage page) => null;
 }
 
+// Marks an undo action that carries raster paint blobs, so the manager can cap
+// the paint-undo history (OILPAINT-SPEC §6.1) by weight without ever bounding
+// vector undo — vector actions carry no PaintBytes and so read as zero here.
+public interface IPaintUndo
+{
+    long PaintBytes { get; }
+}
+
 // Bounds helpers shared by the AffectedBounds implementations (#roadmap).
 internal static class ActionBounds
 {
@@ -284,7 +292,7 @@ public class MoveTextAction : IPageAction
 
 // Bundles several actions into one undo/redo step (e.g. moving a mixed
 // selection of strokes, shapes and text boxes together).
-public class CompositeAction : IPageAction
+public class CompositeAction : IPageAction, IPaintUndo
 {
     private readonly List<IPageAction> _actions;
     public CompositeAction(IEnumerable<IPageAction> actions, string description)
@@ -294,6 +302,9 @@ public class CompositeAction : IPageAction
     }
     public string Description { get; }
     public bool TouchesText => _actions.Any(a => a.TouchesText);
+    // A composite (e.g. the eraser's vector+paint bundle) weighs whatever paint
+    // its children hold, so it is trimmed on the same budget as a lone paint action.
+    public long PaintBytes => _actions.Sum(a => (a as IPaintUndo)?.PaintBytes ?? 0);
     public void Do(NotePage page) { foreach (var a in _actions) a.Do(page); }
     public void Undo(NotePage page) { for (int i = _actions.Count - 1; i >= 0; i--) _actions[i].Undo(page); }
     public Rect? AffectedBounds(NotePage page) =>
@@ -629,4 +640,46 @@ public class UndoRedoManager
     }
 
     public IReadOnlyList<string> History => _undo.Select(a => a.Description).ToList();
+
+    /// <summary>Running total of the paint blobs held in the undo stack, for the
+    /// §6.1 budget. Vector actions contribute nothing.</summary>
+    public long PaintUndoBytes
+    {
+        get { long t = 0; foreach (var a in _undo) t += PaintBytesOf(a); return t; }
+    }
+
+    /// <summary>
+    /// Cap the paint-undo history at <paramref name="capBytes"/> (OILPAINT-SPEC
+    /// §6.1). Paint blobs are heavy, so once they overflow the OLDEST paint
+    /// actions are dropped from the BOTTOM of the stack until the total fits.
+    /// Vector actions carry no PaintBytes and are therefore never trimmed — they
+    /// stay in place even when a paint action below them is dropped, so ink undo
+    /// is unbounded exactly as before.
+    /// </summary>
+    public void TrimBottom(long capBytes)
+    {
+        long total = PaintUndoBytes;
+        if (total <= capBytes) return;
+        // ToArray enumerates a Stack top-first: index 0 is the newest action and
+        // the last index is the oldest. Drop paint weight from the oldest end.
+        var items = _undo.ToArray();
+        var drop = new bool[items.Length];
+        bool any = false;
+        for (int i = items.Length - 1; i >= 0 && total > capBytes; i--)
+        {
+            long b = PaintBytesOf(items[i]);
+            if (b <= 0) continue;                 // vector action: never trimmed
+            drop[i] = true;
+            total -= b;
+            any = true;
+        }
+        if (!any) return;
+        _undo.Clear();
+        // Re-push bottom -> top so the surviving order (and the top) is preserved.
+        for (int i = items.Length - 1; i >= 0; i--)
+            if (!drop[i]) _undo.Push(items[i]);
+        Changed?.Invoke();
+    }
+
+    private static long PaintBytesOf(IPageAction a) => (a as IPaintUndo)?.PaintBytes ?? 0;
 }

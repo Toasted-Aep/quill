@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Effects;
 using Microsoft.UI.Dispatching;
+using Quill.Models;
 using Windows.Foundation;
 using Windows.Graphics.DirectX;
 
@@ -175,6 +176,7 @@ public sealed class PaintTileStore : IDisposable
     public const float LightElevation = 0.5235988f;  //  30°, deliberately low so the light rakes
 
     private readonly Dictionary<(int, int), PaintTile> _tiles = new();
+    private CanvasRenderTarget? _eraserStamp;
     private readonly DispatcherQueue? _ui;
     private readonly DispatcherQueueTimer? _saveTimer;
     private readonly DispatcherQueueTimer? _heartbeat;
@@ -257,6 +259,25 @@ public sealed class PaintTileStore : IDisposable
         return t;
     }
 
+    /// <summary>Drop a tile that undo has returned to its pre-existence state
+    /// (a stroke that first allocated it is being undone). The tile's GPU
+    /// resources are released; a later redo simply re-creates it.</summary>
+    public bool RemoveTile(int tx, int ty)
+    {
+        if (_tiles.Remove((tx, ty), out var t))
+        {
+            t.Dispose();
+            MarkDirty();
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Nudge the debounced writer after a change made outside the paint
+    /// choke point (an undo/redo restoring tile bytes), so restored pixels reach
+    /// disk on the same schedule as a fresh stroke.</summary>
+    public void ScheduleSave() => MarkDirty();
+
     public static int TileIndex(double world) => (int)Math.Floor(world / TileSize);
 
     /// <summary>
@@ -296,6 +317,98 @@ public sealed class PaintTileStore : IDisposable
             }
         MarkDirty();
     }
+
+    // =======================================================================
+    // Erase (OILPAINT-SPEC §6.2) — the point eraser rubs paint away too, so a
+    // pass over painted tiles cuts DestinationOut dabs into BOTH colour and
+    // height. Removing height as well as colour is deliberate: the impasto
+    // highlight has to go with the pigment or a ghost ridge is left catching the
+    // light. Only tiles that already exist are touched — erasing empty canvas
+    // must allocate nothing.
+    // =======================================================================
+
+    /// <summary>
+    /// Cut an eraser capsule [<paramref name="a"/> -> <paramref name="b"/>] of
+    /// the given world radius out of every resident tile it crosses. <paramref
+    /// name="beforeTouch"/> fires once per tile just before it is modified, so the
+    /// caller can snapshot the tile for undo. Returns the tiles actually touched.
+    /// </summary>
+    public List<(int Tx, int Ty)> EraseSegment(ICanvasResourceCreator rc, System.Numerics.Vector2 a,
+                                               System.Numerics.Vector2 b, float radius,
+                                               Action<PaintTile>? beforeTouch)
+    {
+        var touched = new List<(int, int)>();
+        double minX = Math.Min(a.X, b.X) - radius, minY = Math.Min(a.Y, b.Y) - radius;
+        double maxX = Math.Max(a.X, b.X) + radius, maxY = Math.Max(a.Y, b.Y) + radius;
+        int t0x = TileIndex(minX), t1x = TileIndex(maxX - 0.001);
+        int t0y = TileIndex(minY), t1y = TileIndex(maxY - 0.001);
+        var stamp = EnsureEraserStamp(rc);
+        for (int ty = t0y; ty <= t1y; ty++)
+            for (int tx = t0x; tx <= t1x; tx++)
+            {
+                if (!_tiles.TryGetValue((tx, ty), out var tile)) continue;   // never create on erase
+                beforeTouch?.Invoke(tile);
+                var toTile = System.Numerics.Matrix3x2.CreateTranslation(
+                    -tx * (float)TileSize, -ty * (float)TileSize);
+                StampErase(tile.Colour, stamp, toTile, a, b, radius);
+                StampErase(tile.Height, stamp, toTile, a, b, radius);
+                tile.InvalidateLit();
+                touched.Add((tx, ty));
+            }
+        if (touched.Count > 0) MarkDirty();
+        return touched;
+    }
+
+    // DestinationOut is a CanvasComposite mode, not a CanvasBlend, so the cut is
+    // a DrawImage of an opaque disc stamp rather than a FillCircle: dst *= (1 -
+    // stampAlpha). Overlapping dabs stay idempotent, so snapshotting a tile once
+    // per gesture is exact however many times the pen crosses it.
+    private static void StampErase(CanvasRenderTarget target, CanvasRenderTarget stamp,
+                                   System.Numerics.Matrix3x2 toTile,
+                                   System.Numerics.Vector2 a, System.Numerics.Vector2 b, float radius)
+    {
+        using var ds = target.CreateDrawingSession();
+        ds.Transform = toTile;
+        var src = new Rect(0, 0, stamp.Size.Width, stamp.Size.Height);
+        float dist = System.Numerics.Vector2.Distance(a, b);
+        float step = Math.Max(1f, radius * 0.5f);
+        int n = (int)(dist / step);
+        for (int i = 0; i <= n; i++)
+        {
+            var c = System.Numerics.Vector2.Lerp(a, b, n == 0 ? 0f : (float)i / n);
+            var dst = new Rect(c.X - radius, c.Y - radius, radius * 2, radius * 2);
+            ds.DrawImage(stamp, dst, src, 1f, CanvasImageInterpolation.Linear, CanvasComposite.DestinationOut);
+        }
+    }
+
+    private const int EraserStampPx = 64;
+
+    private CanvasRenderTarget EnsureEraserStamp(ICanvasResourceCreator rc)
+    {
+        if (_eraserStamp != null) return _eraserStamp;
+        _eraserStamp = new CanvasRenderTarget(rc, EraserStampPx, EraserStampPx, 96f,
+            DirectXPixelFormat.B8G8R8A8UIntNormalized, CanvasAlphaMode.Premultiplied);
+        // A premultiplied white disc: hard core to ~0.85 of the radius, then a
+        // smoothstep rim so the erased edge is not a jagged bite. In premultiplied
+        // BGRA an alpha of A means colour channels are also A (white * A).
+        var px = new byte[EraserStampPx * EraserStampPx * 4];
+        float half = EraserStampPx * 0.5f;
+        for (int y = 0; y < EraserStampPx; y++)
+            for (int x = 0; x < EraserStampPx; x++)
+            {
+                float dx = (x + 0.5f - half) / half, dy = (y + 0.5f - half) / half;
+                float d = MathF.Sqrt(dx * dx + dy * dy);
+                float a = d >= 1f ? 0f : d <= 0.85f ? 1f
+                        : 1f - Smooth((d - 0.85f) / 0.15f);
+                byte A = (byte)Math.Clamp(a * 255f, 0f, 255f);
+                int i = (y * EraserStampPx + x) * 4;
+                px[i] = A; px[i + 1] = A; px[i + 2] = A; px[i + 3] = A;
+            }
+        _eraserStamp.SetPixelBytes(px);
+        return _eraserStamp;
+    }
+
+    private static float Smooth(float u) => u * u * (3f - 2f * u);
 
     // =======================================================================
     // Write scheduling (§4.3)
@@ -500,6 +613,97 @@ public sealed class PaintTileStore : IDisposable
         try { _heartbeat?.Stop(); } catch { }
         foreach (var t in _tiles.Values) t.Dispose();
         _tiles.Clear();
+        try { _eraserStamp?.Dispose(); } catch { }
+        _eraserStamp = null;
         try { _cts.Dispose(); } catch { }
+    }
+}
+
+/// <summary>
+/// One touched tile's before/after state for a paint undo step (OILPAINT-SPEC
+/// §6.1). Colour and height are the RAW GPU bytes, deflated losslessly (§ codec
+/// CompressRaw). <see cref="BeforeExisted"/> is false when the stroke was the
+/// first to allocate the tile, so undo removes it again; a null After pair means
+/// the tile no longer exists in the after-state.
+/// </summary>
+public sealed record PaintTileCapture(
+    int Tx, int Ty,
+    bool BeforeExisted, byte[]? BeforeColourZ, byte[]? BeforeHeightZ,
+    byte[]? AfterColourZ, byte[]? AfterHeightZ);
+
+/// <summary>
+/// A tile-granular raster paint undo step (OILPAINT-SPEC §6.1). It slots into the
+/// SAME undo stack as vector strokes, so Ctrl+Z / the dial's undo button removes
+/// the most recent edit whether it was ink or paint. The pixels are already on
+/// the canvas when this is built, so it is pushed with alreadyDone:true; Undo
+/// restores the before-blobs and re-lights, Redo restores the after-blobs.
+/// </summary>
+public sealed class PaintTilesAction : IPageAction, IPaintUndo
+{
+    // Paint is pixels, not text, so undoing it must not tear down the text layer.
+    public bool TouchesText => false;
+    public string Description { get; }
+
+    private readonly PaintTileStore _store;
+    private readonly ICanvasResourceCreator _rc;
+    private readonly List<PaintTileCapture> _tiles;
+    private readonly Rect? _bounds;
+
+    public PaintTilesAction(PaintTileStore store, ICanvasResourceCreator rc,
+                            List<PaintTileCapture> tiles, Rect? bounds, string description = "Paint stroke")
+    {
+        _store = store;
+        _rc = rc;
+        _tiles = tiles;
+        _bounds = bounds;
+        Description = description;
+    }
+
+    /// <summary>The undo weight §6.1 caps: every before- and after-blob this step
+    /// is holding.</summary>
+    public long PaintBytes
+    {
+        get
+        {
+            long t = 0;
+            foreach (var c in _tiles)
+            {
+                t += (c.BeforeColourZ?.Length ?? 0) + (c.BeforeHeightZ?.Length ?? 0);
+                t += (c.AfterColourZ?.Length ?? 0) + (c.AfterHeightZ?.Length ?? 0);
+            }
+            return t;
+        }
+    }
+
+    public void Do(NotePage page) => Apply(useAfter: true);
+    public void Undo(NotePage page) => Apply(useAfter: false);
+    public Rect? AffectedBounds(NotePage page) => _bounds;
+
+    private void Apply(bool useAfter)
+    {
+        foreach (var c in _tiles)
+        {
+            var cz = useAfter ? c.AfterColourZ : c.BeforeColourZ;
+            var hz = useAfter ? c.AfterHeightZ : c.BeforeHeightZ;
+            bool exists = useAfter ? c.AfterColourZ != null : c.BeforeExisted;
+            if (!exists)
+            {
+                // The tile did not exist in this direction's state — return it to
+                // nothing (a redo may re-create it from GetOrCreate later).
+                _store.RemoveTile(c.Tx, c.Ty);
+                continue;
+            }
+            var tile = _store.GetOrCreate(_rc, c.Tx, c.Ty);
+            try
+            {
+                if (cz != null)
+                    tile.Colour.SetPixelBytes(PaintTileCodec.DecompressRaw(cz, PaintTileCodec.ColourBytes));
+                if (hz != null)
+                    tile.Height.SetPixelBytes(PaintTileCodec.DecompressRaw(hz, PaintTileCodec.HeightGpuBytes));
+                tile.InvalidateLit();   // sets Dirty, so the restored pixels re-light and re-persist
+            }
+            catch { /* one bad tile must not take the whole undo down */ }
+        }
+        _store.ScheduleSave();
     }
 }

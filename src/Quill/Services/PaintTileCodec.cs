@@ -105,6 +105,20 @@ public static class PaintTileCodec
         return (colour, height);
     }
 
+    // =======================================================================
+    // Undo blobs (OILPAINT-SPEC §6.1). The paint undo action keeps the RAW GPU
+    // bytes of a touched tile — BGRA8 colour and RGBA16F height — deflated. Going
+    // through the disk codec's U16 height quantisation would make undo->redo
+    // lossy, so undo compresses the exact GPU bytes instead: lossless and
+    // byte-exact both ways, and the grey (h,h,h,h) height packs down hard because
+    // three of its four channels are duplicates.
+    // =======================================================================
+
+    public static byte[] CompressRaw(byte[] raw) => Deflate(raw);
+
+    public static byte[] DecompressRaw(byte[] compressed, int expected)
+        => Inflate(compressed, 0, compressed.Length, expected);
+
     private static byte[] Deflate(byte[] raw)
     {
         using var ms = new MemoryStream();

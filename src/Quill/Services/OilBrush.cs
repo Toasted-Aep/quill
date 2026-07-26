@@ -61,6 +61,11 @@ public sealed class OilBrush : IDisposable
 
     private readonly PaintTileStore _store;
     private readonly Dictionary<(int, int), Scratch> _scratch = new();
+    // Per-gesture undo capture (§6.1): the pre-stroke state of each tile the
+    // gesture composites onto, recorded the FIRST time that tile is touched
+    // (mid-gesture flush included), so the paint undo "before" is the true
+    // pre-gesture state however many segments the stroke commits in.
+    private readonly Dictionary<(int, int), (bool Existed, byte[]? ColourZ, byte[]? HeightZ)> _undoBefore = new();
     private CanvasRenderTarget? _heightStamp;
     private CanvasRadialGradientBrush? _colourBrush;
 
@@ -104,6 +109,7 @@ public sealed class OilBrush : IDisposable
         _prLast = pressure;
         _dabAccum = 0f;      // a new stroke starts with a clean carry
         DabCount = 0;
+        _undoBefore.Clear();
         ResetBounds();
     }
 
@@ -149,6 +155,7 @@ public sealed class OilBrush : IDisposable
     public void Cancel()
     {
         _active = false;
+        _undoBefore.Clear();
         DisposeScratch();
     }
 
@@ -321,6 +328,7 @@ public sealed class OilBrush : IDisposable
         if (_scratch.Count == 0) return null;
         foreach (var ((tx, ty), s) in _scratch)
         {
+            RecordBefore(tx, ty);       // snapshot the pre-stroke tile BEFORE it changes
             var tile = _store.GetOrCreate(rc, tx, ty);
             try
             {
@@ -367,6 +375,50 @@ public sealed class OilBrush : IDisposable
     {
         foreach (var s in _scratch.Values) s.Dispose();
         _scratch.Clear();
+    }
+
+    // =======================================================================
+    // Undo capture (§6.1)
+    // =======================================================================
+
+    /// <summary>Snapshot a tile's pre-stroke bytes the first time the gesture
+    /// touches it. A tile the stroke is about to allocate is recorded as
+    /// non-existent, so undo drops it again.</summary>
+    private void RecordBefore(int tx, int ty)
+    {
+        var key = (tx, ty);
+        if (_undoBefore.ContainsKey(key)) return;
+        if (_store.TryGet(tx, ty, out var existing))
+            _undoBefore[key] = (true,
+                PaintTileCodec.CompressRaw(existing.Colour.GetPixelBytes()),
+                PaintTileCodec.CompressRaw(existing.Height.GetPixelBytes()));
+        else
+            _undoBefore[key] = (false, null, null);
+    }
+
+    /// <summary>
+    /// Pen-up: read back the AFTER state of every tile the gesture touched and
+    /// pair it with the recorded BEFORE, yielding the tile-granular deltas for one
+    /// <c>PaintTilesAction</c>. Returns null when the gesture painted nothing.
+    /// Clears the capture, so the next stroke starts clean.
+    /// </summary>
+    public List<PaintTileCapture>? TakeUndoCaptures(ICanvasResourceCreator rc)
+    {
+        if (_undoBefore.Count == 0) return null;
+        var list = new List<PaintTileCapture>(_undoBefore.Count);
+        foreach (var ((tx, ty), before) in _undoBefore)
+        {
+            byte[]? afterColour = null, afterHeight = null;
+            if (_store.TryGet(tx, ty, out var t))
+            {
+                afterColour = PaintTileCodec.CompressRaw(t.Colour.GetPixelBytes());
+                afterHeight = PaintTileCodec.CompressRaw(t.Height.GetPixelBytes());
+            }
+            list.Add(new PaintTileCapture(tx, ty, before.Existed, before.ColourZ, before.HeightZ,
+                                          afterColour, afterHeight));
+        }
+        _undoBefore.Clear();
+        return list;
     }
 
     // =======================================================================
