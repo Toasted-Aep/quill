@@ -43,20 +43,36 @@ public enum ColorWheelMode { Copic, Hsl, Rgb }
 /// need to know. See ColorPickerService for the one-time host wiring
 /// (canvas sampler, recents list, persistence).
 ///
+/// ── LAYOUT (calibrated to the reference wheel) ────────────────────────────
+/// Three concentric tiers, exactly as the dialled-in web wheel:
+///   • Tier 1 — a 144° inner arc of accents + core (13 chips, 3 groups).
+///   • Tier 2 — a full grey ring (Toner/Warm/Neutral/Cool, 46 chips).
+///   • Tier 3+ — 36 fixed 10° columns grouped into 11 colour families, each
+///     column a radial stack whose depth is however many inks it holds (up to
+///     17 in the deep Earth column). Family widths are the reference's own:
+///     R/RV/V/BV/B/G/YG/Y/YR span 30° each, BG 40°, E 50°.
+/// The whole ring rotates as one; a wheel-scroll or flick spins it and it
+/// settles square on a 10° column boundary.
+///
 /// ── WHY WIN2D ────────────────────────────────────────────────────────────
-/// The ring is ~360 swatches on 7 concentric arcs. As XAML that would be 700+
-/// live elements (a Path and a rotated TextBlock each) whose layout would have
-/// to be invalidated on every frame of a spin. In Win2D the whole ring is one
-/// immediate-mode pass over cached per-ring geometry, and hit-testing is pure
-/// arithmetic — atan2 for the column, a radius division for the arc — so
-/// nothing scales with the swatch count.
+/// The ring is ~320 swatches on up to 17 concentric arcs. As XAML that would
+/// be 600+ live elements (a Path and a rotated TextBlock each) whose layout
+/// would have to be invalidated on every frame of a spin. In Win2D the whole
+/// ring is one immediate-mode pass over cached per-ring geometry, and
+/// hit-testing is pure arithmetic — atan2 for the column, a radius division for
+/// the ring — so nothing scales with the swatch count. (The reference is DOM/
+/// SVG and a little laggy for exactly this reason; only its layout is ported.)
 /// </summary>
 public sealed class ColorWheel : UserControl
 {
     // ---- ring layout ------------------------------------------------------
-    private const int Rings = 7;          // concentric arcs of swatches
     private const float Decay = 0.938f;   // per-frame inertia falloff
     private const float StopVel = 0.06f;  // rad/s below which a spin has settled
+
+    private const float Deg = MathF.PI / 180f;
+    // The outer ring is 36 contiguous 10° columns starting at the top (-90°).
+    private const float ColStep = 10f * Deg;
+    private const float OuterStart = -90f * Deg;
 
     private readonly CanvasControl _canvas = new();
     private readonly DispatcherTimer _spin = new() { Interval = TimeSpan.FromMilliseconds(16) };
@@ -134,7 +150,7 @@ public sealed class ColorWheel : UserControl
     private ColorWheelMode _mode = ColorWheelMode.Copic;
     private double _h, _s, _l;          // HSL mirror of _color, kept so that a
                                         // grey does not lose its hue mid-drag
-    private float _rot;                 // ring rotation, radians
+    private float _rot = 100f * Deg;    // ring rotation, radians (reference default)
     private float _vel;                 // rad/s, for the inertia glide
     private float _snapTo;              // settle target once the glide is done
     private bool _snapping;
@@ -147,8 +163,14 @@ public sealed class ColorWheel : UserControl
     private double _travelled;
     private long _pressTicks;
 
-    // resolved geometry (see Layout)
-    private float _rIn, _band, _rOut, _rLabel, _rRecent, _chipR;
+    // resolved geometry (see Layout). All radii are scaled from the reference's
+    // own pixel radii by `m/760`, so the three tiers keep the reference's
+    // proportions on Quill's full-screen canvas.
+    private float _r1In, _r1Out;        // Tier 1 (inner accent/core arc)
+    private float _r2In, _r2Out;        // Tier 2 (grey ring)
+    private float _rOutBase, _band;     // Tier 3+ (outer family columns)
+    private float _rIn, _rOut;          // grabbable annulus [inner tier, outer edge]
+    private float _rLabel, _rRecent, _chipR;
     private float _base;                // direction from the anchor to the
                                         // viewport centre — everything that has
                                         // to stay on screen hangs off this
@@ -158,35 +180,66 @@ public sealed class ColorWheel : UserControl
     private Vector2 _dropPt, _puckPt;
     private readonly List<(Vector2 Pt, Color Col)> _chipPts = new();
 
-    private readonly CanvasGeometry?[] _cellGeo = new CanvasGeometry?[Rings];
+    // Cached tile geometry: one 10° cell per outer ring band (reused across all
+    // 36 columns by rotation), plus one cell each for the two inner tiers.
+    private readonly CanvasGeometry?[] _outerGeo = new CanvasGeometry?[MaxRings];
+    private CanvasGeometry? _tier1Geo, _tier2Geo;
     private bool _geoDirty = true;
 
-    // ---- the ring's column table ------------------------------------------
-    // Each column is one angular slot holding up to Rings swatches, outermost
-    // (index Rings-1) lightest. Families keep their own contiguous run of
-    // columns, so a family never straddles the seam of another.
-    private static readonly CopicSwatch?[][] Columns = BuildColumns();
-    private static float ColStep => (float)(Math.Tau / Columns.Length);
+    // ---- the reference's fixed column / arc tables ------------------------
+    // Outer: 36 radial columns in angular order from -90°. Column i covers
+    // [-90+10i, -80+10i]°; entry 0 of a column is its innermost ink.
+    private static readonly CopicSwatch[][] OuterColumns = BuildOuterColumns();
+    private static readonly int MaxRings = OuterColumns.Max(c => c.Length);
 
-    private static CopicSwatch?[][] BuildColumns()
+    // Inner arcs: each cell carries its own [A0, A1] because the group dividers
+    // push later cells along. Widths are uniform within a tier (Tier?Width), so
+    // one cached geometry rotated to each A0 draws the whole ring.
+    private readonly record struct Cell(float A0, float A1, CopicSwatch Sw);
+    private static readonly Cell[] Tier1Cells;
+    private static readonly Cell[] Tier2Cells;
+    private static readonly float Tier1Width;   // radians per Tier 1 chip
+    private static readonly float Tier2Width;   // radians per Tier 2 chip
+
+    static ColorWheel()
     {
-        var cols = new List<CopicSwatch?[]>();
-        foreach (var family in CopicPalette.Families)
-        {
-            // Sort by luminance so the outermost arc of every family is its
-            // palest tint — the light-outward reading the reference relies on.
-            var members = CopicPalette.Of(family)
-                .OrderByDescending(s => s.R * 0.299 + s.G * 0.587 + s.B * 0.114)
-                .ToArray();
-            for (int i = 0; i < members.Length; i += Rings)
-            {
-                var col = new CopicSwatch?[Rings];
-                for (int j = 0; j < Rings && i + j < members.Length; j++)
-                    col[Rings - 1 - j] = members[i + j];
-                cols.Add(col);
-            }
-        }
+        // Tier 1: a 144° arc, 3 groups, 4.5° dividers between groups only.
+        (Tier1Cells, Tier1Width) = BuildInnerCells(
+            CopicPalette.Tier1Categories, start: -128f, span: 144f, gap: 4.5f, gapAfterLast: false);
+        // Tier 2: the full circle, 4 groups, 5.5° divider after every group.
+        (Tier2Cells, Tier2Width) = BuildInnerCells(
+            CopicPalette.Tier2GrayCategories, start: -90f, span: 360f, gap: 5.5f, gapAfterLast: true);
+    }
+
+    private static CopicSwatch[][] BuildOuterColumns()
+    {
+        var cols = new List<CopicSwatch[]>(36);
+        foreach (var sector in CopicPalette.Sectors)
+            foreach (var slice in sector.Slices)
+                cols.Add(slice.Colors);   // already -90°→270° in reference order
         return cols.ToArray();
+    }
+
+    private static (Cell[] Cells, float Width) BuildInnerCells(
+        CopicCategory[] cats, float start, float span, float gap, bool gapAfterLast)
+    {
+        int total = cats.Sum(c => c.Colors.Length);
+        int groups = cats.Length;
+        int gaps = gapAfterLast ? groups : groups - 1;
+        float per = (span - gaps * gap) / total;
+
+        var cells = new List<Cell>(total);
+        float cur = start;
+        for (int gi = 0; gi < groups; gi++)
+        {
+            foreach (var sw in cats[gi].Colors)
+            {
+                cells.Add(new Cell(cur * Deg, (cur + per) * Deg, sw));
+                cur += per;
+            }
+            if (gapAfterLast || gi < groups - 1) cur += gap;
+        }
+        return (cells.ToArray(), per * Deg);
     }
 
     public ColorWheel()
@@ -206,9 +259,16 @@ public sealed class ColorWheel : UserControl
         Unloaded += (_, _) =>
         {
             _spin.Stop();
-            for (int i = 0; i < Rings; i++) { _cellGeo[i]?.Dispose(); _cellGeo[i] = null; }
+            DisposeGeometry();
             _canvas.RemoveFromVisualTree();
         };
+    }
+
+    private void DisposeGeometry()
+    {
+        for (int i = 0; i < _outerGeo.Length; i++) { _outerGeo[i]?.Dispose(); _outerGeo[i] = null; }
+        _tier1Geo?.Dispose(); _tier1Geo = null;
+        _tier2Geo?.Dispose(); _tier2Geo = null;
     }
 
     // =======================================================================
@@ -220,11 +280,17 @@ public sealed class ColorWheel : UserControl
     private void Layout(float w, float h)
     {
         float m = Math.Max(320f, Math.Min(w, h));
-        _band = m * 0.055f;
-        _rIn = m * 0.62f;
-        _rOut = _rIn + Rings * _band;
-        _rRecent = m * 0.575f;
-        _chipR = m * 0.017f;
+        float s = m / 760f;                    // reference-unit → local pixels
+
+        _r1In = 285f * s; _r1Out = 302f * s;   // Tier 1 inner arc
+        _r2In = 307f * s; _r2Out = 328f * s;   // Tier 2 grey ring
+        _rOutBase = 333f * s; _band = 21f * s; // Tier 3+ columns, 21px rings
+        _rIn = _r1In;
+        _rOut = _rOutBase + MaxRings * _band;
+        _codeFmt.FontSize = Math.Clamp(_band * 0.40f, 6.5f, 12f);
+
+        _rRecent = m * 0.16f;
+        _chipR = m * 0.013f;
         _rLabel = m * 0.26f;
         _arcR[0] = m * 0.34f;
         _arcR[1] = m * 0.44f;
@@ -240,7 +306,7 @@ public sealed class ColorWheel : UserControl
         _dropPt = At(_rLabel, _base + 0.57f);
 
         _chipPts.Clear();
-        int n = Math.Min(16, Recents.Count);
+        int n = Math.Min(12, Recents.Count);
         if (n > 0)
         {
             float step = _chipR * 2.4f / _rRecent;
@@ -259,26 +325,46 @@ public sealed class ColorWheel : UserControl
         return a;
     }
 
-    // One cell of ring `ring`, spanning [0, ColStep] and inset by a hairline
-    // gap so neighbours read as separate chips. Cached and re-used for all
-    // ~57 columns via a rotation transform.
-    private CanvasGeometry CellGeometry(ICanvasResourceCreator rc, int ring)
+    // An annular tile spanning [a0, a1] between r0 and r1, built at unrotated
+    // angles and re-used for every column via a rotation transform.
+    private CanvasGeometry ArcTile(ICanvasResourceCreator rc, float r0, float r1, float a0, float a1)
     {
-        if (_cellGeo[ring] is { } cached) return cached;
-        float r0 = _rIn + ring * _band + 1f;
-        float r1 = r0 + _band - 2f;
-        float gap = 1.2f / r0;
-        float a0 = gap, a1 = ColStep - gap;
-
         using var b = new CanvasPathBuilder(rc);
         b.BeginFigure(At(r0, a0));
         b.AddArc(At(r0, a1), r0, r0, 0f, CanvasSweepDirection.Clockwise, CanvasArcSize.Small);
         b.AddLine(At(r1, a1));
         b.AddArc(At(r1, a0), r1, r1, 0f, CanvasSweepDirection.CounterClockwise, CanvasArcSize.Small);
         b.EndFigure(CanvasFigureLoop.Closed);
-        var geo = CanvasGeometry.CreatePath(b);
-        _cellGeo[ring] = geo;
+        return CanvasGeometry.CreatePath(b);
+    }
+
+    // One 10° outer cell at ring band `ring`, inset by a hairline gap so
+    // neighbours read as separate chips. Cached and re-used for all 36 columns.
+    private CanvasGeometry OuterCell(ICanvasResourceCreator rc, int ring)
+    {
+        if (_outerGeo[ring] is { } cached) return cached;
+        float r0 = _rOutBase + ring * _band + 1f;
+        float r1 = r0 + _band - 2f;
+        float gap = 1.2f / MathF.Max(r0, 1f);
+        var geo = ArcTile(rc, r0, r1, gap, ColStep - gap);
+        _outerGeo[ring] = geo;
         return geo;
+    }
+
+    private CanvasGeometry Tier1Cell(ICanvasResourceCreator rc)
+    {
+        if (_tier1Geo is { } cached) return cached;
+        float r0 = _r1In + 1f, r1 = _r1Out - 1f;
+        float gap = 1.0f / MathF.Max(r0, 1f);
+        return _tier1Geo = ArcTile(rc, r0, r1, gap, Tier1Width - gap);
+    }
+
+    private CanvasGeometry Tier2Cell(ICanvasResourceCreator rc)
+    {
+        if (_tier2Geo is { } cached) return cached;
+        float r0 = _r2In + 1f, r1 = _r2Out - 1f;
+        float gap = 1.0f / MathF.Max(r0, 1f);
+        return _tier2Geo = ArcTile(rc, r0, r1, gap, Tier2Width - gap);
     }
 
     // =======================================================================
@@ -288,11 +374,7 @@ public sealed class ColorWheel : UserControl
     {
         float w = (float)sender.ActualWidth, h = (float)sender.ActualHeight;
         if (w < 2 || h < 2) return;
-        if (_geoDirty)
-        {
-            for (int i = 0; i < Rings; i++) { _cellGeo[i]?.Dispose(); _cellGeo[i] = null; }
-            _geoDirty = false;
-        }
+        if (_geoDirty) { DisposeGeometry(); _geoDirty = false; }
         Layout(w, h);
         var ds = e.DrawingSession;
 
@@ -310,50 +392,88 @@ public sealed class ColorWheel : UserControl
         // Labels are dropped while the ring is really moving: they are the only
         // per-cell text in the frame, and they are unreadable at speed anyway.
         bool labels = Math.Abs(_vel) < 1.2f;
-        float step = ColStep;
 
-        for (int col = 0; col < Columns.Length; col++)
+        // Tier 1 (inner arc) then Tier 2 (grey ring): disjoint bands, uniform
+        // cell width, so one cached geometry rotated to each cell's A0 does it.
+        DrawInnerTier(rc, ds, view, Tier1Cells, Tier1Cell(rc), (_r1In + _r1Out) * 0.5f, near, labels);
+        DrawInnerTier(rc, ds, view, Tier2Cells, Tier2Cell(rc), (_r2In + _r2Out) * 0.5f, near, labels);
+
+        // Tier 3+ (outer family columns): 36 fixed 10° columns, each a radial
+        // stack of its own depth.
+        for (int col = 0; col < OuterColumns.Length; col++)
         {
-            float a0 = Norm(col * step + _rot);
-            // Cheap reject: sample the column's mid-angle at four radii. A cell
-            // band is ~_band tall, so four samples across it cannot skip over a
-            // viewport (the smallest we lay out for is 320px).
-            float midA = a0 + step * 0.5f;
+            var stack = OuterColumns[col];
+            if (stack.Length == 0) continue;
+            float a0 = Norm(OuterStart + col * ColStep + _rot);
+            float midA = a0 + ColStep * 0.5f;
+            float rColOut = _rOutBase + stack.Length * _band;
+
+            // Cheap reject: sample the column's mid-angle across its radial run.
             bool visible = false;
             for (int k = 0; k <= 3 && !visible; k++)
             {
-                var q = At(_rIn + (_rOut - _rIn) * k / 3f, midA);
+                var q = At(_rOutBase + (rColOut - _rOutBase) * k / 3f, midA);
                 visible = view.Contains(new Point(q.X, q.Y));
             }
             if (!visible) continue;
 
             var rotate = Matrix3x2.CreateRotation(a0, _c);
-            for (int ring = 0; ring < Rings; ring++)
+            for (int ring = 0; ring < stack.Length; ring++)
             {
-                if (Columns[col][ring] is not { } sw) continue;
+                var sw = stack[ring];
                 var col32 = Color.FromArgb(255, sw.R, sw.G, sw.B);
                 ds.Transform = rotate;
-                ds.FillGeometry(CellGeometry(rc, ring), col32);
+                ds.FillGeometry(OuterCell(rc, ring), col32);
                 if (sw.Code == near.Code)
-                {
-                    ds.DrawGeometry(CellGeometry(rc, ring),
+                    ds.DrawGeometry(OuterCell(rc, ring),
                         IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), 3f);
-                }
                 ds.Transform = Matrix3x2.Identity;
 
-                if (!labels) continue;
-                float mid = a0 + step * 0.5f;
-                var p = At(_rIn + (ring + 0.5f) * _band, mid);
-                // keep the code upright: past the vertical it reads inward
-                float ta = MathF.Cos(mid) < 0 ? mid + MathF.PI : mid;
-                ds.Transform = Matrix3x2.CreateRotation(ta, p);
-                ds.DrawText(sw.Code,
-                    new Rect(p.X - _band * 1.6, p.Y - 9, _band * 3.2, 18),
-                    IsDark(col32) ? Color.FromArgb(240, 255, 255, 255) : Color.FromArgb(230, 24, 24, 24),
-                    _codeFmt);
-                ds.Transform = Matrix3x2.Identity;
+                if (labels) DrawCode(ds, sw.Code, _rOutBase + (ring + 0.5f) * _band, midA, col32);
             }
         }
+    }
+
+    // Draws one inner tier: fill each cell by rotating the shared geometry to
+    // the cell's start angle, outline the nearest swatch, and label it.
+    private void DrawInnerTier(ICanvasResourceCreator rc, CanvasDrawingSession ds, Rect view,
+        Cell[] cells, CanvasGeometry geo, float rMid, CopicSwatch near, bool labels)
+    {
+        foreach (var cell in cells)
+        {
+            float a0 = cell.A0 + _rot;
+            float mid = (cell.A0 + cell.A1) * 0.5f + _rot;
+            var q = At(rMid, mid);
+            if (!view.Contains(new Point(q.X, q.Y))) continue;   // thin band: one sample is enough
+
+            var col32 = Color.FromArgb(255, cell.Sw.R, cell.Sw.G, cell.Sw.B);
+            ds.Transform = Matrix3x2.CreateRotation(a0, _c);
+            ds.FillGeometry(geo, col32);
+            if (cell.Sw.Code == near.Code)
+                ds.DrawGeometry(geo, IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), 2.5f);
+            ds.Transform = Matrix3x2.Identity;
+
+            if (labels) DrawCode(ds, cell.Sw.Code, rMid, mid, col32);
+        }
+    }
+
+    // The marker code, centred in its tile and oriented RADIALLY: the text is
+    // rotated by (θ − 90°) about the label's own centre, which points the top of
+    // the glyphs at the wheel's centre. Because the ring turns as a rigid body,
+    // every code then holds the same orientation relative to the wheel through a
+    // spin — the reason for the fixed offset rather than a cos-based flip, which
+    // reads upright at rest but inverts discontinuously mid-rotation.
+    // (Sign verified against the renderer: +90° would face the tops outward.)
+    private void DrawCode(CanvasDrawingSession ds, string code, float r, float midA, Color bg)
+    {
+        var p = At(r, midA);
+        var keep = ds.Transform;
+        ds.Transform = Matrix3x2.CreateRotation(midA - MathF.PI / 2f, p) * keep;
+        ds.DrawText(code,
+            new Rect(p.X - _band * 1.7, p.Y - 8, _band * 3.4, 16),
+            IsDark(bg) ? Color.FromArgb(240, 255, 255, 255) : Color.FromArgb(230, 24, 24, 24),
+            _codeFmt);
+        ds.Transform = keep;
     }
 
     // HSL and RGB share one shape: three concentric arcs, each a tapered
@@ -640,15 +760,43 @@ public sealed class ColorWheel : UserControl
     private void PickAt(Vector2 p)
     {
         float r = Vector2.Distance(p, _c);
-        if (r < _rIn || r > _rOut) return;
-        int ring = Math.Clamp((int)((r - _rIn) / _band), 0, Rings - 1);
         float a = MathF.Atan2(p.Y - _c.Y, p.X - _c.X) - _rot;
-        float turns = a / MathF.Tau;
-        int col = (int)Math.Floor((turns - Math.Floor(turns)) * Columns.Length);
-        col = Math.Clamp(col, 0, Columns.Length - 1);
-        if (Columns[col][ring] is not { } sw) return;
+        if (SwatchAt(r, a) is not { } sw) return;
         Color = Color.FromArgb(255, sw.R, sw.G, sw.B);
         ColorChanged?.Invoke(_color);
+    }
+
+    // Pure-arithmetic hit-test: pick the tier by radius, then the cell by angle.
+    // `a` is the pointer angle already de-rotated into the ring's own frame.
+    private CopicSwatch? SwatchAt(float r, float a)
+    {
+        if (r >= _r1In && r <= _r1Out) return CellHit(Tier1Cells, a);
+        if (r >= _r2In && r <= _r2Out) return CellHit(Tier2Cells, a);
+        if (r >= _rOutBase)
+        {
+            int ring = (int)MathF.Floor((r - _rOutBase) / _band);
+            if (ring < 0) return null;
+            // Fold the angle into [0, 360) measured from the -90° start, then
+            // one division lands the 10° column.
+            double deg = a / Deg + 90.0;
+            deg = ((deg % 360) + 360) % 360;
+            int col = (int)Math.Floor(deg / 10.0) % OuterColumns.Length;
+            var stack = OuterColumns[col];
+            if (ring < stack.Length) return stack[ring];
+        }
+        return null;
+    }
+
+    private static CopicSwatch? CellHit(Cell[] cells, float a)
+    {
+        foreach (var cell in cells)
+        {
+            // Norm gives the shortest signed offset from the cell start; inside
+            // the cell it lands in [0, width]. Works across the ±π seam too.
+            float d = Norm(a - cell.A0);
+            if (d >= 0 && d <= cell.A1 - cell.A0) return cell.Sw;
+        }
+        return null;
     }
 
     // The glide: exponential falloff, then a short ease onto the nearest column
