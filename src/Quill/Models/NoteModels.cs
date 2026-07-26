@@ -381,6 +381,14 @@ public class Library
     public string AccentColor { get; set; } = "#D97757";
     // Touch-screen mode: larger tap targets across the toolbars (#36).
     public bool TouchMode { get; set; }
+    // Radial tool dial instead of the linear pen row (#radial). Off by default,
+    // so an existing library.json behaves exactly as it does today.
+    public bool RadialToolDial { get; set; }
+    // Which ten tools occupy the dial's outer ring, as "pen:<guid>",
+    // "tool:<tag>", "cmd:<name>" or "" for an empty slot. EMPTY means "use the
+    // defaults": the list is only written once the user actually customises the
+    // dial, so an untouched library gains nothing at all.
+    public List<string> WheelSlots { get; set; } = new();
     // Calculator history, kept across restarts (#47).
     public List<string> CalcHistory { get; set; } = new();
     // User-defined calculator constants, "name=value" (#18-batch3).
@@ -391,6 +399,8 @@ public class Library
     public double Liquidness { get; set; } = 0.35;
     // Recently used pen/highlight colours (newest first, max 16).
     public List<string> RecentColors { get; set; } = new();
+    // Face the system colour picker reopens in: 0 = Copic ring, 1 = HSL, 2 = RGB.
+    public int ColorPickerMode { get; set; }
     // User-curated custom accent colours shown as an extra swatch row in Settings.
     public List<string> CustomColors { get; set; } = new();
     // Last-selected eraser mode ("Point"/"Object"), restored on launch.
