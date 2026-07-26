@@ -202,6 +202,57 @@
   <data name="Settings.PenRepair.BridgeDesc" xml:space="preserve">
     <value>Continues the same stroke when the pen momentarily loses contact mid-line.</value>
   </data>
+  <data name="Settings.RadialDial.Header" xml:space="preserve">
+    <value>Radial tool dial</value>
+  </data>
+  <data name="Settings.RadialDial.Desc" xml:space="preserve">
+    <value>Swap the pen row for a Concepts-style dial: ten tool slots on the rim, size / opacity / smoothness on the arcs, colour in the middle. Press and hold the canvas — or the dial chip — to summon it.</value>
+  </data>
+  <data name="Wheel.Chip.Tip" xml:space="preserve">
+    <value>Tool dial - press and hold, then flick to a slot</value>
+  </data>
+  <data name="Wheel.Auto" xml:space="preserve">
+    <value>auto</value>
+  </data>
+  <data name="Wheel.Assign.Header" xml:space="preserve">
+    <value>What sits in slot {0}?</value>
+  </data>
+  <data name="Wheel.Assign.Empty" xml:space="preserve">
+    <value>Leave this slot empty</value>
+  </data>
+  <data name="Wheel.Tool.Eraser" xml:space="preserve">
+    <value>Eraser</value>
+  </data>
+  <data name="Wheel.Tool.Select" xml:space="preserve">
+    <value>Lasso select</value>
+  </data>
+  <data name="Wheel.Tool.Text" xml:space="preserve">
+    <value>Text</value>
+  </data>
+  <data name="Wheel.Tool.FreeSpace" xml:space="preserve">
+    <value>Insert free space</value>
+  </data>
+  <data name="Wheel.Cmd.Undo" xml:space="preserve">
+    <value>Undo</value>
+  </data>
+  <data name="Wheel.Cmd.Redo" xml:space="preserve">
+    <value>Redo</value>
+  </data>
+  <data name="Wheel.Cmd.MouseMode" xml:space="preserve">
+    <value>Mouse mode</value>
+  </data>
+  <data name="Wheel.Mouse.Auto" xml:space="preserve">
+    <value>Normal mouse</value>
+  </data>
+  <data name="Wheel.Mouse.Grab" xml:space="preserve">
+    <value>Grab - drag to pan</value>
+  </data>
+  <data name="Wheel.Mouse.Select" xml:space="preserve">
+    <value>Select - drag to lasso</value>
+  </data>
+  <data name="Wheel.Mouse.Move" xml:space="preserve">
+    <value>Move - drag strokes</value>
+  </data>
   <data name="Settings.MotionBlur.Header" xml:space="preserve">
     <value>Motion blur</value>
   </data>

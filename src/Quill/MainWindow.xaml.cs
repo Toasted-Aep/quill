@@ -39,6 +39,14 @@ public sealed partial class MainWindow : Window
     private NotePage? _curPage;
     private TreeViewNode? _selNode;
     private Guid? _activePresetId;
+    // The radial tool dial (#radial). Everything about it lives in
+    // Controls/ToolWheel.cs; this declaration plus the attach block, the two
+    // funnel calls, the visibility gate and the Settings toggle are its whole
+    // footprint in this file.
+    private ToolWheel? _toolWheel;
+    // Both tool surfaces subscribe to this and are dumb renderers over the same
+    // state, so the linear row and the dial can never diverge (§2.2).
+    private event Action? ToolUiChanged;
     // Notebooks unlocked for this session (#23).
     private readonly HashSet<Guid> _unlockedNotebooks = new();
 
@@ -431,6 +439,7 @@ public sealed partial class MainWindow : Window
         Surface.EraserSize = _library.EraserSize;
         // the eyedropper shortcut samples wherever the pointer last was
         Surface.PointerMoved += (_, pe) => _lastCanvasPt = pe.GetCurrentPoint(Surface).Position;
+        ConfigureColorPicker();
         // the legacy combined pen-repair switch migrates to the split toggles (#6-batch4)
         if (_library.PenRepair) { _library.PenRepairDots = true; _library.PenRepairBridge = true; _library.PenRepair = false; }
         Surface.PenRepairDots = _library.PenRepairDots;
@@ -451,6 +460,23 @@ public sealed partial class MainWindow : Window
         ApplyPenDock();
         BuildTree();
         BuildPenStrip();
+        _toolWheel = ToolWheel.Attach(CanvasArea, Surface, new ToolWheel.Host
+        {
+            Library = () => _library,
+            ActivePreset = () => _activePresetId,
+            ToolTag = () => _toolTag,
+            ApplyPreset = ApplyPreset,
+            SelectTool = SelectTool,
+            ChipData = PenChipData,
+            TwoTone = (b, c, col) => BuildTwoToneChip(b, c, col, out _, out _, out _),
+            SetMouseMode = t => SetMouseMode(Enum.Parse<MouseMode>(t)),
+            ReduceMotion = () => _reduceMotion,
+            Save = ScheduleSave,
+        });
+        ToolUiChanged += _toolWheel.Refresh;
+        // Point the dial's colour disc at the system COPIC picker (the seam the
+        // radial + colour branches were built to meet at).
+        _toolWheel.ColourPickerHook = ColorPickerService.Open;
         OpenStartupPage();
         SelectTool("Pen");
         ApplyToolbarVisibility();
@@ -2411,25 +2437,13 @@ public sealed partial class MainWindow : Window
             }
             panel.Children.Add(recents);
 
-            var picker = new ColorPicker
-            {
-                IsAlphaEnabled = false,
-                IsMoreButtonVisible = false,
-                ColorSpectrumShape = ColorSpectrumShape.Box,
-                Color = ColorUtil.Parse(p.Color)
-            };
-            pickerRef = picker;
-            picker.ColorChanged += (_, args) =>
-            {
-                if (_syncingUi) return;
-                SetColor(args.NewColor);
-            };
-            panel.Children.Add(new Expander
-            {
-                Header = "Custom colour",
-                Content = picker,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            });
+            // Custom colour now opens the system picker (the Copic ring / HSL /
+            // RGB wheel) rather than an inline box; the quick + recent swatches
+            // above stay for one-tap reuse. pickerRef stays null, which the
+            // swatch handlers already treat as "no inline picker to sync".
+            var customBtn = new Button { Content = "Custom colour…", HorizontalAlignment = HorizontalAlignment.Stretch };
+            customBtn.Click += (_, _) => OpenColorPicker(customBtn, ColorUtil.Parse(p.Color), SetColor);
+            panel.Children.Add(customBtn);
 
             var sizeLabel = new TextBlock { Text = $"Size: {p.Size:0.#}", FontSize = 12 };
             var size = new Slider { Minimum = 1, Maximum = 24, StepFrequency = 0.5, Value = p.Size };
@@ -2711,6 +2725,7 @@ public sealed partial class MainWindow : Window
         // so switching back to Manual restores the user's own pick.
         if (_library.AccentFollow == "Pen")
             try { ApplyAccentLive(ColorUtil.Parse(p.Color)); } catch { }
+        ToolUiChanged?.Invoke();
     }
 
     private async void AddPreset_Click(object sender, RoutedEventArgs e)
@@ -3032,7 +3047,6 @@ public sealed partial class MainWindow : Window
         GridRadios.SelectedIndex = Math.Max(0, Array.IndexOf(GridKindMap, page.Grid));
         SpacingSlider.Value = page.GridSpacing;
         SyncPageSizeUi(page);
-        BgPicker.Color = ColorUtil.Parse(page.Background);
         _syncingUi = false;
 
         ApplyPenRowVisibility();
@@ -4996,6 +5010,17 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(penFixBridge);
         panel.Children.Add(new TextBlock { Text = Loc.T("Settings.PenRepair.BridgeDesc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
+        // ---- radial tool dial (#radial) ----
+        var radialDial = new ToggleSwitch { Header = Loc.T("Settings.RadialDial.Header"), IsOn = _library.RadialToolDial };
+        radialDial.Toggled += (_, _) =>
+        {
+            _library.RadialToolDial = radialDial.IsOn;
+            ApplyPenRowVisibility();   // swaps the two surfaces live, in both directions
+            ScheduleSave();
+        };
+        panel.Children.Add(radialDial);
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.RadialDial.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
         // ---- motion blur (#A5) ----
         var motionBlur = new ToggleSwitch { Header = Loc.T("Settings.MotionBlur.Header"), IsOn = _library.MotionBlur };
         motionBlur.Toggled += (_, _) =>
@@ -5116,13 +5141,11 @@ public sealed partial class MainWindow : Window
         // ---- accent colour (#33) ----
         panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Accent.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
         panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Accent.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
-        var accentPicker = new ColorPicker
-        {
-            IsAlphaEnabled = false,
-            IsMoreButtonVisible = false,
-            ColorSpectrumShape = ColorSpectrumShape.Box,
-            Color = ColorUtil.Parse(_library.AccentColor)
-        };
+        // Custom accent opens the system picker; the preset + saved swatches
+        // below still set the accent in one tap. SetAccent is the single apply
+        // path, and _library.AccentColor is the live "current accent".
+        var accentCustomBtn = new Button { Content = Loc.T("Settings.Accent.Custom"), HorizontalAlignment = HorizontalAlignment.Stretch };
+        accentCustomBtn.Click += (_, _) => OpenColorPicker(accentCustomBtn, ColorUtil.Parse(_library.AccentColor), SetAccent);
         var swatchRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         string[] accentPresets = { "#D97757", "#6A9BCC", "#788C5D", "#7B1FA2", "#2E7D6B", "#FBC02D", "#D32F2F" };
         foreach (var hex in accentPresets)
@@ -5135,13 +5158,11 @@ public sealed partial class MainWindow : Window
                 BorderBrush = new SolidColorBrush(Color.FromArgb(90, 128, 128, 128))
             };
             ToolTipService.SetToolTip(sw, h == "#D97757" ? Loc.T("Settings.Accent.ClayDefault") : h);
-            sw.Click += (_, _) => accentPicker.Color = ColorUtil.Parse(h);   // fires ColorChanged
+            sw.Click += (_, _) => SetAccent(ColorUtil.Parse(h));
             swatchRow.Children.Add(sw);
         }
         panel.Children.Add(swatchRow);
-        var accentExp = new Expander { Header = Loc.T("Settings.Accent.Custom"), Content = accentPicker, HorizontalAlignment = HorizontalAlignment.Stretch };
-        panel.Children.Add(accentExp);
-        accentPicker.ColorChanged += (_, args) => SetAccent(args.NewColor);
+        panel.Children.Add(accentCustomBtn);
 
         // ---- user-saved custom colours (#5-batch2): a second, user-curated row ----
         panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Accent.Mine"), FontSize = 12, Opacity = 0.8, Margin = new Thickness(0, 6, 0, 0) });
@@ -5159,7 +5180,7 @@ public sealed partial class MainWindow : Window
                     BorderBrush = new SolidColorBrush(Color.FromArgb(90, 128, 128, 128))
                 };
                 ToolTipService.SetToolTip(sw, Loc.T("Settings.Accent.SwatchTip", h));
-                sw.Click += (_, _) => accentPicker.Color = ColorUtil.Parse(h);
+                sw.Click += (_, _) => SetAccent(ColorUtil.Parse(h));
                 sw.RightTapped += (_, _) => { _library.CustomColors.Remove(h); ScheduleSave(); RebuildCustomRow(); };
                 customRow.Children.Add(sw);
             }
@@ -5167,7 +5188,7 @@ public sealed partial class MainWindow : Window
             ToolTipService.SetToolTip(add, Loc.T("Settings.Accent.AddTip"));
             add.Click += (_, _) =>
             {
-                var hex = $"#{accentPicker.Color.R:X2}{accentPicker.Color.G:X2}{accentPicker.Color.B:X2}";
+                var hex = _library.AccentColor;
                 if (!_library.CustomColors.Contains(hex))
                 {
                     _library.CustomColors.Add(hex);
@@ -5373,6 +5394,7 @@ public sealed partial class MainWindow : Window
                 ShowStatus("Drag downwards to push everything below apart; drag up to pull together.");
                 break;
         }
+        ToolUiChanged?.Invoke();
     }
 
     private void TouchDraw_Click(object sender, RoutedEventArgs e)
@@ -5665,10 +5687,11 @@ public sealed partial class MainWindow : Window
         SetPageBackground(hex);
     }
 
-    private void BgPicker_ColorChanged(ColorPicker sender, ColorChangedEventArgs args)
+    private void BgCustom_Click(object sender, RoutedEventArgs e)
     {
-        if (_syncingUi || _curPage == null) return;
-        SetPageBackground(ColorUtil.ToHex(args.NewColor));
+        if (_curPage == null) return;
+        OpenColorPicker(BgCustomBtn, ColorUtil.Parse(_curPage.Background),
+            c => SetPageBackground(ColorUtil.ToHex(c)));
     }
 
     // Applies a page background and, when the page flips between light and dark,
@@ -5915,6 +5938,10 @@ public sealed partial class MainWindow : Window
         // on screen (#14-batch4); the floating pen in minimal UI stays manual
         bool penMode = _toolTag is "Pen" or "Eraser";
         if (!penMode && !_uiHidden) { showRow = false; showChip = false; }
+        // the radial dial IS the tool surface when it is on, so the linear row
+        // and its reopen chip stand down entirely (#radial)
+        if (_library.RadialToolDial) { showRow = false; showChip = false; }
+        _toolWheel?.SetVisible(_library.RadialToolDial && (!_uiHidden || _floatPen));
         // slide in from the bottom edge the dock lives on, like the other bars
         if (showRow) FadeIn(PenRow, slideY: 24); else FadeOut(PenRow);
         if (showChip) FadeIn(PenRowShowBtn); else FadeOut(PenRowShowBtn);
@@ -6328,6 +6355,52 @@ public sealed partial class MainWindow : Window
     // sampling lives in InkSurface.SampleColorAt.
     private Windows.Foundation.Point _lastCanvasPt;
 
+    // =======================================================================
+    // System colour picker (colour-system): the ColorWheel + ColorPickerService
+    // are the one picker for the whole app. This block is the entire MainWindow
+    // footprint — the host wiring, the MRU push, and one opener that call sites
+    // route through. See ColorWheel.cs / ColorPickerService.cs for the rest.
+    // =======================================================================
+    private void ConfigureColorPicker()
+    {
+        ColorPickerService.Configure(new ColorPickerService.HostConfig
+        {
+            Overlay = RootGrid,
+            GetRecents = () => _library.RecentColors.Select(ColorUtil.Parse).ToList(),
+            PushRecent = PushRecentColor,
+            // the picker floats over the whole window; map its point down into
+            // the canvas before the logical eyedropper hit-tests it
+            Sample = p =>
+            {
+                var cp = RootGrid.TransformToVisual(Surface).TransformPoint(p);
+                return Surface.SampleColorAt(new System.Numerics.Vector2((float)cp.X, (float)cp.Y));
+            },
+            GetMode = () => (ColorWheelMode)Math.Clamp(_library.ColorPickerMode, 0, 2),
+            SetMode = m => { _library.ColorPickerMode = (int)m; ScheduleSave(); }
+        });
+    }
+
+    // The single MRU updater. Newest first, deduped, capped at 16 — the same
+    // rule the inline pen swatches used, now shared so every entry point feeds
+    // one list.
+    private void PushRecentColor(Color c)
+    {
+        var hex = ColorUtil.ToHex(c);
+        _library.RecentColors.Remove(hex);
+        _library.RecentColors.Insert(0, hex);
+        if (_library.RecentColors.Count > 16) _library.RecentColors.RemoveAt(16);
+        ScheduleSave();
+    }
+
+    // Opens the system picker centred on a control (its middle, in root coords)
+    // or on an explicit root point. onPicked fires live on every change.
+    private void OpenColorPicker(FrameworkElement anchor, Color current, Action<Color> onPicked)
+    {
+        var tl = anchor.TransformToVisual(RootGrid).TransformPoint(new Point(0, 0));
+        var pt = new Point(tl.X + anchor.ActualWidth / 2, tl.Y + anchor.ActualHeight / 2);
+        ColorPickerService.Open(pt, current, onPicked);
+    }
+
     private void EyedropAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs args)
     {
         if (TextBoxFocused) { args.Handled = false; return; }
@@ -6342,6 +6415,7 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         }
         Surface.PenColor = c.Value;
+        PushRecentColor(c.Value);
         ShowStatus($"Picked {ColorUtil.ToHex(c.Value)}");
     }
 

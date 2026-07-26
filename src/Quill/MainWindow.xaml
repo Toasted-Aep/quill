@@ -262,11 +262,8 @@
                                         <Button Tag="#1E1E1E" Click="BgPreset_Click" ToolTipService.ToolTip="Dark grey" Width="40" Height="28" Background="#1E1E1E" BorderBrush="Gray"/>
                                         <Button Tag="#000000" Click="BgPreset_Click" ToolTipService.ToolTip="Total black (OLED)" Width="40" Height="28" Background="Black" BorderBrush="Gray"/>
                                     </StackPanel>
-                                    <Expander Header="Custom colour" HorizontalAlignment="Stretch">
-                                        <ColorPicker x:Name="BgPicker" IsAlphaEnabled="False" IsMoreButtonVisible="False"
-                                                     ColorSpectrumShape="Box" IsColorSliderVisible="True"
-                                                     ColorChanged="BgPicker_ColorChanged"/>
-                                    </Expander>
+                                    <Button x:Name="BgCustomBtn" Content="Custom colour…" HorizontalAlignment="Stretch"
+                                            Click="BgCustom_Click"/>
                                     <Button Click="SetDefaultBg_Click" FontSize="12" HorizontalAlignment="Stretch"
                                             Content="Use this page's colour for all new pages"/>
                                     <Button Click="SetNotebookDefaultBg_Click" FontSize="12" HorizontalAlignment="Stretch"
