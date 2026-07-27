@@ -420,6 +420,14 @@ public sealed partial class MainWindow : Window
 
         Loc.SetLanguage(_library.Language);   // before anything captures a string (#C7)
 
+        // One-time: switch the docked dial on for libraries saved before it
+        // existed (they carry an explicit false that beats the model default).
+        if (!_library.RadialDialMigrated)
+        {
+            _library.RadialDialMigrated = true;
+            _library.RadialToolDial = true;
+            ScheduleSave();
+        }
         SeedPens();
         Surface.PendingFontFamily = _library.DefaultFont;
         Surface.PendingFontSize = (float)_library.DefaultFontSize;

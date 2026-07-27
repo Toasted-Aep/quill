@@ -391,7 +391,14 @@ public class Library
     public bool TouchMode { get; set; }
     // Radial tool dial instead of the linear pen row (#radial). Off by default,
     // so an existing library.json behaves exactly as it does today.
-    public bool RadialToolDial { get; set; }
+    // Docked top-left and always visible, like Concepts. On by default.
+    public bool RadialToolDial { get; set; } = true;
+    // One-time migration marker. Libraries saved before the dial was docked
+    // carry an explicit "RadialToolDial": false, which overrides the default
+    // above - so a changed default alone can never reach an existing user.
+    // Cleared once, which switches the dial on; after that the user's own
+    // choice is respected forever.
+    public bool RadialDialMigrated { get; set; }
     // Which ten tools occupy the dial's outer ring, as "pen:<guid>",
     // "tool:<tag>", "cmd:<name>" or "" for an empty slot. EMPTY means "use the
     // defaults": the list is only written once the user actually customises the
