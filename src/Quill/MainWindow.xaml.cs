@@ -1547,8 +1547,33 @@ public sealed partial class MainWindow : Window
         catch { return true; }
     }
 
-    private bool ResolvedDark() =>
-        _library.Theme == "System" ? SystemPrefersDark() : _library.Theme == "Dark";
+    private bool ResolvedDark()
+    {
+        // "Follow page background" (§paper-theme): the ACTIVE PAGE decides. The
+        // page's EFFECTIVE ground is used, not its raw hex, so a Blueprint or
+        // Darkprint page reads dark even though its stored colour is incidental.
+        // With no page open yet (gallery / startup) fall through to the explicit
+        // mode, which is also what an existing library always does.
+        if (_library.ThemeSource == "Page" && _curPage != null)
+            return ColorUtil.IsDark(PaperTextures.Ground(_curPage));
+        return _library.Theme == "System" ? SystemPrefersDark() : _library.Theme == "Dark";
+    }
+
+    // The theme ApplyTheme last committed. ApplyTheme rebuilds the tree, the pen
+    // strip, the calc history, the gallery and the canvas, so calling it on every
+    // page turn would rebuild the whole UI each time the user flips a page. This
+    // is the gate: re-derive cheaply, and only apply when the answer CHANGED.
+    private bool? _appliedDark;
+
+    /// <summary>Re-derives the theme after something that can change it (page
+    /// open/switch, page background change, paper change) and applies it only if
+    /// it actually differs from what is on screen.</summary>
+    private void SyncThemeToPage()
+    {
+        if (_library.ThemeSource != "Page") return;
+        if (_appliedDark == ResolvedDark()) return;   // no change: no rebuild
+        ApplyTheme();
+    }
 
     // Code-built UI captures its strings at build time exactly the way it
     // captures theme colours, so a language change has to repaint the same set of
@@ -1574,6 +1599,7 @@ public sealed partial class MainWindow : Window
     private void ApplyTheme()
     {
         bool dark = ResolvedDark();
+        _appliedDark = dark;   // the anti-thrash baseline SyncThemeToPage compares against
         ApplyOledBlack(dark && _library.OledBlack);
         // with a live Mica/acrylic backdrop the root goes translucent so the
         // desktop reads through; OLED black and reduced transparency stay opaque
@@ -1595,6 +1621,7 @@ public sealed partial class MainWindow : Window
                 BuildTree();
                 BuildPenStrip();
                 RefreshCalcHistory();
+                _settingsWin?.Refresh();   // the floating panel captures colours at build time too
                 if (GalleryPanel.Visibility == Visibility.Visible) BuildGallery();
                 Surface.Refresh();
             }
@@ -1973,7 +2000,11 @@ public sealed partial class MainWindow : Window
 
     private void Theme_Click(object sender, RoutedEventArgs e)
     {
+        // An explicit tap on the sun/moon pill is an explicit choice: it leaves
+        // "follow page background" mode rather than being silently overridden by
+        // the next page turn.
         _library.Theme = ResolvedDark() ? "Light" : "Dark";
+        _library.ThemeSource = "Manual";
         ApplyTheme();
         ScheduleSave();
         ShowStatus(_library.Theme == "Dark" ? "Dark mode on." : "Light mode on.");
@@ -3026,6 +3057,9 @@ public sealed partial class MainWindow : Window
         }
 
         Surface.LoadPage(page);
+        // §paper-theme: the page that is now active may be light where the last
+        // one was dark. Cheap re-derive; only rebuilds the chrome if it flipped.
+        SyncThemeToPage();
         if (pageChanged && !_suppressPageFade)
         {
             // gentle cross-fade so the new page eases in rather than snapping
@@ -4702,13 +4736,83 @@ public sealed partial class MainWindow : Window
     // The panel is code-built, so it captures its strings at build time exactly
     // the way the gallery captures theme colours. Switching language therefore
     // closes and re-presents the dialog rather than trying to patch it in place.
-    private async void Settings_Click(object sender, RoutedEventArgs e)
+    // The settings surface is the floating, draggable, resizable glass window
+    // (Controls/FloatingWindow.cs hosts Controls/SettingsWindow.cs). Everything
+    // the old dialog carried still lives in ShowSettingsDialogAsync below: the
+    // window's Interaction tab hosts THAT VERY PANEL through the `into`
+    // parameter, which is why the rebuild costs this contended file only the
+    // wiring block instead of a 500-line move.
+    private SettingsWindow? _settingsWin;
+
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettingsWindow();
+
+    private void OpenSettingsWindow()
     {
-        while (await ShowSettingsDialogAsync()) { }
+        try { OpenSettingsWindowCore(); }
+        catch (Exception ex)
+        {
+            // The command palette swallows exceptions from the commands it runs,
+            // so a failure here would otherwise be a settings button that simply
+            // does nothing. Surface it instead.
+            ShowStatus("Settings could not open: " + ex.Message);
+            try
+            {
+                System.IO.File.AppendAllText(
+                    System.IO.Path.Combine(LibraryStore.Dir, "crash.log"),
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] settings window: {ex}" + Environment.NewLine);
+            }
+            catch { }
+        }
+    }
+
+    private void OpenSettingsWindowCore()
+    {
+        _settingsWin ??= SettingsWindow.Attach(CanvasArea, new SettingsWindow.Host
+        {
+            Library = () => _library,
+            Page = () => _curPage,
+            SetPaper = SetPagePaper,
+            PickColor = OpenColorPicker,
+            SetGrid = g =>
+            {
+                if (_curPage == null) return;
+                _curPage.Grid = g;
+                _syncingUi = true;
+                GridRadios.SelectedIndex = Math.Max(0, Array.IndexOf(GridKindMap, g));
+                _syncingUi = false;
+                Surface.Refresh(); ScheduleSave();
+            },
+            SetGridSpacing = v => { if (_curPage != null) { _curPage.GridSpacing = v; Surface.Refresh(); ScheduleSave(); } },
+            SetGridColor = c => { if (_curPage != null) { _curPage.GridColor = c; Surface.Refresh(); ScheduleSave(); } },
+            SetPageSize = (preset, w, h, unit) =>
+            {
+                if (_curPage == null) return;
+                _curPage.PageSize = preset;
+                if (preset == PageSizePreset.Custom) { _curPage.PageWidth = w; _curPage.PageHeight = h; }
+                _curPage.PageUnit = unit;
+                _syncingUi = true; SyncPageSizeUi(_curPage); _syncingUi = false;
+                Surface.Refresh(); ScheduleSave();
+            },
+            SetLandscape = on =>
+            {
+                if (_curPage == null) return;
+                _curPage.PageLandscape = on;
+                _syncingUi = true; SyncPageSizeUi(_curPage); _syncingUi = false;
+                Surface.Refresh(); ScheduleSave();
+            },
+            SetUnitsPerInch = v => { if (_curPage != null) { _curPage.UnitsPerInch = v; Surface.Refresh(); ScheduleSave(); } },
+            ApplyTheme = ApplyTheme,
+            Save = ScheduleSave,
+            FillLegacySettings = p => { _ = ShowSettingsDialogAsync(p); },
+            Status = ShowStatus,
+        });
+        _settingsWin.Toggle();
     }
 
     // Returns true when the language changed and the dialog should be reopened.
-    private async Task<bool> ShowSettingsDialogAsync()
+    // With `into` supplied the very same controls are handed to that panel
+    // instead of a ContentDialog — this is the floating window's Interaction tab.
+    private async Task<bool> ShowSettingsDialogAsync(Panel? into = null)
     {
         bool languageChanged = false;
         var panel = new StackPanel { Spacing = 10, Width = 480 };
@@ -4951,18 +5055,24 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(customExp);
 
         // ---- theme mode (#10-roadmap) ----
-        var themeBox = new ComboBox { Header = Loc.T("Settings.Theme.Header"), Width = 220 };
-        foreach (var tag in new[] { "Light", "Dark", "System" })
+        var themeBox = new ComboBox { Header = Loc.T("Settings.Theme.Header"), Width = 260 };
+        // "Page" is a THEME SOURCE, not a Theme value: picking it leaves the saved
+        // Light/Dark/System choice untouched so switching back restores it.
+        foreach (var tag in new[] { "Page", "Light", "Dark", "System" })
             themeBox.Items.Add(new ComboBoxItem { Content = Loc.T("Theme." + tag), Tag = tag });
+        string curTheme = _library.ThemeSource == "Page" ? "Page" : _library.Theme;
         foreach (ComboBoxItem it in themeBox.Items)
-            if ((string)it.Tag == _library.Theme) { themeBox.SelectedItem = it; break; }
-        if (themeBox.SelectedItem == null) themeBox.SelectedIndex = 1;
+            if ((string)it.Tag == curTheme) { themeBox.SelectedItem = it; break; }
+        if (themeBox.SelectedItem == null) themeBox.SelectedIndex = 2;
         themeBox.SelectionChanged += (_, _) =>
         {
-            if (themeBox.SelectedItem is ComboBoxItem ci && ci.Tag is string t)
-            { _library.Theme = t; ApplyTheme(); ScheduleSave(); }
+            if (themeBox.SelectedItem is not ComboBoxItem ci || ci.Tag is not string t) return;
+            if (t == "Page") _library.ThemeSource = "Page";
+            else { _library.ThemeSource = "Manual"; _library.Theme = t; }
+            ApplyTheme(); ScheduleSave();
         };
         panel.Children.Add(themeBox);
+        panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Theme.PageDesc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
 
         // ---- true black for OLED (#32-batch2) ----
         var oledToggle = new ToggleSwitch { Header = Loc.T("Settings.Oled"), IsOn = _library.OledBlack };
@@ -5236,6 +5346,11 @@ public sealed partial class MainWindow : Window
         importBtn.Click += async (_, _) => { var p = await PickJsonFileAsync(); if (p != null) ImportFromFile(p); };
         panel.Children.Add(importBtn);
         panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Import.Desc"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+
+        // Hosted inside the floating settings window: hand the built controls over
+        // and stop here. Everything above ran synchronously, so the panel is fully
+        // populated by the time this returns.
+        if (into != null) { into.Children.Add(panel); return false; }
 
         // scrollable so every section (incl. the colour picker) stays reachable
         var scroller = new ScrollViewer
@@ -5709,6 +5824,20 @@ public sealed partial class MainWindow : Window
             Surface.RebuildTextLayer();
         }
         Surface.Refresh();
+        SyncThemeToPage();   // §paper-theme: a dark page can now darken the whole app
+        ScheduleSave();
+    }
+
+    /// <summary>Applies a paper texture (and the plain colour that goes with it)
+    /// to the active page. <paramref name="paper"/> null/empty = today's plain
+    /// colour. Single entry point, so the theme re-derive can never be forgotten.</summary>
+    internal void SetPagePaper(string? paper, string? hex)
+    {
+        if (_curPage == null) return;
+        _curPage.Paper = string.IsNullOrEmpty(paper) ? null : paper;
+        if (!string.IsNullOrEmpty(hex)) { SetPageBackground(hex); return; }   // that path syncs + saves
+        Surface.Refresh();
+        SyncThemeToPage();
         ScheduleSave();
     }
 

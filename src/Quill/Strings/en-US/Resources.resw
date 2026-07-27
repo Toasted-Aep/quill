@@ -184,6 +184,12 @@
   <data name="Theme.System" xml:space="preserve">
     <value>Follow Windows</value>
   </data>
+  <data name="Theme.Page" xml:space="preserve">
+    <value>Follow page background</value>
+  </data>
+  <data name="Settings.Theme.PageDesc" xml:space="preserve">
+    <value>The page you are on decides the whole app's look: a dark or Blueprint page puts Quill in dark mode, a white or Lightweight page in light mode.</value>
+  </data>
   <data name="Settings.Oled" xml:space="preserve">
     <value>True black dark theme (OLED)</value>
   </data>

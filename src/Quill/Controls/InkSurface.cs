@@ -3101,13 +3101,18 @@ public sealed class InkSurface : UserControl
             return;
         }
 
-        var bg = ColorUtil.Parse(_page.Background);
+        // §7.3: the page's EFFECTIVE ground — a paper texture with a ground of its
+        // own (Blueprint / Darkprint / Brown) owns the colour; everything else,
+        // including a null Paper (i.e. every existing page), keeps the page's own
+        // plain colour. This is the same colour the theme derivation reads.
+        var bg = PaperTextures.Ground(_page.Paper, ColorUtil.Parse(_page.Background));
         ds.Clear(bg);
 
         ds.Transform = Matrix3x2.CreateScale(ViewZoom) *
                        Matrix3x2.CreateTranslation(ViewOffset.X, ViewOffset.Y) *
                        regionT;
 
+        DrawPaper(ds, region, bg);
         DrawGrid(ds, bg);
         DrawPerspective(ds, bg);
         DrawArtboard(ds, bg);
@@ -3360,6 +3365,30 @@ public sealed class InkSurface : UserControl
                 _canvas.Invalidate();
             }
         }
+    }
+
+    // Procedural paper texture (§7.3). Called with the session ALREADY composed
+    // into world space by DrawRegion — this method only READS ds.Transform's
+    // effect, it never assigns to it, so the CVC's per-tile pre-translation
+    // survives (overwriting it is what made ink vanish in #inkfix2).
+    //
+    // The fill rectangle is the visible world rect and the brush wraps every 256
+    // WORLD units, so the texture is glued to the page: it pans and zooms with
+    // the drawing instead of swimming across it.
+    private void DrawPaper(CanvasDrawingSession ds, Rect region, Color ground)
+    {
+        var paper = _page?.Paper;
+        if (string.IsNullOrEmpty(paper)) return;   // plain colour: byte-for-byte today's path
+        // zoomed far enough out that a 256-unit tile is a few pixels: the grain
+        // would alias into noise, and the flat ground already reads correctly
+        if (ViewZoom < 0.18f) return;
+        var brush = PaperTextures.Brush(_canvas, paper, ground);
+        if (brush == null) return;
+        var tl = ToWorld(new Vector2((float)region.X, (float)region.Y));
+        var br = ToWorld(new Vector2((float)region.Right, (float)region.Bottom));
+        float w = br.X - tl.X, h = br.Y - tl.Y;
+        if (w <= 0 || h <= 0) return;
+        ds.FillRectangle(new Rect(tl.X, tl.Y, w, h), brush);
     }
 
     private void DrawGrid(CanvasDrawingSession ds, Color bg)
@@ -6848,7 +6877,7 @@ public sealed class InkSurface : UserControl
                 // A cover thumbnail composites the ink OVER the notebook's identity
                 // colour, not the page's own (usually dark) background, so the card
                 // reads as "notebook colour with a preview of ink on it" (#coverfix).
-                var bg = backgroundOverride ?? ColorUtil.Parse(page.Background);
+                var bg = backgroundOverride ?? PaperTextures.Ground(page.Paper, ColorUtil.Parse(page.Background));
                 ds.Clear(bg);
 
                 // With an override the page's ink can vanish against the notebook
