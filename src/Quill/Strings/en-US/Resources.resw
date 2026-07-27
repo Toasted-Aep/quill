@@ -424,4 +424,40 @@
   <data name="Status.LanguageChanged" xml:space="preserve">
     <value>Quill is now in {0}.</value>
   </data>
+  <data name="Wheel.Tool.Fill" xml:space="preserve">
+    <value>Fill</value>
+  </data>
+  <data name="Wheel.Tool.Pen" xml:space="preserve">
+    <value>Pen</value>
+  </data>
+  <data name="Wheel.Sel.Freeform" xml:space="preserve">
+    <value>Freeform lasso</value>
+  </data>
+  <data name="Wheel.Sel.Square" xml:space="preserve">
+    <value>Square lasso</value>
+  </data>
+  <data name="Wheel.Sel.Partial" xml:space="preserve">
+    <value>Partial selection</value>
+  </data>
+  <data name="Wheel.Sel.Complete" xml:space="preserve">
+    <value>Complete selection</value>
+  </data>
+  <data name="Wheel.Sel.Layer" xml:space="preserve">
+    <value>Active layer</value>
+  </data>
+  <data name="Wheel.Erase.Nudge" xml:space="preserve">
+    <value>Nudge</value>
+  </data>
+  <data name="Wheel.Erase.Slice" xml:space="preserve">
+    <value>Slice</value>
+  </data>
+  <data name="Wheel.Erase.Hard" xml:space="preserve">
+    <value>Hard mask</value>
+  </data>
+  <data name="Wheel.Erase.Soft" xml:space="preserve">
+    <value>Soft mask</value>
+  </data>
+  <data name="Wheel.Erase.Object" xml:space="preserve">
+    <value>Whole stroke</value>
+  </data>
 </root>

@@ -51,6 +51,12 @@ public class PenStroke
     public string Color { get; set; } = "#1A1A1A";
     public float Size { get; set; } = 3f;
     public float Sens { get; set; } = 1f;
+    // Ink opacity, 0-1. null == fully opaque, and null is what an opaque stroke
+    // serialises to (WhenWritingNull), so switching the renderer to an
+    // alpha-aware path costs an existing 53 MB library.json exactly zero bytes
+    // and every stroke ever saved keeps rendering identically.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? Opacity { get; set; }
     public List<StrokePoint> Points { get; set; } = new();
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
     public List<float>? PressureCurve { get; set; }
@@ -182,6 +188,9 @@ public class PenPreset
     public string Color { get; set; } = "#141413";
     public float Size { get; set; } = 3.5f;
     public float Sens { get; set; } = 1f;
+    // Ink opacity, 0-1. Defaults to 1, so a preset loaded from a library.json
+    // written before opacity existed is fully opaque exactly as it was.
+    public float Opacity { get; set; } = 1f;
     // Wet-ink stabiliser: 0 = off, 1 = maximum smoothing.
     public float Stabiliser { get; set; }
     // Custom pressure response curve control points (0–1 range).
