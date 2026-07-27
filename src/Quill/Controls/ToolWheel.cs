@@ -143,6 +143,12 @@ public sealed class ToolWheel
 
     private bool _on;
     private bool _open;
+    // Docked: the wheel lives permanently in the top-left corner (the Concepts
+    // arrangement) instead of being summoned at the pointer. While docked it is
+    // NOT modal - it never shows the scrim, never closes on an outside press,
+    // and a press beyond its rim is left entirely to the canvas so drawing,
+    // lasso and the barrel menu are untouched.
+    private bool _docked = true;
     private bool _sticky;                // opened by a tap: stays up until the next tap
     private bool _mirrored;              // handedness: satellites flip on the right half
     private double _scale = 1;
@@ -200,6 +206,8 @@ public sealed class ToolWheel
         _layer.Children.Add(_chip);
 
         _host.Children.Add(_layer);
+        // the dock is corner-anchored, so it has to be re-parked on every resize
+        _host.SizeChanged += (_, _) => { if (_on && _docked) { PlaceDocked(); PlaceChip(); } };
 
         // One root handler set, registered handledEventsToo so a press the ink
         // surface has already claimed is still *observed* (and then ignored).
@@ -212,7 +220,7 @@ public sealed class ToolWheel
         _host.AddHandler(UIElement.PointerCanceledEvent, new PointerEventHandler(OnLost), true);
         _host.AddHandler(UIElement.PointerCaptureLostEvent, new PointerEventHandler(OnLost), true);
 
-        _hold.Tick += (_, _) => { _hold.Stop(); if (_holdArmed) { _holdArmed = false; Open(_holdPt, dragArm: true, fromChip: false); } };
+        _hold.Tick += (_, _) => { _hold.Stop(); if (_holdArmed && !_docked) { _holdArmed = false; Open(_holdPt, dragArm: true, fromChip: false); } };
         _assign.Tick += (_, _) => { _assign.Stop(); if (_assignSlot >= 0) ShowAssign(_assignSlot); };
         _host.SizeChanged += (_, _) => { if (!_open) PlaceChip(); };
         // Every colour here is captured at paint time, so a theme flip has to
@@ -248,11 +256,53 @@ public sealed class ToolWheel
     /// <summary>Show or hide the dial. Takes effect immediately, both ways.</summary>
     public void SetVisible(bool on)
     {
-        if (_on == on) { if (on) Refresh(); return; }
+        if (_on == on) { if (on) { PlaceDocked(); Refresh(); } return; }
         _on = on;
-        if (!on) Close();
+        if (!on) { _docked = false; Close(); }
         _layer.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-        if (on) { PlaceChip(); Refresh(); }
+        if (on)
+        {
+            _docked = true;
+            PlaceChip();
+            _chip.Visibility = Visibility.Collapsed;   // the dock replaces the summon chip
+            OpenDocked();
+        }
+    }
+
+    /// <summary>Parks the wheel in the top-left corner and leaves it open. Unlike
+    /// Open() this raises no scrim, so the canvas keeps every press outside the
+    /// rim.</summary>
+    private void OpenDocked()
+    {
+        PlaceDocked();
+        _open = true;
+        _dragArm = false; _fromChip = false; _sticky = true;
+        _hoverSlot = -1; _hoverArc = -1; _dragArc = -1; _hoverColour = false;
+        _scrim.Visibility = Visibility.Collapsed;
+        _wheel.Visibility = Visibility.Visible;
+        _wheel.Opacity = 1;
+        var st = (ScaleTransform)_wheel.RenderTransform;
+        st.ScaleX = st.ScaleY = _scale;
+        Refresh();
+    }
+
+    /// <summary>Top-left dock, mirrored to the top-right for a left-handed user
+    /// so the wheel sits under the drawing hand rather than across the page.</summary>
+    private void PlaceDocked()
+    {
+        double w = _host.ActualWidth, h = _host.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+        double half = Footprint / 2;
+        const double pad = 10;
+        // dock left; PenDock == "Right" means the user keeps their tools on the
+        // right, so mirror the corner to match rather than crossing the page
+        _mirrored = string.Equals(_h.Library().PenDock, "Right", StringComparison.OrdinalIgnoreCase);
+        double cx = _mirrored ? Math.Max(half, w - half - pad) : half + pad;
+        double cy = Math.Min(half + pad, Math.Max(half, h - half));
+        _centre = new Point(cx, cy);
+        Canvas.SetLeft(_wheel, _centre.X - half);
+        Canvas.SetTop(_wheel, _centre.Y - half);
+        PlaceGrip();
     }
 
     /// <summary>The ToolUiChanged subscriber: a dumb re-render of whatever the
@@ -635,6 +685,17 @@ public sealed class ToolWheel
     {
         _hold.Stop(); _holdArmed = false;
         _assign.Stop(); _assignSlot = -1;
+        if (_docked && _on)
+        {
+            // A docked wheel never goes away - just drop the transient hover and
+            // drag state and repaint.
+            _pointer = null;
+            _hoverSlot = -1; _hoverArc = -1; _dragArc = -1; _hoverColour = false;
+            _dragArm = _fromChip = false;
+            _scrim.Visibility = Visibility.Collapsed;
+            Refresh();
+            return;
+        }
         if (!_open) { _scrim.Visibility = Visibility.Collapsed; return; }
         _open = _sticky = _dragArm = false;
         _pointer = null;
@@ -864,7 +925,13 @@ public sealed class ToolWheel
             _pressPt = p; _pressMs = Environment.TickCount64;
             _dragArm = true; _fromChip = false;
             var (z, idx, r, a) = Aim(p);
-            if (r > SatR + 20) { Close(); e.Handled = true; return; }
+            if (r > SatR + 20)
+            {
+                // Docked is not modal: hand the press straight back to the canvas
+                // so drawing beside the wheel behaves exactly as if it were absent.
+                if (_docked) { _pointer = null; _dragArm = false; return; }
+                Close(); e.Handled = true; return;
+            }
             _hoverSlot = z == Zone.Slot ? idx : -1;
             _hoverArc = z == Zone.Arc ? idx : -1;
             _hoverColour = z == Zone.Colour;
