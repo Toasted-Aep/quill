@@ -400,6 +400,12 @@ public class Library
     // Recently used pen/highlight colours (newest first, max 16).
     public List<string> RecentColors { get; set; } = new();
     // Face the system colour picker reopens in: 0 = Copic ring, 1 = HSL, 2 = RGB.
+    // Tolerant of the enum NAME as well as the index: a shipped build wrote
+    // "Copic" here, and a plain int property makes that file undeserializable -
+    // which cost the whole library, because a failed load then fell through to
+    // the pre-rename data folder. Never let one field's type change lock a user
+    // out of their notes.
+    [System.Text.Json.Serialization.JsonConverter(typeof(TolerantIntConverter))]
     public int ColorPickerMode { get; set; }
     // User-curated custom accent colours shown as an extra swatch row in Settings.
     public List<string> CustomColors { get; set; } = new();
@@ -695,4 +701,37 @@ public class KeyOverride
     public string Mods { get; set; } = "";
     // true = the command is explicitly unbound (distinct from "no override").
     public bool Disabled { get; set; }
+}
+
+/// <summary>Reads an int that may have been written as a number OR as an enum
+/// name (or any string). Unrecognised text reads as 0 rather than throwing, so
+/// a single renamed value can never make the library fail to load.</summary>
+public sealed class TolerantIntConverter : System.Text.Json.Serialization.JsonConverter<int>
+{
+    public override int Read(ref System.Text.Json.Utf8JsonReader reader, System.Type t,
+                             System.Text.Json.JsonSerializerOptions o)
+    {
+        if (reader.TokenType == System.Text.Json.JsonTokenType.Number)
+            return reader.TryGetInt32(out int n) ? n : 0;
+        if (reader.TokenType == System.Text.Json.JsonTokenType.String)
+        {
+            string? v = reader.GetString();
+            if (string.IsNullOrEmpty(v)) return 0;
+            if (int.TryParse(v, out int parsed)) return parsed;
+            // enum names, matched case-insensitively against the picker faces
+            return v.ToLowerInvariant() switch
+            {
+                "copic" => 0,
+                "hsl" => 1,
+                "rgb" => 2,
+                _ => 0
+            };
+        }
+        reader.Skip();
+        return 0;
+    }
+
+    public override void Write(System.Text.Json.Utf8JsonWriter writer, int value,
+                               System.Text.Json.JsonSerializerOptions o)
+        => writer.WriteNumberValue(value);
 }
