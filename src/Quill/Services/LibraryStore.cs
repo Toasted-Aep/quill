@@ -43,7 +43,15 @@ public static class LibraryStore
     }
 
     private static AppSettings? _settings;
+
+    // Test seam. The save-path harness redirects the FIXED anchor into a scratch
+    // folder so settings.json, the library and the trash can all be exercised for
+    // real without going anywhere near the user's actual notes. Nothing in the app
+    // ever assigns this: it is private, has no setter, no env var and no config
+    // key, and is reachable only by reflection from the harness.
+    private static string? _anchorOverride = null;
     private static string AnchorDir =>
+        _anchorOverride ??
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Quill");
     private static string SettingsPath => Path.Combine(AnchorDir, "settings.json");
 
@@ -53,35 +61,83 @@ public static class LibraryStore
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "LectureInk");
     private static string OldSettingsPath => Path.Combine(OldAnchorDir, "settings.json");
 
+    /// <summary>True when a settings file EXISTS but neither it nor its backup
+    /// could be parsed. settings.json records DataFolder — i.e. WHERE the library
+    /// lives — so silently falling back to defaults would point the app at an
+    /// empty Documents\Quill and let it seed a fresh library there while the real
+    /// notes sit in a folder nothing references any more. Load fails closed on it.</summary>
+    public static bool SettingsUnreadable { get; private set; }
+
     public static AppSettings Settings
     {
         get
         {
             if (_settings != null) return _settings;
-            try
+            // Same-lineage first: settings.json, then the ".bak" SaveSettings
+            // rotates beside it.
+            bool sawFile = false;
+            foreach (var p in new[] { SettingsPath, SettingsPath + ".bak" })
             {
-                if (File.Exists(SettingsPath))
-                    _settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath));
-                else if (File.Exists(OldSettingsPath))
+                try
                 {
-                    // adopt the old settings (incl. any custom storage folder)
-                    _settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(OldSettingsPath));
-                    if (_settings != null) SaveSettings();
+                    if (!File.Exists(p)) continue;
+                    sawFile = true;
+                    var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(p));
+                    if (s != null) { _settings = s; break; }
                 }
+                catch { /* try the backup, then decide below */ }
             }
-            catch { }
+            // The pre-rename anchor holds a DIFFERENT lineage's settings, with its
+            // OWN DataFolder. Adopting it on a genuine first run is the migration
+            // it was written for; adopting it because the current settings.json is
+            // sitting right there and merely failed to parse would silently point
+            // the app at another folder — exactly the cross-location trap the
+            // library load path closes. So only migrate when nothing is here.
+            if (_settings == null && !sawFile)
+            {
+                try
+                {
+                    if (File.Exists(OldSettingsPath))
+                    {
+                        // adopt the old settings (incl. any custom storage folder)
+                        _settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(OldSettingsPath));
+                        if (_settings != null) { SaveSettings(); return _settings; }
+                    }
+                }
+                catch { }
+            }
+            // A file was there and nothing came out of it: do NOT quietly become
+            // a first run. Defaults here would relocate the whole library.
+            if (_settings == null && sawFile) SettingsUnreadable = true;
             return _settings ??= new AppSettings();
         }
     }
 
+    private static readonly object _settingsLock = new();
+
+    /// <summary>Persists the anchor settings. This used to be a plain
+    /// File.WriteAllText — the ONE remaining write in the app that opened a file
+    /// the app cannot do without for truncation, with no flush, no backup and no
+    /// retry. A crash or a second instance mid-write emptied it, DataFolder was
+    /// lost, and the next launch seeded a brand-new library in the default folder.
+    /// Same temp + Flush(true) + File.Replace path as the library now.</summary>
     public static void SaveSettings()
     {
-        try
+        if (SettingsUnreadable) return;   // never overwrite a file we failed to read
+        lock (_settingsLock)
         {
-            Directory.CreateDirectory(AnchorDir);
-            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(Settings, Opts));
+            string json;
+            try { json = JsonSerializer.Serialize(Settings, Opts); }
+            catch { return; }
+            try { Directory.CreateDirectory(AnchorDir); } catch { }
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try { WriteAtomic(SettingsPath, json); return; }
+                catch { if (attempt < 2) Thread.Sleep(80 * (attempt + 1)); }
+            }
+            // never leave a stale ".tmp" behind; settings.json keeps its old content
+            try { if (File.Exists(SettingsPath + ".tmp")) File.Delete(SettingsPath + ".tmp"); } catch { }
         }
-        catch { }
     }
 
     // The central, user-configurable storage folder (default Documents\Quill).
@@ -151,15 +207,54 @@ public static class LibraryStore
         LoadError = null;
         try
         {
+            // Where the library lives comes out of settings.json. If that file is
+            // there but unreadable we do not know the answer, and guessing means
+            // opening the DEFAULT folder, finding nothing, seeding a fresh library
+            // and autosaving it — with the user's real notes intact but orphaned in
+            // a folder nothing points at. Fail closed exactly like a bad library.
+            if (SettingsUnreadable)
+            {
+                LoadFailed = true;
+                LoadError = $"Quill could not read its settings file\n{SettingsPath}\n" +
+                            "It records which folder your notebooks are stored in, so Quill has " +
+                            "stopped rather than risk creating an empty library somewhere else.\n\n" +
+                            "Restore it from settings.json.bak next to it, or delete it if you have " +
+                            "never changed the storage folder.";
+                return new Library();
+            }
             MigrateFromLegacyIfNeeded();
             bool anySource = SourcePaths().Any(File.Exists);
 
+            // Arm the foreign-write guard with the state we are ACTUALLY reading,
+            // so the very first save of the session is checked against it too
+            // (#52 — two instances used to overwrite each other's notes silently).
+            try
+            {
+                _lastOwnWriteUtc = File.Exists(FilePath)
+                    ? File.GetLastWriteTimeUtc(FilePath)
+                    : DateTime.MinValue;
+            }
+            catch { _lastOwnWriteUtc = DateTime.MinValue; }
+
+            // Same-lineage recovery only: library.json, then the ".bak" that
+            // Save rotates beside it.
+            bool primaryExists = File.Exists(FilePath);
             var lib = TryRead(FilePath, preserveCorrupt: true)
-                ?? TryRead(FilePath + ".bak", preserveCorrupt: false)
-                ?? TryRead(Path.Combine(OldAnchorDir, "library.json"), preserveCorrupt: false)
-                ?? TryRead(Path.Combine(OldAnchorDir, "library.json.bak"), preserveCorrupt: false)
-                ?? TryRead(LegacyFilePath, preserveCorrupt: false)
-                ?? TryRead(LegacyFilePath + ".bak", preserveCorrupt: false);
+                ?? TryRead(FilePath + ".bak", preserveCorrupt: false);
+
+            // The pre-rename / legacy locations hold a DIFFERENT (older) library.
+            // Reaching for them is right on a genuine first run at this path, but
+            // catastrophic when library.json is sitting right there and merely
+            // failed to parse: the user would be shown stale notes, saving would
+            // be enabled, and the next autosave would overwrite the real file
+            // with them. So only migrate when there is nothing here at all.
+            if (lib == null && !primaryExists)
+            {
+                lib = TryRead(Path.Combine(OldAnchorDir, "library.json"), preserveCorrupt: false)
+                    ?? TryRead(Path.Combine(OldAnchorDir, "library.json.bak"), preserveCorrupt: false)
+                    ?? TryRead(LegacyFilePath, preserveCorrupt: false)
+                    ?? TryRead(LegacyFilePath + ".bak", preserveCorrupt: false);
+            }
 
             if (lib == null)
             {
@@ -237,8 +332,24 @@ public static class LibraryStore
         try
         {
             Directory.CreateDirectory(newFolder);
+            // The destination may already hold a DIFFERENT library, and the Save
+            // below is about to write straight over it — the one write in the app
+            // that legitimately replaces somebody else's whole library. Keep a copy.
+            var dest = Path.Combine(newFolder, "library.json");
+            if (File.Exists(dest))
+                try
+                {
+                    File.Copy(dest, Path.Combine(newFolder,
+                        $"library.replaced-{DateTime.Now:yyyyMMdd-HHmmss}.json"), true);
+                }
+                catch { }
             Settings.DataFolder = newFolder;
             SaveSettings();
+            // Re-arm the foreign-write guard against the NEW path. It was holding
+            // the old folder's timestamp, which says nothing about this file, so
+            // the next save would compare across two unrelated libraries.
+            try { _lastOwnWriteUtc = File.Exists(dest) ? File.GetLastWriteTimeUtc(dest) : DateTime.MinValue; }
+            catch { _lastOwnWriteUtc = DateTime.MinValue; }
             Save(current); // writes the library (and a snapshot) into the new folder
         }
         catch { }
@@ -261,7 +372,14 @@ public static class LibraryStore
 
             var srcFile = Path.Combine(srcDir, "library.json");
             Directory.CreateDirectory(Dir);
-            File.Copy(srcFile, FilePath, false);
+            // Copy through a temp and rename. A half-finished File.Copy straight to
+            // FilePath leaves a truncated library.json, and Load now (correctly)
+            // refuses to fall back to the legacy folder once the primary exists —
+            // so a torn copy would lock the user out of a library that is sitting
+            // right there, intact, in the old location.
+            var seedTmp = FilePath + ".migrating";
+            File.Copy(srcFile, seedTmp, true);
+            File.Move(seedTmp, FilePath);
             if (File.Exists(srcFile + ".bak"))
                 try { File.Copy(srcFile + ".bak", FilePath + ".bak", false); } catch { }
 
@@ -283,8 +401,18 @@ public static class LibraryStore
         try
         {
             if (!File.Exists(path)) return null;
-            var lib = JsonSerializer.Deserialize<Library>(File.ReadAllText(path), Opts);
-            return lib != null && lib.Notebooks.Count > 0 ? lib : null;
+            var text = File.ReadAllText(path);
+            var lib = JsonSerializer.Deserialize<Library>(text, Opts);
+            if (lib == null) return null;
+            if (lib.Notebooks.Count > 0) return lib;
+            // Zero notebooks is AMBIGUOUS: either the user really deleted the
+            // last one, or the file is a stub ("{}", "null", a truncated write)
+            // that merely deserialises to defaults. Treating both as a failure
+            // locked the user out of their own app after deleting the last
+            // notebook. Only a document that actually carries a "Notebooks"
+            // array is a deliberate empty library; anything else still falls
+            // through to the backups so a stub can never mask real notes.
+            return HasNotebooksArray(text) ? lib : null;
         }
         catch
         {
@@ -294,6 +422,21 @@ public static class LibraryStore
                 try { File.Copy(path, path + ".corrupt", true); } catch { }
             return null;
         }
+    }
+
+    /// <summary>True when the JSON really is a library document carrying a
+    /// Notebooks array — as opposed to a stub that just happens to deserialise
+    /// into a Library with all-default values.</summary>
+    private static bool HasNotebooksArray(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("Notebooks", out var el) &&
+                   el.ValueKind == JsonValueKind.Array;
+        }
+        catch { return false; }
     }
 
     // Last time WE wrote library.json — used to notice external changes (sync
@@ -426,52 +569,166 @@ public static class LibraryStore
         try { _lastWrite.Wait(15000); } catch { }
     }
 
+    /// <summary>Non-null when a foreign writer (a second Quill instance, a sync
+    /// client, another machine) changed library.json under us. Their version was
+    /// archived next to it before we wrote ours.</summary>
+    public static string? ConflictWarning { get; private set; }
+
+    // Conflict copies are 70 MB each; two instances ping-ponging once produced
+    // twenty of them. One archive per 5 minutes is enough to preserve the other
+    // writer's work without filling the disk.
+    private static DateTime _lastConflictCopyUtc = DateTime.MinValue;
+
     private static void WriteAll(string json)
     {
         lock (_writeLock)
         {
-            // Conflict guard: if another writer (sync client, second machine)
-            // touched library.json since our last save, preserve their version
-            // before overwriting it (#52).
+            // Conflict guard: if another writer (sync client, second machine,
+            // second instance) touched library.json since our last save,
+            // preserve their version before overwriting it (#52).
+            //
+            // The baseline is armed by Load (see _lastOwnWriteUtc there): it used
+            // to stay DateTime.MinValue until our FIRST write, so the first save
+            // of a session — exactly the one that clobbers whatever the other
+            // instance wrote while we were loading — skipped the check entirely.
             try
             {
                 if (_lastOwnWriteUtc != DateTime.MinValue && File.Exists(FilePath) &&
                     File.GetLastWriteTimeUtc(FilePath) > _lastOwnWriteUtc.AddSeconds(2))
                 {
-                    File.Copy(FilePath,
-                        Path.Combine(Dir, $"library.conflict-{DateTime.Now:yyyyMMdd-HHmmss}.json"), true);
+                    if (DateTime.UtcNow - _lastConflictCopyUtc > TimeSpan.FromMinutes(5))
+                    {
+                        var archive = Path.Combine(Dir, $"library.conflict-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+                        File.Copy(FilePath, archive, true);
+                        _lastConflictCopyUtc = DateTime.UtcNow;
+                        ConflictWarning =
+                            "Another Quill instance (or a sync client) changed\n" +
+                            $"{FilePath}\nwhile this window had it open. Their version was archived as\n" +
+                            $"{Path.GetFileName(archive)}\nbefore this window's copy was written. " +
+                            "Close the other instance — Quill cannot merge whole-library writes.";
+                    }
                 }
             }
             catch { }
             WriteCore(json);
-            try { _lastOwnWriteUtc = File.GetLastWriteTimeUtc(FilePath); } catch { }
+            // Only re-arm the baseline when the write actually landed: after a
+            // failed write the file on disk is still the foreign one, and
+            // adopting its timestamp would silence the guard next time round.
+            if (WriteError == null)
+                try { _lastOwnWriteUtc = File.GetLastWriteTimeUtc(FilePath); } catch { }
         }
+    }
+
+    /// <summary>Non-null when the last library write could not reach
+    /// library.json. The work was parked in <see cref="PendingPath"/> instead —
+    /// nothing was lost, but the live file is now behind.</summary>
+    public static string? WriteError { get; private set; }
+
+    /// <summary>Where a save goes when library.json cannot be replaced. A single
+    /// stable name, so a locked file cannot fill the disk with 70 MB copies.</summary>
+    public static string PendingPath => Path.Combine(Dir, "library.pending.json");
+
+    // Temp file + flush + atomic replace. The destination is NEVER opened for
+    // writing, so a failure or a crash at any point leaves the previous file
+    // exactly as it was. Throws if it could not complete.
+    private static void WriteAtomic(string path, string json)
+    {
+        var tmp = path + ".tmp";
+        WriteTemp(tmp, json);
+        PromoteTemp(tmp, path);
+    }
+
+    /// <summary>Writes the payload to a scratch file and forces it all the way to
+    /// the platter. Nothing is promoted until this has returned, so a partially
+    /// written temp can never become the live file.</summary>
+    private static void WriteTemp(string tmp, string json)
+    {
+        using var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var sw = new StreamWriter(fs);
+        sw.Write(json);
+        sw.Flush();       // StreamWriter buffer + encoder -> the FileStream
+        fs.Flush(true);   // to the physical disk, not just the OS cache
+    }
+
+    /// <summary>Swaps a finished temp in. Always with a backup name: Win32
+    /// ReplaceFile only guarantees that the replaced file keeps its own name on a
+    /// late failure when one is supplied — with a null backup a failure at the
+    /// wrong moment can leave the destination gone entirely.</summary>
+    private static void PromoteTemp(string tmp, string path)
+    {
+        if (File.Exists(path))
+            File.Replace(tmp, path, path + ".bak");
+        else
+            File.Move(tmp, path);
     }
 
     private static void WriteCore(string json)
     {
+        Exception? last = null;
+        try { Directory.CreateDirectory(Dir); } catch (Exception ex) { last = ex; }
+
+        // Serialise to disk ONCE. The retry loop used to call WriteAtomic, which
+        // re-wrote the whole payload on every attempt — five full copies of a
+        // 70 MB library per save while the file was locked, and another one to
+        // park it. Only the promote can realistically fail, so only it is retried.
+        var tmp = FilePath + ".tmp";
+        bool haveTemp = false;
+        try { WriteTemp(tmp, json); haveTemp = true; }
+        catch (Exception ex) { last = ex; }
+
+        // File.Replace legitimately fails when a sync client, antivirus or a
+        // second instance momentarily holds library.json open, and that is
+        // almost always over within a second — so retry briefly first.
+        if (haveTemp)
+            for (int attempt = 0; attempt < 4; attempt++)
+            {
+                try
+                {
+                    PromoteTemp(tmp, FilePath);
+                    WriteError = null;
+                    // the live library is current again, so any parked copy is obsolete
+                    foreach (var stale in new[] { PendingPath, PendingPath + ".bak", PendingPath + ".tmp" })
+                        try { if (File.Exists(stale)) File.Delete(stale); } catch { }
+                    TrySnapshot(json);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (attempt < 3) Thread.Sleep(150 * (attempt + 1));
+                }
+            }
+
+        // Still failing. The old fallback here was File.WriteAllText(FilePath, …),
+        // which OPENS THE LIVE LIBRARY FOR TRUNCATION — a crash or a second
+        // failure part-way through that write destroys the notes. Never do that:
+        // park the save under a distinct name and report the failure instead.
+        // library.json keeps its last good content either way.
+        bool parked = false;
         try
         {
-            Directory.CreateDirectory(Dir);
-            // Write to a temp file first, then swap it in atomically so an
-            // interrupted write (crash / power loss) can never truncate the
-            // live library. File.Replace also rotates the previous good copy
-            // into ".bak" for recovery.
-            var tmp = FilePath + ".tmp";
-            File.WriteAllText(tmp, json);
-            if (File.Exists(FilePath))
-                File.Replace(tmp, FilePath, FilePath + ".bak");
-            else
-                File.Move(tmp, FilePath);
+            // The temp is already written AND flushed, so parking it is a rename,
+            // not another full-size write. MoveFileEx(REPLACE_EXISTING) swaps the
+            // directory entry; it never opens the destination for truncation.
+            if (haveTemp && File.Exists(tmp)) { File.Move(tmp, PendingPath, true); parked = true; }
         }
-        catch
+        catch (Exception ex) { last = ex; }
+        if (!parked)
         {
-            // atomic path failed (e.g. locked file): fall back to a direct
-            // write so we still persist; still never crash the app on save.
-            try { File.WriteAllText(FilePath, json); } catch { }
-            // don't leave a stale ".tmp" (containing note data) behind.
-            try { if (File.Exists(FilePath + ".tmp")) File.Delete(FilePath + ".tmp"); } catch { }
+            try { WriteAtomic(PendingPath, json); parked = true; }
+            catch (Exception ex)
+            {
+                WriteError = $"Quill could not save to\n{FilePath}\nor to\n{PendingPath}\n\n{ex.Message}";
+            }
         }
+        if (parked)
+            WriteError = $"Quill could not update\n{FilePath}\n" +
+                         "(another program has it open). Your work was saved to\n" +
+                         $"{PendingPath}\ninstead — close the other program, or rename that " +
+                         $"file to library.json to recover it.\n\n{last?.Message}";
+        // don't leave a stale ".tmp" (containing note data) behind.
+        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+        try { if (File.Exists(PendingPath + ".tmp")) File.Delete(PendingPath + ".tmp"); } catch { }
 
         TrySnapshot(json);
     }
@@ -497,7 +754,12 @@ public static class LibraryStore
                 return; // throttle: don't snapshot on every debounced save
 
             var name = $"library-{DateTime.Now:yyyyMMdd-HHmmss}.json";
-            File.WriteAllText(Path.Combine(BackupDir, name), json);
+            // A snapshot is a RECOVERY file, so it must never be a half-written one
+            // that still looks restorable: same temp + flush + rename. The temp is
+            // deliberately named so the "library-*.json" scan above cannot see it.
+            var snapTmp = Path.Combine(BackupDir, "snapshot.writing.tmp");
+            WriteTemp(snapTmp, json);
+            File.Move(snapTmp, Path.Combine(BackupDir, name), true);
 
             // keep the newest 12 snapshots (existing 11 + the new one)
             foreach (var old in existing.Skip(11))
@@ -557,91 +819,128 @@ public static class LibraryStore
     // previous good copy into ".bak"), never an in-place overwrite. Gated on the
     // same save switch as the library so a failed library load can never cause a
     // trash write. Deletes are deliberate and infrequent, so this stays synchronous.
-    private static void SaveTrash()
+    /// <summary>The reason the last trash write failed, for the caller to show.</summary>
+    public static string? TrashError { get; private set; }
+
+    /// <summary>Persists the bin. Returns false if it could NOT reach the disk —
+    /// callers must not commit a destructive change on a false.</summary>
+    private static bool SaveTrash()
     {
-        if (!_savingEnabled) return;
-        if (_trash == null) return;
+        if (!_savingEnabled) { TrashError = "saving is not enabled yet"; return false; }
+        if (_trash == null) { TrashError = "the trash bin is not loaded"; return false; }
         string json;
         try { json = JsonSerializer.Serialize(_trash, Opts); }
-        catch { return; }
+        catch (Exception ex) { TrashError = ex.Message; return false; }
         lock (_trashLock)
         {
-            try
+            Exception? last = null;
+            try { Directory.CreateDirectory(Dir); } catch (Exception ex) { last = ex; }
+            for (int attempt = 0; attempt < 3; attempt++)
             {
-                Directory.CreateDirectory(Dir);
-                var tmp = TrashPath + ".tmp";
-                File.WriteAllText(tmp, json);
-                if (File.Exists(TrashPath))
-                    File.Replace(tmp, TrashPath, TrashPath + ".bak");
-                else
-                    File.Move(tmp, TrashPath);
+                try
+                {
+                    // temp + flush + atomic replace; trash.json is never opened
+                    // for truncation, so a failure leaves the old bin intact.
+                    WriteAtomic(TrashPath, json);
+                    TrashError = null;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (attempt < 2) Thread.Sleep(120 * (attempt + 1));
+                }
             }
-            catch
-            {
-                // atomic path failed (locked file): fall back to a direct write so
-                // the deletion still persists, and never leave a stale ".tmp" of note data.
-                try { File.WriteAllText(TrashPath, json); } catch { }
-                try { if (File.Exists(TrashPath + ".tmp")) File.Delete(TrashPath + ".tmp"); } catch { }
-            }
+            // The old code fell back to File.WriteAllText(TrashPath, …) here,
+            // truncating the live bin. Report the failure instead: the caller
+            // aborts the delete, so nothing is lost.
+            try { if (File.Exists(TrashPath + ".tmp")) File.Delete(TrashPath + ".tmp"); } catch { }
+            TrashError = last?.Message ?? "the trash file could not be written";
+            return false;
         }
     }
 
-    private static void PushTrash(TrashEntry e)
+    /// <summary>Files an entry in the bin and makes sure it is ON DISK. Returns
+    /// false (leaving the in-memory bin exactly as it was) if it could not be
+    /// persisted, so the caller can abort rather than destroy the item.</summary>
+    private static bool PushTrash(TrashEntry e)
     {
         var bin = Trash;
+        List<TrashEntry> trimmed = new();
         lock (_trashLock)
         {
             bin.Items.Insert(0, e);                 // newest first
             // Hard cap so a bin left untended cannot grow without bound; oldest go first.
             while (bin.Items.Count > TrashBin.MaxItems)
+            {
+                trimmed.Add(bin.Items[bin.Items.Count - 1]);
                 bin.Items.RemoveAt(bin.Items.Count - 1);
+            }
         }
-        SaveTrash();
+        if (SaveTrash()) return true;
+
+        // roll the bin back so memory matches what is actually on disk
+        lock (_trashLock)
+        {
+            bin.Items.Remove(e);
+            for (int i = trimmed.Count - 1; i >= 0; i--) bin.Items.Add(trimmed[i]);
+        }
+        return false;
     }
 
-    /// <summary>Soft-deletes a notebook: removes it from the library and files it
-    /// in the bin with its original index so Restore can put it back.</summary>
-    public static void DeleteNotebook(Library lib, Notebook nb)
+    // A soft delete is only soft if the bin write actually lands. These used to
+    // remove the item from the library FIRST and then push to the trash with a
+    // SaveTrash that swallowed every error — so a locked or full disk turned a
+    // "move to trash" into permanent destruction. The bin write now happens
+    // first and the removal is committed only once it has reached the disk.
+
+    /// <summary>Soft-deletes a notebook: files it in the bin with its original
+    /// index so Restore can put it back, then removes it from the library.
+    /// Returns false (leaving the notebook in place) if the bin write failed.</summary>
+    public static bool DeleteNotebook(Library lib, Notebook nb)
     {
         int idx = lib.Notebooks.IndexOf(nb);
-        if (idx < 0) return;
-        lib.Notebooks.RemoveAt(idx);
-        PushTrash(new TrashEntry
+        if (idx < 0) return false;
+        if (!PushTrash(new TrashEntry
         {
             Kind = TrashItemKind.Notebook,
             Name = nb.Name,
             OriginalIndex = idx,
             Notebook = nb
-        });
+        })) return false;
+        lib.Notebooks.RemoveAt(idx);
         PruneRecents(lib);   // its pages are gone from the tree now
         Save(lib);
+        return true;
     }
 
-    /// <summary>Soft-deletes a section, remembering its parent notebook and index.</summary>
-    public static void DeleteSection(Library lib, Notebook parent, Section sec)
+    /// <summary>Soft-deletes a section, remembering its parent notebook and index.
+    /// Returns false (leaving the section in place) if the bin write failed.</summary>
+    public static bool DeleteSection(Library lib, Notebook parent, Section sec)
     {
         int idx = parent.Sections.IndexOf(sec);
-        if (idx < 0) return;
-        parent.Sections.RemoveAt(idx);
-        PushTrash(new TrashEntry
+        if (idx < 0) return false;
+        if (!PushTrash(new TrashEntry
         {
             Kind = TrashItemKind.Section,
             Name = sec.Name,
             ParentNotebookId = parent.Id,
             OriginalIndex = idx,
             Section = sec
-        });
+        })) return false;
+        parent.Sections.RemoveAt(idx);
         PruneRecents(lib);
         Save(lib);
+        return true;
     }
 
-    /// <summary>Soft-deletes a page, remembering its notebook, section and index.</summary>
-    public static void DeletePage(Library lib, Notebook nb, Section sec, NotePage page)
+    /// <summary>Soft-deletes a page, remembering its notebook, section and index.
+    /// Returns false (leaving the page in place) if the bin write failed.</summary>
+    public static bool DeletePage(Library lib, Notebook nb, Section sec, NotePage page)
     {
         int idx = sec.Pages.IndexOf(page);
-        if (idx < 0) return;
-        sec.Pages.RemoveAt(idx);
-        PushTrash(new TrashEntry
+        if (idx < 0) return false;
+        if (!PushTrash(new TrashEntry
         {
             Kind = TrashItemKind.Page,
             Name = page.Name,
@@ -649,9 +948,11 @@ public static class LibraryStore
             ParentSectionId = sec.Id,
             OriginalIndex = idx,
             Page = page
-        });
+        })) return false;
+        sec.Pages.RemoveAt(idx);
         PruneRecents(lib);
         Save(lib);
+        return true;
     }
 
     /// <summary>Restores a bin entry to its original location. If the original
@@ -660,6 +961,7 @@ public static class LibraryStore
     /// false if the entry is missing or already back in the tree.</summary>
     public static bool Restore(Library lib, Guid entryId)
     {
+        if (!_savingEnabled) return false;   // nothing may be moved while writes are gated
         var bin = Trash;
         TrashEntry? e;
         lock (_trashLock) { e = bin.Items.FirstOrDefault(x => x.Id == entryId); }
@@ -674,9 +976,20 @@ public static class LibraryStore
         };
         if (ok)
         {
-            lock (_trashLock) { bin.Items.Remove(e); }
-            SaveTrash();
+            // The mirror image of the delete ordering, and it was missing: while a
+            // restore is in flight the item exists ONLY in the bin. Dropping the
+            // bin entry and then firing a library save that is merely QUEUED — and
+            // that can end up parked in library.pending.json — leaves the item in
+            // neither file on the next launch. So commit the library write and
+            // confirm it landed before forgetting the bin copy; if it did not, the
+            // entry stays put and the worst case is a harmless duplicate.
             Save(lib);
+            Flush();
+            if (WriteError == null)
+            {
+                lock (_trashLock) { bin.Items.Remove(e); }
+                SaveTrash();
+            }
         }
         return ok;
     }

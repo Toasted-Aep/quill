@@ -21,6 +21,30 @@ public class AudioRecorder : IDisposable
 
     public event Action<TimeSpan>? ElapsedChanged;
 
+    /// <summary>True when <paramref name="path"/> already holds a recording that
+    /// must not be written over. Errs towards "occupied": if the file cannot be
+    /// inspected we refuse to touch it rather than risk destroying a take.</summary>
+    public static bool HasAudioContent(string path)
+    {
+        try { return File.Exists(path) && new FileInfo(path).Length > 0; }
+        catch { return true; }
+    }
+
+    /// <summary>Picks the file for a NEW take on a page: the plain per-page name
+    /// while it is free, then numbered takes. Never returns a path that already
+    /// holds audio, so starting a recording cannot overwrite an earlier one.</summary>
+    public static string NextTakePath(string dir, Guid pageId)
+    {
+        var first = Path.Combine(dir, $"{pageId}.m4a");
+        if (!HasAudioContent(first)) return first;
+        for (int i = 2; i < 1000; i++)
+        {
+            var p = Path.Combine(dir, $"{pageId}-take{i}.m4a");
+            if (!HasAudioContent(p)) return p;
+        }
+        return Path.Combine(dir, $"{pageId}-take{DateTime.Now:yyyyMMdd-HHmmss-fff}.m4a");
+    }
+
     public async Task StartRecordingAsync(string filePath)
     {
         if (_isRecording) return;
@@ -32,8 +56,26 @@ public class AudioRecorder : IDisposable
             Directory.CreateDirectory(dir);
         }
 
-        // Ensure empty file exists so GetFileFromPathAsync succeeds
-        File.WriteAllBytes(filePath, Array.Empty<byte>());
+        // MediaCapture needs the target file to already exist, but creating it
+        // must never destroy a take that is already there: the old code wrote an
+        // empty file unconditionally, so tapping record a second time truncated
+        // the previous recording to zero bytes BEFORE the microphone was even
+        // opened — unrecoverable even if the user stopped immediately.
+        // Only ever create a missing (or already-empty) file; anything with
+        // content in it is refused, and the caller records to a new path.
+        if (File.Exists(filePath))
+        {
+            long existing;
+            try { existing = new FileInfo(filePath).Length; }
+            catch { existing = -1; }   // cannot tell: assume occupied
+            if (existing != 0)
+                throw new InvalidOperationException(
+                    "A recording already exists at this path. Record to a new file instead.");
+        }
+        else
+        {
+            File.WriteAllBytes(filePath, Array.Empty<byte>());
+        }
 
         _mediaCapture = new MediaCapture();
         var settings = new MediaCaptureInitializationSettings
