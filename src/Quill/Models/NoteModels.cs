@@ -365,6 +365,14 @@ public class Library
     // Library-wide default paper texture (§7.3); null = smooth (today's default).
     public string? DefaultPaper { get; set; }
     public string Theme { get; set; } = "Dark";
+    // WHAT DECIDES light/dark (§paper-theme). "Manual" (the default) reproduces
+    // today's behaviour exactly: Theme above is the whole story. "Page" derives
+    // the effective theme from the ACTIVE PAGE's effective background (its paper
+    // ground, or its plain colour) so a Blueprint/Darkprint/dark page puts the
+    // whole app into dark mode and a white/Lightweight/Brown page into light.
+    // A NEW field defaulted to the OLD mode, so an existing library.json behaves
+    // exactly as it does today until the user opts in.
+    public string ThemeSource { get; set; } = "Manual";
     // UI language tag ("en-US"/"tr"/"it"); "" follows the Windows UI language.
     public string Language { get; set; } = "";
     public string DefaultFont { get; set; } = "Lora";
