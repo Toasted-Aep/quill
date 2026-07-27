@@ -52,6 +52,10 @@ public sealed class InkSurface : UserControl
     public float PenSize { get; set; } = 3.5f;
     public float PenSensitivity { get; set; } = 1f;
     public float PenStabiliser { get; set; }
+    // Ink opacity of the live tool, 0-1 (1 = opaque). Fed from PenPreset.Opacity
+    // and scrubbed by the dial's opacity arc; every renderer path multiplies its
+    // own alpha by it, so a translucent pen builds up where it overlaps.
+    public float PenOpacity { get; set; } = 1f;
     public List<float>? PenPressureCurve { get; set; }
     // Two-control-point pressure response (#curve v2). When set it is baked down
     // to the 6-float legacy curve the width renderer already interprets, so it
@@ -70,6 +74,12 @@ public sealed class InkSurface : UserControl
     // Eraser radius in world units; 0 = derive from the active pen size exactly
     // as before. Library.EraserSize feeds this.
     public double EraserSize { get; set; }
+    // ---- selection tool options (UI-SPEC-V2 1.3), surfaced by the dial ----
+    /// <summary>Lasso shape: false = freeform, true = square (rubber-band box).</summary>
+    public bool LassoSquare { get; set; }
+    /// <summary>true = a stroke is caught when it is PARTIALLY inside the lasso;
+    /// false = only when every one of its points is inside.</summary>
+    public bool SelectPartial { get; set; } = true;
     public bool RulerMode { get; set; }
     // On-screen ruler angle in degrees (any value, not just 15° steps) (#21).
     public double RulerAngle { get; set; }
@@ -1298,7 +1308,10 @@ public sealed class InkSurface : UserControl
                 if (TryBeginShapeOrSelectionDrag(pos, tol)) break;
                 _activeShape = null;
                 ClearSelection();
-                _lasso = new List<Vector2> { pos };
+                // Square lasso reuses the rubber-band rectangle the mouse path
+                // already tracks and commits, so both shapes are one code path.
+                if (LassoSquare) { _rectSelect = true; _rectStart = pos; _rectCur = pos; }
+                else _lasso = new List<Vector2> { pos };
                 break;
             }
 
@@ -1894,6 +1907,7 @@ public sealed class InkSurface : UserControl
                             Color = ColorUtil.ToHex(PenColor),
                             Size = PenSize,
                             Sens = PenSensitivity,
+                            Opacity = PenOpacity >= 0.999f ? (float?)null : PenOpacity,
                             Points = pts,
                             PressureCurve = EffectivePressureCurve()
                         };
@@ -2708,7 +2722,9 @@ public sealed class InkSurface : UserControl
             if (s.Points.Count == 0) continue;
             if (lsCand != null && !lsCand.Contains(s)) continue;
             int inside = s.Points.Count(p => GeometryUtil.PointInPolygon(new Vector2(p.X, p.Y), poly));
-            if (inside > 0 && inside >= s.Points.Count * 0.4)
+            // Partial: any part of the stroke inside the lasso catches it.
+            // Complete: the whole stroke has to be inside (UI-SPEC-V2 1.3).
+            if (SelectPartial ? inside > 0 : inside == s.Points.Count)
             {
                 _selected.Add(s);
                 _selectedSet.Add(s);
@@ -3214,6 +3230,7 @@ public sealed class InkSurface : UserControl
                 Color = ColorUtil.ToHex(PenColor),
                 Size = PenSize,
                 Sens = PenSensitivity,
+                Opacity = PenOpacity >= 0.999f ? (float?)null : PenOpacity,
                 Points = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : (_wet ?? new List<StrokePoint>()),
                 PressureCurve = EffectivePressureCurve()
             };
@@ -3681,10 +3698,16 @@ public sealed class InkSurface : UserControl
         if (n == 0) return;
 
         var color = ColorUtil.Parse(s.Color);
+        // Every alpha this method lays down is scaled by the stroke's own
+        // opacity. Clamped off zero so a fully transparent pen still leaves a
+        // hairline the user can find and erase rather than invisible geometry.
+        float op = Math.Clamp(s.Opacity ?? 1f, 0.02f, 1f);
+        byte Al(int a) => (byte)Math.Clamp(a * op, 1, 255);
+        color.A = Al(color.A);
 
         if (s.Pen == PenType.Highlighter)
         {
-            color.A = 110;
+            color.A = Al(110);
             float hw = s.Size * 2.4f;
             if (n == 1)
             {
@@ -3708,13 +3731,13 @@ public sealed class InkSurface : UserControl
             float pw = Math.Max(0.6f, s.Size * (0.45f + 0.7f * sens * prAvg));
             if (n == 1)
             {
-                var c1 = color; c1.A = 150;
+                var c1 = color; c1.A = Al(150);
                 ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, Math.Max(0.6f, pw / 2), c1);
                 return;
             }
-            var core = color; core.A = 145;
+            var core = color; core.A = Al(145);
             DrawPolyline(ds, rc, pts, n, offset, core, pw, _roundStyle);
-            var grain = color; grain.A = 55;
+            var grain = color; grain.A = Al(55);
             DrawPolyline(ds, rc, pts, n, offset + new Vector2(0.5f, 0.45f), grain, pw * 0.5f, _roundStyle);
             DrawPolyline(ds, rc, pts, n, offset + new Vector2(-0.45f, -0.4f), grain, pw * 0.45f, _roundStyle);
             return;
@@ -3731,13 +3754,13 @@ public sealed class InkSurface : UserControl
             float cw = Math.Max(1.2f, s.Size * (0.9f + 0.7f * sens * prAvg));
             if (n == 1)
             {
-                var c1 = color; c1.A = 220;
+                var c1 = color; c1.A = Al(220);
                 ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, Math.Max(1f, cw / 2), c1);
                 return;
             }
-            var coreC = color; coreC.A = 210;
+            var coreC = color; coreC.A = Al(210);
             DrawPolyline(ds, rc, pts, n, offset, coreC, cw, _roundStyle);
-            var gr = color; gr.A = 70;
+            var gr = color; gr.A = Al(70);
             DrawPolyline(ds, rc, pts, n, offset + new Vector2(0.8f, 0.7f), gr, cw * 0.55f, _roundStyle);
             DrawPolyline(ds, rc, pts, n, offset + new Vector2(-0.7f, -0.6f), gr, cw * 0.5f, _roundStyle);
             DrawPolyline(ds, rc, pts, n, offset + new Vector2(0.2f, -0.8f), gr, cw * 0.4f, _roundStyle);
@@ -3747,14 +3770,14 @@ public sealed class InkSurface : UserControl
         if (s.Pen == PenType.Watercolor)
         {
             // soft translucent wash that builds up where strokes overlap
-            var wc = color; wc.A = 70;
+            var wc = color; wc.A = Al(70);
             float ww = Math.Max(1.5f, s.Size * 2.2f);
             if (n == 1)
             {
                 ds.FillCircle(new Vector2(pts[0].X, pts[0].Y) + offset, ww / 2, wc);
                 return;
             }
-            var wc2 = color; wc2.A = 42;
+            var wc2 = color; wc2.A = Al(42);
             DrawPolyline(ds, rc, pts, n, offset, wc2, ww * 1.5f, _roundStyle);
             DrawPolyline(ds, rc, pts, n, offset, wc, ww, _roundStyle);
             return;
@@ -3773,8 +3796,8 @@ public sealed class InkSurface : UserControl
             return;
         }
 
-        if (s.Pen == PenType.Marker) color.A = 235;
-        else if (s.Pen == PenType.Ballpoint) color.A = 240;
+        if (s.Pen == PenType.Marker) color.A = Al(235);
+        else if (s.Pen == PenType.Ballpoint) color.A = Al(240);
 
         if (n == 1)
         {
@@ -3795,6 +3818,48 @@ public sealed class InkSurface : UserControl
         }
     }
 
+
+    // =======================================================================
+    // Preview rendering (UI-SPEC-V2 1.1) — the radial dial's live scrub preview
+    // =======================================================================
+
+    /// <summary>Draws <paramref name="s"/> through the REAL stroke renderer onto
+    /// any session. The dial's preview circle goes through here, so what the user
+    /// sees while scrubbing is produced by the same code that lays ink on the
+    /// page — never a UI ellipse standing in for it.</summary>
+    public void RenderStrokeTo(CanvasDrawingSession ds, ICanvasResourceCreator rc,
+        PenStroke s, Vector2 offset = default) => DrawStroke(ds, rc, s, offset, null);
+
+    /// <summary>A perfect circle as a real stroke carrying the LIVE tool state:
+    /// pen type, colour, size, opacity and pressure response. Pressure sweeps one
+    /// full lobe so the pen's dynamics show, and the points run through the very
+    /// same one-pole stabiliser the wet-ink path applies — so dragging Smoothness
+    /// changes the preview for the real reason rather than a mimicked one.</summary>
+    public PenStroke PreviewCircle(Vector2 centre, float radius, int segments = 200)
+    {
+        var s = new PenStroke
+        {
+            Pen = Pen,
+            Color = ColorUtil.ToHex(PenColor),
+            Size = PenSize,
+            Sens = PenSensitivity,
+            Opacity = PenOpacity >= 0.999f ? (float?)null : PenOpacity,
+            PressureCurve = EffectivePressureCurve()
+        };
+        var pts = s.Points;
+        var smooth = centre + new Vector2(0, -radius);
+        float factor = PenStabiliser > 0 ? 1f - PenStabiliser * 0.85f : 1f;
+        for (int i = 0; i <= segments; i++)
+        {
+            double t = i / (double)segments;
+            double th = t * Math.PI * 2 - Math.PI / 2;          // start at the top
+            var v = centre + new Vector2((float)(radius * Math.Cos(th)), (float)(radius * Math.Sin(th)));
+            if (factor < 1f) { smooth += (v - smooth) * factor; v = smooth; }
+            float pr = 0.28f + 0.72f * (float)Math.Sin(t * Math.PI);
+            pts.Add(new StrokePoint(v.X, v.Y, pr));
+        }
+        return s;
+    }
 
     // Strokes a single continuous polyline through the points (used for pens that
     // should read as one smooth line rather than a chain of round-capped dots).

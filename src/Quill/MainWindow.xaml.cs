@@ -44,6 +44,9 @@ public sealed partial class MainWindow : Window
     // funnel calls, the visibility gate and the Settings toggle are its whole
     // footprint in this file.
     private ToolWheel? _toolWheel;
+    // Top-bar element keys the dial currently owns: a tool that lives in the
+    // dial is removed from the bar rather than offered twice (V3 A.9).
+    private HashSet<string> _dialTools = new(StringComparer.Ordinal);
     // Both tool surfaces subscribe to this and are dumb renderers over the same
     // state, so the linear row and the dial can never diverge (§2.2).
     private event Action? ToolUiChanged;
@@ -468,6 +471,7 @@ public sealed partial class MainWindow : Window
         ApplyPenDock();
         BuildTree();
         BuildPenStrip();
+        Icons.BindTopBar(IconToolPen, IconToolText, IconToolSelect, IconToolSpace, IconUndo, IconRedo);
         _toolWheel = ToolWheel.Attach(CanvasArea, Surface, new ToolWheel.Host
         {
             Library = () => _library,
@@ -485,6 +489,7 @@ public sealed partial class MainWindow : Window
         // Point the dial's colour disc at the system COPIC picker (the seam the
         // radial + colour branches were built to meet at).
         _toolWheel.ColourPickerHook = ColorPickerService.Open;
+        _toolWheel.SlotsChanged += t => { _dialTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
         OpenStartupPage();
         SelectTool("Pen");
         ApplyToolbarVisibility();
@@ -2789,6 +2794,7 @@ public sealed partial class MainWindow : Window
         Surface.Pen = p.Pen;
         Surface.PenColor = ColorUtil.Parse(p.Color);
         Surface.PenSize = p.Size;
+        Surface.PenOpacity = p.Opacity;
         Surface.PenSensitivity = p.Sens;
         Surface.PenStabiliser = p.Stabiliser;
         Surface.PenPressureCurve = p.PressureCurve;
@@ -3766,6 +3772,9 @@ public sealed partial class MainWindow : Window
         if (!launcher && GalleryPanel.Visibility != Visibility.Visible) MorphPageToCard();
         _galleryLauncher = launcher;
         _galleryNb = nb;
+        // The dial lives inside CanvasArea at ZIndex 60, above GalleryPanel — it
+        // has to be told to stand down rather than being covered up (V3 A.2).
+        _toolWheel?.SetVisible(false);
         BuildGallery();
         // mirror of CloseGallery's dissolve: settle inward from 1.035 with the
         // same Sine curve, so open and close read as one motion reversed
@@ -3784,6 +3793,7 @@ public sealed partial class MainWindow : Window
         FadeOut(GalleryPanel, 160);
         _galleryLauncher = false;
         _galleryNb = null;
+        ApplyPenRowVisibility();   // back on a page: the dial comes back with it
         BtnSidebar.Visibility = Visibility.Visible;
         BtnSettings.Visibility = Visibility.Collapsed;
         CrumbText.Visibility = Visibility.Visible;
@@ -7975,11 +7985,16 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         void Set(FrameworkElement? el, string key, bool inContext = true)
         {
             if (el == null) return;
-            bool on = !_library.HiddenTools.Contains(key) && inContext;
+            bool on = !_library.HiddenTools.Contains(key) && !_dialTools.Contains(key) && inContext;
             el.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         }
         try
         {
+            Set(ToolPen, "ToolPen");
+            Set(ToolText, "ToolText");
+            Set(ToolSelect, "ToolSelect");
+            Set(BtnUndo, "BtnUndo");
+            Set(BtnRedo, "BtnRedo");
             Set(ToolSpace, "ToolSpace");
             Set(TouchDrawToggle, "TouchDrawToggle", pen);
             Set(ToolComment, "ToolComment");
