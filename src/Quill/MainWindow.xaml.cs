@@ -329,7 +329,7 @@ public sealed partial class MainWindow : Window
         // Stage 1 collaboration (#collab): every 20s, apply ops other devices
         // appended to their oplog files in the (synced) library folder.
         _syncTimer.Interval = TimeSpan.FromSeconds(20);
-        _syncTimer.Tick += (_, _) => RunForeignMerge();
+        _syncTimer.Tick += (_, _) => { RunForeignMerge(); ReportStorageProblems(); };
         // keep the real monitor width current so a NEW text box caps at half the
         // physical screen; existing boxes snapshot their own cap at creation and
         // are left untouched by a later resize (#15)
@@ -1525,6 +1525,42 @@ public sealed partial class MainWindow : Window
         if (!_libraryReady) return;
         Surface.FlushTexts();
         LibraryStore.Save(_library);
+    }
+
+    /// <summary>A soft delete that could not be filed in the trash is ABORTED,
+    /// not committed — say so, rather than leaving the user thinking it worked.</summary>
+    private void ReportDeleteFailed(string name)
+    {
+        ShowStatus($"“{name}” was NOT deleted: the trash could not be written " +
+                   $"({LibraryStore.TrashError ?? "unknown error"}). Nothing was removed.");
+    }
+
+    // Saving happens on a worker thread, so failures are reported by polling
+    // rather than thrown at the caller.
+    private string? _shownWriteError, _shownConflict;
+    private DateTime _shownWriteErrorAt;
+
+    private void ReportStorageProblems()
+    {
+        var we = LibraryStore.WriteError;
+        if (we != null)
+        {
+            // While this is set, NOTHING the user types is reaching library.json.
+            // Announcing it once would let the status bar fade after a few seconds
+            // and leave the app looking healthy for the rest of the session, so
+            // the warning is repeated for as long as the condition lasts.
+            if (we != _shownWriteError ||
+                DateTime.UtcNow - _shownWriteErrorAt > TimeSpan.FromSeconds(60))
+            {
+                _shownWriteError = we;
+                _shownWriteErrorAt = DateTime.UtcNow;
+                ShowStatus(we.Replace("\n", " "));
+            }
+            return;
+        }
+        _shownWriteError = null;
+        var cw = LibraryStore.ConflictWarning;
+        if (cw != null && cw != _shownConflict) { _shownConflict = cw; ShowStatus(cw.Replace("\n", " ")); }
     }
 
     private void ShowStatus(string message)
@@ -3039,14 +3075,22 @@ public sealed partial class MainWindow : Window
 
     private void OpenFirstPage()
     {
+        bool seeded = false;
         if (_library.Notebooks.Count == 0)
+        {
+            // A library with zero notebooks is legitimate (the user deleted the
+            // last one) and now loads normally — seed a fresh notebook so they
+            // land in a usable app rather than an empty shell.
             _library.Notebooks.Add(new Notebook { Name = "My Notebook" });
+            seeded = true;
+        }
         var nb = _library.Notebooks[0];
         if (nb.Sections.Count == 0)
             nb.Sections.Add(new Section { Name = "Section 1" });
         var sec = nb.Sections[0];
         if (sec.Pages.Count == 0)
             sec.Pages.Add(NewPage("Page 1"));
+        if (seeded) BuildTree();   // the tree was built before the notebook existed
         SwitchToPage(nb, sec, sec.Pages[0]);
     }
 
@@ -3230,20 +3274,22 @@ public sealed partial class MainWindow : Window
         {
             case Notebook nb:
                 if (!await ConfirmAsync($"Move notebook “{nb.Name}” and everything inside it to the trash?")) return;
-                LibraryStore.DeleteNotebook(_library, nb);
+                if (!LibraryStore.DeleteNotebook(_library, nb)) { ReportDeleteFailed(nb.Name); return; }
                 break;
             case Section sec:
             {
                 if (!await ConfirmAsync($"Move section “{sec.Name}” and all its pages to the trash?")) return;
                 var owner = _library.Notebooks.FirstOrDefault(n => n.Sections.Contains(sec));
-                if (owner != null) LibraryStore.DeleteSection(_library, owner, sec);
+                if (owner != null && !LibraryStore.DeleteSection(_library, owner, sec))
+                { ReportDeleteFailed(sec.Name); return; }
                 break;
             }
             case NotePage pg:
             {
                 if (!await ConfirmAsync($"Move page “{pg.Name}” to the trash?")) return;
                 var (nb2, sec2) = FindContext(pg);
-                if (nb2 != null && sec2 != null) LibraryStore.DeletePage(_library, nb2, sec2, pg);
+                if (nb2 != null && sec2 != null && !LibraryStore.DeletePage(_library, nb2, sec2, pg))
+                { ReportDeleteFailed(pg.Name); return; }
                 break;
             }
         }
@@ -4185,7 +4231,7 @@ public sealed partial class MainWindow : Window
         {
             if (!await EnsureUnlockedAsync(nb)) return;
             if (!await ConfirmAsync($"Move notebook “{nb.Name}” and everything inside it to the trash?")) return;
-            LibraryStore.DeleteNotebook(_library, nb);
+            if (!LibraryStore.DeleteNotebook(_library, nb)) { ReportDeleteFailed(nb.Name); return; }
             _selNode = null;
             BuildTree();
             if (_curPage == null || FindContext(_curPage).Item1 == null) OpenFirstPage();
@@ -4274,7 +4320,7 @@ public sealed partial class MainWindow : Window
             delSec.Click += async (_, _) =>
             {
                 if (!await ConfirmAsync($"Move section “{s0.Name}” and all its pages to the trash?")) return;
-                LibraryStore.DeleteSection(_library, nb, s0);
+                if (!LibraryStore.DeleteSection(_library, nb, s0)) { ReportDeleteFailed(s0.Name); return; }
                 ScheduleSave(); BuildTree();
                 if (_curPage != null && FindContext(_curPage).Item1 == null) OpenFirstPage();
                 BuildGallery();
@@ -4392,7 +4438,8 @@ public sealed partial class MainWindow : Window
         {
             if (!await ConfirmAsync($"Move page “{pg.Name}” to the trash?")) return;
             var (delNb, _) = FindContext(pg);
-            if (delNb != null) LibraryStore.DeletePage(_library, delNb, sec, pg);
+            if (delNb != null && !LibraryStore.DeletePage(_library, delNb, sec, pg))
+            { ReportDeleteFailed(pg.Name); return; }
             ScheduleSave(); BuildTree();
             if (ReferenceEquals(pg, _curPage)) OpenFirstPage();
             BuildGallery();
@@ -9871,7 +9918,10 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     {
         if (_audioRecorder.IsRecording)
         {
-            await _audioRecorder.StopRecordingAsync();
+            var switchDuration = await _audioRecorder.StopRecordingAsync();
+            // commit against the page the take was RECORDED on: this runs after
+            // SwitchToPage has already moved _curPage to the new page
+            CommitRecordedTake(switchDuration);
             AudioRecordBtn.IsChecked = false;
             RecordDot.Fill = new SolidColorBrush(Colors.Red);
         }
@@ -9956,10 +10006,11 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
         if (AudioRecordBtn.IsChecked == true)
         {
-            // Start recording
+            // Start recording. A new take ALWAYS goes to a new file — the page's
+            // existing recording is never opened for writing (#audio-safety).
             var dir = System.IO.Path.Combine(LibraryStore.Dir, "audio");
             Directory.CreateDirectory(dir);
-            var filePath = System.IO.Path.Combine(dir, $"{_curPage.Id}.m4a");
+            var filePath = Quill.Services.AudioRecorder.NextTakePath(dir, _curPage.Id);
 
             try
             {
@@ -9967,17 +10018,25 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                 _audioPlayer.Pause();
 
                 await _audioRecorder.StartRecordingAsync(filePath);
-                _curPage.AudioFile = filePath;
-                _curPage.AudioStartTicks = _audioRecorder.RecordingStartTicks;
-                Surface.RecordingStartTicks = _curPage.AudioStartTicks;
-                ScheduleSave();
+                // Remember what is being recorded, but do NOT repoint the page at
+                // it yet: until the take is finalised the page must keep pointing
+                // at the recording the user already has.
+                _recordingPage = _curPage;
+                _recordingPath = filePath;
+                _recordingStartTicks = _audioRecorder.RecordingStartTicks;
+                // live ink/audio sync only — this field is not persisted
+                Surface.RecordingStartTicks = _recordingStartTicks;
 
                 // Glow red dot animation
                 RecordDot.Fill = new SolidColorBrush(Colors.DarkRed);
-                ShowStatus("Recording started…");
+                ShowStatus(_recordingPage.AudioFile != null && _recordingPath != _recordingPage.AudioFile
+                    ? "Recording a new take… the existing recording is kept."
+                    : "Recording started…");
             }
             catch (Exception ex)
             {
+                _recordingPage = null;
+                _recordingPath = null;
                 AudioRecordBtn.IsChecked = false;
                 ShowStatus($"Failed to start recording: {ex.Message}");
             }
@@ -9989,7 +10048,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             {
                 var duration = await _audioRecorder.StopRecordingAsync();
                 RecordDot.Fill = new SolidColorBrush(Colors.Red);
-                ShowStatus($"Recording saved ({duration.TotalSeconds:F0}s).");
+                CommitRecordedTake(duration);
                 SyncAudioPlaybackStateForCurrentPage();
             }
             catch (Exception ex)
@@ -9997,6 +10056,48 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                 ShowStatus($"Error saving recording: {ex.Message}");
             }
         }
+    }
+
+    // The take currently being captured. Kept separately from _curPage so the
+    // finished file lands on the page it was recorded on even if the user has
+    // paged away, and so a failed/empty take leaves the page untouched.
+    private NotePage? _recordingPage;
+    private string? _recordingPath;
+    private long _recordingStartTicks;
+
+    private static bool HasAudioContent(string path) =>
+        Quill.Services.AudioRecorder.HasAudioContent(path);
+
+    /// <summary>Points the page at a take only once it is on disk with content in
+    /// it. A take that captured nothing is discarded and the page keeps whatever
+    /// recording it already had — the previous file is never deleted.</summary>
+    private void CommitRecordedTake(TimeSpan duration)
+    {
+        var page = _recordingPage;
+        var path = _recordingPath;
+        long ticks = _recordingStartTicks;
+        _recordingPage = null;
+        _recordingPath = null;
+        if (page == null || path == null) return;
+
+        if (!HasAudioContent(path))
+        {
+            // nothing captured: drop only the empty placeholder we created
+            try { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); } catch { }
+            ShowStatus(page.AudioFile != null
+                ? "Nothing was captured — the existing recording is unchanged."
+                : "Nothing was captured.");
+            return;
+        }
+
+        bool replaced = !string.IsNullOrEmpty(page.AudioFile) && page.AudioFile != path;
+        var previous = page.AudioFile;
+        page.AudioFile = path;
+        page.AudioStartTicks = ticks;
+        ScheduleSave();
+        ShowStatus(replaced
+            ? $"New take saved ({duration.TotalSeconds:F0}s). The previous recording is kept at {System.IO.Path.GetFileName(previous)}."
+            : $"Recording saved ({duration.TotalSeconds:F0}s).");
     }
 
     private void AudioPlay_Click(object sender, RoutedEventArgs e)
