@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using Quill.Models;
 using Microsoft.Graphics.Canvas;
@@ -30,9 +31,7 @@ public enum ColorWheelMode { Copic, Hsl, Rgb }
 ///
 ///     ColorPickerService.Open(
 ///         xamlRoot,                       // any element's XamlRoot
-///         anchorInRootCoords,             // where the ring is centred — e.g.
-///                                         // the radial dial's centre disc, or
-///                                         // the middle of the button tapped
+///         openedFromPoint,                // a HINT only — see PLACEMENT
 ///         currentColour,
 ///         c => { /* called live, on every change */ });
 ///
@@ -42,6 +41,20 @@ public enum ColorWheelMode { Copic, Hsl, Rgb }
 /// <see cref="ColorPickerService.Close"/>); pass an onClosed callback if you
 /// need to know. See ColorPickerService for the one-time host wiring
 /// (canvas sampler, recents list, persistence).
+///
+/// ── PLACEMENT ─────────────────────────────────────────────────────────────
+/// The picker is its own surface, not something hanging off whatever opened
+/// it. The ring centres itself in the viewport and is scaled so the WHOLE of
+/// it — inner arc, grey ring and the deepest 17-band family column — is on
+/// screen at once, at any window size. It therefore never moves while the
+/// pointer moves or while the radial dial behind it re-renders. The point the
+/// caller passes is kept only as a bias hint: it picks which side of the hub
+/// the chrome cluster (mode labels, eyedropper, puck, recents) faces, so the
+/// picker still leans toward the thing you tapped.
+///
+/// ── ENTRANCE ──────────────────────────────────────────────────────────────
+/// The reference's radial gravity drop, ported keyframe-for-keyframe — see
+/// the "Entrance / exit" region at the bottom of this file.
 ///
 /// ── LAYOUT (calibrated to the reference wheel) ────────────────────────────
 /// Three concentric tiers, exactly as the dialled-in web wheel:
@@ -70,12 +83,24 @@ public sealed class ColorWheel : UserControl
     private const float StopVel = 0.06f;  // rad/s below which a spin has settled
 
     private const float Deg = MathF.PI / 180f;
+    // Breathing room between the outermost band and the window edge, px.
+    private const float EdgeMargin = 18f;
     // The outer ring is 36 contiguous 10° columns starting at the top (-90°).
     private const float ColStep = 10f * Deg;
     private const float OuterStart = -90f * Deg;
 
     private readonly CanvasControl _canvas = new();
+    // The element the pointer handlers are attached to. Capture MUST be taken
+    // on this exact element: a captured pointer is routed to the capturing
+    // element and bubbles UP from there, so capturing on the UserControl (the
+    // parent) silently orphans these handlers - PointerMoved and
+    // PointerReleased simply never arrive, the ring cannot be dragged, and a
+    // tap never completes, so no swatch can ever be picked.
+    private UIElement? _input;
     private readonly DispatcherTimer _spin = new() { Interval = TimeSpan.FromMilliseconds(16) };
+    // The one clock the whole entrance/exit cascade runs off. It ticks only
+    // while a transition is in flight, so an idle picker costs nothing.
+    private readonly DispatcherTimer _anim = new() { Interval = TimeSpan.FromMilliseconds(16) };
 
     private readonly CanvasTextFormat _codeFmt = new()
     {
@@ -106,11 +131,16 @@ public sealed class ColorWheel : UserControl
     // Public surface
     // =======================================================================
 
-    /// Where the ring is centred, in this control's coordinates.
+    /// Where the picker was opened from, in this control's coordinates.
+    ///
+    /// This is a HINT, not a mount point. The ring always centres itself in
+    /// the viewport (see Layout) so it reads as its own surface and cannot
+    /// drift with the pointer or with the dial that opened it; the hint only
+    /// chooses which side of the hub the chrome cluster leans toward.
     public Vector2 Anchor
     {
-        get => _c;
-        set { _c = value; _geoDirty = true; _canvas.Invalidate(); }
+        get => _hint;
+        set { _hint = value; _canvas.Invalidate(); }
     }
 
     /// The colour the picker is showing. Setting it does NOT raise ColorChanged.
@@ -145,7 +175,8 @@ public sealed class ColorWheel : UserControl
     // =======================================================================
     // State
     // =======================================================================
-    private Vector2 _c;
+    private Vector2 _c;      // ring centre — resolved in Layout, never set from outside
+    private Vector2 _hint;   // where the picker was opened from (bias only)
     private Color _color = Colors.Black;
     private ColorWheelMode _mode = ColorWheelMode.Copic;
     private double _h, _s, _l;          // HSL mirror of _color, kept so that a
@@ -160,8 +191,15 @@ public sealed class ColorWheel : UserControl
     private int _dragArc = -1;          // 0..2 while an HSL/RGB arc is dragged
     private bool _dragRing;
     private float _lastAngle;
-    private double _travelled;
-    private long _pressTicks;
+    private Vector2 _pressPt, _lastPt;
+    private float _pathPx;              // pointer path length since the press
+    // A tap is a press that never really moved. This is measured in PIXELS at
+    // the point of contact rather than in radians: the old radian slop was
+    // ~10px at the ring's inner edge but under 4px out at the rim, so a
+    // careful pen tap on an outer swatch was read as a flick and picked
+    // nothing at all. There is no long-press gesture on the ring either, so a
+    // slow deliberate press now selects however long it is held down.
+    private const float TapSlopPx = 12f;
 
     // resolved geometry (see Layout). All radii are scaled from the reference's
     // own pixel radii by `m/760`, so the three tiers keep the reference's
@@ -171,6 +209,11 @@ public sealed class ColorWheel : UserControl
     private float _rOutBase, _band;     // Tier 3+ (outer family columns)
     private float _rIn, _rOut;          // grabbable annulus [inner tier, outer edge]
     private float _rLabel, _rRecent, _chipR;
+    // Chrome scale. The hub shrinks with the window (the ring is fitted to the
+    // viewport), and the mode plates / eyedropper / bubbles are authored at a
+    // fixed pixel size, so without this they collide with Tier 1 on a small
+    // window. 1.0 is the size they were drawn for.
+    private float _ui = 1f;
     private float _base;                // direction from the anchor to the
                                         // viewport centre — everything that has
                                         // to stay on screen hangs off this
@@ -209,6 +252,30 @@ public sealed class ColorWheel : UserControl
         // Tier 2: the full circle, 4 groups, 5.5° divider after every group.
         (Tier2Cells, Tier2Width) = BuildInnerCells(
             CopicPalette.Tier2GrayCategories, start: -90f, span: 360f, gap: 5.5f, gapAfterLast: true);
+
+        // ---- the entrance cascade's per-column delay table ----------------
+        // The reference shuffles the 36 columns ONCE at module load and uses a
+        // column's rank in that shuffle as its slot in the cascade, so the ring
+        // assembles as a scatter rather than a sweep. Same here: one shuffle
+        // per process, and the two delay formulae verbatim from the reference.
+        int n = OuterColumns.Length;
+        var order = Enumerable.Range(0, n).ToArray();
+        var rng = new Random();
+        for (int i = n - 1; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
+            (order[i], order[j]) = (order[j], order[i]);
+        }
+        ColOpenDelay = new int[n];
+        ColCloseDelay = new int[n];
+        for (int rank = 0; rank < n; rank++)
+        {
+            int colIdx = order[rank];
+            ColOpenDelay[colIdx] = (int)Math.Round(30 + rank / 36.0 * 90);     // 30..120 ms
+            ColCloseDelay[colIdx] = (int)Math.Round((35 - rank) / 36.0 * 50);  // ~49..0 ms
+        }
+        EnterSpan = EnterMs + ColOpenDelay.Max();                              // 280 ms
+        ExitSpan = ExitMs + Math.Max(Tier1CloseDelay, ColCloseDelay.Max());    // 180 ms
     }
 
     private static CopicSwatch[][] BuildOuterColumns()
@@ -248,6 +315,7 @@ public sealed class ColorWheel : UserControl
         host.Children.Add(_canvas);
         Content = host;
         IsTabStop = true;
+        _input = host;
 
         _canvas.Draw += OnDraw;
         host.PointerPressed += OnPressed;
@@ -255,10 +323,12 @@ public sealed class ColorWheel : UserControl
         host.PointerReleased += OnReleased;
         host.PointerCanceled += (_, _) => EndDrag();
         _spin.Tick += OnSpinTick;
+        _anim.Tick += OnAnimTick;
         SizeChanged += (_, _) => { _geoDirty = true; _canvas.Invalidate(); };
         Unloaded += (_, _) =>
         {
             _spin.Stop();
+            _anim.Stop();
             DisposeGeometry();
             _canvas.RemoveFromVisualTree();
         };
@@ -274,30 +344,43 @@ public sealed class ColorWheel : UserControl
     // =======================================================================
     // Geometry
     // =======================================================================
-    // Every radius is a fraction of the shorter viewport edge, so the ring
-    // keeps the same proportions the reference has on a full-screen canvas —
-    // an arc that sweeps past the anchor rather than a dialog that fits.
+    // The ring is centred in the viewport and scaled so that ALL of it fits:
+    // the reference's own radii are quoted against its 690-unit outer radius,
+    // so dividing that radius into the space available keeps every proportion
+    // the reference has while guaranteeing the outermost band of the deepest
+    // family column is on screen. Nothing here reads the pointer or the
+    // opener, so the wheel is fixed for as long as it is up.
     private void Layout(float w, float h)
     {
-        float m = Math.Max(320f, Math.Min(w, h));
-        float s = m / 760f;                    // reference-unit → local pixels
+        _c = new Vector2(w * 0.5f, h * 0.5f);
+        float refOut = 333f + MaxRings * 21f;  // the reference's outer radius
+        float fit = Math.Max(150f, Math.Min(w, h) * 0.5f - EdgeMargin);
+        float s = fit / refOut;                // reference-unit → local pixels
 
         _r1In = 285f * s; _r1Out = 302f * s;   // Tier 1 inner arc
         _r2In = 307f * s; _r2Out = 328f * s;   // Tier 2 grey ring
         _rOutBase = 333f * s; _band = 21f * s; // Tier 3+ columns, 21px rings
         _rIn = _r1In;
         _rOut = _rOutBase + MaxRings * _band;
-        _codeFmt.FontSize = Math.Clamp(_band * 0.40f, 6.5f, 12f);
+        _codeFmt.FontSize = Math.Clamp(_band * 0.42f, 6f, 12f);
 
-        _rRecent = m * 0.16f;
-        _chipR = m * 0.013f;
-        _rLabel = m * 0.26f;
-        _arcR[0] = m * 0.34f;
-        _arcR[1] = m * 0.44f;
-        _arcR[2] = m * 0.54f;
+        // The chrome lives in the hub, so it is sized off the HOLE rather than
+        // the window: it can never collide with Tier 1 whatever the shape.
+        float hole = _r1In;
+        _ui = Math.Clamp(hole / 180f, 0.60f, 1.20f);
+        _labelFmt.FontSize = 15f * _ui;
+        _bubbleFmt.FontSize = 13f * _ui;
+        _rRecent = hole * 0.40f;
+        _chipR = Math.Clamp(hole * 0.045f, 5f, 12f);
+        _rLabel = hole * 0.68f;
+        // The HSL / RGB face draws instead of the ring, so it gets the lot.
+        _arcR[0] = fit * 0.42f;
+        _arcR[1] = fit * 0.58f;
+        _arcR[2] = fit * 0.74f;
 
-        var toCentre = new Vector2(w * 0.5f, h * 0.5f) - _c;
-        _base = toCentre.LengthSquared() < 4f ? 0f : MathF.Atan2(toCentre.Y, toCentre.X);
+        // The only thing the opener's point decides: which way the hub faces.
+        var toHint = _hint - _c;
+        _base = toHint.LengthSquared() < 4f ? 0f : MathF.Atan2(toHint.Y, toHint.X);
 
         _puckPt = At(_rLabel, _base - 0.75f);
         _labelPt[0] = At(_rLabel, _base - 0.42f);
@@ -378,11 +461,36 @@ public sealed class ColorWheel : UserControl
         Layout(w, h);
         var ds = e.DrawingSession;
 
-        if (_mode == ColorWheelMode.Copic) DrawRing(sender, ds, w, h);
-        else DrawArcs(ds);
+        // The clock starts on the first frame after BeginEnter, not on the
+        // call itself: the very first open has to realise the CanvasControl,
+        // and starting from the call would eat the head of the cascade.
+        if (_clockPending) { _animT0 = Stopwatch.GetTimestamp(); _clockPending = false; }
 
-        DrawRecents(ds);
-        DrawChrome(ds);
+        // Tier 1's clock also carries the hub chrome, so the surface arrives
+        // as one gesture (the reference's chrome sits outside the SVG group
+        // that animates, but here they share a canvas).
+        float p1 = TierProgress(Tier1OpenDelay, Tier1CloseDelay);
+
+        // The reference presents this face as a MODAL — ColorPickerModal wraps
+        // the very same wheel in a dimmed backdrop and centres it — and that
+        // backdrop is most of what makes it read as its own surface rather than
+        // something growing out of whatever was tapped. It is drawn here, inside
+        // the same Win2D pass, so it fades in on Tier 1's clock with everything
+        // else. It lifts while the eyedropper is armed: that tool has to see the
+        // page it is about to sample.
+        if (!_sampling && p1 > 0.002f)
+            ds.FillRectangle(0, 0, w, h, Fade(Color.FromArgb(132, 8, 9, 12), p1));
+
+        if (_mode == ColorWheelMode.Copic) DrawRing(sender, ds, w, h);
+        else DrawArcs(ds, p1);
+
+        if (p1 > 0.002f)
+        {
+            ds.Transform = TierTransform(p1);
+            DrawRecents(ds, p1);
+            DrawChrome(ds, p1);
+            ds.Transform = Matrix3x2.Identity;
+        }
     }
 
     private void DrawRing(ICanvasResourceCreator rc, CanvasDrawingSession ds, float w, float h)
@@ -395,8 +503,11 @@ public sealed class ColorWheel : UserControl
 
         // Tier 1 (inner arc) then Tier 2 (grey ring): disjoint bands, uniform
         // cell width, so one cached geometry rotated to each cell's A0 does it.
-        DrawInnerTier(rc, ds, view, Tier1Cells, Tier1Cell(rc), (_r1In + _r1Out) * 0.5f, near, labels);
-        DrawInnerTier(rc, ds, view, Tier2Cells, Tier2Cell(rc), (_r2In + _r2Out) * 0.5f, near, labels);
+        // Each tier carries its own slot in the entrance cascade.
+        DrawInnerTier(rc, ds, view, Tier1Cells, Tier1Cell(rc), (_r1In + _r1Out) * 0.5f, near, labels,
+            TierProgress(Tier1OpenDelay, Tier1CloseDelay));
+        DrawInnerTier(rc, ds, view, Tier2Cells, Tier2Cell(rc), (_r2In + _r2Out) * 0.5f, near, labels,
+            TierProgress(Tier2OpenDelay, Tier2CloseDelay));
 
         // Tier 3+ (outer family columns): 36 fixed 10° columns, each a radial
         // stack of its own depth.
@@ -404,6 +515,8 @@ public sealed class ColorWheel : UserControl
         {
             var stack = OuterColumns[col];
             if (stack.Length == 0) continue;
+            float p = TierProgress(ColOpenDelay[col], ColCloseDelay[col]);
+            if (p <= 0.002f) continue;              // not arrived yet / already gone
             float a0 = Norm(OuterStart + col * ColStep + _rot);
             float midA = a0 + ColStep * 0.5f;
             float rColOut = _rOutBase + stack.Length * _band;
@@ -417,19 +530,24 @@ public sealed class ColorWheel : UserControl
             }
             if (!visible) continue;
 
-            var rotate = Matrix3x2.CreateRotation(a0, _c);
+            // The column's own gravity drop: scaled about the WHEEL centre, so
+            // the ring implodes/explodes as one body rather than each column
+            // shrinking into itself.
+            var grow = TierTransform(p);
+            var rotate = Matrix3x2.CreateRotation(a0, _c) * grow;
             for (int ring = 0; ring < stack.Length; ring++)
             {
                 var sw = stack[ring];
                 var col32 = Color.FromArgb(255, sw.R, sw.G, sw.B);
                 ds.Transform = rotate;
-                ds.FillGeometry(OuterCell(rc, ring), col32);
+                ds.FillGeometry(OuterCell(rc, ring), Fade(col32, p));
                 if (sw.Code == near.Code)
                     ds.DrawGeometry(OuterCell(rc, ring),
-                        IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), 3f);
-                ds.Transform = Matrix3x2.Identity;
+                        Fade(IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), p), 3f);
+                ds.Transform = grow;
 
-                if (labels) DrawCode(ds, sw.Code, _rOutBase + (ring + 0.5f) * _band, midA, col32);
+                if (labels) DrawCode(ds, sw.Code, _rOutBase + (ring + 0.5f) * _band, midA, col32, p);
+                ds.Transform = Matrix3x2.Identity;
             }
         }
     }
@@ -437,8 +555,10 @@ public sealed class ColorWheel : UserControl
     // Draws one inner tier: fill each cell by rotating the shared geometry to
     // the cell's start angle, outline the nearest swatch, and label it.
     private void DrawInnerTier(ICanvasResourceCreator rc, CanvasDrawingSession ds, Rect view,
-        Cell[] cells, CanvasGeometry geo, float rMid, CopicSwatch near, bool labels)
+        Cell[] cells, CanvasGeometry geo, float rMid, CopicSwatch near, bool labels, float p)
     {
+        if (p <= 0.002f) return;
+        var grow = TierTransform(p);
         foreach (var cell in cells)
         {
             float a0 = cell.A0 + _rot;
@@ -447,13 +567,15 @@ public sealed class ColorWheel : UserControl
             if (!view.Contains(new Point(q.X, q.Y))) continue;   // thin band: one sample is enough
 
             var col32 = Color.FromArgb(255, cell.Sw.R, cell.Sw.G, cell.Sw.B);
-            ds.Transform = Matrix3x2.CreateRotation(a0, _c);
-            ds.FillGeometry(geo, col32);
+            ds.Transform = Matrix3x2.CreateRotation(a0, _c) * grow;
+            ds.FillGeometry(geo, Fade(col32, p));
             if (cell.Sw.Code == near.Code)
-                ds.DrawGeometry(geo, IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), 2.5f);
-            ds.Transform = Matrix3x2.Identity;
+                ds.DrawGeometry(geo,
+                    Fade(IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), p), 2.5f);
+            ds.Transform = grow;
 
-            if (labels) DrawCode(ds, cell.Sw.Code, rMid, mid, col32);
+            if (labels) DrawCode(ds, cell.Sw.Code, rMid, mid, col32, p);
+            ds.Transform = Matrix3x2.Identity;
         }
     }
 
@@ -464,22 +586,24 @@ public sealed class ColorWheel : UserControl
     // spin — the reason for the fixed offset rather than a cos-based flip, which
     // reads upright at rest but inverts discontinuously mid-rotation.
     // (Sign verified against the renderer: +90° would face the tops outward.)
-    private void DrawCode(CanvasDrawingSession ds, string code, float r, float midA, Color bg)
+    private void DrawCode(CanvasDrawingSession ds, string code, float r, float midA, Color bg, float a)
     {
         var p = At(r, midA);
         var keep = ds.Transform;
         ds.Transform = Matrix3x2.CreateRotation(midA - MathF.PI / 2f, p) * keep;
         ds.DrawText(code,
             new Rect(p.X - _band * 1.7, p.Y - 8, _band * 3.4, 16),
-            IsDark(bg) ? Color.FromArgb(240, 255, 255, 255) : Color.FromArgb(230, 24, 24, 24),
+            Fade(IsDark(bg) ? Color.FromArgb(240, 255, 255, 255) : Color.FromArgb(230, 24, 24, 24), a),
             _codeFmt);
         ds.Transform = keep;
     }
 
     // HSL and RGB share one shape: three concentric arcs, each a tapered
     // ribbon of the colour it would produce, with a knob and a value bubble.
-    private void DrawArcs(CanvasDrawingSession ds)
+    private void DrawArcs(CanvasDrawingSession ds, float a)
     {
+        if (a <= 0.002f) return;
+        ds.Transform = TierTransform(a);
         for (int i = 0; i < 3; i++)
         {
             float r = _arcR[i];
@@ -491,75 +615,77 @@ public sealed class ColorWheel : UserControl
                 var p = At(r, a0 + (a1 - a0) * t);
                 // Overlapping dots make a smooth, tapered stroke for free —
                 // far cheaper than one gradient-filled geometry per segment.
-                ds.FillCircle(p, 2.6f + 4.4f * t, ChannelColor(i, t));
+                ds.FillCircle(p, 2.6f + 4.4f * t, Fade(ChannelColor(i, t), a));
             }
 
             float v = ChannelValue(i);
             var knob = At(r, a0 + (a1 - a0) * v);
-            ds.FillCircle(knob, 11f, ChannelColor(i, v));
-            ds.DrawCircle(knob, 11f, Color.FromArgb(255, 255, 255, 255), 2.5f);
-            ds.DrawCircle(knob, 11f, Color.FromArgb(70, 0, 0, 0), 0.8f);
+            ds.FillCircle(knob, 11f * _ui, Fade(ChannelColor(i, v), a));
+            ds.DrawCircle(knob, 11f * _ui, Fade(Color.FromArgb(255, 255, 255, 255), a), 2.5f);
+            ds.DrawCircle(knob, 11f * _ui, Fade(Color.FromArgb(70, 0, 0, 0), a), 0.8f);
 
-            var bubble = At(r - 40f, a0 + (a1 - a0) * v);
-            Bubble(ds, bubble, ChannelText(i));
+            var bubble = At(r - 40f * _ui, a0 + (a1 - a0) * v);
+            Bubble(ds, bubble, ChannelText(i), a);
         }
+        ds.Transform = Matrix3x2.Identity;
     }
 
-    private void Bubble(CanvasDrawingSession ds, Vector2 p, string text)
+    private void Bubble(CanvasDrawingSession ds, Vector2 p, string text, float a)
     {
-        var rect = new Rect(p.X - 27, p.Y - 15, 54, 30);
-        ds.FillRoundedRectangle(rect, 5, 5, Color.FromArgb(232, 18, 18, 18));
-        ds.DrawRoundedRectangle(rect, 5, 5, Color.FromArgb(60, 255, 255, 255), 1f);
-        ds.DrawText(text, rect, Color.FromArgb(255, 245, 245, 242), _bubbleFmt);
+        var rect = new Rect(p.X - 27 * _ui, p.Y - 15 * _ui, 54 * _ui, 30 * _ui);
+        ds.FillRoundedRectangle(rect, 5, 5, Fade(Color.FromArgb(232, 18, 18, 18), a));
+        ds.DrawRoundedRectangle(rect, 5, 5, Fade(Color.FromArgb(60, 255, 255, 255), a), 1f);
+        ds.DrawText(text, rect, Fade(Color.FromArgb(255, 245, 245, 242), a), _bubbleFmt);
     }
 
-    private void DrawRecents(CanvasDrawingSession ds)
+    private void DrawRecents(CanvasDrawingSession ds, float a)
     {
         foreach (var (p, col) in _chipPts)
         {
-            ds.FillCircle(p, _chipR, col);
-            ds.DrawCircle(p, _chipR, Color.FromArgb(150, 140, 140, 140), 1.2f);
+            ds.FillCircle(p, _chipR, Fade(col, a));
+            ds.DrawCircle(p, _chipR, Fade(Color.FromArgb(150, 140, 140, 140), a), 1.2f);
         }
     }
 
     // Mode labels, the eyedropper and the current-colour puck: the picker's own
     // chrome, laid on a small arc around the anchor exactly as the reference
     // stacks COPIC / HSL / RGB beside the dial.
-    private void DrawChrome(CanvasDrawingSession ds)
+    private void DrawChrome(CanvasDrawingSession ds, float a)
     {
-        ds.FillCircle(_puckPt, 17f, _color);
-        ds.DrawCircle(_puckPt, 17f, Color.FromArgb(120, 160, 160, 160), 1.5f);
+        ds.FillCircle(_puckPt, 17f * _ui, Fade(_color, a));
+        ds.DrawCircle(_puckPt, 17f * _ui, Fade(Color.FromArgb(120, 160, 160, 160), a), 1.5f);
 
         string[] names = { "COPIC", "HSL", "RGB" };
         for (int i = 0; i < 3; i++)
         {
             var p = _labelPt[i];
             bool on = (int)_mode == i;
-            var rect = new Rect(p.X - 38, p.Y - 17, 76, 34);
+            var rect = new Rect(p.X - 38 * _ui, p.Y - 17 * _ui, 76 * _ui, 34 * _ui);
             if (on)
             {
-                ds.FillRoundedRectangle(rect, 5, 5, Color.FromArgb(235, 236, 234, 228));
-                ds.DrawText(names[i], rect, Color.FromArgb(255, 20, 20, 19), _labelFmt);
+                ds.FillRoundedRectangle(rect, 5, 5, Fade(Color.FromArgb(235, 236, 234, 228), a));
+                ds.DrawText(names[i], rect, Fade(Color.FromArgb(255, 20, 20, 19), a), _labelFmt);
             }
             else
             {
-                ds.DrawText(names[i], rect, Color.FromArgb(210, 236, 234, 228), _labelFmt);
+                ds.DrawText(names[i], rect, Fade(Color.FromArgb(210, 236, 234, 228), a), _labelFmt);
             }
         }
 
-        DrawEyedropper(ds, _dropPt, 34f,
-            _sampling ? Color.FromArgb(255, 217, 119, 87) : Color.FromArgb(235, 236, 234, 228));
+        DrawEyedropper(ds, _dropPt, 34f * _ui,
+            Fade(_sampling ? Color.FromArgb(255, 217, 119, 87) : Color.FromArgb(235, 236, 234, 228), a),
+            a);
     }
 
     // Hand-authored eyedropper: a bulb on a 45° shaft that tapers to a point,
     // matching the flat single-weight silhouettes the rest of Quill's icons use.
-    private static void DrawEyedropper(CanvasDrawingSession ds, Vector2 c, float size, Color col)
+    private static void DrawEyedropper(CanvasDrawingSession ds, Vector2 c, float size, Color col, float a)
     {
         float k = size / 24f;
         Vector2 L(float x, float y) => c + new Vector2((x - 12f) * k, (y - 12f) * k);
 
         var plate = new Rect(c.X - size * 0.62, c.Y - size * 0.62, size * 1.24, size * 1.24);
-        ds.FillRoundedRectangle(plate, 6, 6, Color.FromArgb(150, 18, 18, 18));
+        ds.FillRoundedRectangle(plate, 6, 6, Fade(Color.FromArgb(150, 18, 18, 18), a));
 
         using (var b = new CanvasPathBuilder(ds))
         {
@@ -634,10 +760,15 @@ public sealed class ColorWheel : UserControl
     // =======================================================================
     private void OnPressed(object sender, PointerRoutedEventArgs e)
     {
+        // Nothing is where it looks like it is mid-transition (every tier is
+        // scaled about the centre on its own clock), and an exit is already
+        // committed, so input parks until the cascade lands. It is ~280ms.
+        if (_phase != Phase.Idle) { e.Handled = true; return; }
+
         var pt = e.GetCurrentPoint((UIElement)sender).Position;
         var p = new Vector2((float)pt.X, (float)pt.Y);
         e.Handled = true;
-        CapturePointer(e.Pointer);
+        _input?.CapturePointer(e.Pointer);
 
         if (_sampling)
         {
@@ -648,7 +779,7 @@ public sealed class ColorWheel : UserControl
         }
 
         // chrome first: it sits over the empty middle of the ring
-        if (Vector2.Distance(p, _dropPt) < 24f)
+        if (Vector2.Distance(p, _dropPt) < 24f * _ui)
         {
             _sampling = true;
             _canvas.Invalidate();
@@ -656,7 +787,7 @@ public sealed class ColorWheel : UserControl
         }
         for (int i = 0; i < 3; i++)
         {
-            if (Math.Abs(p.X - _labelPt[i].X) < 40 && Math.Abs(p.Y - _labelPt[i].Y) < 19)
+            if (Math.Abs(p.X - _labelPt[i].X) < 40 * _ui && Math.Abs(p.Y - _labelPt[i].Y) < 19 * _ui)
             {
                 Mode = (ColorWheelMode)i;
                 return;
@@ -684,8 +815,8 @@ public sealed class ColorWheel : UserControl
                 _vel = 0;
                 _dragRing = true;
                 _lastAngle = a;
-                _travelled = 0;
-                _pressTicks = Environment.TickCount64;
+                _pressPt = _lastPt = p;
+                _pathPx = 0f;
                 return;
             }
         }
@@ -703,7 +834,7 @@ public sealed class ColorWheel : UserControl
             }
         }
 
-        ReleasePointerCapture(e.Pointer);
+        _input?.ReleasePointerCapture(e.Pointer);
         Dismissed?.Invoke();
     }
 
@@ -724,7 +855,8 @@ public sealed class ColorWheel : UserControl
         float d = Norm(a - _lastAngle);
         _lastAngle = a;
         _rot += d;
-        _travelled += Math.Abs(d);
+        _pathPx += Vector2.Distance(p, _lastPt);
+        _lastPt = p;
         // 60 Hz-ish frames: a light smoothing keeps a jittery pen from throwing
         // the ring across the screen on release
         _vel = _vel * 0.55f + (d * 60f) * 0.45f;
@@ -734,17 +866,17 @@ public sealed class ColorWheel : UserControl
     private void OnReleased(object sender, PointerRoutedEventArgs e)
     {
         var pt = e.GetCurrentPoint((UIElement)sender).Position;
+        var p = new Vector2((float)pt.X, (float)pt.Y);
         bool wasRing = _dragRing;
-        double travelled = _travelled;
-        long held = Environment.TickCount64 - _pressTicks;
+        float path = _pathPx;
         EndDrag();
-        ReleasePointerCapture(e.Pointer);
+        _input?.ReleasePointerCapture(e.Pointer);
         e.Handled = true;
         if (!wasRing) return;
 
-        if (travelled < 0.012 && held < 600)
+        if (path <= TapSlopPx && Vector2.Distance(p, _pressPt) <= TapSlopPx)
         {
-            PickAt(new Vector2((float)pt.X, (float)pt.Y));
+            PickAt(p);
             return;
         }
         if (Math.Abs(_vel) > StopVel) _spin.Start();
@@ -836,9 +968,205 @@ public sealed class ColorWheel : UserControl
     }
 
     // =======================================================================
+    // Entrance / exit — the reference's radial gravity drop
+    // =======================================================================
+    // The reference plays one CSS keyframe per SVG group:
+    //
+    //   radialGravityDrop  160ms cubic-bezier(0.16, 1, 0.3, 1)  fill both
+    //       opacity 0 -> 1, transform scale3d(0.5,0.5,1) -> scale3d(1,1,1)
+    //   radialGravityExit  120ms cubic-bezier(0.4, 0, 1, 1)     fill forwards
+    //       opacity 1 -> 0, transform scale 1 -> 0.5
+    //
+    // …with transform-origin at the wheel centre and a per-group
+    // animation-delay that makes the ring assemble in tiers: the inner chips
+    // first, the grey ring 20ms behind, then the 36 family columns rippling in
+    // over the next 90ms. 280ms end to end.
+    //
+    // Win2D is immediate mode, so there is nothing for a Storyboard to hang
+    // off and no way for one to stagger tiers that are not elements. Instead
+    // ONE 16ms clock runs while a transition is in flight and every tier
+    // derives its own progress from the wall-clock elapsed time inside the
+    // draw pass — same delays, same curve, one timer, no allocation. The
+    // clock stops itself on the frame the last tier lands, so an idle picker
+    // does no work at all.
+    //
+    // A tier's progress p (1 = fully present) drives both halves of the
+    // keyframe exactly as CSS does — one eased value feeding opacity and
+    // transform together: alpha = p, scale = lerp(0.5, 1, p) about the centre.
+
+    private const float EnterMs = 160f, ExitMs = 120f;
+    private const int Tier1OpenDelay = 0, Tier1CloseDelay = 60;    // inner chips
+    private const int Tier2OpenDelay = 20, Tier2CloseDelay = 40;   // grey ring
+    private static readonly int[] ColOpenDelay;                    // per family column
+    private static readonly int[] ColCloseDelay;
+    private static readonly float EnterSpan, ExitSpan;             // last tier lands
+
+    // Exactly the solver a browser runs for cubic-bezier(x1,y1,x2,y2): WebKit's
+    // UnitBezier — Newton-Raphson on x, bisection when the derivative stalls.
+    // Not a KeySpline lookalike or an exponential stand-in; the same curve.
+    private readonly struct UnitBezier
+    {
+        private readonly float _ax, _bx, _cx, _ay, _by, _cy;
+
+        public UnitBezier(float x1, float y1, float x2, float y2)
+        {
+            _cx = 3f * x1; _bx = 3f * (x2 - x1) - _cx; _ax = 1f - _cx - _bx;
+            _cy = 3f * y1; _by = 3f * (y2 - y1) - _cy; _ay = 1f - _cy - _by;
+        }
+
+        private float X(float t) => ((_ax * t + _bx) * t + _cx) * t;
+        private float Y(float t) => ((_ay * t + _by) * t + _cy) * t;
+        private float Dx(float t) => (3f * _ax * t + 2f * _bx) * t + _cx;
+
+        public float Solve(float x)
+        {
+            if (x <= 0f) return 0f;
+            if (x >= 1f) return 1f;
+
+            float t = x;
+            for (int i = 0; i < 8; i++)
+            {
+                float err = X(t) - x;
+                if (MathF.Abs(err) < 1e-5f) return Y(t);
+                float d = Dx(t);
+                if (MathF.Abs(d) < 1e-6f) break;
+                t -= err / d;
+            }
+
+            float lo = 0f, hi = 1f;
+            t = x;
+            while (hi - lo > 1e-6f)
+            {
+                float xa = X(t);
+                if (MathF.Abs(xa - x) < 1e-5f) break;
+                if (x > xa) lo = t; else hi = t;
+                t = lo + (hi - lo) * 0.5f;
+            }
+            return Y(t);
+        }
+    }
+
+    private static readonly UnitBezier EnterEase = new(0.16f, 1f, 0.3f, 1f);
+    private static readonly UnitBezier ExitEase = new(0.4f, 0f, 1f, 1f);
+
+    private enum Phase { Idle, Entering, Exiting }
+    private Phase _phase = Phase.Idle;
+    private long _animT0;
+    private bool _clockPending;
+    private Action? _exitDone;
+
+    // Windows' "Animation effects" switch. Read here rather than plumbed in
+    // from MainWindow so the picker keeps its zero footprint there; the
+    // UISettings instance is cached but the property is read live, so turning
+    // the setting off takes effect on the next open.
+    private static Windows.UI.ViewManagement.UISettings? _uiSettings;
+    private static bool ReduceMotion
+    {
+        get
+        {
+            try
+            {
+                _uiSettings ??= new Windows.UI.ViewManagement.UISettings();
+                return !_uiSettings.AnimationsEnabled;
+            }
+            catch { return false; }   // no UISettings (unpackaged edge cases): animate
+        }
+    }
+
+    private float ElapsedMs() => _clockPending
+        ? 0f
+        : (float)((Stopwatch.GetTimestamp() - _animT0) * 1000.0 / Stopwatch.Frequency);
+
+    /// A tier's presence: 1 fully here, 0 fully gone. Alpha is this value and
+    /// the tier is scaled about the wheel centre by lerp(0.5, 1, value).
+    private float TierProgress(int openDelay, int closeDelay)
+    {
+        if (_phase == Phase.Idle) return 1f;
+        float t = ElapsedMs();
+        return _phase == Phase.Entering
+            ? EnterEase.Solve(Math.Clamp((t - openDelay) / EnterMs, 0f, 1f))
+            : 1f - ExitEase.Solve(Math.Clamp((t - closeDelay) / ExitMs, 0f, 1f));
+    }
+
+    /// scale3d(p', p', 1) about the wheel centre, p' = lerp(0.5, 1, p).
+    private Matrix3x2 TierTransform(float p) => p >= 0.999f
+        ? Matrix3x2.Identity
+        : Matrix3x2.CreateScale(0.5f + 0.5f * p, _c);
+
+    /// Plays the entrance. Call once the picker has been made visible.
+    public void BeginEnter()
+    {
+        _exitDone = null;
+        if (ReduceMotion)
+        {
+            _anim.Stop();
+            _phase = Phase.Idle;      // straight to the end state
+            _canvas.Invalidate();
+            return;
+        }
+        _phase = Phase.Entering;
+        _clockPending = true;
+        if (!_anim.IsEnabled) _anim.Start();
+        _canvas.Invalidate();
+    }
+
+    /// Plays the exit and calls back once it has finished. The host must not
+    /// hide the picker until then — that is the whole point of the callback.
+    public void BeginExit(Action onComplete)
+    {
+        if (_phase == Phase.Exiting) return;         // already leaving
+        if (ReduceMotion)
+        {
+            CancelAnimation();
+            onComplete();
+            return;
+        }
+        _exitDone = onComplete;
+        _phase = Phase.Exiting;
+        _clockPending = true;
+        if (!_anim.IsEnabled) _anim.Start();
+        _canvas.Invalidate();
+    }
+
+    /// Drops a transition in flight WITHOUT firing its completion callback —
+    /// for when the picker is reopened mid-close.
+    public void CancelAnimation()
+    {
+        _anim.Stop();
+        _phase = Phase.Idle;
+        _clockPending = false;
+        _exitDone = null;
+    }
+
+    private void OnAnimTick(object? sender, object e)
+    {
+        if (_phase != Phase.Idle && ElapsedMs() < (_phase == Phase.Entering ? EnterSpan : ExitSpan))
+        {
+            _canvas.Invalidate();
+            return;
+        }
+
+        _anim.Stop();
+        bool wasExit = _phase == Phase.Exiting;
+        _phase = Phase.Idle;
+        _clockPending = false;
+        var done = _exitDone;
+        _exitDone = null;
+        if (wasExit) { done?.Invoke(); return; }   // the host hides us; no repaint
+        _canvas.Invalidate();                      // land on the exact end state
+    }
+
+    // =======================================================================
     // Colour maths
     // =======================================================================
     private static bool IsDark(Color c) => (c.R * 299 + c.G * 587 + c.B * 114) / 1000 < 128;
+
+    /// Multiplies a colour's own alpha by the tier's opacity. Cells are
+    /// disjoint, so per-colour alpha gives the same result as a layer at a
+    /// fraction of the cost of ~40 CreateLayer scopes a frame.
+    private static Color Fade(Color c, float a) => a >= 0.999f
+        ? c
+        : Color.FromArgb((byte)(c.A * Math.Clamp(a, 0f, 1f)), c.R, c.G, c.B);
 
     public static (double H, double S, double L) ToHsl(Color c)
     {
