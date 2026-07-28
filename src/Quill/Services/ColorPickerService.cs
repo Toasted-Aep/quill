@@ -21,8 +21,9 @@ namespace Quill.Services;
 /// picker with a screen point and a callback:
 ///
 ///     ColorPickerService.Open(
-///         rootPoint,                 // where to centre the ring, in the
-///                                    // configured host panel's coordinates
+///         rootPoint,                 // a HINT, not a mount point: the ring
+///                                    // centres itself in the viewport and the
+///                                    // point only biases which way it faces
 ///         currentColour,
 ///         picked => ApplyColour(picked));   // fires live on every change
 ///
@@ -61,14 +62,17 @@ public static class ColorPickerService
     private static Action<Color>? _onChanged;
     private static Action? _onClosed;
     private static Color _committed;
+    private static bool _closing;   // exit animation in flight
 
     public static bool IsOpen { get; private set; }
 
     public static void Configure(HostConfig host) => _host = host;
 
     /// <summary>
-    /// Opens the picker centred on <paramref name="rootPoint"/> (in the host
-    /// overlay's coordinates), seeded with <paramref name="current"/>.
+    /// Opens the picker, seeded with <paramref name="current"/>. The ring
+    /// centres itself in the viewport — it is its own surface, not a flyout
+    /// hanging off the caller — and <paramref name="rootPoint"/> is kept only
+    /// as a hint for which way the picker's hub faces.
     /// <paramref name="onChanged"/> fires on every change — swatch tap, slider
     /// drag, eyedropper — so treat it as "the colour is now this". Optional
     /// <paramref name="onClosed"/> fires once when the picker is dismissed.
@@ -77,7 +81,11 @@ public static class ColorPickerService
         Action<Color> onChanged, Action? onClosed = null)
     {
         if (_host == null) return;   // not yet configured — safe no-op
-        Close();
+        // Re-opened while a previous exit is still playing: drop that animation
+        // on the floor (without firing its completion) and finalise the old
+        // session now, so the new one starts from a clean slate.
+        _wheel?.CancelAnimation();
+        Finish();
 
         var wheel = _wheel ??= BuildWheel();
         _onChanged = onChanged;
@@ -98,10 +106,25 @@ public static class ColorPickerService
         }
         overlay.Visibility = Visibility.Visible;
         IsOpen = true;
+        wheel.BeginEnter();   // the reference's staggered gravity drop
     }
 
+    /// <summary>
+    /// Dismisses the picker. The exit animation plays first: the overlay is
+    /// not hidden, and onClosed is not raised, until it has finished.
+    /// </summary>
     public static void Close()
     {
+        if (!IsOpen || _closing) return;
+        if (_wheel == null) { Finish(); return; }
+        _closing = true;
+        _wheel.BeginExit(Finish);
+    }
+
+    // The actual teardown, once nothing is animating.
+    private static void Finish()
+    {
+        _closing = false;
         if (!IsOpen) return;
         IsOpen = false;
         if (_overlay != null) _overlay.Visibility = Visibility.Collapsed;
