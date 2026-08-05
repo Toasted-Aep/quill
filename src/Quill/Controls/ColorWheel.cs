@@ -42,15 +42,22 @@ public enum ColorWheelMode { Copic, Hsl, Rgb }
 /// need to know. See ColorPickerService for the one-time host wiring
 /// (canvas sampler, recents list, persistence).
 ///
-/// ── PLACEMENT ─────────────────────────────────────────────────────────────
+/// ── PLACEMENT AND SIZE ────────────────────────────────────────────────────
 /// The picker is its own surface, not something hanging off whatever opened
-/// it. The ring centres itself in the viewport and is scaled so the WHOLE of
-/// it — inner arc, grey ring and the deepest 17-band family column — is on
-/// screen at once, at any window size. It therefore never moves while the
+/// it: the ring centres itself in the viewport, so it never moves while the
 /// pointer moves or while the radial dial behind it re-renders. The point the
 /// caller passes is kept only as a bias hint: it picks which side of the hub
 /// the chrome cluster (mode labels, eyedropper, puck, recents) faces, so the
 /// picker still leans toward the thing you tapped.
+///
+/// The ring is sized from the reference's OWN geometry — one reference unit is
+/// one DIP, exactly as the reference's 260-unit viewBox maps onto its 260px
+/// SVG — so a band is 21 DIP and a marker code is ~10.5 DIP. It is therefore
+/// 1380 DIP across and OVERFLOWS the window, which is the intended behaviour
+/// and not a bug: the reference does the same (overflow-visible on a 260px
+/// box) and reaches the outer families by SPINNING them round to the
+/// horizontal, where the viewport is widest. Fitting the whole 690-unit radius
+/// on screen instead is what squeezed the bands to ~13 DIP with a 6 DIP code.
 ///
 /// ── ENTRANCE ──────────────────────────────────────────────────────────────
 /// The reference's radial gravity drop, ported keyframe-for-keyframe — see
@@ -83,8 +90,19 @@ public sealed class ColorWheel : UserControl
     private const float StopVel = 0.06f;  // rad/s below which a spin has settled
 
     private const float Deg = MathF.PI / 180f;
-    // Breathing room between the outermost band and the window edge, px.
+    // Breathing room between the ring and the window edge, px.
     private const float EdgeMargin = 18f;
+    // The reference-unit radius of the grey ring's outer edge. The grey ring is
+    // the innermost FULL circle, so it is the one thing that has to be on screen
+    // all the way round without spinning; it is the only thing the size guard in
+    // Layout defends.
+    private const float Tier2OuterRef = 328f;
+    // Abutting tiles share an edge, and two antialiased edges over the same
+    // pixel leave a faint line of background showing through. Each tile is
+    // therefore drawn a hair past the side it shares with its successor, which
+    // then paints over the overlap — the chips read as one continuous sheet.
+    // Deliberately sub-pixel: the hit-test still divides the band exactly.
+    private const float Weld = 0.5f;
     // The outer ring is 36 contiguous 10° columns starting at the top (-90°).
     private const float ColStep = 10f * Deg;
     private const float OuterStart = -90f * Deg;
@@ -193,6 +211,9 @@ public sealed class ColorWheel : UserControl
     private float _lastAngle;
     private Vector2 _pressPt, _lastPt;
     private float _pathPx;              // pointer path length since the press
+    private long _lastMoveTs;           // Stopwatch ticks at the previous move
+    private long _spinTs;               // Stopwatch ticks at the previous glide tick
+    private uint _dragPointer;          // the ONE pointer allowed to drive a drag
     // A tap is a press that never really moved. This is measured in PIXELS at
     // the point of contact rather than in radians: the old radian slop was
     // ~10px at the ring's inner edge but under 4px out at the rim, so a
@@ -322,6 +343,11 @@ public sealed class ColorWheel : UserControl
         host.PointerMoved += OnMoved;
         host.PointerReleased += OnReleased;
         host.PointerCanceled += (_, _) => EndDrag();
+        // A capture can be lost without a release — the window deactivates, a
+        // flyout opens, the shell steals it. Without this the drag stayed armed
+        // and EVERY later pointer move, button up or not, spun the ring: the
+        // wheel appeared to track the mouse from the far side of the screen.
+        host.PointerCaptureLost += (_, _) => EndDrag();
         _spin.Tick += OnSpinTick;
         _anim.Tick += OnAnimTick;
         SizeChanged += (_, _) => { _geoDirty = true; _canvas.Invalidate(); };
@@ -344,25 +370,41 @@ public sealed class ColorWheel : UserControl
     // =======================================================================
     // Geometry
     // =======================================================================
-    // The ring is centred in the viewport and scaled so that ALL of it fits:
-    // the reference's own radii are quoted against its 690-unit outer radius,
-    // so dividing that radius into the space available keeps every proportion
-    // the reference has while guaranteeing the outermost band of the deepest
-    // family column is on screen. Nothing here reads the pointer or the
-    // opener, so the wheel is fixed for as long as it is up.
+    // The ring is centred in the viewport and drawn at the reference's own
+    // scale — NOT shrunk to fit. The reference mounts this wheel in a 260x260
+    // SVG whose viewBox is "0 0 260 260", i.e. one SVG unit per CSS pixel, and
+    // lets overflow-visible spill the 690-unit radius across the page; the
+    // outer families are reached by spinning, not by zooming out. Copying that
+    // is the whole point: fitting all 690 units into half a window's height is
+    // what collapsed a band to 13 DIP and its code to 6. Nothing here reads the
+    // pointer or the opener, so the wheel is fixed for as long as it is up.
     private void Layout(float w, float h)
     {
         _c = new Vector2(w * 0.5f, h * 0.5f);
-        float refOut = 333f + MaxRings * 21f;  // the reference's outer radius
-        float fit = Math.Max(150f, Math.Min(w, h) * 0.5f - EdgeMargin);
-        float s = fit / refOut;                // reference-unit → local pixels
+        // One reference unit == one DIP. Fixed, so the swatches are the same
+        // comfortable size at every window size and only HOW MUCH of the ring
+        // you can see changes.
+        float s = 1f;
+        // The one concession: below roughly 692 DIP of usable space the grey
+        // ring itself would be off screen in every direction at once and the
+        // picker would open on an empty middle, so the ring is allowed to
+        // shrink to keep that full circle reachable. No window Quill is used at
+        // comes near this, and it never scales the ring UP.
+        float halfMin = Math.Min(w, h) * 0.5f - EdgeMargin;
+        if (halfMin < Tier2OuterRef) s = Math.Max(0.45f, halfMin / Tier2OuterRef);
 
-        _r1In = 285f * s; _r1Out = 302f * s;   // Tier 1 inner arc
-        _r2In = 307f * s; _r2Out = 328f * s;   // Tier 2 grey ring
-        _rOutBase = 333f * s; _band = 21f * s; // Tier 3+ columns, 21px rings
+        _r1In = 285f * s; _r1Out = 302f * s;   // Tier 1 inner arc  (17 units)
+        _r2In = 307f * s; _r2Out = 328f * s;   // Tier 2 grey ring  (21 units)
+        _rOutBase = 333f * s; _band = 21f * s; // Tier 3+ columns   (21 units each)
         _rIn = _r1In;
         _rOut = _rOutBase + MaxRings * _band;
-        _codeFmt.FontSize = Math.Clamp(_band * 0.42f, 6f, 12f);
+        // The reference sets its SVG code text to 7 units in a 21-unit band, a
+        // third of the band. Segoe UI through Win2D at that size is a smear and
+        // the band has room for far more: half the band still leaves ~3.5 DIP of
+        // padding above and below the line box, and the narrowest cell in the
+        // whole wheel (Tier 2, ~7.3° at r≈317, so ~40 DIP of arc) still swallows
+        // the longest grey code at that size.
+        _codeFmt.FontSize = Math.Clamp(_band * 0.5f, 7f, 14f);
 
         // The chrome lives in the hub, so it is sized off the HOLE rather than
         // the window: it can never collide with Tier 1 whatever the shape.
@@ -373,7 +415,9 @@ public sealed class ColorWheel : UserControl
         _rRecent = hole * 0.40f;
         _chipR = Math.Clamp(hole * 0.045f, 5f, 12f);
         _rLabel = hole * 0.68f;
-        // The HSL / RGB face draws instead of the ring, so it gets the lot.
+        // The HSL / RGB face is three arcs rather than a ring, and there is
+        // nothing to spin, so it stays fitted to the viewport as it always was.
+        float fit = Math.Max(150f, Math.Min(w, h) * 0.5f - EdgeMargin);
         _arcR[0] = fit * 0.42f;
         _arcR[1] = fit * 0.58f;
         _arcR[2] = fit * 0.74f;
@@ -408,6 +452,46 @@ public sealed class ColorWheel : UserControl
         return a;
     }
 
+    // Can any part of the wedge [a0, a1] beyond radius rIn reach the viewport?
+    //
+    // Now that the ring overflows, this decides most of what is drawn, so it has
+    // to be EXACT rather than cheap: the hit-test answers for every swatch the
+    // arithmetic says is under the pointer, so a cull that drops a chip which
+    // still has pixels on screen would put a live, invisible target there —
+    // precisely the kind of render/hit-test disagreement that made this control
+    // unpickable before. (The old midpoint sample did exactly that: an outer
+    // cell is ~120 DIP of arc at r=690, so its centre can sit 60 DIP past the
+    // edge while its near corner is still visible.)
+    //
+    // The ring is centred, so the viewport is a rectangle centred on the wheel
+    // and along a ray at θ the visible run is [0, R(θ)] with
+    // R = min(halfW/|cos θ|, halfH/|sin θ|). R peaks on the axes and bottoms out
+    // on the diagonals, so over an interval its maximum is at an endpoint or at
+    // whichever axis direction the interval contains — five candidates, exact.
+    // p folds in the entrance cascade's scale about the centre, which only ever
+    // brings MORE of the ring into view.
+    private static bool WedgeVisible(float a0, float a1, float rIn, float p, float halfW, float halfH)
+    {
+        float reach = MathF.Max(RayReach(a0, halfW, halfH), RayReach(a1, halfW, halfH));
+        for (int k = -2; k <= 2 && reach < float.MaxValue; k++)
+        {
+            float axis = k * MathF.PI / 2f;
+            if (axis >= a0 && axis <= a1) reach = MathF.Max(reach, RayReach(axis, halfW, halfH));
+        }
+        float scale = p >= 0.999f ? 1f : 0.5f + 0.5f * p;
+        return reach > rIn * scale;
+    }
+
+    // |cos| and |sin| make this π-periodic and symmetric, so an angle outside
+    // (-π, π] answers identically — the callers do not have to normalise a1.
+    private static float RayReach(float a, float halfW, float halfH)
+    {
+        float ca = MathF.Abs(MathF.Cos(a)), sa = MathF.Abs(MathF.Sin(a));
+        float rx = ca < 1e-6f ? float.MaxValue : halfW / ca;
+        float ry = sa < 1e-6f ? float.MaxValue : halfH / sa;
+        return MathF.Min(rx, ry);
+    }
+
     // An annular tile spanning [a0, a1] between r0 and r1, built at unrotated
     // angles and re-used for every column via a rotation transform.
     private CanvasGeometry ArcTile(ICanvasResourceCreator rc, float r0, float r1, float a0, float a1)
@@ -421,33 +505,40 @@ public sealed class ColorWheel : UserControl
         return CanvasGeometry.CreatePath(b);
     }
 
-    // One 10° outer cell at ring band `ring`, inset by a hairline gap so
-    // neighbours read as separate chips. Cached and re-used for all 36 columns.
+    // One 10° outer cell at ring band `ring`, FLUSH with its neighbours. The
+    // reference hands createArcTilePath() the slice's own [startAngle, endAngle]
+    // and rInner = 333 + ring*21, rOuter = rInner + 21 — no inset anywhere, so
+    // chips share edges and the wheel reads as one sheet of colour. The gutter
+    // this used to carry was doing two kinds of harm: it looked like a gap
+    // round every swatch, and it put the painted tile a pixel inside the band
+    // the hit-test answers for, so the two stopped describing the same shape.
+    // Cached and re-used for all 36 columns.
     private CanvasGeometry OuterCell(ICanvasResourceCreator rc, int ring)
     {
         if (_outerGeo[ring] is { } cached) return cached;
-        float r0 = _rOutBase + ring * _band + 1f;
-        float r1 = r0 + _band - 2f;
-        float gap = 1.2f / MathF.Max(r0, 1f);
-        var geo = ArcTile(rc, r0, r1, gap, ColStep - gap);
+        float r0 = _rOutBase + ring * _band;
+        // Welded outward and clockwise: rings are drawn inner-to-outer and
+        // columns in increasing angle, so the overlap is always covered by the
+        // neighbour drawn next.
+        var geo = ArcTile(rc, r0, r0 + _band + Weld, 0f, ColStep + Weld / MathF.Max(r0, 1f));
         _outerGeo[ring] = geo;
         return geo;
     }
 
+    // The two inner tiers are isolated bands, so they are welded only along the
+    // shared side — the next chip in the group. The wider breaks left between
+    // CATEGORIES are the reference's own group dividers (4.5° in Tier 1, 5.5°
+    // in Tier 2), not gutters, and are left alone.
     private CanvasGeometry Tier1Cell(ICanvasResourceCreator rc)
     {
         if (_tier1Geo is { } cached) return cached;
-        float r0 = _r1In + 1f, r1 = _r1Out - 1f;
-        float gap = 1.0f / MathF.Max(r0, 1f);
-        return _tier1Geo = ArcTile(rc, r0, r1, gap, Tier1Width - gap);
+        return _tier1Geo = ArcTile(rc, _r1In, _r1Out, 0f, Tier1Width + Weld / MathF.Max(_r1In, 1f));
     }
 
     private CanvasGeometry Tier2Cell(ICanvasResourceCreator rc)
     {
         if (_tier2Geo is { } cached) return cached;
-        float r0 = _r2In + 1f, r1 = _r2Out - 1f;
-        float gap = 1.0f / MathF.Max(r0, 1f);
-        return _tier2Geo = ArcTile(rc, r0, r1, gap, Tier2Width - gap);
+        return _tier2Geo = ArcTile(rc, _r2In, _r2Out, 0f, Tier2Width + Weld / MathF.Max(_r2In, 1f));
     }
 
     // =======================================================================
@@ -495,7 +586,9 @@ public sealed class ColorWheel : UserControl
 
     private void DrawRing(ICanvasResourceCreator rc, CanvasDrawingSession ds, float w, float h)
     {
-        var view = new Rect(-40, -40, w + 80, h + 80);
+        // The ring is centred on the control, so the viewport is a rectangle
+        // centred on _c and its two half-extents are all the cull needs.
+        float halfW = w * 0.5f + 2f, halfH = h * 0.5f + 2f;
         var near = CopicPalette.Nearest(_color.R, _color.G, _color.B);
         // Labels are dropped while the ring is really moving: they are the only
         // per-cell text in the frame, and they are unreadable at speed anyway.
@@ -504,13 +597,15 @@ public sealed class ColorWheel : UserControl
         // Tier 1 (inner arc) then Tier 2 (grey ring): disjoint bands, uniform
         // cell width, so one cached geometry rotated to each cell's A0 does it.
         // Each tier carries its own slot in the entrance cascade.
-        DrawInnerTier(rc, ds, view, Tier1Cells, Tier1Cell(rc), (_r1In + _r1Out) * 0.5f, near, labels,
-            TierProgress(Tier1OpenDelay, Tier1CloseDelay));
-        DrawInnerTier(rc, ds, view, Tier2Cells, Tier2Cell(rc), (_r2In + _r2Out) * 0.5f, near, labels,
-            TierProgress(Tier2OpenDelay, Tier2CloseDelay));
+        DrawInnerTier(ds, halfW, halfH, Tier1Cells, Tier1Cell(rc), _r1In, (_r1In + _r1Out) * 0.5f,
+            near, labels, TierProgress(Tier1OpenDelay, Tier1CloseDelay));
+        DrawInnerTier(ds, halfW, halfH, Tier2Cells, Tier2Cell(rc), _r2In, (_r2In + _r2Out) * 0.5f,
+            near, labels, TierProgress(Tier2OpenDelay, Tier2CloseDelay));
 
         // Tier 3+ (outer family columns): 36 fixed 10° columns, each a radial
-        // stack of its own depth.
+        // stack of its own depth. At rest most of them run off the window — by
+        // design; the deep inks are brought back by spinning the column round to
+        // the horizontal, where the viewport reaches furthest.
         for (int col = 0; col < OuterColumns.Length; col++)
         {
             var stack = OuterColumns[col];
@@ -519,16 +614,7 @@ public sealed class ColorWheel : UserControl
             if (p <= 0.002f) continue;              // not arrived yet / already gone
             float a0 = Norm(OuterStart + col * ColStep + _rot);
             float midA = a0 + ColStep * 0.5f;
-            float rColOut = _rOutBase + stack.Length * _band;
-
-            // Cheap reject: sample the column's mid-angle across its radial run.
-            bool visible = false;
-            for (int k = 0; k <= 3 && !visible; k++)
-            {
-                var q = At(_rOutBase + (rColOut - _rOutBase) * k / 3f, midA);
-                visible = view.Contains(new Point(q.X, q.Y));
-            }
-            if (!visible) continue;
+            if (!WedgeVisible(a0, a0 + ColStep, _rOutBase, p, halfW, halfH)) continue;
 
             // The column's own gravity drop: scaled about the WHEEL centre, so
             // the ring implodes/explodes as one body rather than each column
@@ -554,8 +640,8 @@ public sealed class ColorWheel : UserControl
 
     // Draws one inner tier: fill each cell by rotating the shared geometry to
     // the cell's start angle, outline the nearest swatch, and label it.
-    private void DrawInnerTier(ICanvasResourceCreator rc, CanvasDrawingSession ds, Rect view,
-        Cell[] cells, CanvasGeometry geo, float rMid, CopicSwatch near, bool labels, float p)
+    private void DrawInnerTier(CanvasDrawingSession ds, float halfW, float halfH,
+        Cell[] cells, CanvasGeometry geo, float rIn, float rMid, CopicSwatch near, bool labels, float p)
     {
         if (p <= 0.002f) return;
         var grow = TierTransform(p);
@@ -563,8 +649,8 @@ public sealed class ColorWheel : UserControl
         {
             float a0 = cell.A0 + _rot;
             float mid = (cell.A0 + cell.A1) * 0.5f + _rot;
-            var q = At(rMid, mid);
-            if (!view.Contains(new Point(q.X, q.Y))) continue;   // thin band: one sample is enough
+            float n0 = Norm(a0);
+            if (!WedgeVisible(n0, n0 + (cell.A1 - cell.A0), rIn, p, halfW, halfH)) continue;
 
             var col32 = Color.FromArgb(255, cell.Sw.R, cell.Sw.G, cell.Sw.B);
             ds.Transform = Matrix3x2.CreateRotation(a0, _c) * grow;
@@ -591,8 +677,11 @@ public sealed class ColorWheel : UserControl
         var p = At(r, midA);
         var keep = ds.Transform;
         ds.Transform = Matrix3x2.CreateRotation(midA - MathF.PI / 2f, p) * keep;
+        // The box only positions the (centred, unwrapped) line, but it has to
+        // be at least as tall as the line or Win2D clips the descenders.
+        double boxH = Math.Max(16.0, _codeFmt.FontSize * 1.7);
         ds.DrawText(code,
-            new Rect(p.X - _band * 1.7, p.Y - 8, _band * 3.4, 16),
+            new Rect(p.X - _band * 1.7, p.Y - boxH * 0.5, _band * 3.4, boxH),
             Fade(IsDark(bg) ? Color.FromArgb(240, 255, 255, 255) : Color.FromArgb(230, 24, 24, 24), a),
             _codeFmt);
         ds.Transform = keep;
@@ -760,9 +849,15 @@ public sealed class ColorWheel : UserControl
     // =======================================================================
     private void OnPressed(object sender, PointerRoutedEventArgs e)
     {
-        // Nothing is where it looks like it is mid-transition (every tier is
-        // scaled about the centre on its own clock), and an exit is already
-        // committed, so input parks until the cascade lands. It is ~280ms.
+        // An exit is already committed, so a press during it is dropped. An
+        // ENTRANCE is not: making an impatient user wait out 280ms of cascade
+        // is bad enough, but the old "park all input until the phase is Idle"
+        // was unbounded — if the clock never reached the end (see OnAnimTick),
+        // _phase stayed Entering and the picker ate EVERY press for the rest of
+        // its life, which reads exactly as "buttons not clickable". A press now
+        // lands the entrance on its end state first, so the frame the press is
+        // hit-tested against is the one on screen from that instant.
+        if (_phase == Phase.Entering) { LandTransition(); _canvas.Invalidate(); }
         if (_phase != Phase.Idle) { e.Handled = true; return; }
 
         var pt = e.GetCurrentPoint((UIElement)sender).Position;
@@ -814,9 +909,11 @@ public sealed class ColorWheel : UserControl
                 _snapping = false;
                 _vel = 0;
                 _dragRing = true;
+                _dragPointer = e.Pointer.PointerId;
                 _lastAngle = a;
                 _pressPt = _lastPt = p;
                 _pathPx = 0f;
+                _lastMoveTs = Stopwatch.GetTimestamp();
                 return;
             }
         }
@@ -841,6 +938,14 @@ public sealed class ColorWheel : UserControl
     private void OnMoved(object sender, PointerRoutedEventArgs e)
     {
         if (!_dragRing && _dragArc < 0) return;
+        // The overlay is full-screen by design (it has to catch the tap-away
+        // that dismisses the picker), so a pointer move ANYWHERE lands here.
+        // Two gates make that harmless: the pointer must still be in contact —
+        // a stale drag left armed by a lost release would otherwise let a
+        // button-up mouse spin the ring from across the display — and it must
+        // be the same pointer that started the drag.
+        if (!e.Pointer.IsInContact) { EndDrag(); return; }
+        if (_dragRing && e.Pointer.PointerId != _dragPointer) return;
         var pt = e.GetCurrentPoint((UIElement)sender).Position;
         var p = new Vector2((float)pt.X, (float)pt.Y);
         float a = MathF.Atan2(p.Y - _c.Y, p.X - _c.X);
@@ -854,12 +959,23 @@ public sealed class ColorWheel : UserControl
 
         float d = Norm(a - _lastAngle);
         _lastAngle = a;
-        _rot += d;
+        // Kept in (-π, π]. The rotation is modular for every tier, so folding it
+        // costs nothing visually and stops a long session of spinning from
+        // pushing _rot somewhere float cannot resolve a 10° column any more —
+        // which would put the drawn ring and the arithmetic hit-test out of step
+        // by a fraction of a swatch and make edge taps pick the neighbour.
+        _rot = Norm(_rot + d);
         _pathPx += Vector2.Distance(p, _lastPt);
         _lastPt = p;
-        // 60 Hz-ish frames: a light smoothing keeps a jittery pen from throwing
-        // the ring across the screen on release
-        _vel = _vel * 0.55f + (d * 60f) * 0.45f;
+        // Velocity off the CLOCK rather than an assumed 60 moves a second: a pen
+        // reports at 120-240 Hz, so a per-event constant reads a flick as a
+        // quarter of its real speed and the ring barely coasts. The smoothing is
+        // the same as before — it keeps a jittery pen from throwing the ring
+        // across the screen on release.
+        long now = Stopwatch.GetTimestamp();
+        float dt = (float)((now - _lastMoveTs) / (double)Stopwatch.Frequency);
+        _lastMoveTs = now;
+        if (dt > 1e-4f && dt < 0.12f) _vel = _vel * 0.55f + (d / dt) * 0.45f;
         _canvas.Invalidate();
     }
 
@@ -879,7 +995,7 @@ public sealed class ColorWheel : UserControl
             PickAt(p);
             return;
         }
-        if (Math.Abs(_vel) > StopVel) _spin.Start();
+        if (Math.Abs(_vel) > StopVel) { _spinTs = Stopwatch.GetTimestamp(); _spin.Start(); }
         else BeginSnap();
     }
 
@@ -900,23 +1016,27 @@ public sealed class ColorWheel : UserControl
 
     // Pure-arithmetic hit-test: pick the tier by radius, then the cell by angle.
     // `a` is the pointer angle already de-rotated into the ring's own frame.
+    //
+    // EVERY branch is bounded on BOTH sides. The angle alone must never be
+    // allowed to resolve a chip: the overlay covers the whole window, so
+    // without a ceiling a point way outside the ring would still divide down to
+    // a column and answer with whatever ink happened to sit at that bearing.
     private CopicSwatch? SwatchAt(float r, float a)
     {
-        if (r >= _r1In && r <= _r1Out) return CellHit(Tier1Cells, a);
-        if (r >= _r2In && r <= _r2Out) return CellHit(Tier2Cells, a);
-        if (r >= _rOutBase)
-        {
-            int ring = (int)MathF.Floor((r - _rOutBase) / _band);
-            if (ring < 0) return null;
-            // Fold the angle into [0, 360) measured from the -90° start, then
-            // one division lands the 10° column.
-            double deg = a / Deg + 90.0;
-            deg = ((deg % 360) + 360) % 360;
-            int col = (int)Math.Floor(deg / 10.0) % OuterColumns.Length;
-            var stack = OuterColumns[col];
-            if (ring < stack.Length) return stack[ring];
-        }
-        return null;
+        if (r < _rIn || r > _rOut) return null;                        // outside the ring entirely
+        if (r <= _r1Out) return r >= _r1In ? CellHit(Tier1Cells, a) : null;
+        if (r <= _r2Out) return r >= _r2In ? CellHit(Tier2Cells, a) : null;
+        if (r < _rOutBase) return null;                                 // the gap before the columns
+
+        int ring = (int)MathF.Floor((r - _rOutBase) / _band);
+        if (ring < 0 || ring >= MaxRings) return null;
+        // Fold the angle into [0, 360) measured from the -90° start, then
+        // one division lands the 10° column.
+        double deg = a / Deg + 90.0;
+        deg = ((deg % 360) + 360) % 360;
+        int col = (int)Math.Floor(deg / 10.0) % OuterColumns.Length;
+        var stack = OuterColumns[col];
+        return ring < stack.Length ? stack[ring] : null;
     }
 
     private static CopicSwatch? CellHit(Cell[] cells, float a)
@@ -935,17 +1055,26 @@ public sealed class ColorWheel : UserControl
     // boundary so the ring always comes to rest square rather than mid-swatch.
     private void OnSpinTick(object? sender, object e)
     {
+        // A DispatcherTimer is not a frame clock — it drops ticks under load —
+        // so the glide integrates real elapsed time and both rates are raised to
+        // dt*60. At exactly 60 Hz that is the old per-frame constant, so the
+        // feel is unchanged; off 60 Hz the ring now decays in the same wall-clock
+        // time instead of coasting further on a busy machine.
+        long now = Stopwatch.GetTimestamp();
+        float dt = Math.Clamp((float)((now - _spinTs) / (double)Stopwatch.Frequency), 0.001f, 0.05f);
+        _spinTs = now;
+
         if (_snapping)
         {
             float d = Norm(_snapTo - _rot);
-            if (Math.Abs(d) < 0.0015f) { _rot = _snapTo; _snapping = false; _spin.Stop(); }
-            else _rot += d * 0.28f;
+            if (Math.Abs(d) < 0.0015f) { _rot = Norm(_snapTo); _snapping = false; _spin.Stop(); }
+            else _rot = Norm(_rot + d * (1f - MathF.Pow(0.72f, dt * 60f)));
             _canvas.Invalidate();
             return;
         }
 
-        _rot += _vel * (1f / 60f);
-        _vel *= Decay;
+        _rot = Norm(_rot + _vel * dt);
+        _vel *= MathF.Pow(Decay, dt * 60f);
         if (Math.Abs(_vel) < StopVel) BeginSnap();
         _canvas.Invalidate();
     }
@@ -955,7 +1084,7 @@ public sealed class ColorWheel : UserControl
         _vel = 0;
         _snapping = true;
         _snapTo = MathF.Round(_rot / ColStep) * ColStep;
-        if (!_spin.IsEnabled) _spin.Start();
+        if (!_spin.IsEnabled) { _spinTs = Stopwatch.GetTimestamp(); _spin.Start(); }
     }
 
     /// The host feeds an eyedropper result back in. Null (nothing under the
@@ -1052,8 +1181,14 @@ public sealed class ColorWheel : UserControl
     private enum Phase { Idle, Entering, Exiting }
     private Phase _phase = Phase.Idle;
     private long _animT0;
+    private long _phaseT0;              // wall clock at BeginEnter / BeginExit
     private bool _clockPending;
     private Action? _exitDone;
+    private Action? _landed;            // handed out by LandTransition
+    // How far past its own span a transition may run before it is declared over
+    // whatever the draw clock says. Generous enough never to clip a real
+    // animation, short enough that a wedged one is not noticed.
+    private const float PhaseGuardMs = 600f;
 
     // Windows' "Animation effects" switch. Read here rather than plumbed in
     // from MainWindow so the picker keeps its zero footprint there; the
@@ -1099,13 +1234,14 @@ public sealed class ColorWheel : UserControl
         _exitDone = null;
         if (ReduceMotion)
         {
-            _anim.Stop();
-            _phase = Phase.Idle;      // straight to the end state
+            LandTransition();         // straight to the end state
+            _landed = null;
             _canvas.Invalidate();
             return;
         }
         _phase = Phase.Entering;
         _clockPending = true;
+        _phaseT0 = Stopwatch.GetTimestamp();
         if (!_anim.IsEnabled) _anim.Start();
         _canvas.Invalidate();
     }
@@ -1124,6 +1260,7 @@ public sealed class ColorWheel : UserControl
         _exitDone = onComplete;
         _phase = Phase.Exiting;
         _clockPending = true;
+        _phaseT0 = Stopwatch.GetTimestamp();
         if (!_anim.IsEnabled) _anim.Start();
         _canvas.Invalidate();
     }
@@ -1132,28 +1269,46 @@ public sealed class ColorWheel : UserControl
     /// for when the picker is reopened mid-close.
     public void CancelAnimation()
     {
-        _anim.Stop();
-        _phase = Phase.Idle;
-        _clockPending = false;
-        _exitDone = null;
+        LandTransition();
+        _landed = null;      // dropped on the floor: that is the whole point
     }
 
     private void OnAnimTick(object? sender, object e)
     {
-        if (_phase != Phase.Idle && ElapsedMs() < (_phase == Phase.Entering ? EnterSpan : ExitSpan))
+        float span = _phase == Phase.Entering ? EnterSpan : ExitSpan;
+        // The cascade's own clock is started by the first DRAW, not by the call
+        // that begins it, so that a cold CanvasControl does not eat the head of
+        // the animation. That is fine while frames are arriving and a trap when
+        // they are not — minimised, occluded, or simply never invalidated, the
+        // clock reads 0 forever, the phase never lands, and with it the picker
+        // stops accepting input at all. The timer itself keeps ticking in all
+        // those cases, so a wall-clock deadline measured from BeginEnter /
+        // BeginExit is the backstop: past it the phase is over regardless.
+        float wall = (float)((Stopwatch.GetTimestamp() - _phaseT0) * 1000.0 / Stopwatch.Frequency);
+        if (_phase != Phase.Idle && ElapsedMs() < span && wall < span + PhaseGuardMs)
         {
             _canvas.Invalidate();
             return;
         }
 
-        _anim.Stop();
         bool wasExit = _phase == Phase.Exiting;
+        LandTransition();
+        if (wasExit) { _landed?.Invoke(); _landed = null; return; }   // host hides us; no repaint
+        _canvas.Invalidate();                                         // land on the exact end state
+    }
+
+    /// Ends whatever transition is in flight RIGHT NOW: clock off, phase Idle,
+    /// every tier at its end state. The exit's completion callback is handed
+    /// back through <see cref="_landed"/> rather than invoked here, so the one
+    /// caller that must run it (OnAnimTick) does, and the one that must not
+    /// (a press landing the entrance) cannot.
+    private void LandTransition()
+    {
+        _anim.Stop();
         _phase = Phase.Idle;
         _clockPending = false;
-        var done = _exitDone;
+        _landed = _exitDone;
         _exitDone = null;
-        if (wasExit) { done?.Invoke(); return; }   // the host hides us; no repaint
-        _canvas.Invalidate();                      // land on the exact end state
     }
 
     // =======================================================================
