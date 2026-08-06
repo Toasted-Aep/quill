@@ -122,3 +122,50 @@ A floating window in the same family as the settings window:
   Include Background · Include Grid, as `#78a19c` toggle sliders.
 - **Details** — Output Size (px @ppi) and Scale: 100% · 200% · 400%.
 - Primary action button in `#3282aa`.
+
+---
+
+## K. Fix list, 2026-08-06 (user-reported against the shipped build)
+
+Decisions taken: pen slot icons are a **stylised stroke silhouette** (a vector
+mark shaped like that pen's stroke, in the pen's colour), not a live render.
+**Visible bugs are fixed before layers**; layers then follows as its own piece.
+
+### Dial + colour
+1. Dial still appears in the **notebook gallery** — regression, was fixed once.
+2. COPIC wheel is **not centred on the dial**.
+3. Colour **names disappear while scrolling** the COPIC wheel.
+4. Size / opacity / smoothness need a **slider window that opens**, not
+   drag-only scrubbing with no UI.
+5. Dial icons are **cut off** — parts missing "like erased", clipped into a
+   small square.
+6. Dial **collides with the Notebooks window** — hide or move the dial when it
+   opens.
+7. Make the dial **smaller**.
+8. Pen slot icons = the **stroke that pen leaves** (stylised silhouette).
+9. Add a **colour picker to the pen row**; when the dial is off, the wheel
+   opens centred on that picker instead. ***
+10. Clicking **Custom colour again** (after selecting, in Settings) opens the
+    COPIC wheel.
+11. COPIC **closes automatically** once a colour is chosen.
+12. **Colour mixing** is not implemented.
+
+### Chrome, panels, settings
+13. **Revert** the settings floating window (docked stays).
+14. **Touch draw** moves into Settings as an on/off toggle.
+15. **Leave free space** moves to the toolbar.
+16. **Remove the Objects button** from the top bar (it is in the left cluster).
+17. **Comments** move to the tool window, selectable from the dial.
+18. **AI button** sits to the left of Import.
+19. **Layers / Precision / Objects do not open.**
+20. Layers and Precision become **floating, borderless, background-less panes**
+    in the bottom-left.
+21. **Every panel moves out of the way dynamically when something overlaps
+    it.** ***
+22. Export **regions renamed**: Screenshot · Selection · Entire Page · Current
+    Section · Current Notebook · and a sixth meaning "just the page area"
+    (e.g. A4 when A4 is set) — needs a better name than "Page".
+23. **Unit selection as circles**, with more units (cm, m, …).
+24. **App theme selection as coloured circles.**
+25. Textured page backgrounds **more realistic**.
+26. **Tilt** is still unimplemented (canvas rotation).
