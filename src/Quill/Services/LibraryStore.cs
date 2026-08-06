@@ -141,10 +141,30 @@ public static class LibraryStore
     }
 
     // The central, user-configurable storage folder (default Documents\Quill).
+    // An out-of-process override, checked before the saved setting. Automated
+    // tests need an isolated library WITHOUT rewriting the user's settings.json
+    // - doing that repointed the real app at a throwaway folder twice, and the
+    // user opened Quill to an empty gallery both times. Set QUILL_DATA_FOLDER
+    // for the child process instead; nothing on disk changes.
+    private static string? EnvFolder
+    {
+        get
+        {
+            try
+            {
+                var v = Environment.GetEnvironmentVariable("QUILL_DATA_FOLDER");
+                return string.IsNullOrWhiteSpace(v) ? null : v;
+            }
+            catch { return null; }
+        }
+    }
+
     public static string Dir
     {
         get
         {
+            var e = EnvFolder;
+            if (e != null) return e;
             var f = Settings.DataFolder;
             return !string.IsNullOrWhiteSpace(f) ? f! : AnchorDir;
         }
