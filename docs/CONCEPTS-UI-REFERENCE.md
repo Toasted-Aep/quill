@@ -1,8 +1,13 @@
 # Concepts UI reference — for the Quill conversion
 
-Research deliverable, 2026-08-05. Written so an implementer never has to guess a
+Research deliverable, 2026-08-05. **Revised 2026-08-06** — added a web-research
+pass against concepts.app's Windows manual, release notes and tutorials; see
+§9.3 for exactly what changed. Written so an implementer never has to guess a
 size, spacing, colour or behaviour. Companion to `UI-SPEC-V2.md` (dial geometry)
 and `UI-SPEC-V3.md` (user requirements A–J).
+
+**Read first if you are implementing chrome:** §1.1 and §1.7 — Concepts' on-canvas
+surfaces have *no background at all*, and this is now proven at the pixel level.
 
 ---
 
@@ -17,6 +22,11 @@ and `UI-SPEC-V3.md` (user requirements A–J).
 | `[MANSHOT]` | `C:\Users\irony\Downloads\Screenshot 2026-07-22 at 17-09-22 Settings - Concepts Manual.png` (full-page capture of the manual's Settings page) |
 | `[WEB:<file>]` | User's own web implementation, `C:\Users\irony\Downloads\New folder (4)\Concepts\src\...` — **web JS/JSX/CSS only** |
 | `[V2]` / `[V3]` | `docs/UI-SPEC-V2.md` / `docs/UI-SPEC-V3.md` |
+| `[WIN-MAN]` | Official **Windows-specific** manual, <https://concepts.app/en/windows/manual/yourworkspace> and `/settings` |
+| `[REL:2022.4]` | Release notes, <https://concepts.app/en/releases/concepts-20224-for-windows/> |
+| `[REL:2022.10]` | Release notes, <https://concepts.app/en/releases/concepts-202210-for-windows/> |
+| `[REL:2021.9.8]` | Release notes, <https://concepts.app/en/releases/concepts-202198-windows/> |
+| `[TUT:menus]` | Tutorial, <https://concepts.app/en/tutorials/setting-your-menus-brushes-and-presets/> |
 
 Every claim below carries one of these. Anything with **(inferred)** was derived
 from proportions, not read directly — treat it as a design decision, not a fact.
@@ -139,6 +149,12 @@ Measured glyph boxes, physical px, `[SS:…9I8pRX5lPh]`:
 | Settings ⚙ | 2721–2747 | 27 × 27 | 2734 | 1367 |
 | Help ? | 2809–2826 | 18 × 28 | 2817.5 | 1408.75 |
 
+**PROOF that the status bar has no background.** Vertical luminance profiles at
+x = 600, 900, 1200, 1600 and 2000, from y = 64 to y = 200, return
+**mean 0.00, max 0, exactly one unique value** — pixel-identical to deep canvas
+sampled at y 400–600. There is no panel, no gradient, no scrim, no blur behind
+the status bar `[SS:…9I8pRX5lPh]`. See §1.7.
+
 Derived rules:
 - **Icon pitch is 84 physical px = 42 DIP**, uniform on both clusters
   (layers→precision 84, precision→objects 84; import→export 84, export→settings 85,
@@ -149,8 +165,20 @@ Derived rules:
 - Row centre at y = 126 physical = **63 DIP** from window top, i.e. 31 DIP below
   the title bar. Content vertical extent y 110–143 physical.
 - The three menu toggles show **a line under the icon when that menu is on
-  canvas** `[MAN:p93]` — visible in `[SS:…9I8pRX5lPh]` as short underlines beneath
-  the layers/precision/objects glyphs.
+  canvas** `[MAN:p93]`. Measured `[SS:…9I8pRX5lPh]`: **two separate bars**, not
+  one group bar — lit runs at x 280–359 and x 364–443 (4 px gap), each **80
+  physical px = 40 DIP wide × 4 px = 2 DIP tall**, at y 164–167. Each is centred
+  under its icon (319.5 vs icon centre 320; 403.5 vs 404). Objects (centre 488)
+  has **no** underline in this capture because it is off. The underline width
+  (40 DIP) is the icon pitch (42 DIP) minus the gap, so underlines tile cleanly.
+- A **vertical divider rule** separates the gallery icon from the page name:
+  x 104–105, y 110–141 → **2 px wide × 32 px tall = 1 × 16 DIP**, colour
+  **`#262829`**. Gaps: 27 px from the gallery glyph, 23 px to the name.
+- Two very dim **diagonal chevron marks** (`#232425`, y 150–167, ≈ 4 DIP tall)
+  flank the toggle group (x ≈ 500–545) and the right cluster (x ≈ 2480–2560).
+  **Purpose unconfirmed** — most plausibly drag affordances for relocating the
+  bar groups, consistent with "every menu on the screen can be moved"
+  `[MAN:p89]`. **(inferred — do not rely on it.)**
 - The Pro Store button reads `PRO` when purchased, `Go PRO` otherwise
   `[MAN:p79]`. On Windows it lives in the **title bar**, not the status bar
   `[MAN:p79]`.
@@ -210,6 +238,70 @@ aspect (1.60) — the thumbnail is a scaled view of the canvas **(inferred)**.
 
 There is a soft shadow/gradient edge from x ≈ 2020 to 2083 (≈ 31 DIP) — the panel
 is a **docked side panel with a shadow**, not a floating window `[SS:…oFjbQ2DItz]`.
+
+#### Is Settings docked or floating on Windows? — RESOLVED
+
+**Docked.** Evidence:
+- It is flush to the window's right edge (right edge x = 2880 = the window edge)
+  and spans the full height below the title bar in **all three** captures that
+  show it: `[SS:…ODTfKjJmnK]`, `[SS:WX05SCbfIg]`, `[SS:…oFjbQ2DItz]`.
+- Its position and width are **identical** across those three captures, taken at
+  different scroll positions — a floating window would be unlikely to land
+  identically three times.
+- It has a shadow on its **left edge only**; a floating window would have a
+  shadow on all four sides.
+- It has **no title bar of its own and no resize grips**.
+
+The official Windows manual `[WIN-MAN]` documents the tabs and sections but
+**does not state whether the panel is docked or floating** — I checked
+specifically. So the screenshot measurement is the best available evidence and it
+is unambiguous.
+
+> ⚠️ **Conflict for the user to decide.** `[V2] §2` asks for a *floating,
+> resizable* settings window with iPadOS-style resize indicators, reused for the
+> pen library. Concepts on Windows does **not** do this. Both are legitimate
+> designs; they are simply different. Recommend putting this to the user rather
+> than either agent picking silently.
+
+### 1.7 The two bars — chrome or bare? RESOLVED: BARE
+
+This resolves the styling question for `[V3] §I`'s "two floating liquid-glass
+bars".
+
+**Concepts' top-left and top-right clusters are the two ends of one bare,
+fully transparent status bar. They have no background, no border, no blur and
+no card.** The proof is in §1.3: 136 rows × 5 columns of pixels spanning the
+entire status-bar band are *exactly* `#000000`, identical to deep canvas.
+
+| Property | Value | Note |
+|---|---|---|
+| Background | **none** | measured, pixel-identical to canvas |
+| Border | **none** | measured |
+| Blur / backdrop filter | **none** | measured |
+| Corner radius | n/a | there is no surface to round |
+| Band height | content y 110–143 phys → **row centre 63 DIP** | no bounding box exists |
+| Left cluster | gallery · `│` divider · page name · layers · precision · objects | §1.3 |
+| Right cluster | 🔒 zoom · tilt · import · export · settings · help | §1.3 |
+| Icon glyph | **16 DIP** | measured 27–32 phys |
+| Icon pitch | **42 DIP** | measured, both clusters |
+| Edge margins | **≈ 31 DIP** left and right | measured, symmetric |
+| Divider | 1 × 16 DIP rule, `#262829` | left cluster only, after the gallery icon |
+| Active indicator | 40 × 2 DIP underline under each active toggle | §1.3 |
+
+Concepts' own marketing calls this "a new floating UI at the top of your canvas"
+with "**less status bar, more canvas space, and the elements fade out of the way
+while you draw**" `[REL:2022.4]`. Note the word *floating* there means
+"unattached, drawn over the canvas" — **not** "a floating card". The measurement
+is decisive: there is no surface.
+
+**Recommendation for Quill:** build the two clusters as bare icon rows using the
+pitch/margin/underline constants above. If the user still wants glass bars, that
+is a deliberate departure from Concepts and should be their explicit choice — it
+is the single most visible way the current build diverges (§8 row 1).
+
+**New behaviour to implement:** UI elements **fade out while the user draws** and
+fade back afterwards `[REL:2022.4]`. Not previously captured in this document.
+Fade duration and threshold are unmeasured — see §9.
 
 ---
 
@@ -294,10 +386,16 @@ Boundaries at **90°, 210°, 330°**.
 `[WEB:components/RadialDial.jsx]` uses `-150→-30`, `-30→90`, `90→210` — also
 identical. **All three sources agree; do not change this.**
 
+**Official icon descriptions** `[TUT:menus]` — match these exactly:
+- **Size** — *"the thin and thick lined icon"* (two lines of differing weight,
+  **not** three equal bars).
+- **Opacity** — *"the divided circle"* (a circle half-filled).
+- **Smoothing** — *"the squiggled line"*.
+
 Hub content layout (physical px from centre, `[SS:…9I8pRX5lPh]`):
-- Size: icon (three stacked bars) + value text **"512 px"** on one baseline at
-  r ≈ 75, top of hub. This is the only setting whose value is rendered *with
-  units and inline with its icon*.
+- Size: icon + value text **"512 px"** on one baseline at r ≈ 75, top of hub.
+  This is the only setting whose value is rendered *with units and inline with
+  its icon*.
 - Smoothing: squiggle icon at r ≈ 76, angle ≈ 172°; value "10%" below-left at
   r ≈ 78.5, angle ≈ 127°.
 - Opacity: half-filled-circle icon at r ≈ 71, angle ≈ 10°; value "100%"
@@ -340,6 +438,11 @@ Two findings, both important:
    system accent. The fill always equals the centre colour disc. When the tool's
    colour is white, the sector is white and its icon inverts to black
    `[SS:tdKKCawzwe]`.
+
+   ✅ **Confirmed by an official primary source.** The 2022.10 Windows release
+   notes state that as you adjust the colour sliders *"you'll see both the color
+   dot and the active tool button change to your new color"* `[REL:2022.10]`.
+   This is no longer a two-sample inference — it is documented behaviour.
 2. **The active sector is drawn ≈ 41°, i.e. expanded ≈ 2.5° beyond its 36°
    bounds on each side.** The span is constant across all radii (measured at
    r = 118/130/145/160/175/184 → 41.0, 40.8, 41.1, 41.2, 41.0, 40.8), so this is a
@@ -378,10 +481,24 @@ dot attenuation — I could not isolate it against a light background)**.
 The hub, by contrast, samples a flat `#262626` at every radius from 41 to 110 with
 no dot bleed-through — **opaque**.
 
-### 2.7 Motion timings — HONEST UNKNOWN
+### 2.7 Motion timings — STILL AN HONEST UNKNOWN
 
 **I could not measure any Concepts animation timing.** Static screenshots cannot
-yield durations, and I did not obtain control of the running app (§9).
+yield durations. I attempted live capture on two separate occasions and yielded
+both times because the user was actively at the machine; on the second attempt
+Concepts was no longer running at all (§9.1).
+
+**What web research did establish** — the animations that exist, even though
+their durations do not:
+
+| Animation | Evidence |
+|---|---|
+| Status bar and canvas elements **fade out while drawing**, fade back after | `[REL:2022.4]` — "the elements fade out of the way while you draw" |
+| Active tool sector and colour dot **cross-fade to the new colour** as colour sliders move | `[REL:2022.10]` — "you'll see both the color dot and the active tool button change to your new color" |
+| Setting slider **opens as you slide and closes the instant you lift** | `[MAN:p83]`, `[TUT:menus]` |
+| Tool wheel becomes **spinnable** in compact mode | `[TUT:menus]` |
+
+None of these sources gives a duration or easing. **Do not invent one.**
 
 The only concrete timings available are from the user's own web implementation,
 which they describe as "fully dialled in" — **cite these as the web reference, not
@@ -810,6 +927,34 @@ confirming `[V3] §B`'s "zoom and tilt readouts with a lock". Note Concepts uses
 
 Double-tapping the zoom field returns to canvas centre `[MAN:p96]`.
 
+### 4.8 Brush menu
+
+**Invoked:** tap an **already-active** tool sector again, or **double-tap** an
+inactive one `[MAN:p81]`, `[TUT:menus]`. This is the single most important
+navigation path in the wheel and is currently unimplemented in Quill.
+
+Documented contents `[TUT:menus]`, `[MAN:p103-136]`:
+
+| Section | Contents |
+|---|---|
+| **In This Drawing** | Brushes already used in the current document |
+| **My Brushes** | The user's saved/custom brushes |
+| **The Brush Market** | Downloadable brush packs `[MAN:p116]` |
+| **Brush viewer** | A live test area for the current brush |
+
+Related chapters: Basic Brushes `[MAN:p105-109]`, Tools `[MAN:p110-115]`,
+Creating a Custom Brush `[MAN:p117-128]`, Brush Sharing `[MAN:p129-132]`,
+Importing Brush Packs `[MAN:p133-136]`.
+
+The custom-brush editor contains **a stroke preview that updates live as you
+adjust a variance curve** `[MAN:p117-128]` — this is the *only* documented
+"preview" in Concepts, and it belongs to the brush editor, **not** to the tool
+wheel's setting arcs (see §9 item 12).
+
+> **Unknown:** no capture of this menu on Windows. Geometry, chrome and layout
+> are unmeasured. `[V3] §G` rates the pen library ⭐⭐⭐⭐⭐, so capture it before
+> building.
+
 ---
 
 ## 5. Colour and type
@@ -907,6 +1052,7 @@ from glyph shapes; I did not extract font metadata.
 | `S` | Zoom mode — same toggle-or-hold semantics; drag right zooms in, left out |
 | `R` | Rotation mode — same toggle-or-hold semantics |
 | `E` | Eraser, using the configured eraser action |
+| `Alt+Enter` or `F11` | **Toggle fullscreen** (Windows) `[REL:2022.4]` |
 
 All shortcuts are **user-rebindable** and can be globally disabled
 `[MAN:p306-307]`.
@@ -918,9 +1064,14 @@ Three modes, a genuinely distinctive Concepts feature:
 1. **Normal** — all menus visible, wheel fully on canvas.
 2. **Compact** — entered by swiping outward on Layers/Precision, or cornering the
    wheel. Labels collapse to icons; the wheel **docks to the corner**; size,
-   opacity and smoothing sliders are hidden from the Tool Bar.
+   opacity and smoothing sliders are hidden from the Tool Bar. Additionally
+   **the Tool Wheel becomes spinnable** in this mode `[TUT:menus]`.
 3. **Hidden** — swipe outward again. All menus hide. **Tap the Concepts icon on
-   the canvas to bring them back**, or bind a gesture to toggle hidden mode.
+   the canvas to bring them back** `[MAN:p92]` (the tutorial calls it "a tab"
+   `[TUT:menus]`), or bind a gesture to toggle hidden mode.
+
+Separately, and orthogonal to these three modes: **the UI fades out of the way
+while you draw** and returns when you stop `[REL:2022.4]`. Duration unmeasured.
 
 Additionally, each of Precision, Layers and Objects can be independently shown or
 hidden from the status-bar toggles `[MAN:p93]`.
@@ -993,7 +1144,7 @@ description of the shipped build) and `[V2]`.
 | 9 | **Hit testing** | — | **Phantom hover: dial lights up while the pointer is over the page** `[V3] §A.1` | Hit-test against the annulus (`r_in ≤ r ≤ r_out` **and** the sector's angular range), not the wheel's bounding box. This is almost certainly a square-bounds test. |
 | 10 | **Tool selection** | Tap a sector to activate `[MAN:p81]` | **Clicking a slot does nothing** `[V3] §A.3` | Wire up sector hit-testing to slot activation. |
 | 11 | **Opacity** | Full slider + 4 presets `[MAN:p82]` | **Not implemented** `[V3] §A.4` | Implement. |
-| 12 | **Preview circle** | *(unverified — see §9)* | **No preview circle** `[V3] §A.5` | `[V2] §1.1` wants a real ink-drawn circle. `[WEB:RadialDial.jsx]` draws it at `r = clamp(130 + size·0.8, 134, 180)` with a dashed `#38bdf8` outer guide. Implement the user's spec; I could not confirm Concepts' behaviour. |
+| 12 | **Preview circle** | **Probably nothing** — see below | **No preview circle** `[V3] §A.5` | Treat the preview circle as a **Quill invention**, not a Concepts feature. Implement `[V2] §1.1` because the user asked for it, but do not claim it is "like Concepts". `[WEB:RadialDial.jsx]` draws it at `r = clamp(130 + size·0.8, 134, 180)` with a dashed `#38bdf8` outer guide — a reasonable model. |
 | 13 | **COPIC wheel reachability** | Tap the centre colour disc `[MAN:p137-138]` | **Unreachable from the centre disc** `[V3] §A.6` | Wire the centre disc to open the wheel. |
 | 14 | **COPIC wheel sizing** | Rings at `2.25–2.51 R`, `2.60–2.86 R`, then `47 px` spokes from `2.95 R`; **overflows the window by design** (§3.1) | Web ref rings are proportionally much thinner (`2.28–2.42 R` etc.) `[WEB:ConcentricColorWheel.jsx]` | Thicken the rings to the measured ratios. Do not shrink the wheel to fit. |
 | 15 | **COPIC wheel stickiness** | Drag to rotate, release to stop (with momentum) `[MAN:p141]` | **Sticks to the mouse** `[V3] §F` | Release pointer capture on pointer-up. `[WEB:ConcentricColorWheel.jsx]` has correct momentum logic (velocity from a 5-sample history, `×0.94` decay) to copy. |
@@ -1017,6 +1168,11 @@ description of the shipped build) and `[V2]`.
 | 33 | **Finger actions** | Do Nothing · Use Active Tool · Pan Canvas · Select · Nudge · Slice · **Configured Tool** `[MAN:p308]` | includes Zoom · Rotate `[V3] §C` | Flag: the manual has no Zoom/Rotate finger actions. Confirm with the user. |
 | 34 | **Right mouse button** | Bindable exactly like a stylus shortcut button `[MAN:p313]` | `[V2] §2` uses right-click for the pen library | Compatible, but make it *configurable* rather than hard-wired. |
 | 35 | **Canvas element movability** | Wheel, Precision, Layers and Objects are **all drag-relocatable**, and menus re-orient when the wheel moves side `[MAN:p90, p93]` | Fixed positions | Large feature; defer, but do not architect it out. |
+| 36 | **The two top bars** | **Bare — zero background, border or blur**, pixel-identical to canvas (§1.7) | Two floating liquid-glass bars `[V3] §I` | **Strip all chrome.** Use pitch 42 DIP, glyph 16 DIP, margins 31 DIP, divider 1 × 16 DIP `#262829`, underline 40 × 2 DIP. If the user wants glass, make it their explicit, informed choice. |
+| 37 | **Fade while drawing** | Status bar and canvas elements **fade out while drawing** and return afterwards `[REL:2022.4]` | Not implemented | Add. Duration/threshold unmeasured — pick something and mark it provisional. |
+| 38 | **Active-toggle underline** | **Two separate 40 × 2 DIP bars**, one centred under each active toggle (§1.3) | Not implemented | Add; note it is per-icon, not a group bar. |
+| 39 | **Brush menu entry** | Tap an active tool again, or double-tap an inactive one `[MAN:p81]` | Right-click opens the pen library `[V2] §2` | Add the tap-again path — it is the primary route in Concepts. Keep right-click as a bonus, and make it configurable (`[MAN:p313]`). |
+| 40 | **Fullscreen** | `Alt+Enter` / `F11`, hides title bar *and* the Windows taskbar `[REL:2022.4]`, `[MAN:p78]` | Not mentioned | Add both shortcuts. |
 
 ---
 
@@ -1047,18 +1203,36 @@ Things I could **not** determine. None of these are guessed at above.
     heights; the hierarchy is measured but the absolute pt values are not.
 11. **Compact and hidden mode appearance** — described in `[MAN:p91-92]` but the
     manual's own illustrations were not extractable as text and I have no capture.
-12. **Concepts' preview-circle behaviour while scrubbing a setting** — `[V2]` wants
-    a real ink-drawn circle; I could not confirm what Concepts actually draws.
+12. **Concepts' preview-circle behaviour while scrubbing a setting** — *downgraded
+    from "unknown" to "probably does not exist".* Three independent official
+    sources describe the size/opacity/smoothing slider interaction in step-by-step
+    detail — the manual `[MAN:p82-83]`, the Windows manual `[WIN-MAN]`, and the
+    dedicated tutorial `[TUT:menus]` — and **none of them mentions any canvas or
+    around-the-wheel preview**. The only "preview" documented anywhere in Concepts
+    is the **stroke preview inside the custom-brush editor**, which updates live as
+    you adjust a variance curve — a different surface entirely `[MAN:p117-128]`.
+    This is a strong negative result, but it is still absence of evidence rather
+    than a direct observation, so it stays on this list.
 
-### 9.1 Why these remain unknown
+### 9.1 Why these remain unknown — two attempts, both yielded
 
-I attempted to drive the running Concepts app (it was open throughout,
-`ApplicationFrameHost` PID 18552, `TopHatchInc.Concepts` v2026.6.4.0) to capture
-the missing states. **The user was continuously active at the machine** — idle
-time polled at 46 s, 9 s, 0 s, 28 s, 43 s, 4 s, 0 s and 0 s across the session,
-with the foreground window changing between polls. Per the standing rule to yield
-when the user is working, **I did not take control and I changed nothing on their
-machine.**
+**Attempt 1.** Concepts was running throughout (`ApplicationFrameHost` PID 18552,
+`TopHatchInc.Concepts` v2026.6.4.0). The user was continuously active — idle time
+polled at 46 s, 9 s, 0 s, 28 s, 43 s, 4 s, 0 s, 0 s, with the foreground window
+changing between polls.
+
+**Attempt 2.** Idle polled at 4 s and 0 s; foreground was Notepads, with Zen
+Browser on YouTube, TreeSize Free and Quill also open — the user was plainly
+mid-task. **Concepts was no longer running at all**, so capture would have
+required launching it into their working session.
+
+Per the standing rule to yield when the user is working, **I took control on
+neither occasion. Nothing on the user's machine was opened, changed, toggled or
+reverted at any point.** The only commands run were read-only: idle-time polls,
+process listings, and a display-DPI query.
+
+The web-research pass (§0.1 `[WIN-MAN]`, `[REL:*]`, `[TUT:menus]`) was done
+instead and closed several gaps without touching the machine — see §9.3.
 
 ### 9.2 Exactly what to capture to close these gaps
 
@@ -1083,6 +1257,27 @@ Save into
 and record the window size, since every measurement here is anchored to
 2880 × 1800 physical / 1440 × 900 DIP.
 
+### 9.3 What the web-research pass changed
+
+| Was | Now | Source |
+|---|---|---|
+| Active sector = tool colour (inferred from 2 samples) | **Confirmed, documented behaviour** | `[REL:2022.10]` |
+| Two bars: chrome unknown | **RESOLVED — bare, no background/border/blur** (§1.7) | pixel proof + `[REL:2022.4]` |
+| Settings docked vs floating: measured but unconfirmed | **RESOLVED — docked** (§1.6); official docs silent, so measurement stands | `[WIN-MAN]` + 3 captures |
+| Preview circle: unknown | **Downgraded to "probably does not exist"** | 3 official sources silent |
+| Toggle underline: "short underlines" | **Two separate 40 × 2 DIP bars**, one per active toggle | measured |
+| Divider between gallery and page name | **1 × 16 DIP, `#262829`** | measured |
+| "8 slots + undo/redo" from PDF manual only | **Corroborated by the Windows manual** | `[WIN-MAN]` |
+| Setting icon shapes guessed from pixels | **Official descriptions** (thin/thick lines, divided circle, squiggle) | `[TUT:menus]` |
+| No knowledge of fade-on-draw | **New behaviour recorded** (§1.7, §2.7) | `[REL:2022.4]` |
+| Fullscreen shortcut unknown | **Alt+Enter / F11** | `[REL:2022.4]` |
+| Compact mode described only as "docked wheel" | **Wheel becomes spinnable** | `[TUT:menus]` |
+| Brush menu contents unknown | **Sections: In This Drawing · My Brushes · The Brush Market · brush viewer** | `[TUT:menus]` |
+
+Still open after this pass: **motion durations/easings** (item 1), and every
+surface I have no capture of (Objects, Export, Import, Brush menu, hover/press,
+compact/hidden modes, light theme).
+
 ---
 
 ## 10. Quick-reference implementation constants
@@ -1093,8 +1288,12 @@ Everything an implementer needs, in DIP, in one place.
 DISPLAY BASIS      1440 x 900 DIP  (captures 2880 x 1800 @ 200%)
 
 TITLE BAR          height 32,  bg #1e2025
-STATUS BAR         transparent; content centre y=63; icon glyph 16;
-                   icon pitch 42; edge margin 31
+STATUS BAR         NO background / border / blur  (measured: identical to canvas)
+                   content centre y=63;  icon glyph 16;  icon pitch 42
+                   edge margins 31 left and right
+                   divider   1 x 16, #262829  (after gallery icon only)
+                   underline 40 x 2  under each ACTIVE menu toggle
+                   fades out while drawing, returns after  (duration unknown)
 
 TOOL WHEEL         centre (103.5, 177.5);  R = 93.5
   colour disc      0      -> 0.200 R   (18.75)
