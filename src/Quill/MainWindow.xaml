@@ -35,6 +35,37 @@
                           VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Disabled"
                           PointerWheelChanged="BarScroll_Wheel">
                 <StackPanel Orientation="Horizontal" Spacing="4">
+                    <!-- The Quill mark, back on the top bar (UI-SPEC-V3 B / I) and
+                         IDENTICAL to the gallery's GalleryAppMenuBtn: no Width, Height,
+                         Padding, CornerRadius, Margin or alignment of its own, so both
+                         take the same default button metrics; the image is the 512px
+                         master at 16x16 with NO DecodePixel cap, because decoding the
+                         master down to icon size is exactly what made the old mark look
+                         soft. It hosts the same app menu — a FlyoutBase can only be
+                         attached to one element, so the items are declared twice rather
+                         than shared. -->
+                    <Button x:Name="TopBarAppMenuBtn"
+                            ToolTipService.ToolTip="Quill — app menu">
+                        <Image Source="ms-appx:///Assets/icon_512.png" Width="16" Height="16"/>
+                        <Button.Flyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="Settings…" Click="Settings_Click">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;"/></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Keyboard shortcuts" Click="ShortcutsMenu_Click">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE765;"/></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutItem Text="About Quill" Click="About_Click">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE946;"/></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutItem Text="Quit" Click="WinClose_Click">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE7E8;"/></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
                     <ToggleButton x:Name="BtnSidebar" IsChecked="True" Click="Sidebar_Toggle"
                                   ToolTipService.ToolTip="Show or hide the notebook panel">
                         <FontIcon Glyph="&#xE700;" FontSize="14"/>

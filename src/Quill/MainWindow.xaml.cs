@@ -47,6 +47,11 @@ public sealed partial class MainWindow : Window
     // Top-bar element keys the dial currently owns: a tool that lives in the
     // dial is removed from the bar rather than offered twice (V3 A.9).
     private HashSet<string> _dialTools = new(StringComparer.Ordinal);
+    // The two floating bars (Controls/ChromeBars.cs) and the keys THEY own, on
+    // the same rule: zoom, export and page settings live on the bars while the
+    // bars are up, so the top bar stops offering them (V3 I).
+    private ChromeBars? _chromeBars;
+    private HashSet<string> _barTools = new(StringComparer.Ordinal);
     // Both tool surfaces subscribe to this and are dumb renderers over the same
     // state, so the linear row and the dial can never diverge (§2.2).
     private event Action? ToolUiChanged;
@@ -454,6 +459,7 @@ public sealed partial class MainWindow : Window
         // the legacy combined pen-repair switch migrates to the split toggles (#6-batch4)
         if (_library.PenRepair) { _library.PenRepairDots = true; _library.PenRepairBridge = true; _library.PenRepair = false; }
         Surface.PenRepairDots = _library.PenRepairDots;
+        Surface.ShapeRecognition = _library.ShapeRecognition;
         Surface.PenRepairBridge = _library.PenRepairBridge;
         Surface.MotionBlur = _library.MotionBlur;
         Surface.ShowCommentsAlways = _library.ShowCommentPins;
@@ -490,6 +496,11 @@ public sealed partial class MainWindow : Window
         // radial + colour branches were built to meet at).
         _toolWheel.ColourPickerHook = ColorPickerService.Open;
         _toolWheel.SlotsChanged += t => { _dialTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
+        // The rest of the top bar's marking commands become assignable slots.
+        // What moved and what deliberately did not is argued in DialCommands.cs.
+        // Wrapped: startup is the ONE place an exception costs the whole app -
+        // it would leave the loading veil up forever, which reads as a hang.
+        try { AttachChrome(); } catch (Exception ex) { LogStartupFault("chrome", ex); }
         OpenStartupPage();
         SelectTool("Pen");
         ApplyToolbarVisibility();
@@ -515,10 +526,74 @@ public sealed partial class MainWindow : Window
         ShowStatus("Right-click a pen to edit its type, colour, size and pressure response. F11 toggles full screen.");
     }
 
+    /// <summary>The dial's donated commands and the two floating bars
+    /// (UI-SPEC-V3 I). Split out of FinishStartup so a fault in the chrome
+    /// cannot strand the loading veil over a perfectly good library.</summary>
+    private void AttachChrome()
+    {
+        if (_toolWheel == null) return;
+        _toolWheel.ExtraCommands = DialCommands.Build(new DialCommands.Host
+        {
+            ToggleComment = () => ToggleComment_Click(this, new RoutedEventArgs()),
+            CommentActive = () => ToolComment.IsChecked == true,
+            ToggleTouchDraw = () => TouchDraw_Click(this, new RoutedEventArgs()),
+            TouchDrawActive = () => TouchDrawToggle.IsChecked == true,
+            ShapeMenu = () => ShapeBtn.Flyout,
+            HistoryMenu = () => BtnHistory.Flyout,
+        });
+        // The two floating bars. They share PageOps with the settings window, so
+        // the page-editing delegates exist exactly once (Controls/ChromeBars.cs).
+        _chromeBars = ChromeBars.Attach(CanvasArea, new ChromeBars.Host
+        {
+            PageOps = () => PageOps,
+            Surface = () => Surface,
+            Notebook = () => _curNb,
+            Section = () => _curSec,
+            Wheel = _toolWheel,
+            OpenGallery = () => OpenGallery_Click(this, new RoutedEventArgs()),
+            RenamePage = () => _ = RenamePageFromTitleAsync(),
+            OpenSettings = OpenSettingsWindow,
+            ImportPdf = () => ImportPdf_Click(this, new RoutedEventArgs()),
+            PasteImage = () => _ = PasteImageAsync(),
+            PickOpen = PickOpenFileAsync,
+            PickSave = (ext, name) => PickSaveFileAsync(ext, name),
+            RightDockWidth = () => _settingsWin?.OccupiedRightWidth ?? 0,
+            PerspectiveVps = () => Math.Max(0, PerspectiveCombo.SelectedIndex),
+            SetPerspective = v => PerspectiveCombo.SelectedIndex = v,
+        });
+        _chromeBars.OwnedKeysChanged += t => { _barTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
+    }
+
+    private void LogStartupFault(string what, Exception? ex)
+    {
+        if (ex != null) ShowStatus("Part of the interface could not be built (" + what + "): " + ex.Message);
+        try
+        {
+            System.IO.File.AppendAllText(System.IO.Path.Combine(LibraryStore.Dir, "crash.log"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] startup {what}: {ex}" + Environment.NewLine);
+        }
+        catch { }
+    }
+
     private void HideVeil()
     {
         if (LoadingVeil.Visibility != Visibility.Visible) return;
+        // The veil swallows input by design, so it must stop doing that the
+        // instant the app is ready - before the fade, not after it.
+        LoadingVeil.IsHitTestVisible = false;
         FadeTo(LoadingVeil, 0, 180, collapseAtEnd: true);
+        // Belt to that brace. Every other fade in the app can afford to be
+        // dropped; this one cannot, because a veil left up is indistinguishable
+        // from a hung app. A one-shot timer collapses it regardless of whether
+        // the storyboard ever reports Completed.
+        var sure = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+        sure.Tick += (_, _) =>
+        {
+            sure.Stop();
+            LoadingVeil.Visibility = Visibility.Collapsed;
+            LoadingVeil.Opacity = 1;
+        };
+        sure.Start();
     }
 
     // The veil becomes the error state rather than dismissing: _libraryReady
@@ -1209,6 +1284,13 @@ public sealed partial class MainWindow : Window
     // other (an interrupted fade-out must not collapse a re-shown panel).
     // =======================================================================
     private readonly Dictionary<FrameworkElement, int> _fadeVer = new();
+    // The RUNNING storyboards, held for their lifetime. A Storyboard that is
+    // only referenced by a local can be collected mid-run: Completed never
+    // fires, and a fade that collapses its element at the end therefore never
+    // collapses it. For LoadingVeil that is fatal - the startup veil stays over
+    // a fully built app and the whole thing reads as a hang. (FloatingWindow
+    // already learned this; the same rule belongs here.)
+    private readonly Dictionary<FrameworkElement, Storyboard> _fadeRun = new();
 
     private void FadeTo(FrameworkElement el, double to, int ms, bool collapseAtEnd)
     {
@@ -1235,9 +1317,11 @@ public sealed partial class MainWindow : Window
             sb.Children.Add(anim);
             sb.Completed += (_, _) =>
             {
+                _fadeRun.Remove(el);
                 if (_fadeVer[el] != ver) return;
                 if (collapseAtEnd) { el.Visibility = Visibility.Collapsed; el.Opacity = 1; }
             };
+            _fadeRun[el] = sb;   // rooted until it completes
             sb.Begin();
         }
         catch
@@ -1671,6 +1755,7 @@ public sealed partial class MainWindow : Window
                 BuildPenStrip();
                 RefreshCalcHistory();
                 _settingsWin?.Refresh();   // the floating panel captures colours at build time too
+                _chromeBars?.Refresh();    // ...and so do the two floating bars
                 if (GalleryPanel.Visibility == Visibility.Visible) BuildGallery();
                 Surface.Refresh();
             }
@@ -3125,6 +3210,7 @@ public sealed partial class MainWindow : Window
             FadeTo(Surface, 1, 200, collapseAtEnd: false);
         }
         CrumbText.Text = $"{nb.Name} ▸ {sec.Name} ▸ {page.Name}";
+        _chromeBars?.SyncReadouts();   // the floating bar carries the page name now
 
         // accent-follow (#6-batch2): tint the app to the notebook's colour
         if (_library.AccentFollow == "Notebook")
@@ -3775,6 +3861,7 @@ public sealed partial class MainWindow : Window
         // The dial lives inside CanvasArea at ZIndex 60, above GalleryPanel — it
         // has to be told to stand down rather than being covered up (V3 A.2).
         _toolWheel?.SetVisible(false);
+        _chromeBars?.SetVisible(false);   // ...and so do the two bars that hang off it
         BuildGallery();
         // mirror of CloseGallery's dissolve: settle inward from 1.035 with the
         // same Sine curve, so open and close read as one motion reversed
@@ -4832,7 +4919,17 @@ public sealed partial class MainWindow : Window
 
     private void OpenSettingsWindowCore()
     {
-        _settingsWin ??= SettingsWindow.Attach(CanvasArea, new SettingsWindow.Host
+        _settingsWin ??= SettingsWindow.Attach(CanvasArea, PageOps);
+        _settingsWin.DockChanged ??= () => _chromeBars?.ApplyDockInset();
+        _settingsWin.Toggle();
+    }
+
+    /// <summary>The page-editing delegate bundle. Hoisted out of the settings
+    /// window's attach call so the floating bars' Precision panel and the export
+    /// pane drive the page through the SAME code path instead of a second copy.</summary>
+    private SettingsWindow.Host? _pageOps;
+
+    private SettingsWindow.Host PageOps => _pageOps ??= new SettingsWindow.Host
         {
             Library = () => _library,
             Page = () => _curPage,
@@ -4870,9 +4967,7 @@ public sealed partial class MainWindow : Window
             Save = ScheduleSave,
             FillLegacySettings = p => { _ = ShowSettingsDialogAsync(p); },
             Status = ShowStatus,
-        });
-        _settingsWin.Toggle();
-    }
+        };
 
     // Returns true when the language changed and the dialog should be reopened.
     // With `into` supplied the very same controls are handed to that panel
@@ -5450,6 +5545,16 @@ public sealed partial class MainWindow : Window
         WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
         var folder = await picker.PickSingleFolderAsync();
         return folder?.Path;
+    }
+
+    /// <summary>Open picker for the floating bars' import menu. Lives here
+    /// because a picker has to be initialised with the window's HWND.</summary>
+    private async Task<StorageFile?> PickOpenFileAsync(string[] extensions)
+    {
+        var picker = new FileOpenPicker();
+        foreach (var ext in extensions) picker.FileTypeFilter.Add(ext);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        return await picker.PickSingleFileAsync();
     }
 
     private async Task<string?> PickJsonFileAsync()
@@ -6135,7 +6240,9 @@ public sealed partial class MainWindow : Window
         // the radial dial IS the tool surface when it is on, so the linear row
         // and its reopen chip stand down entirely (#radial)
         if (_library.RadialToolDial) { showRow = false; showChip = false; }
-        _toolWheel?.SetVisible(_library.RadialToolDial && (!_uiHidden || _floatPen));
+        bool dialOn = _library.RadialToolDial && (!_uiHidden || _floatPen);
+        _toolWheel?.SetVisible(dialOn);
+        _chromeBars?.SetVisible(dialOn);   // the two floating bars ARE the dial's chrome (V3 I)
         // slide in from the bottom edge the dock lives on, like the other bars
         if (showRow) FadeIn(PenRow, slideY: 24); else FadeOut(PenRow);
         if (showChip) FadeIn(PenRowShowBtn); else FadeOut(PenRowShowBtn);
@@ -7985,7 +8092,8 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         void Set(FrameworkElement? el, string key, bool inContext = true)
         {
             if (el == null) return;
-            bool on = !_library.HiddenTools.Contains(key) && !_dialTools.Contains(key) && inContext;
+            bool on = !_library.HiddenTools.Contains(key) && !_dialTools.Contains(key) &&
+                      !_barTools.Contains(key) && inContext;
             el.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         }
         try
@@ -9303,6 +9411,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         BuildTree();
         if (_curNb != null && _curSec != null)
             CrumbText.Text = $"{_curNb.Name} ▸ {_curSec.Name} ▸ {_curPage.Name}";
+        _chromeBars?.SyncReadouts();   // the floating bar carries the page name now
         Surface.Refresh();
         ScheduleSave();
     }

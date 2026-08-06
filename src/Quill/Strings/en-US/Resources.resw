@@ -460,4 +460,16 @@
   <data name="Wheel.Erase.Object" xml:space="preserve">
     <value>Whole stroke</value>
   </data>
+  <data name="Wheel.Cmd.Comment" xml:space="preserve">
+    <value>Comment pin</value>
+  </data>
+  <data name="Wheel.Cmd.TouchDraw" xml:space="preserve">
+    <value>Touch draw</value>
+  </data>
+  <data name="Wheel.Cmd.Shape" xml:space="preserve">
+    <value>Insert shape</value>
+  </data>
+  <data name="Wheel.Cmd.History" xml:space="preserve">
+    <value>Edit history</value>
+  </data>
 </root>

@@ -142,7 +142,82 @@ public sealed class ToolWheel
     private const string KindPen = "pen:", KindTool = "tool:", KindCmd = "cmd:";
 
     private static readonly string[] ToolKinds = { "Eraser", "Select", "Text", "FreeSpace", "Fill" };
-    private static readonly string[] CmdKinds = { "Undo", "Redo", "MouseMode" };
+    // The three the dial has always known how to run itself. Everything else a
+    // user can put in a slot arrives through ExtraCommands, so the dial never
+    // grows a second dependency on MainWindow.
+    private static readonly string[] BuiltInCmds = { "Undo", "Redo", "MouseMode" };
+
+    /// <summary>A top-bar command donated to the dial (UI-SPEC-V3 I: "every
+    /// remaining top-bar feature moves into the radial dial as a selectable
+    /// tool"). The host owns the behaviour; the dial owns the slot, the mark and
+    /// the top-bar hand-back.</summary>
+    public sealed class ExtraCommand
+    {
+        /// <summary>Slot id suffix - persisted as "cmd:&lt;Id&gt;".</summary>
+        public required string Id { get; init; }
+        public required string Label { get; init; }
+        /// <summary>Geometry from <see cref="Icons"/>, never a glyph or an emoji.</summary>
+        public required string Icon { get; init; }
+        /// <summary>True when the mark IS a stroke rather than a silhouette.</summary>
+        public bool Stroked { get; init; }
+        /// <summary>The top-bar element this supersedes, so the bar drops it
+        /// exactly the way it drops the pen and the eraser (V3 A.9).</summary>
+        public string? TopBarKey { get; init; }
+        public Func<bool>? IsActive { get; init; }
+        public Func<bool>? IsAvailable { get; init; }
+        /// <summary>Run on tap. Ignored when <see cref="Flyout"/> is supplied.</summary>
+        public Action? Run { get; init; }
+        /// <summary>A menu to open on the dial instead of running a command -
+        /// this is how the shape and history buttons keep their existing menus
+        /// rather than having them re-declared here.</summary>
+        public Func<FlyoutBase?>? Flyout { get; init; }
+    }
+
+    /// <summary>Commands beyond undo / redo / mouse-mode that may occupy a slot.
+    /// Assign before the first Refresh; changing it re-announces the slots.</summary>
+    public IReadOnlyList<ExtraCommand> ExtraCommands
+    {
+        get => _extras;
+        set { _extras = value ?? Array.Empty<ExtraCommand>(); if (_on) Refresh(); }
+    }
+    private IReadOnlyList<ExtraCommand> _extras = Array.Empty<ExtraCommand>();
+
+    private ExtraCommand? Extra(string cmd)
+    {
+        foreach (var x in _extras) if (string.Equals(x.Id, cmd, StringComparison.Ordinal)) return x;
+        return null;
+    }
+
+    private IEnumerable<string> CmdIds()
+    {
+        foreach (var c in BuiltInCmds) yield return c;
+        foreach (var x in _extras) yield return x.Id;
+    }
+
+    private string CmdLabel(string cmd) => Extra(cmd)?.Label ?? Loc.T("Wheel.Cmd." + cmd);
+
+    /// <summary>Headroom the dock leaves at the top of the host. The floating
+    /// top-left bar sits directly ABOVE the docked dial (UI-SPEC-V3 I), and at
+    /// the shipped dock the wheel's rim is 15 DIPs from the top edge - there is
+    /// no "above" until the dial makes room. ChromeBars sets this to the bar's
+    /// measured height; 0 restores the original dock exactly.</summary>
+    /// <summary>Where the wheel's rim sits, in DIPs below the host's top edge,
+    /// with no inset applied. ChromeBars needs it to convert the measured
+    /// "top of wheel, 52 DIP below the title bar" into an inset without
+    /// hard-coding this control's own dock padding.</summary>
+    public static double RestingRimTop => Half + 10 - RimR;
+
+    public double TopInset
+    {
+        get => _topInset;
+        set
+        {
+            if (Math.Abs(_topInset - value) < 0.5) return;
+            _topInset = value;
+            if (_on) Place();
+        }
+    }
+    private double _topInset;
 
     private readonly Grid _host;
     private readonly InkSurface _surface;
@@ -386,7 +461,7 @@ public sealed class ToolWheel
         const double pad = 10;
         _mirrored = string.Equals(_h.Library().PenDock, "Right", StringComparison.OrdinalIgnoreCase);
         double cx = _mirrored ? Math.Max(Half, w - Half - pad) : Half + pad;
-        double cy = Math.Min(Half + pad, Math.Max(Half, h - Half));
+        double cy = Math.Min(Half + pad + _topInset, Math.Max(Half, h - Half));
         _centre = new Point(cx, cy);
 
         // Margin, not Canvas.Left: this layer is a GRID, and a Grid ignores the
@@ -749,6 +824,8 @@ public sealed class ToolWheel
         if (id.Length == 0) return false;
         if (PenOf(id) is { } pen) return _h.ToolTag() == "Pen" && _h.ActivePreset() == pen.Id;
         if (id.StartsWith(KindTool, StringComparison.Ordinal)) return _h.ToolTag() == id[KindTool.Length..];
+        if (id.StartsWith(KindCmd, StringComparison.Ordinal))
+            return Extra(id[KindCmd.Length..])?.IsActive?.Invoke() ?? false;
         return false;
     }
 
@@ -762,16 +839,20 @@ public sealed class ToolWheel
         if (id.StartsWith(KindPen, StringComparison.Ordinal)) return PenOf(id) != null;
         if (id.StartsWith(KindTool, StringComparison.Ordinal)) return id[KindTool.Length..] != "Fill";
         if (!id.StartsWith(KindCmd, StringComparison.Ordinal)) return false;
-        return id[KindCmd.Length..] switch
+        string cmd = id[KindCmd.Length..];
+        return cmd switch
         {
             "Undo" => _surface.UndoManager.CanUndo,
             "Redo" => _surface.UndoManager.CanRedo,
-            _ => true,
+            "MouseMode" => true,
+            // A donated command that reports itself unavailable draws FULLY
+            // TRANSPARENT, exactly like redo with an empty stack.
+            _ => Extra(cmd) is { } x && (x.IsAvailable?.Invoke() ?? true),
         };
     }
 
     /// <summary>The top-bar element a slot supersedes, or null (V3 A.9).</summary>
-    private static string? TopBarKey(string id)
+    private string? TopBarKey(string id)
     {
         if (id.StartsWith(KindPen, StringComparison.Ordinal)) return "ToolPen";
         if (id.StartsWith(KindTool, StringComparison.Ordinal))
@@ -783,7 +864,13 @@ public sealed class ToolWheel
                 _ => null,
             };
         if (id.StartsWith(KindCmd, StringComparison.Ordinal))
-            return id[KindCmd.Length..] switch { "Undo" => "BtnUndo", "Redo" => "BtnRedo", _ => null };
+            return id[KindCmd.Length..] switch
+            {
+                "Undo" => "BtnUndo",
+                "Redo" => "BtnRedo",
+                "MouseMode" => "MouseModeBtn",
+                var c => Extra(c)?.TopBarKey,
+            };
         return null;
     }
 
@@ -927,6 +1014,12 @@ public sealed class ToolWheel
             case "Undo": _surface.Undo(); break;
             case "Redo": _surface.Redo(); break;
             case "MouseMode": ShowMouseModes(); break;
+            case var c when Extra(c) is { } x:
+                // A donated menu opens ON THE DIAL rather than on the (now
+                // hidden) top-bar button it came from.
+                if (x.Flyout != null) { try { x.Flyout()?.ShowAt(_shield, ShieldAt(RimR, RimR)); } catch { } }
+                else x.Run?.Invoke();
+                break;
         }
         Refresh();
     }
@@ -1169,7 +1262,7 @@ public sealed class ToolWheel
 
         foreach (var preset in lib.Pens) Row(KindPen + preset.Id, PenChip(preset, 22), preset.Name);
         foreach (var t in ToolKinds) Row(KindTool + t, Icons.Filled(Icons.Tool(t), Ink(), 20), Loc.T("Wheel.Tool." + t));
-        foreach (var c in CmdKinds) Row(KindCmd + c, CmdArt(c, Ink(), 20), Loc.T("Wheel.Cmd." + c));
+        foreach (var c in CmdIds()) Row(KindCmd + c, CmdArt(c, Ink(), 20), CmdLabel(c));
         Row("", null, Loc.T("Wheel.Assign.Empty"));
 
         var at = P(SlotMid(slot), IconR);
@@ -1279,10 +1372,13 @@ public sealed class ToolWheel
         _ => Icons.Stroked(Icons.Smoothness, fg, 20, 1.7),
     };
 
-    private static FrameworkElement? CmdArt(string cmd, Color fg, double size) => cmd switch
+    private FrameworkElement? CmdArt(string cmd, Color fg, double size) => cmd switch
     {
         "Undo" => Icons.Filled(Icons.Undo, fg, size),
         "Redo" => Icons.Filled(Icons.Undo, fg, size, mirror: true),
-        _ => Icons.Filled(Icons.Mouse, fg, size),
+        "MouseMode" => Icons.Filled(Icons.Mouse, fg, size),
+        _ => Extra(cmd) is { } x
+             ? (x.Stroked ? Icons.Stroked(x.Icon, fg, size, 1.7) : Icons.Filled(x.Icon, fg, size))
+             : Icons.Filled(Icons.Mouse, fg, size),
     };
 }

@@ -367,4 +367,16 @@
   <data name="Status.LanguageChanged" xml:space="preserve">
     <value>Quill è ora in {0}.</value>
   </data>
+  <data name="Wheel.Cmd.Comment" xml:space="preserve">
+    <value>Segnaposto commento</value>
+  </data>
+  <data name="Wheel.Cmd.TouchDraw" xml:space="preserve">
+    <value>Disegno a dito</value>
+  </data>
+  <data name="Wheel.Cmd.Shape" xml:space="preserve">
+    <value>Inserisci forma</value>
+  </data>
+  <data name="Wheel.Cmd.History" xml:space="preserve">
+    <value>Cronologia modifiche</value>
+  </data>
 </root>

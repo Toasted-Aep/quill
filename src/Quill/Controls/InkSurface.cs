@@ -168,6 +168,27 @@ public sealed class InkSurface : UserControl
     // Real monitor width in DIPs, pushed by MainWindow, for the text-box growth
     // ceiling (half the physical screen); 0 falls back to the window width (#15).
     public double ScreenWidthDip { get; set; }
+
+    // ---- page chrome + export switches (UI-SPEC-V3 B / J) ----------------
+    // The page name and date are drawn ON the page today. When the floating
+    // top-left bar is up it carries the title instead, and the spec says the
+    // page must stop drawing them - so the bar owns this flag rather than the
+    // surface guessing (UI-SPEC-V3 B, I).
+    public bool ShowPageHeader { get; set; } = true;
+
+    // Set for the duration of an export capture. Chromeless drops the editing
+    // furniture (the header and the selection marquee + handles) so an exported
+    // image is the drawing, never the editor; the two Omit flags are the export
+    // pane's "Include Background" / "Include Grid" toggles. All three are
+    // restored by the caller the moment the frame is taken.
+    public bool ExportChromeless { get; set; }
+    public bool ExportOmitBackground { get; set; }
+    public bool ExportOmitGrid { get; set; }
+
+    // Hold-still shape recognition. It has always run unconditionally; the
+    // Precision panel needs a real switch for it (UI-SPEC-V3 I), and a user who
+    // draws deliberately wobbly shapes needs one too.
+    public bool ShapeRecognition { get; set; } = true;
     private PenStroke? _lastCommitted;
     private long _lastCommitMs;
     private Vector2 _lastCommitEnd;
@@ -453,6 +474,19 @@ public sealed class InkSurface : UserControl
         float offX = (float)(marginPx - r.X * zoom);
         float offY = (float)(marginPx - r.Y * zoom);
         SetView(new Vector2(offX, offY), zoom);
+    }
+
+    /// <summary>Frames an arbitrary WORLD rectangle, the way FitToContent frames
+    /// the whole page. The export pane uses it to point the viewport at the
+    /// selection before a raster capture.</summary>
+    public void FitToRect(Windows.Foundation.Rect r, double marginPx)
+    {
+        double vw = ActualWidth, vh = ActualHeight;
+        if (vw < 10 || vh < 10 || r.Width <= 0 || r.Height <= 0) return;
+        double zx = (vw - 2 * marginPx) / r.Width;
+        double zy = (vh - 2 * marginPx) / r.Height;
+        float zoom = (float)Math.Clamp(Math.Min(zx, zy), 0.05, 4.0);
+        SetView(new Vector2((float)(marginPx - r.X * zoom), (float)(marginPx - r.Y * zoom)), zoom);
     }
 
     private void PanBy(Vector2 screenDelta)
@@ -3122,14 +3156,16 @@ public sealed class InkSurface : UserControl
         // including a null Paper (i.e. every existing page), keeps the page's own
         // plain colour. This is the same colour the theme derivation reads.
         var bg = PaperTextures.Ground(_page.Paper, ColorUtil.Parse(_page.Background));
-        ds.Clear(bg);
+        // "Include Background" off exports onto transparency rather than onto a
+        // white lie: the frame is cleared to nothing and the paper is skipped.
+        ds.Clear(ExportOmitBackground ? Colors.Transparent : bg);
 
         ds.Transform = Matrix3x2.CreateScale(ViewZoom) *
                        Matrix3x2.CreateTranslation(ViewOffset.X, ViewOffset.Y) *
                        regionT;
 
-        DrawPaper(ds, region, bg);
-        DrawGrid(ds, bg);
+        if (!ExportOmitBackground) DrawPaper(ds, region, bg);
+        if (!ExportOmitGrid) DrawGrid(ds, bg);
         DrawPerspective(ds, bg);
         DrawArtboard(ds, bg);
         DrawPageTitle(ds, bg);
@@ -3247,7 +3283,7 @@ public sealed class InkSurface : UserControl
             ds.DrawRectangle(bb, accent, uiScale, _dashStyle);
         }
 
-        if (_activeShape != null && !_replaying)
+        if (_activeShape != null && !_replaying && !ExportChromeless)
         {
             DrawShapeSelection(ds, _activeShape, accent, uiScale);
 
@@ -3282,7 +3318,7 @@ public sealed class InkSurface : UserControl
             ds.DrawRectangle(r, accent, uiScale, _dashStyle);
         }
 
-        if (HasMultiSelection && !_selBounds.IsEmpty)
+        if (HasMultiSelection && !_selBounds.IsEmpty && !ExportChromeless)
         {
             var r = new Rect(_selBounds.X + _moveDx, _selBounds.Y + _moveDy, _selBounds.Width, _selBounds.Height);
             ds.FillRectangle(r, Color.FromArgb(26, Accent.R, Accent.G, Accent.B));
@@ -3662,6 +3698,9 @@ public sealed class InkSurface : UserControl
     private void DrawPageTitle(CanvasDrawingSession ds, Color bg)
     {
         if (_page == null) return;
+        // The floating bar carries the title now, and an export is the drawing
+        // rather than the editor - either one silences the header entirely.
+        if (!ShowPageHeader || ExportChromeless) return;
         bool dark = ColorUtil.IsDark(bg);
         var ink = dark ? Color.FromArgb(255, 250, 249, 245) : Color.FromArgb(255, 20, 20, 19);
         var sub = dark ? Color.FromArgb(170, 250, 249, 245) : Color.FromArgb(170, 20, 20, 19);
@@ -3972,6 +4011,7 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     private void HoldTick(object? sender, object e)
     {
+        if (!ShapeRecognition) return;
         if (_gestureTool != ToolType.Pen || _shapeAdjust || RulerMode || _wet == null || _page == null) return;
         if (Environment.TickCount64 - _lastMoveMs < 620) return;
 
