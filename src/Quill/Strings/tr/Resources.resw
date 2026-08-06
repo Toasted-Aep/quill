@@ -367,4 +367,16 @@
   <data name="Status.LanguageChanged" xml:space="preserve">
     <value>Quill artık {0} dilinde.</value>
   </data>
+  <data name="Wheel.Cmd.Comment" xml:space="preserve">
+    <value>Yorum iğnesi</value>
+  </data>
+  <data name="Wheel.Cmd.TouchDraw" xml:space="preserve">
+    <value>Dokunarak çiz</value>
+  </data>
+  <data name="Wheel.Cmd.Shape" xml:space="preserve">
+    <value>Şekil ekle</value>
+  </data>
+  <data name="Wheel.Cmd.History" xml:space="preserve">
+    <value>Düzenleme geçmişi</value>
+  </data>
 </root>

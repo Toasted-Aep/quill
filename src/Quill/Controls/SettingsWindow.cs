@@ -6,6 +6,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Windows.Foundation;
 using Windows.UI;
 using Path = Microsoft.UI.Xaml.Shapes.Path;
 
@@ -57,32 +59,207 @@ public sealed class SettingsWindow
     private const double SwatchDiameter = 52;
     private const double SwatchCell = 68;
 
+    // ---- docked-panel geometry (docs/CONCEPTS-UI-REFERENCE.md 1.6) --------
+    /// <summary>Measured: left edge x 2083 of 2880 physical -> 797 px -> 398.5
+    /// DIP, flush to the window's right edge, full height below the title bar.</summary>
+    private const double DockWidth = 398.5;
+    /// <summary>The soft edge runs x 2020..2083 physical, i.e. about 31 DIP, and
+    /// it is on the LEFT EDGE ONLY - which is one of the four reasons the
+    /// reference concludes the panel is docked rather than floating.</summary>
+    private const double DockShadow = 31;
+    /// <summary>Sampled from an empty region of the panel.</summary>
+    private static readonly Color DockBackground = Color.FromArgb(0xFF, 0x03, 0x03, 0x03);
+
     private readonly Host _h;
-    private readonly FloatingWindow _win;
 
-    public static SettingsWindow Attach(Panel host, Host h) => new(host, h);
+    // Exactly one of these is non-null. The FLOATING host is deliberately kept
+    // alive and working: the export pane is still a FloatingWindow tenant, and
+    // the user asked to be able to revert this decision cheaply.
+    private readonly FloatingWindow? _win;
+    private readonly Grid? _dock;
 
-    private SettingsWindow(Panel host, Host h)
+    private readonly (string Label, Func<FrameworkElement> Build)[] _tabs;
+    private readonly StackPanel _dockTabs = new() { Orientation = Orientation.Horizontal, Spacing = 6 };
+    private readonly ScrollViewer _dockBody = new()
+    {
+        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        HorizontalScrollMode = ScrollMode.Disabled,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        Padding = new Thickness(18, 10, 14, 18),
+    };
+    private int _active;
+
+    /// <summary>The settings surface. DOCKED RIGHT by default, per the measured
+    /// reference and the user's decision; pass <paramref name="docked"/> false to
+    /// get the floating liquid-glass window back.</summary>
+    public static SettingsWindow Attach(Panel host, Host h, bool docked = true) => new(host, h, docked);
+
+    private SettingsWindow(Panel host, Host h, bool docked)
     {
         _h = h;
-        _win = FloatingWindow.Attach(host, 448, 640);
-        _win.Title = "Settings";
-        _win.InfoRequested = () => _h.Status(
-            "Workspace sets the page itself — paper, grid and artboard. Interaction holds everything else.");
-        _win.SetTabs(new (string, Func<FrameworkElement>)[]
+        _tabs = new (string, Func<FrameworkElement>)[]
         {
             ("Workspace", BuildWorkspace),
             ("Interaction", BuildInteraction),
-        });
+        };
+
+        if (!docked)
+        {
+            _win = FloatingWindow.Attach(host, 448, 640);
+            _win.Title = "Settings";
+            _win.InfoRequested = () => _h.Status(
+                "Workspace sets the page itself — paper, grid and artboard. Interaction holds everything else.");
+            _win.SetTabs(_tabs);
+            return;
+        }
+
+        _dock = BuildDock();
+        host.Children.Add(_dock);
     }
 
-    public bool IsOpen => _win.IsOpen;
-    public void Toggle() => _win.Toggle();
-    public void Show() => _win.Show();
-    public void Hide() => _win.Hide();
+    // =======================================================================
+    // The docked panel: flush right, full height, no title bar, no grips, and
+    // a shadow on the LEFT EDGE ONLY.
+    // =======================================================================
+    private Grid BuildDock()
+    {
+        var root = new Grid
+        {
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Visibility = Visibility.Collapsed,
+        };
+        Canvas.SetZIndex(root, 80);
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(DockShadow) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(DockWidth) });
+
+        // Left-edge shadow. A fresh brush every build, never a mutated one:
+        // WinUI caches GradientStop changes and only brush-level writes repaint.
+        var shade = new LinearGradientBrush { StartPoint = new Point(0, 0.5), EndPoint = new Point(1, 0.5) };
+        shade.GradientStops.Add(new GradientStop { Color = Color.FromArgb(0x00, 0, 0, 0), Offset = 0 });
+        shade.GradientStops.Add(new GradientStop { Color = Color.FromArgb(0x38, 0, 0, 0), Offset = 1 });
+        var shadow = new Border { Background = shade, IsHitTestVisible = false };
+        Grid.SetColumn(shadow, 0);
+        root.Children.Add(shadow);
+
+        var panel = new Border { Background = new SolidColorBrush(DockBackground) };
+        Grid.SetColumn(panel, 1);
+        root.Children.Add(panel);
+
+        var shell = new Grid();
+        shell.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        shell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        panel.Child = shell;
+
+        // The tab row stays; the title bar and the resize grips do not.
+        var tabRow = new Border
+        {
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Padding = new Thickness(18, 14, 14, 0),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)),
+            Child = _dockTabs,
+        };
+        shell.Children.Add(tabRow);
+
+        Grid.SetRow(_dockBody, 1);
+        shell.Children.Add(_dockBody);
+
+        BuildDockTabs();
+        ShowTab(0);
+        return root;
+    }
+
+    private void BuildDockTabs()
+    {
+        _dockTabs.Children.Clear();
+        for (int i = 0; i < _tabs.Length; i++)
+        {
+            int idx = i;
+            var label = new TextBlock
+            {
+                Text = _tabs[i].Label,
+                FontSize = 14,
+                Margin = new Thickness(0, 0, 0, 6),
+                Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0xF4, 0xF2, 0xEC)),
+                FontWeight = i == _active ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal,
+                Opacity = i == _active ? 1.0 : 0.6,
+            };
+            var underline = new Border
+            {
+                Height = 2,
+                CornerRadius = new CornerRadius(1),
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Visibility = i == _active ? Visibility.Visible : Visibility.Collapsed,
+            };
+            try
+            {
+                if (Application.Current.Resources.TryGetValue("BrandOrangeBrush", out var b) && b is Brush br)
+                    underline.Background = br;
+            }
+            catch { }
+            var cell = new Grid { Margin = new Thickness(0, 0, 18, 0), Background = new SolidColorBrush(Colors.Transparent) };
+            cell.Children.Add(label);
+            cell.Children.Add(underline);
+            cell.Tapped += (_, _) => ShowTab(idx);
+            _dockTabs.Children.Add(cell);
+        }
+    }
+
+    private void ShowTab(int index)
+    {
+        if (index < 0 || index >= _tabs.Length) return;
+        _active = index;
+        BuildDockTabs();
+        FrameworkElement content;
+        try { content = _tabs[index].Build(); }
+        catch { content = new TextBlock { Text = "This section could not be built." }; }
+        // The docked panel paints its own near-black ground, so its contents are
+        // always the dark theme regardless of what the page has done to the app.
+        content.RequestedTheme = ElementTheme.Dark;
+        _dockBody.Content = content;
+        _dockBody.ChangeView(null, 0, null, true);
+    }
+
+    public bool IsOpen => _win?.IsOpen ?? _dock?.Visibility == Visibility.Visible;
+
+    /// <summary>How much of the host's right edge this surface is covering, in
+    /// DIPs. The bare status bar's right cluster shifts left by this much while
+    /// the panel is docked open, so the Settings glyph that opened it stays
+    /// clickable to close it again - a docked panel with no title bar has no
+    /// close button of its own by design.</summary>
+    public double OccupiedRightWidth => _dock != null && IsOpen ? DockWidth + DockShadow : 0;
+
+    /// <summary>Raised after the docked panel opens or closes.</summary>
+    public Action? DockChanged { get; set; }
+
+    public void Toggle()
+    {
+        if (_win != null) { _win.Toggle(); return; }
+        if (IsOpen) Hide(); else Show();
+    }
+
+    public void Show()
+    {
+        if (_win != null) { _win.Show(); return; }
+        if (_dock == null) return;
+        ShowTab(_active);
+        _dock.Visibility = Visibility.Visible;
+        DockChanged?.Invoke();
+    }
+
+    public void Hide()
+    {
+        if (_win != null) { _win.Hide(); return; }
+        if (_dock != null) { _dock.Visibility = Visibility.Collapsed; DockChanged?.Invoke(); }
+    }
+
     /// <summary>Rebuild after a theme change — this surface captures its colours at
     /// build time exactly like the tree, the pen strip and the gallery.</summary>
-    public void Refresh() { if (_win.IsOpen) _win.RefreshContent(); }
+    public void Refresh()
+    {
+        if (_win != null) { if (_win.IsOpen) _win.RefreshContent(); return; }
+        if (IsOpen) ShowTab(_active);
+    }
 
     // =======================================================================
     // WORKSPACE

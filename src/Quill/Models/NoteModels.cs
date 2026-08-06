@@ -462,6 +462,10 @@ public class Library
     public bool MotionBlur { get; set; }
     // show comment pins even when the Comment tool is not active (#A3)
     public bool ShowCommentPins { get; set; }
+    // Hold-still shape recognition (the Precision panel's "Recognition" switch,
+    // UI-SPEC-V3 I). It has always run unconditionally; defaulting to true keeps
+    // an existing library behaving exactly as it does today.
+    public bool ShapeRecognition { get; set; } = true;
     // toolbar buttons the user has switched off (#topbar)
     public List<string> HiddenTools { get; set; } = new();
     // Per-command rebinds layered OVER KeyPreset. Empty = pure preset, i.e.

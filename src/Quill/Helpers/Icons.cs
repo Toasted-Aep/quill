@@ -102,6 +102,154 @@ public static class Icons
         _ => Pen,
     };
 
+    // ---- chrome: the two floating bars, the panels and the export pane ----
+    // Everything below is authored on the same 24x24 grid as the marks above and
+    // filled unless the mark IS a stroke. UI-SPEC-V3 I/J introduced a whole new
+    // set of buttons (gallery, layers, precision, objects, zoom, tilt, lock,
+    // import, export, settings) and they belong in this file, not in a second
+    // private set inside the control that happens to draw them first.
+
+    /// Notebook gallery: the approved notebook silhouette (spine + rule lines),
+    /// identical to the minimal-UI notebook button so the two never drift.
+    public const string Notebook =
+        "M4.5 2.2 H17 C19 2.2 20.6 3.8 20.6 5.8 V18.2 C20.6 20.2 19 21.8 17 21.8 H4.5 Z " +
+        "M7 2.2 H8.2 V21.8 H7 Z M10.4 7.2 H17.6 V8.7 H10.4 Z M10.4 11.2 H17.6 V12.7 H10.4 Z";
+
+    /// Layers: the solid top plate over two thinner plates below it.
+    public const string Layers =
+        "M12 2.2 22.2 7.3 12 12.4 1.8 7.3 Z " +
+        "M12 14.1 20.4 9.9 22.2 10.8 12 15.9 1.8 10.8 3.6 9.9 Z " +
+        "M12 17.6 20.4 13.4 22.2 14.3 12 19.4 1.8 14.3 3.6 13.4 Z";
+
+    /// Precision: a ranging reticle — ring, four ticks and a centre dot.
+    public const string Precision =
+        "M12 1.6 A10.4 10.4 0 1 1 11.99 1.6 Z M12 3.4 A8.6 8.6 0 1 0 12.01 3.4 Z " +
+        "M11.2 5.2 H12.8 V9.8 H11.2 Z M11.2 14.2 H12.8 V18.8 H11.2 Z " +
+        "M5.2 11.2 H9.8 V12.8 H5.2 Z M14.2 11.2 H18.8 V12.8 H14.2 Z " +
+        "M12 10.4 a1.6 1.6 0 1 1 -0.01 0 Z";
+
+    /// Objects: two overlapping outlined plates — a group of things on the page.
+    public const string Objects =
+        "M2.6 2.6 H14 V14 H2.6 Z M4.2 4.2 V12.4 H12.4 V4.2 Z " +
+        "M10 10 H21.4 V21.4 H10 Z M11.6 11.6 V19.8 H19.8 V11.6 Z";
+
+    /// Lock, shackle closed. Its open twin below shares the same body, so the
+    /// two read as one control changing state rather than two icons.
+    public const string LockClosed =
+        "M12 2.2 A5.2 5.2 0 0 1 17.2 7.4 V10 H15.4 V7.4 A3.4 3.4 0 0 0 8.6 7.4 V10 H6.8 V7.4 A5.2 5.2 0 0 1 12 2.2 Z " +
+        "M5.4 10 H18.6 A1.5 1.5 0 0 1 20.1 11.5 V20.3 A1.5 1.5 0 0 1 18.6 21.8 H5.4 A1.5 1.5 0 0 1 3.9 20.3 V11.5 A1.5 1.5 0 0 1 5.4 10 Z " +
+        "M12 13.6 a1.8 1.8 0 1 1 -0.01 0 Z M11.2 15.8 H12.8 V18.8 H11.2 Z";
+
+    public const string LockOpen =
+        "M6.8 10 V6.6 A5.2 5.2 0 0 1 17.2 6.6 V7.8 H15.4 V6.6 A3.4 3.4 0 0 0 8.6 6.6 V10 Z " +
+        "M5.4 10 H18.6 A1.5 1.5 0 0 1 20.1 11.5 V20.3 A1.5 1.5 0 0 1 18.6 21.8 H5.4 A1.5 1.5 0 0 1 3.9 20.3 V11.5 A1.5 1.5 0 0 1 5.4 10 Z " +
+        "M12 13.6 a1.8 1.8 0 1 1 -0.01 0 Z M11.2 15.8 H12.8 V18.8 H11.2 Z";
+
+    /// Import: an arrow dropping into an open tray.
+    public const string Import =
+        "M10.6 2.6 H13.4 V11.2 H16.8 L12 16.8 L7.2 11.2 H10.6 Z " +
+        "M3.8 14.4 H6.6 V19 H17.4 V14.4 H20.2 V20.4 A1.4 1.4 0 0 1 18.8 21.8 H5.2 A1.4 1.4 0 0 1 3.8 20.4 Z";
+
+    /// Export: the same tray, the arrow leaving it.
+    public const string Export =
+        "M10.6 16.4 H13.4 V7.8 H16.8 L12 2.2 L7.2 7.8 H10.6 Z " +
+        "M3.8 14.4 H6.6 V19 H17.4 V14.4 H20.2 V20.4 A1.4 1.4 0 0 1 18.8 21.8 H5.2 A1.4 1.4 0 0 1 3.8 20.4 Z";
+
+    /// Settings: an eight-tooth gear, generated on the 24 grid so the teeth are
+    /// evenly spaced rather than eyeballed, with the hub cut by the fill rule.
+    public const string Settings =
+        "M 19.78 9.40 L 22.31 9.53 L 22.31 14.47 L 19.78 14.60 L 19.34 15.67 L 21.04 17.54 " +
+        "L 17.54 21.04 L 15.67 19.34 L 14.60 19.78 L 14.47 22.31 L 9.53 22.31 L 9.40 19.78 " +
+        "L 8.33 19.34 L 6.46 21.04 L 2.96 17.54 L 4.66 15.67 L 4.22 14.60 L 1.69 14.47 " +
+        "L 1.69 9.53 L 4.22 9.40 L 4.66 8.33 L 2.96 6.46 L 6.46 2.96 L 8.33 4.66 L 9.40 4.22 " +
+        "L 9.53 1.69 L 14.47 1.69 L 14.60 4.22 L 15.67 4.66 L 17.54 2.96 L 21.04 6.46 L 19.34 8.33 Z " +
+        "M 7.60 12.00 A 4.4 4.4 0 1 0 16.40 12.00 A 4.4 4.4 0 1 0 7.60 12.00 Z";
+
+    /// Zoom: the magnifier, for the live zoom readout.
+    public const string Zoom =
+        "M10.2 2.4 a7.8 7.8 0 1 1 -0.01 0 Z M10.2 4.4 a5.8 5.8 0 1 0 0.01 0 Z " +
+        "M15.5 14.1 L21.6 20.2 L20.2 21.6 L14.1 15.5 Z";
+
+    /// Tilt: a protractor angle — baseline, ray and the swept arc between them.
+    /// Stroked, because the mark IS three lines.
+    public const string Tilt = "M3 19 H21 M3 19 L17.6 8.4 M9.8 19 A6.9 6.9 0 0 0 12.9 13.2";
+
+    /// Camera, for "take a photo" in the import menu.
+    public const string Camera =
+        "M9.2 3.4 H14.8 L16.1 5.6 H19.6 A1.7 1.7 0 0 1 21.3 7.3 V18.5 A1.7 1.7 0 0 1 19.6 20.2 " +
+        "H4.4 A1.7 1.7 0 0 1 2.7 18.5 V7.3 A1.7 1.7 0 0 1 4.4 5.6 H7.9 Z " +
+        "M12 8.4 a4.6 4.6 0 1 0 0.01 0 Z M12 10.2 a2.8 2.8 0 1 1 -0.01 0 Z";
+
+    /// Clipboard, for "paste from clipboard".
+    public const string Clipboard =
+        "M9 2.2 H15 A1.3 1.3 0 0 1 16.3 3.5 V4.6 H17.9 A1.7 1.7 0 0 1 19.6 6.3 V20.1 " +
+        "A1.7 1.7 0 0 1 17.9 21.8 H6.1 A1.7 1.7 0 0 1 4.4 20.1 V6.3 A1.7 1.7 0 0 1 6.1 4.6 H7.7 " +
+        "V3.5 A1.3 1.3 0 0 1 9 2.2 Z " +
+        "M6.2 6.4 V20 H17.8 V6.4 H16.3 V7.5 A1.3 1.3 0 0 1 15 8.8 H9 A1.3 1.3 0 0 1 7.7 7.5 V6.4 Z";
+
+    /// A document, for "from file".
+    public const string File =
+        "M5.8 2.2 H14.2 L19.4 7.4 V21.8 H5.8 Z M7.4 3.8 V20.2 H17.8 V9 H12.6 V3.8 Z " +
+        "M14.2 4.5 L17.1 7.4 H14.2 Z";
+
+    /// Comment: the approved speech bubble with two rule lines.
+    public const string Comment =
+        "M4 3.5 H20 A1.5 1.5 0 0 1 21.5 5 V15 A1.5 1.5 0 0 1 20 16.5 H10 L5.5 20.5 V16.5 H4 " +
+        "A1.5 1.5 0 0 1 2.5 15 V5 A1.5 1.5 0 0 1 4 3.5 Z " +
+        "M6.5 8 H17.5 V9.4 H6.5 Z M6.5 11 H14 V12.4 H6.5 Z";
+
+    /// Touch draw: the approved finger-and-cuff silhouette.
+    public const string TouchDraw =
+        "M10.9 4.1 a1.55 1.55 0 0 1 3.1 0 V11 h0.5 c3.2 0 5.7 2.3 5.7 5.2 C20.2 19.6 17.5 22 14.2 22 " +
+        "h-1.3 c-1.8 0 -3.4 -0.85 -4.4 -2.3 L6.2 16.4 a1.55 1.55 0 0 1 2.5 -1.8 l1.2 1.65 Z " +
+        "M2.1 8.9 C3.5 7.3 5.2 7.3 6.6 8.9 C7.5 9.9 8.3 10.1 9.3 9.6 L9.9 11.2 C8.4 12 6.9 11.6 5.7 10.3 " +
+        "C4.8 9.3 4.2 9.4 3.4 10.2 Z";
+
+    /// Insert shape: the approved outlined square + triangle pair.
+    public const string Shape =
+        "M3.1 4.8 H13.5 V15.2 H3.1 Z M4.7 6.4 V13.6 H11.9 V6.4 Z " +
+        "M14.5 9 20.9 19.2 8.1 19.2 Z M11 17.6 H18 L14.5 12 Z";
+
+    /// Edit history: a clock face with its two hands.
+    public const string History =
+        "M12 2.4 A9.6 9.6 0 1 1 11.99 2.4 Z M12 4.2 A7.8 7.8 0 1 0 12.01 4.2 Z " +
+        "M11.2 6.6 H12.8 V12.1 L16.7 14.3 L15.9 15.7 L11.2 13.1 Z";
+
+    /// Grid, for the precision panel. Nonzero so the crossings stay filled
+    /// instead of punching a hole at every intersection.
+    public const string Grid =
+        "F1 M3 3.6 H21 V5 H3 Z M3 9.3 H21 V10.7 H3 Z M3 15 H21 V16.4 H3 Z " +
+        "M3.6 3 H5 V21 H3.6 Z M9.3 3 H10.7 V21 H9.3 Z M15 3 H16.4 V21 H15 Z";
+
+    /// Snap: a horseshoe magnet.
+    public const string Snap =
+        "M12 3.2 A7.4 7.4 0 0 1 19.4 10.6 V20.4 H14.6 V10.6 A2.6 2.6 0 0 0 9.4 10.6 V20.4 H4.6 V10.6 " +
+        "A7.4 7.4 0 0 1 12 3.2 Z";
+
+    /// Measure: the approved diagonal ruler with its tick cut-outs.
+    public const string Measure =
+        "M3 17.4 L17.4 3 21 6.6 6.6 21 Z M7.4 14.2 9 15.8 8.2 16.6 6.6 15 Z " +
+        "M10.6 11 12.2 12.6 11.4 13.4 9.8 11.8 Z M13.8 7.8 15.4 9.4 14.6 10.2 13 8.6 Z";
+
+    /// Guide: the two axes plus a dashed guide running off them.
+    public const string Guide =
+        "F1 M3 3 H4.6 V21 H3 Z M3 19.4 H21 V21 H3 Z " +
+        "M7.4 6.2 H9.6 V7.8 H7.4 Z M11.2 6.2 H13.4 V7.8 H11.2 Z " +
+        "M15 6.2 H17.2 V7.8 H15 Z M18.8 6.2 H21 V7.8 H18.8 Z";
+
+    /// Recognition: a clean shape with the snap spark beside it.
+    public const string Recognition =
+        "M2.8 5 H15.2 V17.4 H2.8 Z M4.4 6.6 V15.8 H13.6 V6.6 Z " +
+        "M18.6 2.2 L19.7 5.5 L23 6.6 L19.7 7.7 L18.6 11 L17.5 7.7 L14.2 6.6 L17.5 5.5 Z";
+
+    /// Rename: the nib pencil over its baseline.
+    public const string Rename =
+        "M3.4 16.6 L15.2 4.8 L19.2 8.8 L7.4 20.6 H3.4 Z " +
+        "M16.6 3.4 L18 2 A2.4 2.4 0 0 1 22 6 L20.6 7.4 Z";
+
+    /// Chevron, for the collapsible rows. Stroked.
+    public const string ChevronDown = "M5 8.5 L12 15.5 L19 8.5";
+
     // ---- factories -------------------------------------------------------
 
     /// <summary>Parses path mini-language into a Geometry. XamlReader is the only
