@@ -50,8 +50,22 @@ public static class LibraryStore
     // ever assigns this: it is private, has no setter, no env var and no config
     // key, and is reachable only by reflection from the harness.
     private static string? _anchorOverride = null;
+
+    /// <summary>The FIXED anchor: where settings.json lives, and the default home
+    /// for the library.
+    ///
+    /// <para><b>QUILL_DATA_FOLDER moves this too, and that is the point.</b> The
+    /// variable used to redirect only <see cref="Dir"/>, so an isolated test
+    /// process still read AND REWROTE the real user's
+    /// <c>Documents\Quill\settings.json</c> — its window geometry, its theme
+    /// mirror, all of it — every time it ran. That is a live file belonging to
+    /// somebody who is not running the test. Isolation that leaves one foot in
+    /// the user's folder is not isolation, so the anchor follows the variable
+    /// and an isolated instance now touches nothing outside its own folder.
+    /// DataFolder inside an isolated settings.json is simply ignored, because
+    /// <see cref="Dir"/> checks the variable first.</para></summary>
     private static string AnchorDir =>
-        _anchorOverride ??
+        _anchorOverride ?? EnvFolder ??
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Quill");
     private static string SettingsPath => Path.Combine(AnchorDir, "settings.json");
 

@@ -51,6 +51,9 @@ public sealed class ExportWindow
         /// host because a picker has to be initialised with the window HWND.</summary>
         public required Func<string, string, Task<StorageFile?>> PickSave { get; init; }
         public required Action<string> Status { get; init; }
+        /// <summary>Renders a run of pages into the shared vector-page model —
+        /// the multi-page path the section / notebook regions need.</summary>
+        public required Func<IReadOnlyList<NotePage>, Task<List<PdfVectorPage>>> CollectVectors { get; init; }
     }
 
     // =====================================================================
@@ -92,9 +95,22 @@ public sealed class ExportWindow
     private static Def Find(Fmt f) => Formats.First(d => d.Id == f);
 
     // =====================================================================
-    // Regions
+    // Regions (V3 K.22). The six the user named, in their order:
+    // Screenshot - Selection - Entire Page - Current Section - Current Notebook
+    // - and the sixth, "just the page area".
+    //
+    // THE SIXTH IS CALLED "PAGE SIZE" and it renders as the size itself: on an
+    // A4 page the chip reads "A4", on a 1920x1080 page it reads "1920x1080", and
+    // on an infinite page it reads "No page size". "Page bounds" is engineering
+    // vocabulary; "Artboard" is a second, different Concepts concept that this
+    // pane's own Settings tab already uses for the reference frame, so reusing
+    // it here would name two different rectangles the same thing. "Page size" is
+    // the phrase the user already meets in Settings > Artboard Size and in the
+    // page-size picker, it reads correctly beside "Entire Page" (that one is the
+    // ink, this one is the sheet), and it is honest when there is no sheet at
+    // all. The label stays DYNAMIC either way.
     // =====================================================================
-    private enum Region { Screenshot, Drawing, Selection, Artboard }
+    private enum Region { Screenshot, Selection, Drawing, CurrentSection, CurrentNotebook, PageSize }
 
     private readonly Host _h;
     private readonly FloatingWindow _win;
@@ -290,32 +306,62 @@ public sealed class ExportWindow
         yield return (Region.Screenshot, "Screenshot",
             why ?? "Exactly what is on screen right now, at its on-screen size.", raster);
 
-        yield return (Region.Drawing, "Entire Drawing",
-            def.Kind == Kind.None ? def.Disabled : "Everything on the page, framed tightly.",
-            def.Kind != Kind.None);
-
         bool hasSel = s.HasSelection && !s.SelectionBoundsWorld.IsEmpty;
         yield return (Region.Selection, "Selection",
             !hasSel ? "Nothing is selected. Lasso some ink first." : why ?? "Just the selected ink.",
             raster && hasSel);
 
-        // The DYNAMIC chip: the page's own size, named after the page.
-        yield return (Region.Artboard, ArtboardLabel(),
+        yield return (Region.Drawing, "Entire Page",
+            def.Kind == Kind.None ? def.Disabled : "Every stroke, shape, image and text box on this page, framed tightly.",
+            def.Kind != Kind.None);
+
+        // ---- the two multi-page regions -----------------------------------
+        // Only the formats that can actually HOLD more than one page are
+        // offered them. A PNG of "the current notebook" would have to be either
+        // one giant sheet or a silent pick of one page, and neither is what the
+        // chip says, so it is switched off and says so.
+        int secPages = _h.Section()?.Pages.Count ?? 0;
+        int nbPages = _h.Notebook()?.Sections.Sum(x => x.Pages.Count) ?? 0;
+        string multiWhy = def.Label + " holds exactly one page. Export to PDF or .quill for a whole section or notebook.";
+
+        yield return (Region.CurrentSection,
+            secPages > 1 ? $"Current Section ({secPages})" : "Current Section",
+            !Multi(def) ? multiWhy
+                        : secPages == 0 ? "This section has no pages."
+                        : $"All {secPages} page(s) of “{_h.Section()?.Name}”, in order.",
+            Multi(def) && secPages > 0);
+
+        yield return (Region.CurrentNotebook,
+            nbPages > 1 ? $"Current Notebook ({nbPages})" : "Current Notebook",
+            !Multi(def) ? multiWhy
+                        : nbPages == 0 ? "This notebook has no pages."
+                        : $"All {nbPages} page(s) of “{_h.Notebook()?.Name}”, every section in order.",
+            Multi(def) && nbPages > 0);
+
+        // The DYNAMIC sixth chip: the page's own sheet, named after its size.
+        yield return (Region.PageSize, PageSizeLabel(),
             why ?? (ArtboardRect() == null
-                ? "This page is infinite, so its artboard is whatever you have drawn."
-                : "The page's own artboard rectangle."),
-            raster);
+                ? "This page has no size set — it is the infinite canvas — so there is no sheet to cut to. Set one in Settings ▸ Artboard Size."
+                : "Just the page area: the sheet itself, whatever is or is not drawn on it."),
+            raster && ArtboardRect() != null);
     }
 
-    /// <summary>"A4" when the page is A4, "Artboard" when it is infinite — and
-    /// the preset's real name for everything in between.</summary>
-    private string ArtboardLabel()
+    /// <summary>Can this format carry more than one page?</summary>
+    private static bool Multi(Def d) => d.Id is Fmt.PdfFlat or Fmt.PdfVector or Fmt.Quill;
+
+    /// <summary>The sixth region's DYNAMIC label: "A4" on an A4 page, the real
+    /// preset name for every other preset, the literal dimensions for a custom
+    /// page, and an honest "No page size" on the infinite canvas — never a
+    /// static word like "Page" that tells the user nothing.</summary>
+    private string PageSizeLabel()
     {
         var p = _h.Page();
-        if (p == null || p.PageSize == PageSizePreset.Infinite) return "Artboard";
+        if (p == null || p.PageSize == PageSizePreset.Infinite) return "No page size";
         if (p.PageSize == PageSizePreset.Custom)
-            return PageSizes.TryResolve(p, out double w, out double h) ? $"{Math.Round(w)}x{Math.Round(h)}" : "Artboard";
-        return PageSizes.Find(p.PageSize)?.Name ?? "Artboard";
+            return PageSizes.TryResolve(p, out double w, out double h)
+                ? $"{Math.Round(w)} x {Math.Round(h)}"
+                : "No page size";
+        return PageSizes.Find(p.PageSize)?.Name ?? "Page size";
     }
 
     private Rect? ArtboardRect()
@@ -356,6 +402,9 @@ public sealed class ExportWindow
         var s = _h.Surface();
         if (_h.Page() == null) return null;
         if (def.Kind == Kind.Native) return null;
+        // A run of pages has no single pixel size; the note below reports the
+        // page count instead of inventing one.
+        if (IsMultiPage) return null;
 
         if (def.Kind == Kind.Vector)
         {
@@ -381,18 +430,47 @@ public sealed class ExportWindow
             case Region.Selection:
                 var sel = s.SelectionBoundsWorld;
                 return s.HasSelection && !sel.IsEmpty ? sel : null;
-            case Region.Artboard: return ArtboardRect() ?? s.ContentBoundsWorld();
+            case Region.PageSize: return ArtboardRect() ?? s.ContentBoundsWorld();
             default: return null;
         }
     }
 
-    private string DetailNote(Def def) => def.Kind switch
+    /// <summary>The pages the chosen region covers. One for the single-page
+    /// regions, the section's or the notebook's run for the two multi-page
+    /// ones.</summary>
+    private IReadOnlyList<NotePage> RegionPages()
     {
-        Kind.Native => "The native bundle keeps the page verbatim — size, scale and region do not apply.",
-        Kind.Vector => "Vector output has no pixel size of its own; the figure above is the page's own units.",
-        Kind.None => def.Disabled ?? "",
-        _ => "",
-    };
+        switch (_region)
+        {
+            case Region.CurrentSection:
+                return _h.Section()?.Pages.ToList() ?? new List<NotePage>();
+            case Region.CurrentNotebook:
+                return _h.Notebook()?.Sections.SelectMany(x => x.Pages).ToList() ?? new List<NotePage>();
+            default:
+                var p = _h.Page();
+                return p == null ? new List<NotePage>() : new List<NotePage> { p };
+        }
+    }
+
+    private bool IsMultiPage => _region is Region.CurrentSection or Region.CurrentNotebook;
+
+    private string DetailNote(Def def)
+    {
+        if (IsMultiPage)
+        {
+            int n = RegionPages().Count;
+            return def.Kind == Kind.Native
+                ? $"{n} page(s) written into one .quill bundle, structure and all."
+                : $"{n} page(s), one PDF page each, in order. A run of pages has no single pixel size.";
+        }
+        return def.Kind switch
+        {
+            Kind.Native => "The native bundle keeps the page verbatim — size, scale and region do not apply.",
+            Kind.Vector => "Vector output has no pixel size of its own; the figure above is the page's own units.",
+            Kind.None => def.Disabled ?? "",
+            _ => "",
+        };
+    }
 
     // =====================================================================
     // Doing it
@@ -431,6 +509,16 @@ public sealed class ExportWindow
     // ---- raster ---------------------------------------------------------
     private async Task WriteRasterAsync(Def def, StorageFile file)
     {
+        // A flattened PDF is the one raster format that can hold a run of pages.
+        if (IsMultiPage && def.Id == Fmt.PdfFlat)
+        {
+            var vps = await _h.CollectVectors(RegionPages());
+            if (vps.Count == 0) { _h.Status("Nothing to export."); return; }
+            await FileIO.WriteBytesAsync(file, PdfExporter.CreateVector(vps));
+            _h.Status($"Exported {file.Name} — {vps.Count} page(s).");
+            return;
+        }
+
         var cap = await CaptureAsync();
         if (cap == null) { _h.Status("Could not capture the page. Try again."); return; }
         var (px, w, h) = cap.Value;
@@ -533,6 +621,20 @@ public sealed class ExportWindow
     private async Task WriteVectorAsync(Def def, StorageFile file)
     {
         var s = _h.Surface();
+
+        // A section or a notebook goes through the SAME collector the top bar's
+        // section / notebook PDF commands use, so the two can never disagree
+        // about what "the whole notebook" means.
+        if (IsMultiPage)
+        {
+            var pages = RegionPages();
+            var vps = await _h.CollectVectors(pages);
+            if (vps.Count == 0) { _h.Status("Nothing to export."); return; }
+            await FileIO.WriteBytesAsync(file, PdfExporter.CreateVector(vps));
+            _h.Status($"Exported {file.Name} — {vps.Count} vector page(s), ink crisp and text selectable.");
+            return;
+        }
+
         var vp = await s.BuildVectorPageAsync(28);
         if (vp == null) { _h.Status("Nothing to export."); return; }
 
@@ -560,19 +662,40 @@ public sealed class ExportWindow
         if (page == null) return;
         _h.Surface().FlushTexts();
 
-        var sec = new Section { Name = _h.Section()?.Name ?? "Section" };
-        sec.Pages.Add(page);
+        var bundle = new Library();
         var nb = new Notebook
         {
             Name = _h.Notebook()?.Name ?? page.Name,
             Color = _h.Notebook()?.Color ?? "#D97757",
         };
-        nb.Sections.Add(sec);
-        var bundle = new Library();
         bundle.Notebooks.Add(nb);
+
+        if (_region == Region.CurrentNotebook && _h.Notebook() is { } wholeNb)
+        {
+            // The real structure, not a flattening: sections stay sections.
+            foreach (var src in wholeNb.Sections)
+            {
+                var copy = new Section { Name = src.Name };
+                copy.Pages.AddRange(src.Pages);
+                nb.Sections.Add(copy);
+            }
+        }
+        else if (_region == Region.CurrentSection && _h.Section() is { } wholeSec)
+        {
+            var copy = new Section { Name = wholeSec.Name };
+            copy.Pages.AddRange(wholeSec.Pages);
+            nb.Sections.Add(copy);
+        }
+        else
+        {
+            var sec = new Section { Name = _h.Section()?.Name ?? "Section" };
+            sec.Pages.Add(page);
+            nb.Sections.Add(sec);
+        }
 
         var json = JsonSerializer.Serialize(bundle, new JsonSerializerOptions { WriteIndented = true });
         await FileIO.WriteTextAsync(file, json);
-        _h.Status($"Exported {file.Name} — Quill's own format; open it with Settings ▸ Import.");
+        int n = nb.Sections.Sum(x => x.Pages.Count);
+        _h.Status($"Exported {file.Name} — {n} page(s) in Quill's own format; open it with Settings ▸ Import.");
     }
 }

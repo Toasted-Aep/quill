@@ -13,9 +13,14 @@ namespace Quill.Controls;
 /// <para><b>What moved, and why:</b></para>
 /// <list type="bullet">
 /// <item><b>Comment</b> — a page-marking mode, exactly like the eraser: you
-/// point at the page and it leaves something behind.</item>
-/// <item><b>Touch draw</b> — decides whether a finger marks or pans. It changes
-/// what the next stroke does, so it belongs beside the tools.</item>
+/// point at the page and it leaves something behind. Since V3 K.17 the slot
+/// opens the Comments TOOL WINDOW rather than flipping the mode blind: the
+/// window carries the mode switch, the pin-visibility switch and every comment
+/// on the page, so the dial selects a surface instead of a hidden state.</item>
+/// <item><b>Touch draw</b> — NO LONGER HERE. V3 K.14 moved it into
+/// Settings ▸ Interaction as an on/off toggle: it decides what a finger does
+/// for the whole session, which is a preference rather than a per-stroke
+/// command, and it was burning one of only ten slots to say so.</item>
 /// <item><b>Insert shape</b> — a marking command, and its whole menu comes with
 /// it rather than being redeclared.</item>
 /// <item><b>Edit history</b> — scoped to the ink on this page (and it carries
@@ -36,10 +41,11 @@ public static class DialCommands
 {
     public sealed class Host
     {
-        public required Action ToggleComment { get; init; }
-        public required Func<bool> CommentActive { get; init; }
-        public required Action ToggleTouchDraw { get; init; }
-        public required Func<bool> TouchDrawActive { get; init; }
+        /// <summary>Opens the Comments tool window (V3 K.17). It is no longer a
+        /// bare mode toggle: the window carries the mode switch, the pin
+        /// visibility switch and the page's own comments.</summary>
+        public required Action OpenComments { get; init; }
+        public required Func<bool> CommentsActive { get; init; }
         /// <summary>The existing top-bar menus, handed over whole — the dial
         /// opens them on itself rather than on the button they came from.</summary>
         public required Func<FlyoutBase?> ShapeMenu { get; init; }
@@ -54,17 +60,8 @@ public static class DialCommands
             Label = Loc.T("Wheel.Cmd.Comment"),
             Icon = Icons.Comment,
             TopBarKey = "ToolComment",
-            IsActive = h.CommentActive,
-            Run = h.ToggleComment,
-        },
-        new ToolWheel.ExtraCommand
-        {
-            Id = "TouchDraw",
-            Label = Loc.T("Wheel.Cmd.TouchDraw"),
-            Icon = Icons.TouchDraw,
-            TopBarKey = "TouchDrawToggle",
-            IsActive = h.TouchDrawActive,
-            Run = h.ToggleTouchDraw,
+            IsActive = h.CommentsActive,
+            Run = h.OpenComments,
         },
         new ToolWheel.ExtraCommand
         {

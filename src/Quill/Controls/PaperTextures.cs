@@ -209,38 +209,56 @@ public static class PaperTextures
                         Checkerboard(ds);
                         break;
                     case Lightweight:
-                        Fibre(rc, ds, g, 0.090f, 0.090f, 4, 11, 1.9f, 0.55f, BlendEffectMode.Overlay);
+                        // Thin stock: the fibre is FINE and you can see it. Two
+                        // passes at different scales, because one frequency of
+                        // noise reads as television static rather than paper.
+                        Fibre(rc, ds, g, 0.190f, 0.190f, 4, 11, 3.4f, 0.60f);
+                        Fibre(rc, ds, g, 0.055f, 0.055f, 3, 12, 3.0f, 0.34f);
+                        // Lightweight is the SUBTLEST of the papers by design —
+                        // thin stock has few inclusions, so the flecks are
+                        // sparse and faint and the grain does the work.
+                        Speckle(ds, 90, 0.85f, 0x12, true, 47);
                         break;
                     case Heavyweight:
-                        Fibre(rc, ds, g, 0.045f, 0.045f, 5, 23, 2.4f, 0.85f, BlendEffectMode.Overlay);
-                        Fibre(rc, ds, g, 0.006f, 0.320f, 3, 41, 2.1f, 0.40f, BlendEffectMode.Overlay);
+                        // Cartridge paper: a coarse tooth, plus a stretched pass
+                        // that lays the pulp down in one direction the way a
+                        // paper machine does.
+                        Fibre(rc, ds, g, 0.075f, 0.075f, 5, 23, 3.6f, 0.68f);
+                        Fibre(rc, ds, g, 0.012f, 0.340f, 3, 41, 3.0f, 0.40f);
+                        Speckle(ds, 260, 1.15f, 0x26, true, 61);
                         break;
                     case Crumpled:
-                        // ridged (Turbulence) noise at a low frequency reads as
-                        // creases; a soft blur rounds the folds, and a finer
-                        // fractal pass puts the paper grain back on top.
+                        // Creases are RELIEF, not a stain: the ridge field is
+                        // embossed so each fold has a lit side and a shadowed
+                        // side. That is what makes a crumple read as a crumple.
                         Creases(rc, ds, g);
-                        Fibre(rc, ds, g, 0.110f, 0.110f, 3, 7, 1.8f, 0.30f, BlendEffectMode.Overlay);
+                        Fibre(rc, ds, g, 0.160f, 0.160f, 3, 7, 2.4f, 0.16f);
                         break;
                     case Rippled:
-                        Ripples(ds);
-                        Fibre(rc, ds, g, 0.100f, 0.100f, 3, 5, 1.7f, 0.28f, BlendEffectMode.Overlay);
+                        Ripples(rc, ds, g);
+                        Fibre(rc, ds, g, 0.150f, 0.150f, 3, 5, 2.3f, 0.15f);
                         break;
                     case Blueprint:
-                        Fibre(rc, ds, g, 0.120f, 0.120f, 3, 13, 1.6f, 0.30f, BlendEffectMode.Overlay);
+                        Fibre(rc, ds, g, 0.140f, 0.140f, 3, 13, 2.2f, 0.20f);
                         PrintGrid(ds,
-                            Color.FromArgb(0xB4, 0xFF, 0xFF, 0xFF),   // major
-                            Color.FromArgb(0x59, 0xBE, 0xE1, 0xFF));  // minor
+                            Color.FromArgb(0xC8, 0xFF, 0xFF, 0xFF),   // major
+                            Color.FromArgb(0x6E, 0xBE, 0xE1, 0xFF));  // minor
                         break;
                     case Darkprint:
-                        Fibre(rc, ds, g, 0.120f, 0.120f, 3, 17, 1.6f, 0.35f, BlendEffectMode.Overlay);
+                        Fibre(rc, ds, g, 0.140f, 0.140f, 3, 17, 2.2f, 0.22f);
                         PrintGrid(ds,
-                            Color.FromArgb(0x73, 0xE6, 0xEC, 0xF7),
-                            Color.FromArgb(0x33, 0x93, 0xA6, 0xC4));
+                            Color.FromArgb(0x8C, 0xE6, 0xEC, 0xF7),
+                            Color.FromArgb(0x47, 0x93, 0xA6, 0xC4));
                         break;
                     case Brown:
-                        Fibre(rc, ds, g, 0.050f, 0.050f, 5, 31, 2.3f, 0.80f, BlendEffectMode.Overlay);
-                        Fibre(rc, ds, g, 0.004f, 0.280f, 3, 53, 2.0f, 0.45f, BlendEffectMode.Overlay);
+                        // KRAFT. Three things make brown paper read as kraft and
+                        // not as a brown rectangle: a coarse tooth, a directional
+                        // pulp streak, and the dark wood-fibre INCLUSIONS that
+                        // are the material's signature. All three are here.
+                        Fibre(rc, ds, g, 0.085f, 0.085f, 5, 31, 2.9f, 0.36f);
+                        Fibre(rc, ds, g, 0.010f, 0.300f, 3, 53, 2.5f, 0.22f);
+                        Speckle(ds, 300, 1.5f, 0x40, true, 97);    // dark flecks
+                        Speckle(ds, 120, 1.1f, 0x24, false, 131);  // pale flecks
                         break;
                 }
             }
@@ -272,29 +290,59 @@ public static class PaperTextures
         };
     }
 
-    // out.rgb = (lum(in.rgb) - 0.25) * contrast + 0.5 ; out.a = 1.
+    // out.rgb = (in.r - 0.25) * contrast + 0.5 ; out.a = 1.
     // 0.25 is the mean of the turbulence output once premultiplied by its own
     // (also ~0.5-mean) alpha channel, so the height-field lands centred on mid
-    // grey — which is the no-op point of an Overlay blend.
+    // grey — the no-op point of the blend.
+    //
+    // ONE CHANNEL, NOT THE AVERAGE OF THREE, and that is the second half of the
+    // "texture is almost not visible" fix. This used to be a luminance matrix:
+    // k = c/3 applied to R, G and B alike, i.e. the mean of the three channels.
+    // TurbulenceEffect emits INDEPENDENT noise per channel, so averaging them is
+    // averaging three independent random variables — it divides the standard
+    // deviation by root three while leaving `contrast` looking like it was doing
+    // its job. Reading the red channel alone and fanning it out to all three
+    // outputs gives the same grey field with ~1.7x the amplitude for the same
+    // number, which is the difference between grain you can see and grain that
+    // measures 4 levels peak-to-peak on a 256-level page.
     private static Matrix5x4 GreyMatrix(float c)
     {
-        float k = c / 3f;
         float o = 0.5f - 0.25f * c;
         return new Matrix5x4
         {
-            M11 = k, M12 = k, M13 = k, M14 = 0,
-            M21 = k, M22 = k, M23 = k, M24 = 0,
-            M31 = k, M32 = k, M33 = k, M34 = 0,
+            M11 = c, M12 = c, M13 = c, M14 = 0,   // red -> r, g and b
+            M21 = 0, M22 = 0, M23 = 0, M24 = 0,
+            M31 = 0, M32 = 0, M33 = 0, M34 = 0,
             M41 = 0, M42 = 0, M43 = 0, M44 = 0,
             M51 = o, M52 = o, M53 = o, M54 = 1,
         };
     }
 
-    // Lays a height-field over the ground through a BlendEffect. The ground is a
-    // CanvasCommandList rather than the drawing session itself, because a blend
-    // needs BOTH operands as images.
+    /// <summary>
+    /// Lays a height-field over the ground. The ground is a
+    /// <see cref="CanvasCommandList"/> rather than the drawing session itself,
+    /// because a blend needs BOTH operands as images.
+    ///
+    /// <para><b>THE MODE IS LINEAR LIGHT, AND THAT IS THE WHOLE FIX FOR "the
+    /// texture is almost not visible".</b> Every generator here used to blend
+    /// with <c>Overlay</c>, and Overlay is mathematically incapable of texturing
+    /// pale paper. For a base above 0.5 it evaluates to
+    /// <c>1 - 2(1-base)(1-blend)</c>, so on Lightweight's #FAF9F5 ground
+    /// (base 0.96) the ENTIRE output range — blend running from pure black to
+    /// pure white — is 0.92 to 1.00. Eight per cent, before the strength
+    /// multiplier scaled it down again. The grain was being computed correctly
+    /// and then crushed into invisibility by the blend.</para>
+    ///
+    /// <para>Linear Light is <c>base + 2*blend - 1</c>: a height-field centred on
+    /// mid grey moves the ground by its own deviation, by the same amount at any
+    /// base luminance, and <paramref name="strength"/> then scales that
+    /// deviation linearly. So strength finally means what it says — 0.30 is
+    /// roughly ±0.14 luminance at the peaks, about ±35 levels, which is paper
+    /// you can see at 100% and still ink over.</para>
+    /// </summary>
     private static void Modulate(ICanvasResourceCreator rc, CanvasDrawingSession ds, Color ground,
-                                 ICanvasImage height, float strength, BlendEffectMode mode)
+                                 ICanvasImage height, float strength,
+                                 BlendEffectMode mode = BlendEffectMode.LinearLight)
     {
         using var groundList = new CanvasCommandList(rc);
         using (var gds = groundList.CreateDrawingSession())
@@ -305,54 +353,104 @@ public static class PaperTextures
     }
 
     private static void Fibre(ICanvasResourceCreator rc, CanvasDrawingSession ds, Color ground,
-                              float fx, float fy, int octaves, int seed, float contrast,
-                              float strength, BlendEffectMode mode)
+                              float fx, float fy, int octaves, int seed, float contrast, float strength)
     {
         using var n = (IDisposable)Noise(fx, fy, octaves, seed, contrast, TurbulenceEffectNoise.FractalSum);
-        Modulate(rc, ds, ground, (ICanvasImage)n, strength, mode);
+        Modulate(rc, ds, ground, (ICanvasImage)n, strength);
     }
 
+    /// <summary>Creases as RELIEF. The ridge field alone is a stain — a crumple
+    /// only reads as a crumple when each fold has a lit face and a shadowed one,
+    /// so the blurred ridges are run through <see cref="EmbossEffect"/> first.
+    /// Emboss returns a directional derivative centred on mid grey, which is
+    /// exactly the height-field Linear Light wants, and the result is a sheet
+    /// lit from the upper left rather than a sheet with grey smears on it.</summary>
     private static void Creases(ICanvasResourceCreator rc, CanvasDrawingSession ds, Color ground)
     {
         // TurbulenceEffectNoise.Turbulence is the |noise| variant: its creases are
         // sharp ridges rather than smooth hills, which is exactly what a folded
         // sheet looks like. A small blur rounds the fold shoulders.
-        using var ridges = (IDisposable)Noise(0.013f, 0.013f, 5, 71, 3.4f, TurbulenceEffectNoise.Turbulence);
+        using var ridges = (IDisposable)Noise(0.011f, 0.011f, 5, 71, 3.0f, TurbulenceEffectNoise.Turbulence);
         using var soft = new GaussianBlurEffect
         {
             Source = (ICanvasImage)ridges,
-            BlurAmount = 1.6f,
+            BlurAmount = 1.4f,
             BorderMode = EffectBorderMode.Hard,   // no transparent halo at the tile edge
         };
-        Modulate(rc, ds, ground, soft, 0.95f, BlendEffectMode.Overlay);
+        using var relief = new EmbossEffect
+        {
+            Source = soft,
+            Amount = 3.2f,
+            Angle = 2.36f,   // radians: lit from the upper left, 135 degrees
+        };
+        // The broad fold shading UNDER the sharp relief, so the sheet also has
+        // large soft undulations and not only creases.
+        Modulate(rc, ds, ground, soft, 0.22f);
+        Modulate(rc, ds, ground, relief, 0.60f);
     }
 
-    // Soft wave relief. Drawn rather than noised so the waves are regular; the
-    // period is 2 cycles across the 256 tile and the bands sit on a 32 grid, so
-    // both axes wrap seamlessly and no stroke is ever clipped by the tile edge.
-    private static void Ripples(CanvasDrawingSession ds)
+    /// <summary>Wave relief. The bands are DRAWN (so the waves stay regular and
+    /// tile exactly: two cycles across the 256 tile, bands on a 32 grid) into a
+    /// command list which is then embossed, so the ripples become a lit corrugation
+    /// instead of two faint outlines.</summary>
+    private static void Ripples(ICanvasResourceCreator rc, CanvasDrawingSession ds, Color ground)
     {
-        const int bands = 8;
-        const float step = TileSize / bands;   // 32
-        for (int b = 0; b < bands; b++)
+        using var field = new CanvasCommandList(rc);
+        using (var fds = field.CreateDrawingSession())
         {
-            float cy = b * step + step * 0.5f;
-            float phase = b * 0.9f;
-            for (int pass = 0; pass < 2; pass++)
+            // Mid grey is Linear Light's no-op point, so the field starts there
+            // and the waves push away from it in both directions.
+            fds.FillRectangle(0, 0, TileSize, TileSize, Color.FromArgb(0xFF, 0x80, 0x80, 0x80));
+            const int bands = 8;
+            const float step = TileSize / bands;   // 32
+            for (int b = 0; b < bands; b++)
             {
-                float dy = pass == 0 ? -2.4f : 2.4f;
-                var col = pass == 0
-                    ? Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)
-                    : Color.FromArgb(0x1F, 0x00, 0x00, 0x00);
-                var prev = Vector2.Zero;
-                for (int x = 0; x <= (int)TileSize; x += 4)
+                float cy = b * step + step * 0.5f;
+                float phase = b * 0.9f;
+                for (int pass = 0; pass < 2; pass++)
                 {
-                    float y = cy + dy + 3.6f * MathF.Sin(x / TileSize * MathF.Tau * 2f + phase);
-                    var p = new Vector2(x, y);
-                    if (x > 0) ds.DrawLine(prev, p, col, 5.5f);
-                    prev = p;
+                    float dy = pass == 0 ? -3.0f : 3.0f;
+                    var col = pass == 0
+                        ? Color.FromArgb(0xFF, 0xD8, 0xD8, 0xD8)
+                        : Color.FromArgb(0xFF, 0x30, 0x30, 0x30);
+                    var prev = Vector2.Zero;
+                    for (int x = 0; x <= (int)TileSize; x += 4)
+                    {
+                        float y = cy + dy + 4.2f * MathF.Sin(x / TileSize * MathF.Tau * 2f + phase);
+                        var p = new Vector2(x, y);
+                        if (x > 0) fds.DrawLine(prev, p, col, 7.5f);
+                        prev = p;
+                    }
                 }
             }
+        }
+        using var soft = new GaussianBlurEffect
+        {
+            Source = field,
+            BlurAmount = 2.6f,
+            BorderMode = EffectBorderMode.Hard,
+        };
+        Modulate(rc, ds, ground, soft, 0.42f);
+    }
+
+    /// <summary>The dark wood-fibre inclusions that make kraft paper look like
+    /// kraft paper, and the tooth flecks on heavy stock. Deterministic: the seed
+    /// is explicit, so a tile is byte-identical every time it is baked, and the
+    /// dots are kept clear of the tile edge so nothing is half-cut at the wrap
+    /// seam.</summary>
+    private static void Speckle(CanvasDrawingSession ds, int count, float radius, byte alpha,
+                                bool dark, int seed)
+    {
+        var rng = new Random(seed);
+        var colour = dark
+            ? Color.FromArgb(alpha, 0x2A, 0x1C, 0x0E)
+            : Color.FromArgb(alpha, 0xFF, 0xFA, 0xF0);
+        for (int i = 0; i < count; i++)
+        {
+            float x = (float)(rng.NextDouble() * (TileSize - 2 * radius)) + radius;
+            float y = (float)(rng.NextDouble() * (TileSize - 2 * radius)) + radius;
+            float r = radius * (0.5f + (float)rng.NextDouble());
+            ds.FillCircle(new Vector2(x, y), r, colour);
         }
     }
 

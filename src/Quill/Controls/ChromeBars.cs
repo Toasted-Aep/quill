@@ -103,6 +103,31 @@ public sealed class ChromeBars
         /// covering, or 0. The right cluster slides clear of it.</summary>
         public required Func<double> RightDockWidth { get; init; }
 
+        /// <summary>The AI menu, handed over whole from the top bar. The button
+        /// moves to the LEFT of Import (V3 K.18) rather than being rebuilt, so
+        /// the two can never offer different commands.</summary>
+        public required Func<FlyoutBase?> AiMenu { get; init; }
+
+        /// <summary>Comment mode — the Comments pane owns the switch now that the
+        /// top-bar toggle is gone (V3 K.17).</summary>
+        public required Func<bool> CommentMode { get; init; }
+        public required Action<bool> SetCommentMode { get; init; }
+
+        /// <summary>Reduce-motion, so the layout solver's slide can stand down.</summary>
+        public required Func<bool> ReduceMotion { get; init; }
+
+        /// <summary>Renders a run of pages into the shared vector-page model.
+        /// This is the SAME call the top bar's section and notebook PDF exports
+        /// already use, so the export pane's Current Section / Current Notebook
+        /// regions (V3 K.22) are the real multi-page path rather than a second
+        /// implementation that could disagree with it.</summary>
+        public required Func<IReadOnlyList<NotePage>, Task<List<Services.PdfVectorPage>>> CollectVectors { get; init; }
+
+        /// <summary>Place a shape on the page — the Objects library's only way of
+        /// putting something down, and the SAME call the shape menu makes
+        /// (V3 L).</summary>
+        public required Action<ShapeKind, bool> InsertShape { get; init; }
+
         /// <summary>Import: the existing "PDF as section" path.</summary>
         public required Action ImportPdf { get; init; }
         /// <summary>Import: the existing clipboard-image paste path.</summary>
@@ -129,6 +154,17 @@ public sealed class ChromeBars
         "ZoomBtn",          // the right bar carries the live zoom readout
         "ExportBtn",        // the right bar opens the export pane
         "PageSettingsBtn",  // background/grid/page size live in Settings + Precision
+        // ---- V3 K.14 / K.16 / K.17 / K.18: the four orphans the legacy top bar
+        // was still carrying once the dial took over. Each has a new home, and
+        // leaving the old button up as well is exactly the duplication the user
+        // reported.
+        "TouchDrawToggle",  // K.14 -> Settings > Interaction, as an on/off toggle
+        "ShapeBtn",         // K.16 -> the dial's Shape slot. Its 24px mark (square
+                            //         + triangle) is all but identical to the
+                            //         Objects mark in the left cluster, which is
+                            //         why it read as a duplicate Objects button.
+        "ToolComment",      // K.17 -> the Comments pane, opened from the dial
+        "BtnAi",            // K.18 -> the right cluster, immediately left of Import
     };
     private static readonly HashSet<string> None = new(StringComparer.Ordinal);
 
@@ -150,6 +186,17 @@ public sealed class ChromeBars
     private TextBlock _tiltText = new();
 
     private ExportWindow? _export;
+
+    // The bare canvas panes (V3 K.19/K.20) and the one solver they all share
+    // (K.21). Built lazily on first use so a session that never opens Layers
+    // never pays for it.
+    private readonly PanelLayout _layout;
+    private CanvasPane? _layersPane, _precisionPane, _commentsPane;
+
+    /// <summary>The solver every panel registers with. MainWindow hands it the
+    /// Notebooks window and the dial so the K.21 rule covers those too.</summary>
+    public PanelLayout Layout => _layout;
+
     private bool _on;
     private bool _zoomLocked;
     private float _lockedZoom = 1f;
@@ -161,6 +208,7 @@ public sealed class ChromeBars
     {
         _host = host;
         _h = h;
+        _layout = new PanelLayout(host, h.ReduceMotion);
 
         // The hosts carry NO background and NO border: in bare mode there is
         // no surface at all, and in glass mode each CLUSTER supplies its own.
@@ -191,6 +239,12 @@ public sealed class ChromeBars
         _host.Children.Add(_left);
         _host.Children.Add(_right);
 
+        // Both clusters are OBSTACLES, never movable: their positions are the
+        // measured reference (31 DIP margins, 31 DIP row centre) and the whole
+        // point of the panels moving is that these stay put (K.21).
+        _layout.Register("chrome-left", _left);
+        _layout.Register("chrome-right", _right);
+
         Build();
 
         // The bar's own height is the dial's headroom; measure it rather than
@@ -201,6 +255,11 @@ public sealed class ChromeBars
         ChromeUi.ThemeSource = _host;
         var surface = _h.Surface();
         surface.ViewChanged += OnViewChanged;
+        // The Layers pane counts what is on the page and the Comments pane lists
+        // its pins: both are reports, so they have to follow the page rather than
+        // freeze at the moment they were opened. Coalesced onto the dispatcher so
+        // a stroke in progress does not rebuild a panel per sample.
+        surface.ContentChanged += ScheduleContentRefresh;
         _host.ActualThemeChanged += (_, _) => { ChromeUi.ThemeSource = _host; Refresh(); };
     }
 
@@ -222,6 +281,12 @@ public sealed class ChromeBars
         {
             try { _h.Wheel.TopInset = 0; } catch { }
             _export?.Hide();
+            // The panes belong to the bars: leaving Layers on canvas after the
+            // dial is switched off would strand a panel with no way to close it.
+            _layersPane?.Hide();
+            _precisionPane?.Hide();
+            _commentsPane?.Hide();
+            _objects?.Hide();
             OwnedKeysChanged?.Invoke(None);
             return;
         }
@@ -242,6 +307,14 @@ public sealed class ChromeBars
         SyncReadouts();
         PushInset();
         _export?.Refresh();
+        // The panes capture their ink at build time too.
+        foreach (var p in new[] { _layersPane, _precisionPane, _commentsPane })
+        {
+            p?.Repaint();
+            p?.RefreshIfOpen();
+        }
+        _objects?.Refresh();
+        _layout.Invalidate();
     }
 
     /// <summary>Slides the right cluster clear of the docked settings panel, so
@@ -320,16 +393,23 @@ public sealed class ChromeBars
         titleCell.Tapped += (_, _) => _h.RenamePage();
         left.Children.Add(titleCell);
 
-        left.Children.Add(PanelButton(Icons.Layers, "Layers", BuildLayersPanel, PanelId.Layers));
-        left.Children.Add(PanelButton(Icons.Precision, "Precision", BuildPrecisionPanel, PanelId.Precision));
-        left.Children.Add(PanelButton(Icons.Objects, "Objects", BuildObjectsPanel, PanelId.Objects));
+        left.Children.Add(PanelButton(Icons.Layers, "Layers", () => Layers));
+        left.Children.Add(PanelButton(Icons.Precision, "Precision", () => Precision));
+        // Objects is NOT a bare canvas pane: V3 L gives it the old resizable
+        // "iPad-like" floating window instead, on the left.
+        left.Children.Add(ObjectsButton());
 
         _leftRow.Children.Add(Cluster(left));
 
-        // ---- RIGHT CLUSTER: lock zoom tilt | import export settings
+        // ---- RIGHT CLUSTER: lock zoom tilt | AI import export settings
         var right = ChromeUi.Row(0);
         right.VerticalAlignment = VerticalAlignment.Center;
         foreach (var el in BuildViewReadout()) right.Children.Add(el);
+        // K.18: the AI button sits immediately to the LEFT of Import. It carries
+        // the top bar's own flyout rather than a second copy of the menu.
+        var ai = BarButton(Icons.Ai, "AI assistant — summarise, tag, ask, improve", () => { });
+        try { ai.Flyout = _h.AiMenu(); } catch { }
+        right.Children.Add(ai);
         right.Children.Add(BarMenuButton(Icons.Import, "Import", BuildImportMenu()));
         right.Children.Add(BarButton(Icons.Export, "Export", OpenExport));
         right.Children.Add(BarButton(Icons.Settings, "Settings", _h.OpenSettings));
@@ -338,11 +418,6 @@ public sealed class ChromeBars
 
         SyncReadouts();
     }
-
-    /// <summary>Which panel a toggle owns, so its underline can light up.</summary>
-    private enum PanelId { None, Layers, Precision, Objects }
-
-    private PanelId _openPanel = PanelId.None;
 
     /// <summary>Bare by default. In glass mode the cluster gets the card back -
     /// one switch, per <see cref="Metrics.GlassBars"/>.</summary>
@@ -426,33 +501,126 @@ public sealed class ChromeBars
         Background = new SolidColorBrush(ChromeUi.BarDivider),
     };
 
-    /// <summary>A menu toggle. Its underline lights while its panel is on
-    /// canvas - TWO SEPARATE underlines, one per active toggle, never one bar
-    /// spanning the group (measured, reference 1.3).</summary>
-    private Button PanelButton(string geometry, string label, Func<FrameworkElement> build, PanelId which)
+    /// <summary>A menu toggle. Its underline lights while its pane is on canvas -
+    /// TWO SEPARATE underlines, one per active toggle, never one bar spanning the
+    /// group (measured, reference 1.3).
+    ///
+    /// <para>It toggles a <see cref="CanvasPane"/>, NOT a flyout. The flyout
+    /// version never opened: its <c>Opening</c> handler called <see cref="Build"/>
+    /// to light this very underline, and Build clears the rows - unparenting the
+    /// button WinUI was about to position the popup against, which aborts the
+    /// popup silently. See CanvasPane's remarks.</para></summary>
+    private Button PanelButton(string geometry, string label, Func<CanvasPane> pane)
     {
         var art = Icons.Filled(geometry, ChromeUi.Ink, Metrics.GlyphSize);
-        var b = Bare(Slot(art, label, underline: _openPanel == which), label);
-        var flyout = new Flyout();
-        // The PANELS are chrome-free too: Concepts' Layers / Precision / Objects
-        // are bare text and controls on the canvas, so the presenter's card is
-        // stripped rather than a second card being drawn inside it.
-        flyout.FlyoutPresenterStyle = ChromeUi.BarePresenter();
-        flyout.Opening += (_, _) =>
-        {
-            _openPanel = which;
-            Build();
-            flyout.Content = new ScrollViewer
-            {
-                MaxHeight = 560,
-                HorizontalScrollMode = ScrollMode.Disabled,
-                Content = build(),
-            };
-        };
-        flyout.Closed += (_, _) => { _openPanel = PanelId.None; Build(); };
-        b.Flyout = flyout;
+        bool open = false;
+        try { open = PaneIfBuilt(label)?.IsOpen == true; } catch { }
+        var b = Bare(Slot(art, label, underline: open), label);
+        // Deferred to the click: building the pane inside Build() would create
+        // all four panes on every repaint.
+        b.Click += (_, _) => pane().Toggle();
         return b;
     }
+
+    /// <summary>The pane behind a toggle, but only if it has been built - the
+    /// underline must not be the thing that constructs it.</summary>
+    private CanvasPane? PaneIfBuilt(string label) => label switch
+    {
+        "Layers" => _layersPane,
+        "Precision" => _precisionPane,
+        _ => null,
+    };
+
+    /// <summary>The Objects toggle. Same 42 DIP slot and same underline as its
+    /// two neighbours, but it opens the floating Objects library (V3 L) rather
+    /// than a bare canvas pane.</summary>
+    private Button ObjectsButton()
+    {
+        var art = Icons.Filled(Icons.Objects, ChromeUi.Ink, Metrics.GlyphSize);
+        var b = Bare(Slot(art, "Objects", underline: _objects?.IsOpen == true), "Objects");
+        b.Click += (_, _) =>
+        {
+            ObjectsLibrary.Toggle();
+            // The window has no state event of its own, so the underline and the
+            // panel reflow both happen on the next tick, once IsOpen has settled.
+            try
+            {
+                _host.DispatcherQueue.TryEnqueue(() =>
+                {
+                    try { Build(); } catch { }
+                    _layout.Invalidate();
+                });
+            }
+            catch { }
+        };
+        return b;
+    }
+
+    private ObjectsWindow? _objects;
+
+    private ObjectsWindow ObjectsLibrary
+    {
+        get
+        {
+            if (_objects != null) return _objects;
+            _objects = ObjectsWindow.Attach(_host, new ObjectsWindow.Host
+            {
+                Library = () => _h.PageOps().Library(),
+                Save = () => _h.PageOps().Save(),
+                InsertShape = _h.InsertShape,
+                Status = s => _h.PageOps().Status(s),
+            });
+            // K.21 covers the Objects library too. It lives in the popup layer
+            // rather than the canvas Grid, so it joins as a VIRTUAL obstacle that
+            // reports its own rectangle: the bare panes move out from under it,
+            // and it is never moved itself because the user drags it.
+            _layout.RegisterRect("objects", () => _objects?.Bounds);
+            return _objects;
+        }
+    }
+
+    // =====================================================================
+    // The four bare canvas panes (V3 K.19 / K.20). Layers and Precision go
+    // BOTTOM-LEFT as the user asked; Objects and Comments join them in the same
+    // corner and the solver tiles them upwards from there.
+    // =====================================================================
+    private CanvasPane Layers => _layersPane ??= MakePane(
+        "Layers", "Layers", BuildLayersPanel, PanelLayout.Anchor.BottomLeft, order: 20, width: 320);
+
+    private CanvasPane Precision => _precisionPane ??= MakePane(
+        "Precision", "Precision", BuildPrecisionPanel, PanelLayout.Anchor.BottomLeft, order: 21, width: 340);
+
+    private CanvasPane Comments => _commentsPane ??= MakePane(
+        "Comments", "Comments", BuildCommentsPanel, PanelLayout.Anchor.BottomLeft, order: 23, width: 320);
+
+    private CanvasPane MakePane(string id, string title, Func<FrameworkElement> build,
+                                PanelLayout.Anchor home, int order, double width)
+    {
+        // A long panel scrolls inside itself rather than growing past the canvas;
+        // the scroller is chrome-free too, so the pane stays bare.
+        FrameworkElement Wrapped() => new ScrollViewer
+        {
+            MaxHeight = 460,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Background = new SolidColorBrush(Colors.Transparent),
+            Content = build(),
+        };
+        var pane = new CanvasPane(_host, _layout, id, title, Wrapped, home, order, width);
+        // The underline under the toggle is the only feedback the bar gives, so
+        // it has to follow the pane rather than the click.
+        pane.StateChanged = () => { try { Build(); } catch { } };
+        return pane;
+    }
+
+    /// <summary>Opens (or closes) the Comments pane. This is what the radial
+    /// dial's Comment slot runs now that the top-bar toggle is gone (K.17).</summary>
+    public void ToggleComments() => Comments.Toggle();
+
+    /// <summary>True while the Comments pane is up — the dial lights its slot
+    /// from this.</summary>
+    public bool CommentsOpen => _commentsPane?.IsOpen == true;
 
     // ---- zoom / tilt readout, lockable -----------------------------------
     /// <summary>The right cluster's left half: the zoom lock, the live zoom
@@ -512,10 +680,18 @@ public sealed class ChromeBars
             Margin = new Thickness(0, 0, Metrics.IconPitch / 2, 0),
             Children = { _tiltText },
         };
-        // Deferred, and said so: Quill has zoom but no canvas rotation, so this
-        // reads a constant 0 rather than inventing an angle.
+        // DEFERRED, AND SAID SO (V3 K.26). Tilt is not a readout that needs
+        // filling in - it needs canvas rotation, which Quill does not have. The
+        // view transform is a scale and a translate: InkSurface converts between
+        // screen and world in 62 separate inline expressions rather than through
+        // its two helpers, and 51 more places build or test axis-aligned
+        // rectangles that stop being valid the moment the canvas is turned. A
+        // number here that moved while the eraser, the lasso and the text-box
+        // hit-tests still assumed square would be worse than no number at all,
+        // so it stays at zero and this tooltip says why.
         ToolTipService.SetToolTip(tiltCell,
-            "Canvas tilt. Quill has zoom but not canvas rotation yet, so this stays at 0 degrees.");
+            "Canvas tilt is not implemented. Quill can zoom and pan but cannot rotate the canvas, and a tilt " +
+            "readout that moved without real rotation behind it would be a lie. It stays at 0 degrees.");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(tiltCell, "Canvas tilt (not implemented)");
         yield return tiltCell;
     }
@@ -528,6 +704,25 @@ public sealed class ChromeBars
         _h.PageOps().Status(_zoomLocked
             ? $"Zoom locked at {Math.Round(_lockedZoom * 100)}%."
             : "Zoom unlocked.");
+    }
+
+    private bool _contentRefreshPending;
+
+    /// <summary>One rebuild per idle turn, however many edits landed. A pane that
+    /// is closed costs nothing at all.</summary>
+    private void ScheduleContentRefresh()
+    {
+        if (_contentRefreshPending) return;
+        if (_layersPane?.IsOpen != true && _commentsPane?.IsOpen != true) return;
+        _contentRefreshPending = true;
+        try
+        {
+            if (!_host.DispatcherQueue.TryEnqueue(
+                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                    () => { _contentRefreshPending = false; RebuildOpenPanel(); }))
+                _contentRefreshPending = false;
+        }
+        catch { _contentRefreshPending = false; }
     }
 
     private void OnViewChanged()
@@ -600,6 +795,7 @@ public sealed class ChromeBars
             Section = _h.Section,
             PickSave = _h.PickSave,
             Status = s => _h.PageOps().Status(s),
+            CollectVectors = _h.CollectVectors,
         });
         _export.Toggle();
     }
@@ -628,6 +824,57 @@ public sealed class ChromeBars
         preview.Children.Add(ChromeUi.ToggleRow("Background", true, _ => { }, enabled: false,
             tip: "Not available: there is no layer model to switch."));
         panel.Children.Add(preview);
+
+        // The page inventory used to be the Objects panel's job. Objects is now
+        // the object LIBRARY (V3 L) - a place to get things from, not a report of
+        // what is already down - so the count of what is on the page lands here,
+        // in the panel about the page's own stack.
+        panel.Children.Add(ChromeUi.Rule());
+        panel.Children.Add(BuildInventory());
+        return panel;
+    }
+
+    /// <summary>What is actually on this page, counted live.</summary>
+    private FrameworkElement BuildInventory()
+    {
+        var page = _h.PageOps().Page();
+        var s = _h.Surface();
+        var panel = new StackPanel { Spacing = 2 };
+        panel.Children.Add(ChromeUi.Heading("On this page"));
+
+        if (page == null)
+        {
+            panel.Children.Add(ChromeUi.Caption("No page is open."));
+            return panel;
+        }
+
+        int images = page.Shapes.Count(x => x.Kind == ShapeKind.Image);
+        int tables = page.Shapes.Count(x => x.Kind == ShapeKind.Table);
+        int shapes = page.Shapes.Count - images - tables;
+
+        void Line(string geometry, string label, int n)
+        {
+            var row = ChromeUi.Row(8);
+            row.Padding = new Thickness(0, 5, 0, 5);
+            var mark = ChromeUi.Mark(geometry, 16);
+            if (mark != null) { mark.Opacity = n > 0 ? 0.85 : 0.35; row.Children.Add(mark); }
+            row.Children.Add(ChromeUi.Label(label));
+            var count = ChromeUi.Label(n.ToString(), strong: true);
+            count.HorizontalAlignment = HorizontalAlignment.Right;
+            var g = new Grid();
+            g.Children.Add(row);
+            g.Children.Add(count);
+            panel.Children.Add(g);
+        }
+
+        Line(Icons.Pen, "Strokes", page.Strokes.Count);
+        Line(Icons.Shape, "Shapes", shapes);
+        Line(Icons.Text, "Text boxes", page.Texts.Count);
+        Line(Icons.Objects, "Images", images);
+        Line(Icons.Grid, "Tables", tables);
+        Line(Icons.Comment, "Comments", page.Comments.Count);
+        panel.Children.Add(ChromeUi.Label(
+            s.HasSelection ? $"{s.SelectedStrokes.Count} stroke(s) selected" : "Nothing selected", strong: true));
         return panel;
     }
 
@@ -739,71 +986,111 @@ public sealed class ChromeBars
         return panel;
     }
 
-    // =====================================================================
-    // OBJECTS — a live inventory of what is actually on the page
-    // =====================================================================
-    private FrameworkElement BuildObjectsPanel()
-    {
-        var page = _h.PageOps().Page();
-        var s = _h.Surface();
-        var panel = new StackPanel { Spacing = 2, Width = 320 };
-        panel.Children.Add(ChromeUi.Heading("Objects"));
-
-        if (page == null)
-        {
-            panel.Children.Add(ChromeUi.Caption("No page is open."));
-            return panel;
-        }
-
-        int images = page.Shapes.Count(x => x.Kind == ShapeKind.Image);
-        int tables = page.Shapes.Count(x => x.Kind == ShapeKind.Table);
-        int shapes = page.Shapes.Count - images - tables;
-
-        void Line(string geometry, string label, int n)
-        {
-            var row = ChromeUi.Row(8);
-            row.Padding = new Thickness(0, 5, 0, 5);
-            var mark = ChromeUi.Mark(geometry, 16);
-            if (mark != null) { mark.Opacity = n > 0 ? 0.85 : 0.35; row.Children.Add(mark); }
-            row.Children.Add(ChromeUi.Label(label));
-            var count = ChromeUi.Label(n.ToString(), strong: true);
-            count.HorizontalAlignment = HorizontalAlignment.Right;
-            var g = new Grid();
-            g.Children.Add(row);
-            g.Children.Add(count);
-            panel.Children.Add(g);
-        }
-
-        Line(Icons.Pen, "Strokes", page.Strokes.Count);
-        Line(Icons.Shape, "Shapes", shapes);
-        Line(Icons.Text, "Text boxes", page.Texts.Count);
-        Line(Icons.Objects, "Images", images);
-        Line(Icons.Grid, "Tables", tables);
-        Line(Icons.Comment, "Comments", page.Comments.Count);
-
-        panel.Children.Add(ChromeUi.Rule());
-        panel.Children.Add(ChromeUi.Label(
-            s.HasSelection ? $"{s.SelectedStrokes.Count} stroke(s) selected" : "Nothing selected", strong: true));
-        panel.Children.Add(ChromeUi.Caption(
-            "Per-object rows — tap to select, drag to reorder, eye to hide — need the layer model Quill does not " +
-            "have yet, so this panel reports what is on the page rather than pretending to manage it."));
-        return panel;
-    }
-
-    // A panel is inside a Flyout; the cheapest correct "re-render" is to close
-    // it, because the next open rebuilds from live state.
+    /// <summary>A pane's own control changed something the pane displays, so it
+    /// rebuilds itself in place. It stays open — the flyout version had to close
+    /// to re-render, which made every chip tap dismiss the panel.</summary>
     private void RebuildOpenPanel()
     {
-        try { foreach (var p in VisualTreeHelperPopups()) p.IsOpen = false; }
+        try
+        {
+            _layersPane?.RefreshIfOpen();
+            _precisionPane?.RefreshIfOpen();
+            _commentsPane?.RefreshIfOpen();
+        }
         catch { }
     }
 
-    private IEnumerable<Popup> VisualTreeHelperPopups()
+    // =====================================================================
+    // COMMENTS — the page's own pins, and the switch that drops new ones
+    // (V3 K.17: comments move to the tool window the dial can select)
+    // =====================================================================
+    private FrameworkElement BuildCommentsPanel()
     {
-        var root = _host.XamlRoot;
-        if (root == null) yield break;
-        foreach (var p in VisualTreeHelper.GetOpenPopupsForXamlRoot(root))
-            if (p.Child is FlyoutPresenter) yield return p;
+        var ops = _h.PageOps();
+        var page = ops.Page();
+        var s = _h.Surface();
+        var panel = new StackPanel { Spacing = 2, Width = 300 };
+
+        panel.Children.Add(ChromeUi.ToggleRow("Comment mode", _h.CommentMode(), v =>
+        {
+            _h.SetCommentMode(v);
+            RebuildOpenPanel();
+        }, tip: "Tap the page to drop a note pin, or tap a pin to read, resolve or delete it."));
+
+        var lib = ops.Library();
+        panel.Children.Add(ChromeUi.ToggleRow("Always show pins", lib.ShowCommentPins, v =>
+        {
+            lib.ShowCommentPins = v;
+            s.ShowCommentsAlways = v;
+            s.Refresh();
+            ops.Save();
+        }, tip: "Keep the pins visible even when comment mode is off."));
+
+        panel.Children.Add(ChromeUi.Rule());
+
+        if (page == null || page.Comments.Count == 0)
+        {
+            panel.Children.Add(ChromeUi.Caption(page == null
+                ? "No page is open."
+                : "No comments on this page yet. Switch comment mode on and tap the page to leave one."));
+            return panel;
+        }
+
+        foreach (var c in page.Comments.OrderBy(x => x.CreatedTicks))
+        {
+            var comment = c;
+            var row = new StackPanel { Spacing = 0, Padding = new Thickness(0, 6, 0, 6) };
+
+            var head = new Grid();
+            var when = new DateTime(comment.CreatedTicks, DateTimeKind.Utc).ToLocalTime();
+            head.Children.Add(ChromeUi.Label(when.ToString("d MMM HH:mm"), strong: true));
+            var mark = ChromeUi.Label(comment.Resolved ? "Resolved" : "Open");
+            mark.HorizontalAlignment = HorizontalAlignment.Right;
+            mark.Opacity = 0.6;
+            mark.FontSize = 11.5;
+            head.Children.Add(mark);
+            row.Children.Add(head);
+
+            var text = ChromeUi.Caption(string.IsNullOrWhiteSpace(comment.Text) ? "(empty)" : comment.Text);
+            text.Opacity = comment.Resolved ? 0.4 : 0.78;
+            row.Children.Add(text);
+
+            var actions = ChromeUi.Row(6);
+            actions.Children.Add(ChromeUi.Chip("Show", false, () => Centre(comment)));
+            actions.Children.Add(ChromeUi.Chip(comment.Resolved ? "Reopen" : "Resolve", false, () =>
+            {
+                s.ResolveComment(comment, !comment.Resolved);
+                ops.Save();
+                RebuildOpenPanel();
+            }));
+            actions.Children.Add(ChromeUi.Chip("Delete", false, () =>
+            {
+                s.DeleteComment(comment);
+                ops.Save();
+                RebuildOpenPanel();
+            }));
+            row.Children.Add(actions);
+            panel.Children.Add(row);
+            panel.Children.Add(ChromeUi.Rule());
+        }
+        return panel;
+    }
+
+    /// <summary>Brings a pin into view without changing the zoom — the user is
+    /// reading a comment, not reframing the drawing.</summary>
+    private void Centre(Models.PageComment c)
+    {
+        try
+        {
+            var s = _h.Surface();
+            var v = s.GetView();
+            var offset = new System.Numerics.Vector2(
+                (float)(s.ActualWidth / 2 - c.X * v.Zoom),
+                (float)(s.ActualHeight / 2 - c.Y * v.Zoom));
+            s.SetView(offset, v.Zoom);
+            s.Refresh();
+        }
+        catch { }
     }
 
     private static FrameworkElement Row(string geometry, string label)

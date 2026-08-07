@@ -51,6 +51,10 @@ public sealed class SettingsWindow
         public required Action<double> SetUnitsPerInch { get; init; }
         public required Action ApplyTheme { get; init; }
         public required Action Save { get; init; }
+        /// <summary>Touch draw — whether a finger marks or pans. It used to be a
+        /// top-bar toggle; V3 K.14 moves it in here as an on/off switch.</summary>
+        public required Func<bool> TouchDraw { get; init; }
+        public required Action<bool> SetTouchDraw { get; init; }
         /// <summary>Fills the given panel with the pre-existing settings controls.</summary>
         public required Action<Panel> FillLegacySettings { get; init; }
         public required Action<string> Status { get; init; }
@@ -72,11 +76,12 @@ public sealed class SettingsWindow
 
     private readonly Host _h;
 
-    // Exactly one of these is non-null. The FLOATING host is deliberately kept
-    // alive and working: the export pane is still a FloatingWindow tenant, and
-    // the user asked to be able to revert this decision cheaply.
-    private readonly FloatingWindow? _win;
-    private readonly Grid? _dock;
+    // DOCKED, full stop (V3 K.13: "revert the settings floating window - docked
+    // stays"). The floating variant is gone from this class: there is no flag,
+    // no second code path and no way to get it back by accident. FloatingWindow
+    // itself is untouched and still very much alive - the export pane and the
+    // Objects library are its tenants.
+    private readonly Grid _dock;
 
     private readonly (string Label, Func<FrameworkElement> Build)[] _tabs;
     private readonly StackPanel _dockTabs = new() { Orientation = Orientation.Horizontal, Spacing = 6 };
@@ -89,12 +94,12 @@ public sealed class SettingsWindow
     };
     private int _active;
 
-    /// <summary>The settings surface. DOCKED RIGHT by default, per the measured
-    /// reference and the user's decision; pass <paramref name="docked"/> false to
-    /// get the floating liquid-glass window back.</summary>
-    public static SettingsWindow Attach(Panel host, Host h, bool docked = true) => new(host, h, docked);
+    /// <summary>The settings surface: DOCKED RIGHT, 398.5 DIP, #030303, full
+    /// height below the title bar, soft edge on the left only — the measured
+    /// reference (docs/CONCEPTS-UI-REFERENCE.md §1.6).</summary>
+    public static SettingsWindow Attach(Panel host, Host h) => new(host, h);
 
-    private SettingsWindow(Panel host, Host h, bool docked)
+    private SettingsWindow(Panel host, Host h)
     {
         _h = h;
         _tabs = new (string, Func<FrameworkElement>)[]
@@ -102,17 +107,6 @@ public sealed class SettingsWindow
             ("Workspace", BuildWorkspace),
             ("Interaction", BuildInteraction),
         };
-
-        if (!docked)
-        {
-            _win = FloatingWindow.Attach(host, 448, 640);
-            _win.Title = "Settings";
-            _win.InfoRequested = () => _h.Status(
-                "Workspace sets the page itself — paper, grid and artboard. Interaction holds everything else.");
-            _win.SetTabs(_tabs);
-            return;
-        }
-
         _dock = BuildDock();
         host.Children.Add(_dock);
     }
@@ -220,28 +214,25 @@ public sealed class SettingsWindow
         _dockBody.ChangeView(null, 0, null, true);
     }
 
-    public bool IsOpen => _win?.IsOpen ?? _dock?.Visibility == Visibility.Visible;
+    public bool IsOpen => _dock.Visibility == Visibility.Visible;
 
     /// <summary>How much of the host's right edge this surface is covering, in
     /// DIPs. The bare status bar's right cluster shifts left by this much while
     /// the panel is docked open, so the Settings glyph that opened it stays
     /// clickable to close it again - a docked panel with no title bar has no
     /// close button of its own by design.</summary>
-    public double OccupiedRightWidth => _dock != null && IsOpen ? DockWidth + DockShadow : 0;
+    public double OccupiedRightWidth => IsOpen ? DockWidth + DockShadow : 0;
 
     /// <summary>Raised after the docked panel opens or closes.</summary>
     public Action? DockChanged { get; set; }
 
     public void Toggle()
     {
-        if (_win != null) { _win.Toggle(); return; }
         if (IsOpen) Hide(); else Show();
     }
 
     public void Show()
     {
-        if (_win != null) { _win.Show(); return; }
-        if (_dock == null) return;
         ShowTab(_active);
         _dock.Visibility = Visibility.Visible;
         DockChanged?.Invoke();
@@ -249,15 +240,14 @@ public sealed class SettingsWindow
 
     public void Hide()
     {
-        if (_win != null) { _win.Hide(); return; }
-        if (_dock != null) { _dock.Visibility = Visibility.Collapsed; DockChanged?.Invoke(); }
+        _dock.Visibility = Visibility.Collapsed;
+        DockChanged?.Invoke();
     }
 
     /// <summary>Rebuild after a theme change — this surface captures its colours at
     /// build time exactly like the tree, the pen strip and the gallery.</summary>
     public void Refresh()
     {
-        if (_win != null) { if (_win.IsOpen) _win.RefreshContent(); return; }
         if (IsOpen) ShowTab(_active);
     }
 
@@ -431,35 +421,63 @@ public sealed class SettingsWindow
     }
 
     // ---- theme source ----------------------------------------------------
+    /// <summary>The app theme as COLOURED CIRCLES (V3 K.24), not a dropdown —
+    /// the same circular-swatch idiom the page backgrounds and the grids above
+    /// it already use. Each swatch is PAINTED WITH THE THEME IT SELECTS: Light
+    /// is the ivory page over near-black ink, Dark is the reverse, Follow
+    /// Windows is split down the middle, and Follow page shows the page's own
+    /// ground — so the row is a preview, not four identical dots with words
+    /// under them.</summary>
     private FrameworkElement BuildThemeSourceRow()
     {
         var lib = _h.Library();
-        var box = new StackPanel { Spacing = 2, Margin = new Thickness(0, 12, 0, 0) };
-        var combo = new ComboBox { Header = "App theme", HorizontalAlignment = HorizontalAlignment.Stretch };
-        foreach (var (tag, label) in new[]
-                 {
-                     ("Page", "Follow page background"),
-                     ("Light", "Light"),
-                     ("Dark", "Dark"),
-                     ("System", "Follow Windows"),
-                 })
-            combo.Items.Add(new ComboBoxItem { Content = label, Tag = tag });
+        var box = new StackPanel { Spacing = 2, Margin = new Thickness(0, 14, 0, 0) };
+        box.Children.Add(Heading("App Theme"));
+        box.Children.Add(Caption("Light or dark, or let the paper decide."));
+
+        var light = Color.FromArgb(0xFF, 0xFA, 0xF9, 0xF5);
+        var dark = Color.FromArgb(0xFF, 0x1B, 0x1A, 0x18);
+        var pageGround = PaperTextures.Ground(_h.Page());
+
         string cur = lib.ThemeSource == "Page" ? "Page" : lib.Theme;
-        foreach (ComboBoxItem it in combo.Items)
-            if ((string)it.Tag == cur) { combo.SelectedItem = it; break; }
-        if (combo.SelectedItem == null) combo.SelectedIndex = 2;
-        combo.SelectionChanged += (_, _) =>
+        var strip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+
+        void Add(string tag, string label, Brush fill, string tip)
         {
-            if (combo.SelectedItem is not ComboBoxItem ci || ci.Tag is not string t) return;
-            if (t == "Page") lib.ThemeSource = "Page";
-            else { lib.ThemeSource = "Manual"; lib.Theme = t; }
-            _h.ApplyTheme();
-            _h.Save();
-            Refresh();
-        };
-        box.Children.Add(combo);
-        box.Children.Add(Caption("The page decides: a dark, Blueprint or Darkprint page puts Quill in dark mode; white, Lightweight or Brown paper puts it in light mode."));
+            var cell = Swatch(label, fill, cur == tag, () =>
+            {
+                if (tag == "Page") lib.ThemeSource = "Page";
+                else { lib.ThemeSource = "Manual"; lib.Theme = tag; }
+                _h.ApplyTheme();
+                _h.Save();
+                Refresh();
+            });
+            ToolTipService.SetToolTip(cell, tip);
+            strip.Children.Add(cell);
+        }
+
+        Add("Page", "Follow page", new SolidColorBrush(pageGround),
+            "The page decides: a dark, Blueprint or Darkprint page puts Quill in dark mode; white, Lightweight or Brown paper puts it in light mode.");
+        Add("Light", "Light", new SolidColorBrush(light), "Always the light skin, whatever the paper is.");
+        Add("Dark", "Dark", new SolidColorBrush(dark), "Always the dark skin, whatever the paper is.");
+        Add("System", "Follow Windows", Split(light, dark), "Track the Windows light/dark setting.");
+
+        box.Children.Add(HScroll(strip));
         return box;
+    }
+
+    /// <summary>A hard half-and-half fill for the "Follow Windows" swatch. A
+    /// gradient with two stops at the same offset, built FRESH every time —
+    /// WinUI caches GradientStop mutations, so a shared brush that is poked
+    /// later would not repaint.</summary>
+    private static Brush Split(Color a, Color b)
+    {
+        var g = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 1) };
+        g.GradientStops.Add(new GradientStop { Color = a, Offset = 0 });
+        g.GradientStops.Add(new GradientStop { Color = a, Offset = 0.5 });
+        g.GradientStops.Add(new GradientStop { Color = b, Offset = 0.5 });
+        g.GradientStops.Add(new GradientStop { Color = b, Offset = 1 });
+        return g;
     }
 
     // =======================================================================
@@ -590,22 +608,54 @@ public sealed class SettingsWindow
         upi.ValueChanged += (_, e) => _h.SetUnitsPerInch(e.NewValue);
         panel.Children.Add(upi);
 
+        // ---- Display units, as CIRCLES (V3 K.23) -------------------------
+        // The same circular-swatch idiom as the paper and grid rows above, and
+        // grouped Digital / Metric / Imperial exactly as the spec lists them.
+        // Each circle carries its own abbreviation, so the row reads as a set of
+        // units rather than a set of dots.
         panel.Children.Add(Heading("Display Units"));
         panel.Children.Add(Caption("The unit a custom artboard size is entered in."));
-        var unit = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
-        foreach (var u in new[] { PageSizeUnit.Pixels, PageSizeUnit.Millimeters, PageSizeUnit.Inches })
-            unit.Items.Add(new ComboBoxItem { Content = u.ToString(), Tag = u });
-        foreach (ComboBoxItem it in unit.Items)
-            if ((PageSizeUnit)it.Tag == (page?.PageUnit ?? PageSizeUnit.Pixels)) { unit.SelectedItem = it; break; }
-        unit.SelectionChanged += (_, _) =>
+
+        var current = page?.PageUnit ?? PageSizeUnit.Pixels;
+        foreach (var (group, units) in PageSizes.UnitGroups)
         {
-            var p = _h.Page();
-            if (p == null || unit.SelectedItem is not ComboBoxItem ci || ci.Tag is not PageSizeUnit u) return;
-            _h.SetPageSize(p.PageSize, p.PageWidth, p.PageHeight, u);
-        };
-        panel.Children.Add(unit);
+            panel.Children.Add(new TextBlock
+            {
+                Text = group,
+                FontSize = 11.5,
+                Opacity = 0.55,
+                Margin = new Thickness(0, 8, 0, 0),
+            });
+            var strip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+            foreach (var u in units)
+            {
+                var unit = u;
+                var cell = Swatch(PageSizes.UnitName(unit), UnitFace(unit, current == unit), current == unit, () =>
+                {
+                    var p = _h.Page();
+                    if (p == null) return;
+                    _h.SetPageSize(p.PageSize, p.PageWidth, p.PageHeight, unit);
+                    Refresh();
+                }, badge: PageSizes.Abbrev(unit));
+                ToolTipService.SetToolTip(cell,
+                    page == null
+                        ? "No page is open."
+                        : $"Enter custom artboard sizes in {PageSizes.UnitName(unit).ToLowerInvariant()}.");
+                cell.IsHitTestVisible = page != null;
+                cell.Opacity = page != null ? 1 : 0.45;
+                strip.Children.Add(cell);
+            }
+            panel.Children.Add(HScroll(strip));
+        }
         return panel;
     }
+
+    /// <summary>The disc behind a unit's abbreviation. Neutral, and a touch
+    /// warmer when selected so the ring is not the only signal.</summary>
+    private static Brush UnitFace(PageSizeUnit u, bool selected) =>
+        new SolidColorBrush(selected
+            ? Color.FromArgb(0x38, 0xD9, 0x77, 0x57)
+            : Color.FromArgb(0x22, 0x9A, 0x9A, 0x9A));
 
     // =======================================================================
     // INTERACTION — everything the previous settings dialog carried
@@ -613,6 +663,21 @@ public sealed class SettingsWindow
     private FrameworkElement BuildInteraction()
     {
         var panel = new StackPanel { Spacing = 10 };
+
+        // ---- Touch Input (V3 C / K.14) -----------------------------------
+        // Touch draw used to be a top-bar toggle. It decides what a FINGER does,
+        // which is a preference, not a per-stroke command, so it belongs here.
+        var touch = new StackPanel { Spacing = 2 };
+        touch.Children.Add(Heading("Touch Input"));
+        touch.Children.Add(ChromeUi.ToggleRow("Touch draw", _h.TouchDraw(), v =>
+        {
+            _h.SetTouchDraw(v);
+            _h.Save();
+        }, tip: "On: a finger or the mouse marks the page, exactly like the pen. Off: a finger pans and zooms the canvas and only the pen draws."));
+        touch.Children.Add(Caption(
+            "Off is the pen-first default — your palm and your fingers move the page, and only the pen leaves ink."));
+        panel.Children.Add(touch);
+
         try { _h.FillLegacySettings(panel); }
         catch { panel.Children.Add(Caption("These settings could not be loaded.")); }
         return panel;
@@ -652,8 +717,10 @@ public sealed class SettingsWindow
         src == null ? null : new ImageBrush { ImageSource = src, Stretch = Stretch.UniformToFill };
 
     /// <summary>One circular option button: the preview inside the circle, the
-    /// label underneath, and — when selected — a bold label over an underline.</summary>
-    private static FrameworkElement Swatch(string label, Brush fill, bool selected, Action onTap)
+    /// label underneath, and — when selected — a bold label over an underline.
+    /// <paramref name="badge"/> draws a short caption INSIDE the disc, which is
+    /// what turns the same control into a unit swatch ("mm", "cm", "yd").</summary>
+    private static FrameworkElement Swatch(string label, Brush fill, bool selected, Action onTap, string? badge = null)
     {
         var circle = new Ellipse
         {
@@ -705,7 +772,19 @@ public sealed class SettingsWindow
             Background = new SolidColorBrush(Colors.Transparent),
             Padding = new Thickness(2, 4, 2, 4),
         };
-        stack.Children.Add(new Grid { Width = SwatchDiameter, Height = SwatchDiameter, HorizontalAlignment = HorizontalAlignment.Center, Children = { circle } });
+        var disc = new Grid { Width = SwatchDiameter, Height = SwatchDiameter, HorizontalAlignment = HorizontalAlignment.Center };
+        disc.Children.Add(circle);
+        if (!string.IsNullOrEmpty(badge))
+            disc.Children.Add(new TextBlock
+            {
+                Text = badge,
+                FontSize = 15,
+                FontWeight = selected ? Microsoft.UI.Text.FontWeights.Bold : Microsoft.UI.Text.FontWeights.SemiBold,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = false,
+            });
+        stack.Children.Add(disc);
         stack.Children.Add(text);
         stack.Children.Add(underline);
         ToolTipService.SetToolTip(stack, label);

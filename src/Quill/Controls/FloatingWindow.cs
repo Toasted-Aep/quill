@@ -65,6 +65,17 @@ public sealed class FloatingWindow
 
     public bool IsOpen => _popup.IsOpen;
 
+    /// <summary>Where this window is sitting, in the HOST's coordinates, or null
+    /// when it is closed. A popup is composited outside the host's visual tree,
+    /// so its position cannot be read with TransformToVisual — but the popup's
+    /// own offsets are already expressed relative to the host, which is exactly
+    /// what <see cref="PanelLayout"/> needs to route the canvas panels around
+    /// this window (UI-SPEC-V3 K.21).</summary>
+    public Windows.Foundation.Rect? Bounds => IsOpen
+        ? new Windows.Foundation.Rect(_popup.HorizontalOffset, _popup.VerticalOffset,
+                                      _panel.Width, _panel.Height)
+        : null;
+
     public string Title
     {
         get => _title.Text;
@@ -276,7 +287,7 @@ public sealed class FloatingWindow
         // ElementTheme ApplyTheme sets there. Stamp the resolved theme onto the
         // panel explicitly, or a page-driven dark app would open a light window.
         try { _panel.RequestedTheme = Theme; } catch { }
-        if (!_placed) PlaceAnchoredRight();
+        if (!_placed) PlaceAnchored();
         if (_scroller.Content == null) ShowTab(_active);
         _popup.IsOpen = true;
         // The window is made visible OUTRIGHT and only then animated: a fade that
@@ -311,8 +322,16 @@ public sealed class FloatingWindow
         Closed?.Invoke();
     }
 
-    // Anchored to the right edge, below the toolbars — the reference position.
-    private void PlaceAnchoredRight()
+    /// <summary>Which edge the window first appears against. The export pane
+    /// keeps the reference's right edge; the Objects library opens on the LEFT
+    /// (UI-SPEC-V3 L), which is where Concepts puts it. Only the FIRST placement
+    /// uses this — once the user drags the window, its own position wins.</summary>
+    public enum Side { Right, Left }
+
+    public Side OpenOn { get; set; } = Side.Right;
+
+    // Anchored to an edge, below the toolbars — the reference position.
+    private void PlaceAnchored()
     {
         double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
         if (hostW <= 0 || hostH <= 0)
@@ -321,7 +340,9 @@ public sealed class FloatingWindow
             _host.SizeChanged += FirstPlacement;
             return;
         }
-        _popup.HorizontalOffset = Math.Max(12, hostW - _panel.Width - 18);
+        _popup.HorizontalOffset = OpenOn == Side.Left
+            ? 18
+            : Math.Max(12, hostW - _panel.Width - 18);
         _popup.VerticalOffset = Math.Max(12, Math.Min(96, hostH - _panel.Height - 24));
         _placed = true;
     }
@@ -329,7 +350,7 @@ public sealed class FloatingWindow
     private void FirstPlacement(object sender, SizeChangedEventArgs e)
     {
         _host.SizeChanged -= FirstPlacement;
-        PlaceAnchoredRight();
+        PlaceAnchored();
     }
 
     private void MoveBy(double dx, double dy)

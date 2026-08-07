@@ -337,11 +337,11 @@
                                     <StackPanel x:Name="CustomSizePanel" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
                                         <NumberBox x:Name="CustomWidthBox" Header="W" Minimum="1" Maximum="20000" Width="86" SpinButtonPlacementMode="Compact" ValueChanged="CustomSize_Changed"/>
                                         <NumberBox x:Name="CustomHeightBox" Header="H" Minimum="1" Maximum="20000" Width="86" SpinButtonPlacementMode="Compact" ValueChanged="CustomSize_Changed"/>
-                                        <ComboBox x:Name="CustomUnitCombo" Header="Unit" Width="72" SelectionChanged="CustomSize_Changed">
-                                            <ComboBoxItem Content="px"/>
-                                            <ComboBoxItem Content="mm"/>
-                                            <ComboBoxItem Content="in"/>
-                                        </ComboBox>
+                                        <!-- items are filled from the PageSizeUnit enum in code
+                                             (EnsurePageSizeCombo) so the index always equals the
+                                             enum value; hard-coding three of them here is what
+                                             broke the moment cm/m/ft were appended -->
+                                        <ComboBox x:Name="CustomUnitCombo" Header="Unit" Width="82" SelectionChanged="CustomSize_Changed"/>
                                     </StackPanel>
                                     <TextBlock x:Name="PageSizeInfo" FontSize="11" Opacity="0.65" TextWrapping="Wrap"/>
 

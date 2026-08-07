@@ -293,6 +293,16 @@ public static class Icons
         Models.PenType.Pencil or Models.PenType.Crayon => StrokeGrain,
         _ => StrokeRound,
     };
+    /// Close, for the bare canvas panes. Stroked, because the mark IS two lines.
+    public const string Close = "M5 5 L19 19 M19 5 L5 19";
+
+    /// AI assistant: the four-point spark with its small companion — the mark
+    /// the top bar already carried, lifted here so the status bar's AI button
+    /// and the top bar's cannot drift (V3 K.18 moves it beside Import).
+    /// Authored on the 24 grid rather than the 16 the inline copy used.
+    public const string Ai =
+        "M12 1.5 L14.4 9.6 L22.5 12 L14.4 14.4 L12 22.5 L9.6 14.4 L1.5 12 L9.6 9.6 Z " +
+        "M19.5 2.25 L20.4 5.1 L23.25 6 L20.4 6.9 L19.5 9.75 L18.6 6.9 L15.75 6 L18.6 5.1 Z";
 
     // ---- factories -------------------------------------------------------
 
