@@ -227,6 +227,12 @@ public static class LibraryStore
         LoadError = null;
         try
         {
+            // Touch the settings getter FIRST. SettingsUnreadable starts false and is
+            // only ever set by that getter, so checking it before anything has read
+            // settings.json made this whole guard dead code - the worker thread got
+            // here ten lines before the first read, saw false, and sailed past.
+            _ = Settings;
+
             // Where the library lives comes out of settings.json. If that file is
             // there but unreadable we do not know the answer, and guessing means
             // opening the DEFAULT folder, finding nothing, seeding a fresh library
@@ -349,6 +355,18 @@ public static class LibraryStore
     /// backups into it. Returns the new folder path.</summary>
     public static void SetDataFolder(string newFolder, Library current)
     {
+        // Dir prefers QUILL_DATA_FOLDER, but SettingsPath is always the real
+        // anchor - so in a test process this would persist newFolder into the
+        // USER'S settings.json while writing the library into the env folder,
+        // leaving newFolder empty. The next real launch would then find nothing
+        // there, seed a fresh library and autosave it over the top. The env
+        // override exists to keep tests away from the user's data; it must not
+        // become another route into it.
+        if (EnvFolder != null)
+        {
+            WriteError = "Storage folder cannot be changed while QUILL_DATA_FOLDER is set.";
+            return;
+        }
         try
         {
             Directory.CreateDirectory(newFolder);
