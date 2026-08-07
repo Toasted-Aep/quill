@@ -248,6 +248,12 @@ public sealed class ToolWheel
     private readonly Path _pop = new();            // the active sector, at 1.19 R
     private readonly Canvas[] _mark = new Canvas[Slots];
     private readonly TextBlock[] _label = new TextBlock[Slots];
+    // §1.2: when a sector is pulled out to 1.19 R its contents go with it.
+    // Without this the mark and the label stay on the ring's own mid-band and
+    // the popped wedge reads as an empty black tab with the icon stuck at its
+    // base - which is what it looked like on screen.
+    private readonly TranslateTransform[] _markT = new TranslateTransform[Slots];
+    private readonly TranslateTransform[] _labelT = new TranslateTransform[Slots];
     private readonly Ellipse _disc = new();
     private readonly Path[] _rimArc = new Path[Slots];
     private readonly Ellipse _dot = new();
@@ -705,6 +711,12 @@ public sealed class ToolWheel
             _mark[i].Opacity = a;
             _label[i].Opacity = a;
 
+            // Ride outward with the pop, along the sector's own radius.
+            double push = act ? (PopOut - RingOut) / 2 : 0;
+            var outward = Polar(SlotMid(i), push);
+            _markT[i].X = outward.X; _markT[i].Y = outward.Y;
+            _labelT[i].X = outward.X; _labelT[i].Y = outward.Y;
+
             // §1.5: a 45° arc on the disc rim, in the tool's colour, aligned to
             // its sector. Neutral tools paint nothing at all.
             var arc = SlotColour(id);
@@ -952,11 +964,18 @@ public sealed class ToolWheel
             double mid = SlotMid(i);
 
             var at = Pt(mid, MarkR);
+            // Rotate FIRST, then translate: a TransformGroup applies its children
+            // in order, so the translate lands in the parent's (screen) space and
+            // can be a plain radial offset rather than a rotated one.
+            _markT[i] = new TranslateTransform();
+            var mg = new TransformGroup();
+            mg.Children.Add(new RotateTransform { Angle = mid });
+            mg.Children.Add(_markT[i]);
             var g = new Canvas
             {
                 Width = MarkBox, Height = MarkBox, IsHitTestVisible = false,
                 RenderTransformOrigin = new Point(0.5, 0.5),
-                RenderTransform = new RotateTransform { Angle = mid }
+                RenderTransform = mg
             };
             Canvas.SetLeft(g, at.X - MarkBox / 2);
             Canvas.SetTop(g, at.Y - MarkBox / 2);
@@ -964,6 +983,10 @@ public sealed class ToolWheel
             _wheel.Children.Add(g);
 
             var lp = Pt(mid, LabelR);
+            _labelT[i] = new TranslateTransform();
+            var lg = new TransformGroup();
+            lg.Children.Add(new RotateTransform { Angle = mid });
+            lg.Children.Add(_labelT[i]);
             var t = new TextBlock
             {
                 Width = 52,
@@ -972,7 +995,7 @@ public sealed class ToolWheel
                 TextAlignment = TextAlignment.Center,
                 IsHitTestVisible = false,
                 RenderTransformOrigin = new Point(0.5, 0.5),
-                RenderTransform = new RotateTransform { Angle = mid }
+                RenderTransform = lg
             };
             Canvas.SetLeft(t, lp.X - 26);
             Canvas.SetTop(t, lp.Y - LabelSize * 0.72);
@@ -1376,6 +1399,9 @@ public sealed class ToolWheel
         if (slot < 0 || slot >= Slots) return;
         string id = ResolveSlots()[slot];
         if (!Available(id)) { Refresh(); return; }
+        // A value card belongs to the tool that was live when it opened, so
+        // changing tool closes it rather than silently re-pointing it.
+        _popover.Close();
         ClearHover();
         if (PenOf(id) is { } pen) { _h.ApplyPreset(pen); return; }
         if (id.StartsWith(KindTool, StringComparison.Ordinal)) { _h.SelectTool(id[KindTool.Length..]); return; }
@@ -1630,6 +1656,9 @@ public sealed class ToolWheel
     /// is most of the time right after launch - the disc used to look dead.</summary>
     private void ShowColourPicker()
     {
+        // The popover is about the pen's NUMBERS; the wheel is about its colour.
+        // Leaving the card up underneath the ring just buried it.
+        _popover.Close();
         var ap = ActivePen() ?? _h.Library().Pens.FirstOrDefault();
         if (ap == null) return;
         var start = ColorUtil.Parse(ap.Color);

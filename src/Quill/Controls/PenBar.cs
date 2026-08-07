@@ -94,6 +94,16 @@ public sealed class PenBar
 
     private readonly Grid _layer;
     private readonly StackPanel _cells = new();
+    // The bar is a LIST of the user's own pens plus the tool cells, so its
+    // natural height is however many pens they have - twelve of them is 1032 DIP
+    // and runs off the bottom of any window, taking undo with it. The cells
+    // scroll inside a panel capped to the viewport instead.
+    private readonly ScrollViewer _scroll = new()
+    {
+        VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        VerticalScrollMode = ScrollMode.Auto,
+    };
     private readonly Border _bar;
     private readonly StackPanel _setRows = new() { Spacing = 0 };
     private readonly Border _settings;
@@ -109,6 +119,23 @@ public sealed class PenBar
     private bool _want;
     private readonly HashSet<string> _blocks = new(StringComparer.Ordinal);
 
+    /// <summary>Headroom the dock leaves at the top, in DIPs. The floating
+    /// chrome bar sits above the tool surface, and without this the bar's first
+    /// cell and its attached settings panel are drawn UNDER it - the chrome has
+    /// the higher z-index, so it wins. ChromeBars pushes its measured height
+    /// here exactly as it does for the dial.</summary>
+    public double TopInset
+    {
+        get => _topInset;
+        set
+        {
+            if (Math.Abs(_topInset - value) < 0.5) return;
+            _topInset = value;
+            if (_on) Place();
+        }
+    }
+    private double _topInset;
+
     /// <summary>A host predicate that vetoes the bar. Same contract as
     /// <see cref="ToolWheel.IsBlocked"/> — the notebook gallery and the floating
     /// Notebooks window (V3 K.1, K.6) apply to BOTH surfaces, and a fix that
@@ -122,9 +149,10 @@ public sealed class PenBar
         _hostGrid = host; _surface = surface; _h = h;
 
         _cells.Orientation = Orientation.Vertical;
+        _scroll.Content = _cells;
         _bar = new Border
         {
-            Child = _cells,
+            Child = _scroll,
             Width = BarW,
             CornerRadius = new CornerRadius(Radius),   // §2 radius 16
             BorderThickness = new Thickness(1),        // §2 hairline Outline
@@ -258,12 +286,16 @@ public sealed class PenBar
         _scale = _h.Library().TouchMode ? 1.1 : 1.0;
 
         bool right = string.Equals(_h.Library().PenDock, "Right", StringComparison.OrdinalIgnoreCase);
-        _bar.Measure(new Size(BarW, double.PositiveInfinity));
-        double barH = Math.Max(CellH, _bar.DesiredSize.Height);
         const double pad = 14;
+        double top = pad + _topInset;
+        // Room for undo below the panel, and never taller than what is left.
+        double room = Math.Max(CellH, h - top - pad - (SatSize + 24));
+        _cells.Measure(new Size(BarW, double.PositiveInfinity));
+        double barH = Math.Clamp(_cells.DesiredSize.Height, CellH, room);
+        _bar.Height = barH;
 
         double x = right ? Math.Max(pad, w - BarW - pad) : pad;
-        double y = Math.Clamp((h - barH) / 2, pad, Math.Max(pad, h - barH - pad - 46));
+        double y = Math.Clamp(top + (h - top - barH) / 2, top, Math.Max(top, h - barH - pad - (SatSize + 24)));
         _bar.Margin = new Thickness(x, y, 0, 0);
 
         // §2.1: docked to the RIGHT of the first cell. On a right-hand dock that

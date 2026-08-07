@@ -49,7 +49,7 @@ public sealed class ValuePopover
     private const double Pad = 14;
     private const double TrackH = 2;        // §1.7: a 2 DIP track
     private const double KnobR = 7;         // §1.7: a filled round knob, radius 7
-    private const double TickH = 7;
+    private const double TickH = 9;
 
     /// <summary>What the popover is editing. The caller owns the value; this
     /// control only reads and writes it through the delegates.</summary>
@@ -285,15 +285,18 @@ public sealed class ValuePopover
         double mid = _ticks.Height / 2;
         foreach (double p in _spec.Presets)
         {
+            // Darker than the track, not lighter: a tick painted at a LOWER
+            // alpha than the 55% track it crosses is invisible by construction,
+            // which is exactly how it looked on screen.
             var t = new Rectangle
             {
-                Width = 1.5,
+                Width = 2,
                 Height = TickH,
-                RadiusX = 0.75,
-                RadiusY = 0.75,
-                Fill = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 90)),
+                RadiusX = 1,
+                RadiusY = 1,
+                Fill = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 210)),
             };
-            Canvas.SetLeft(t, KnobR + p * (w - KnobR * 2) - 0.75);
+            Canvas.SetLeft(t, KnobR + p * (w - KnobR * 2) - 1);
             Canvas.SetTop(t, mid - TickH / 2);
             _ticks.Children.Add(t);
         }
@@ -363,11 +366,20 @@ public sealed class ValuePopover
     // ===================================================================
     private void Paint()
     {
-        // §1.7: "fill Surface at 78% with a blur, no border". The blur is the
-        // page showing through rather than a backdrop effect: an AcrylicBrush
-        // over a Win2D canvas samples the swap chain a frame late and smears
-        // while the ink moves under it.
-        _card.Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.Surface, 199));
+        // §1.7 asks for "Surface at 78% with a blur". The BLUR is the half of
+        // that which cannot be had here: an AcrylicBrush over a Win2D swap chain
+        // samples it a frame late and smears every time the ink moves
+        // underneath. Without a blur, 78% is not translucency - it is the page's
+        // own text reading straight through the card, which is exactly how it
+        // looked on screen and made the numbers unreadable. The card is opaque
+        // until there is a blur to put behind it.
+        //
+        // Opacity is pinned on the way past for the same reason: this element is
+        // parked in whichever surface's layer is up, and a layer that fades
+        // itself in would otherwise multiply straight through the card.
+        _card.Background = new SolidColorBrush(PageTheme.Surface);
+        _card.Opacity = 1;
+        _root.Opacity = 1;
         _card.BorderThickness = new Thickness(0);
         _caption.Foreground = new SolidColorBrush(PageTheme.OnSurfaceMuted);
         _track.Fill = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 140));
@@ -392,8 +404,23 @@ public sealed class ValuePopover
     {
         // §1.7: the active chip is a filled rounded chip in a RAISED surface with
         // OnSurface text; the others are bare OnSurfaceMuted with no fill at all.
-        chip.Background = new SolidColorBrush(active ? PageTheme.SurfaceAlt : Colors.Transparent);
+        //
+        // SurfaceAlt is only 4 L* from Surface - it is the right token for a
+        // heading band on the PAGE, and invisible for a chip sitting ON Surface,
+        // which is how it came out on screen. The raise is taken toward
+        // OnSurface instead, so it reads on a paper, a blue or a kraft ground
+        // alike rather than only on one of them.
+        chip.Background = new SolidColorBrush(active ? Mix(PageTheme.Surface, PageTheme.OnSurface, 0.14) : Colors.Transparent);
         if (chip.Child is TextBlock t)
             t.Foreground = new SolidColorBrush(active ? PageTheme.OnSurface : PageTheme.OnSurfaceMuted);
+    }
+
+    private static Color Mix(Color a, Color b, double t)
+    {
+        t = Math.Clamp(t, 0, 1);
+        return Color.FromArgb(255,
+            (byte)Math.Round(a.R + (b.R - a.R) * t),
+            (byte)Math.Round(a.G + (b.G - a.G) * t),
+            (byte)Math.Round(a.B + (b.B - a.B) * t));
     }
 }
