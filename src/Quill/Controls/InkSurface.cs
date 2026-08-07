@@ -3484,6 +3484,14 @@ public sealed class InkSurface : UserControl
             try { var c = ColorUtil.Parse(_page.GridColor); gridColor = Color.FromArgb(gridColor.A, c.R, c.G, c.B); }
             catch { }
         }
+        // Grid opacity (UI-SPEC-V3 C) is a MULTIPLIER over the automatic alpha
+        // above, never a replacement for it: 1 is exactly the grid this build
+        // has always drawn, and the setting can only ever fade it out.
+        double gridOpacity = Math.Clamp(_page.GridOpacity, 0, 1);
+        if (gridOpacity < 1)
+            gridColor = Color.FromArgb((byte)Math.Round(gridColor.A * gridOpacity),
+                                       gridColor.R, gridColor.G, gridColor.B);
+        if (gridColor.A == 0) return;
         float lw = 1f / ViewZoom;
 
         switch (_page.Grid)

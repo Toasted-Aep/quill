@@ -5062,6 +5062,8 @@ public sealed partial class MainWindow : Window
             },
             SetGridSpacing = v => { if (_curPage != null) { _curPage.GridSpacing = v; Surface.Refresh(); ScheduleSave(); } },
             SetGridColor = c => { if (_curPage != null) { _curPage.GridColor = c; Surface.Refresh(); ScheduleSave(); } },
+            SetGridOpacity = v => { if (_curPage != null) { _curPage.GridOpacity = Math.Clamp(v, 0, 1); Surface.Refresh(); ScheduleSave(); } },
+            ApplyKeyPreset = ApplyKeyPreset,
             SetPageSize = (preset, w, h, unit) =>
             {
                 if (_curPage == null) return;
@@ -6917,6 +6919,15 @@ public sealed partial class MainWindow : Window
 
         RootGrid.KeyboardAccelerators.Clear();
         var rows = new List<(string Combo, string Label)>();
+        // Settings > Interaction > Keyboard & Mouse can switch the whole layout
+        // off (CONCEPTS-REF 3.3). Off installs no accelerator at all; the F1
+        // sheet still builds and says why it is empty.
+        if (!_library.KeyboardShortcuts)
+        {
+            BuildShortcutsSheet(id, rows,
+                new List<string> { "Keyboard shortcuts are switched off in Settings > Interaction." });
+            return;
+        }
         var dropped = new List<string>();
         var taken = new Dictionary<(VKey, VMod), string>();
 
