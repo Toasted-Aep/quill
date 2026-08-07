@@ -1760,17 +1760,56 @@ public sealed partial class MainWindow : Window
         catch { return true; }
     }
 
-    private bool ResolvedDark()
+    // =======================================================================
+    // The page-derived palette (CONCEPTS-REF-2026-08-07 §0/§6/§7)
+    //
+    // Quill's chrome is NOT a light theme and a dark theme. Every custom-drawn
+    // surface - the dial, the pen row, the value popover, the floating bars, the
+    // export and objects windows - reads Quill.Services.PageTheme, and PageTheme
+    // derives its whole palette from ONE colour: the ground. A blue page gives
+    // blue chrome, a kraft page gives brown chrome. Light and dark fall out of
+    // the ground's luminance rather than being picked.
+    //
+    // Nothing else in the app may call PageTheme.SetGround. This is the only
+    // place that knows what the ground currently is, so it is the only place
+    // allowed to say so.
+    // =======================================================================
+
+    /// <summary>The ONE read of the paper ground table. A texture is a ground
+    /// plus grain and only the GROUND feeds the derivation, so this deliberately
+    /// never looks at the grain. Kept as a single call site because the textures
+    /// are being rebuilt on another branch: if that table is renamed, exactly
+    /// one line here changes.</summary>
+    private static Color PaperGround(NotePage page) => PaperTextures.Ground(page);
+
+    /// <summary>The colour the whole shell derives from.
+    ///
+    /// <para>ThemeSource "Page": the ACTIVE PAGE's effective ground - the fixed
+    /// colour of its paper for Blueprint / Brown / Darkprint, its own background
+    /// otherwise. With no page open (gallery, startup) there is no page to derive
+    /// from, so it falls through.</para>
+    ///
+    /// <para>ThemeSource "Manual": the ground the user pinned, expressed as the
+    /// colour the root actually paints under that choice - including OLED black,
+    /// so pinning Dark with OLED on gives the chrome the true black ground it is
+    /// really sitting on rather than a near-black one it is not.</para></summary>
+    private Color ResolveGround()
     {
-        // "Follow page background" (§paper-theme): the ACTIVE PAGE decides. The
-        // page's EFFECTIVE ground is used, not its raw hex, so a Blueprint or
-        // Darkprint page reads dark even though its stored colour is incidental.
-        // With no page open yet (gallery / startup) fall through to the explicit
-        // mode, which is also what an existing library always does.
         if (_library.ThemeSource == "Page" && _curPage != null)
-            return ColorUtil.IsDark(PaperTextures.Ground(_curPage));
-        return _library.Theme == "System" ? SystemPrefersDark() : _library.Theme == "Dark";
+            return PaperGround(_curPage);
+        bool dark = _library.Theme == "System" ? SystemPrefersDark() : _library.Theme == "Dark";
+        return dark
+            ? (_library.OledBlack ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 0x0F, 0x0E, 0x10))
+            : Color.FromArgb(255, 0xF7, 0xF6, 0xF1);
     }
+
+    /// <summary>Whether the shell is on its dark resolution. Answered by
+    /// PageTheme's own threshold and never by a second one: ColorUtil.IsDark
+    /// averages the raw bytes and puts Brown Paper on the LIGHT side, and Brown
+    /// Paper is one of the three cases §7 calls out as dark with white text.
+    /// Two thresholds would mean the WinUI controls and the custom chrome
+    /// disagreed about the same page.</summary>
+    private bool ResolvedDark() => PageTheme.Luminance(ResolveGround()) < 0.5;
 
     // The theme ApplyTheme last committed. ApplyTheme rebuilds the tree, the pen
     // strip, the calc history, the gallery and the canvas, so calling it on every
@@ -1778,14 +1817,49 @@ public sealed partial class MainWindow : Window
     // is the gate: re-derive cheaply, and only apply when the answer CHANGED.
     private bool? _appliedDark;
 
-    /// <summary>Re-derives the theme after something that can change it (page
-    /// open/switch, page background change, paper change) and applies it only if
-    /// it actually differs from what is on screen.</summary>
-    private void SyncThemeToPage()
+    // The colour picker calls back on EVERY drag frame, so pushing the ground
+    // straight through would re-derive the palette and repaint every custom
+    // surface dozens of times a second while the user scrubs. Coalesce.
+    private DispatcherTimer? _groundTimer;
+
+    /// <summary>Re-points <see cref="PageTheme"/> at whatever the ground is now.
+    /// Call after anything that can move it: page open, page switch, background
+    /// change, paper change, theme-source change.
+    ///
+    /// <para>Discrete events (opening a page, picking a paper) pass
+    /// <paramref name="immediate"/> so a new page never shows for a frame under
+    /// the old page's chrome. Continuous ones (dragging the background picker)
+    /// do not, and are coalesced onto one tick.</para></summary>
+    private void SyncThemeToPage(bool immediate = false)
     {
-        if (_library.ThemeSource != "Page") return;
-        if (_appliedDark == ResolvedDark()) return;   // no change: no rebuild
-        ApplyTheme();
+        if (immediate)
+        {
+            _groundTimer?.Stop();
+            PushGround();
+            return;
+        }
+        if (_groundTimer == null)
+        {
+            _groundTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
+            _groundTimer.Tick += (_, _) => { _groundTimer!.Stop(); PushGround(); };
+        }
+        _groundTimer.Stop();
+        _groundTimer.Start();
+    }
+
+    /// <summary>Hands the current ground to <see cref="PageTheme"/> and, only if
+    /// that flipped the shell between its light and dark resolutions, rebuilds
+    /// the WinUI side with it.
+    ///
+    /// <para>The two halves are separate on purpose. Moving from a blue page to a
+    /// brown one repaints every custom surface (through PageTheme.Changed) but
+    /// must NOT rebuild the tree, the gallery and the pen strip: those read WinUI
+    /// theme resources, which did not move, and rebuilding them on every page
+    /// turn is the cost ApplyTheme's gate has always existed to avoid.</para></summary>
+    private void PushGround()
+    {
+        PageTheme.SetGround(ResolveGround());   // idempotent; raises Changed only on a real move
+        if (_appliedDark != PageTheme.IsDark) ApplyTheme();
     }
 
     // Code-built UI captures its strings at build time exactly the way it
@@ -1811,7 +1885,13 @@ public sealed partial class MainWindow : Window
 
     private void ApplyTheme()
     {
-        bool dark = ResolvedDark();
+        // The palette first: everything rebuilt below - the floating bars, the
+        // settings panel, the dial - reads PageTheme, so it has to be pointing
+        // at the right ground already or they all rebuild from the old one. This
+        // also covers every MANUAL route in (the theme combo, the sun/moon pill,
+        // the OLED toggle), none of which goes through SyncThemeToPage.
+        PageTheme.SetGround(ResolveGround());
+        bool dark = PageTheme.IsDark;
         _appliedDark = dark;   // the anti-thrash baseline SyncThemeToPage compares against
         ApplyOledBlack(dark && _library.OledBlack);
         // with a live Mica/acrylic backdrop the root goes translucent so the
@@ -2048,6 +2128,9 @@ public sealed partial class MainWindow : Window
         res["SystemAccentColorDark1"] = Mix(c, Colors.Black, 0.12);
         res["SystemAccentColorDark2"] = Mix(c, Colors.Black, 0.25);
         res["SystemAccentColorDark3"] = Mix(c, Colors.Black, 0.38);
+        // §6: the accent is the USER's choice, not the paper's - PageTheme leaves
+        // it untouched by the derivation, but it still has to be told what it is.
+        PageTheme.Accent = c;
         if (refreshTheme) RefreshThemeForAccent();
     }
 
@@ -3316,9 +3399,10 @@ public sealed partial class MainWindow : Window
         }
 
         Surface.LoadPage(page);
-        // §paper-theme: the page that is now active may be light where the last
-        // one was dark. Cheap re-derive; only rebuilds the chrome if it flipped.
-        SyncThemeToPage();
+        // §paper-theme: the page that is now active carries its own ground and
+        // the whole shell derives from it. Immediate - a page must never appear
+        // for a frame wearing the previous page's chrome.
+        SyncThemeToPage(immediate: true);
         if (pageChanged && !_suppressPageFade)
         {
             // gentle cross-fade so the new page eases in rather than snapping
@@ -6125,7 +6209,7 @@ public sealed partial class MainWindow : Window
         _curPage.Paper = string.IsNullOrEmpty(paper) ? null : paper;
         if (!string.IsNullOrEmpty(hex)) { SetPageBackground(hex); return; }   // that path syncs + saves
         Surface.Refresh();
-        SyncThemeToPage();
+        SyncThemeToPage(immediate: true);   // a discrete pick, not a drag
         ScheduleSave();
     }
 
