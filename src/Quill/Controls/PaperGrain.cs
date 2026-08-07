@@ -68,7 +68,10 @@ public static class PaperGrain
         // the checkerboard averages to a light neutral, so a transparent page is a LIGHT page
         PaperKind.Transparent => (0xF2, 0xF2, 0xF2),
         PaperKind.Crumpled    => (0xF0, 0xEC, 0xE3),
-        PaperKind.Lightweight => (0xF7, 0xF5, 0xF0),
+        // luma 243, a hair off Plain White's 255 — enough headroom that the
+        // grain's bright tail does not clip flat, and enough separation that the
+        // two read as different papers in the swatch row
+        PaperKind.Lightweight => (0xF5, 0xF3, 0xEE),
         PaperKind.Heavyweight => (0xE9, 0xE4, 0xD9),   // visibly greyer than Lightweight, per §8
         PaperKind.Rippled     => (0xF3, 0xF0, 0xE8),
         PaperKind.Blueprint   => (0x2E, 0x80, 0xC2),   // Y = 0.199  -> dark chrome
@@ -166,10 +169,12 @@ public static class PaperGrain
     private static void Lightweight(float[] dr, float[] dg, float[] db)
     {
         var d = new float[N];
-        Fbm(d, 64, 64, 4, 0.52f, 27.0f, 1301);    // fibre: 8px down to 1px
-        Fbm(d, 8, 8, 3, 0.55f, 9.0f, 1307);       // cloud: gentle 64px shading
-        Fbm(d, 6, 96, 2, 0.50f, 4.5f, 1319);      // faint machine direction
-        Flecks(d, d, d, 260, 2.1f, 1.0f, -6.0f, 0.0f, 1327);   // sparse inclusions
+        Fbm(d, 64, 64, 4, 0.52f, 32.0f, 1301);    // fibre: 8px down to 1px
+        Fbm(d, 20, 20, 3, 0.55f, 10.0f, 1303);    // mid: breaks the fibre up so it
+                                                  // does not read as even static
+        Fbm(d, 8, 8, 3, 0.55f, 12.0f, 1307);      // cloud: gentle 64px shading
+        Fbm(d, 6, 96, 2, 0.50f, 6.0f, 1319);      // faint machine direction
+        Flecks(d, d, d, 260, 2.1f, 1.0f, -7.0f, 0.0f, 1327);   // sparse inclusions
         Spread(d, dr, dg, db);
     }
 
@@ -178,11 +183,20 @@ public static class PaperGrain
     private static void Heavyweight(float[] dr, float[] dg, float[] db)
     {
         var d = new float[N];
-        Fbm(d, 20, 20, 5, 0.55f, 30.0f, 2203);    // the tooth
-        Fbm(d, 5, 80, 3, 0.52f, 15.0f, 2207);     // machine direction streak
-        Fbm(d, 3, 3, 3, 0.55f, 13.0f, 2213);      // cloud
-        Fbm(d, 128, 128, 2, 0.50f, 7.0f, 2221);   // surface tooth, 1-4px
-        Flecks(d, d, d, 520, 2.6f, 1.3f, -9.0f, 0.55f, 2237);
+        // Nearly all the energy sits in the TOOTH — 16px down to 1px. That is
+        // what "coarse" means on cartridge paper: a bumpy surface, not a patchy
+        // one.
+        Fbm(d, 32, 32, 5, 0.55f, 62.0f, 2203);
+        Fbm(d, 128, 128, 2, 0.50f, 14.0f, 2221);  // finest tooth, 1-4px
+        Fbm(d, 12, 12, 3, 0.55f, 16.0f, 2211);    // mild cloudiness, ~40px
+        Fbm(d, 6, 90, 3, 0.52f, 12.0f, 2207);     // machine direction streak
+        // The 170px octave is kept DELIBERATELY tiny. The eye reads large-area
+        // luminance differences far more readily than it reads fine grain, so
+        // even a couple of levels here is enough to make the sheet look damp-
+        // stained rather than thick — it was the whole reason the first pass of
+        // this paper looked dirty, at an amplitude that barely moved sigma.
+        Fbm(d, 3, 3, 2, 0.55f, 5.0f, 2213);
+        Flecks(d, d, d, 520, 2.6f, 1.3f, -13.0f, 0.55f, 2237);
         Spread(d, dr, dg, db);
     }
 
@@ -263,8 +277,8 @@ public static class PaperGrain
         var d = new float[N];
         Shade(h, d, -0.62f, -0.68f, 190f);       // lit from the upper left
         Ambient(h, d, 11.0f);                    // deep folds sit in shadow overall
-        Fbm(d, 96, 96, 3, 0.52f, 7.5f, 3323);    // fine grain over the relief
-        Fbm(d, 24, 24, 3, 0.55f, 5.0f, 3329);
+        Fbm(d, 96, 96, 3, 0.52f, 11.0f, 3323);   // fine grain over the relief
+        Fbm(d, 24, 24, 3, 0.55f, 8.0f, 3329);
         Spread(d, dr, dg, db);
     }
 
@@ -295,10 +309,13 @@ public static class PaperGrain
         BoxBlurWrap(h, 1);
 
         var d = new float[N];
-        Shade(h, d, -0.22f, -0.86f, 150f);       // light from above: crest lit, trough dark
-        Ambient(h, d, 5.0f);
-        Fbm(d, 72, 72, 3, 0.52f, 6.0f, 4421);
-        Fbm(d, 12, 12, 3, 0.55f, 4.0f, 4423);
+        // Deliberately gentler than Crumpled: a ripple is a standing wave in the
+        // sheet, not a fold, and at Crumpled's amplitude it stops reading as
+        // paper and starts reading as corrugated iron.
+        Shade(h, d, -0.22f, -0.86f, 96f);        // light from above: crest lit, trough dark
+        Ambient(h, d, 3.4f);
+        Fbm(d, 72, 72, 3, 0.52f, 9.0f, 4421);
+        Fbm(d, 12, 12, 3, 0.55f, 6.0f, 4423);
         Spread(d, dr, dg, db);
     }
 
@@ -307,9 +324,9 @@ public static class PaperGrain
     private static void Blueprint(float[] dr, float[] dg, float[] db)
     {
         var d = new float[N];
-        Fbm(d, 48, 48, 4, 0.52f, 21.0f, 5501);
-        Fbm(d, 4, 4, 3, 0.55f, 9.0f, 5507);      // the uneven wash of a diazo print
-        Fbm(d, 8, 110, 2, 0.50f, 5.0f, 5519);
+        Fbm(d, 48, 48, 4, 0.52f, 30.0f, 5501);
+        Fbm(d, 4, 4, 3, 0.55f, 14.0f, 5507);     // the uneven wash of a diazo print
+        Fbm(d, 8, 110, 2, 0.50f, 7.0f, 5519);
         Spread(d, dr, dg, db);
     }
 
@@ -318,8 +335,8 @@ public static class PaperGrain
     private static void Darkprint(float[] dr, float[] dg, float[] db)
     {
         var d = new float[N];
-        Fbm(d, 56, 56, 4, 0.52f, 15.0f, 6601);
-        Fbm(d, 5, 5, 3, 0.55f, 7.0f, 6607);
+        Fbm(d, 56, 56, 4, 0.52f, 21.0f, 6601);
+        Fbm(d, 5, 5, 3, 0.55f, 10.0f, 6607);
         Spread(d, dr, dg, db);
     }
 
@@ -332,19 +349,23 @@ public static class PaperGrain
     private static void BrownPaper(float[] dr, float[] dg, float[] db)
     {
         var d = new float[N];
-        Fbm(d, 18, 18, 5, 0.55f, 23.0f, 7701);    // tooth
-        Fbm(d, 4, 72, 3, 0.52f, 15.0f, 7703);     // machine direction
-        Fbm(d, 3, 3, 3, 0.55f, 10.0f, 7717);      // cloud
-        Fbm(d, 110, 110, 2, 0.50f, 7.0f, 7723);   // surface fleck
+        Fbm(d, 18, 18, 5, 0.55f, 46.0f, 7701);    // tooth — kraft is coarse
+        // Kraft IS machine-directional, but this pass has to stay well under the
+        // isotropic tooth. Run it any louder and the long axis wins outright: the
+        // sheet stops looking like paper made of pressed fibre and starts looking
+        // like wood veneer, which is the failure this number is guarding.
+        Fbm(d, 4, 72, 3, 0.52f, 14.0f, 7703);
+        Fbm(d, 3, 3, 3, 0.55f, 14.0f, 7717);      // cloud
+        Fbm(d, 110, 110, 2, 0.50f, 13.0f, 7723);  // surface fleck
         Spread(d, dr, dg, db);
 
         // Dark shives: long, thin, near-horizontal and warm — they take the blue
         // channel down hardest, which is what makes them look like wood rather
         // than like dirt.
-        Flecks(dr, dg, db, 420, 5.5f, 0.85f, -16f, 0.20f, 7741, elongate: true,
+        Flecks(dr, dg, db, 420, 5.5f, 0.85f, -22f, 0.20f, 7741, elongate: true,
                tintG: 0.78f, tintB: 0.55f);
         // Pale flecks: filler, and the odd bleached fibre.
-        Flecks(dr, dg, db, 200, 2.4f, 1.1f, 13f, 0.35f, 7757, elongate: true,
+        Flecks(dr, dg, db, 200, 2.4f, 1.1f, 18f, 0.35f, 7757, elongate: true,
                tintG: 0.95f, tintB: 0.90f);
     }
 
