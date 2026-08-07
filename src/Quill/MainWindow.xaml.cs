@@ -517,8 +517,13 @@ public sealed partial class MainWindow : Window
         // radial + colour branches were built to meet at). V3 K.2: opened from
         // the disc, the ring is CENTRED ON THE DIAL, so the point is a mount
         // point here and not the usual hint.
+        // Reference section 9.3: the wheel opens on the dial's COLOUR DOT and the
+        // dial does not move. The last argument is how much of the wheel's hole
+        // the dial itself fills, so the wheel can hold its hub chrome outside it.
         _toolWheel.ColourPickerHook =
-            (pt, current, changed, closed) => ColorPickerService.Open(pt, current, changed, closed, centreOnPoint: true);
+            (pt, current, changed, closed, clearance) =>
+                ColorPickerService.Open(pt, current, changed, closed,
+                                        centreOnPoint: true, hubClearance: clearance);
         // V3 K.1 and K.6. The dial belongs over a PAGE: never over the notebook
         // gallery, and never underneath the floating Notebooks window it shares
         // the top-left dock with. ApplyPenRowVisibility recomputes the dial from
@@ -642,6 +647,14 @@ public sealed partial class MainWindow : Window
         _chromeBars.Layout.Register("calc", CalcPanel);
         _chromeBars.Layout.RegisterByAutomationId("dial", CanvasArea, "ToolWheel");
         _chromeBars.Layout.RegisterByAutomationId("penbar", CanvasArea, "PenBar");
+        // Section 9.3 asks for the floating bars and any open pane to be pushed
+        // aside while the COPIC wheel is up. The wheel reports itself as an
+        // obstacle over the whole canvas and the existing solver does the rest.
+        _chromeBars.Layout.RegisterRect("copic", () =>
+            ColorPickerService.Obstructing && CanvasArea.ActualWidth > 0
+                ? new Rect(0, 0, CanvasArea.ActualWidth, CanvasArea.ActualHeight)
+                : (Rect?)null);
+        ColorPickerService.ObstacleChanged += () => _chromeBars?.Layout.Invalidate();
     }
 
     private void LogStartupFault(string what, Exception? ex)
