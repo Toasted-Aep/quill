@@ -48,20 +48,22 @@ namespace Quill.Controls;
 public sealed class PenBar
 {
     // §2: "Width ~86 DIP", "One cell per tool, ~86 DIP tall".
-    private const double BarW = 86;
-    private const double CellH = 86;
-    private const double MarkBox = 34;          // §2 "the stroke silhouette (~34 DIP)"
-    private const double LabelSize = 13;        // §2 "the size label in 13 DIP beneath"
+    // 9.1 re-measured these off the dark-theme capture: the section 2 figures
+    // were about 1.5x life size.
+    private const double BarW = 56;
+    private const double CellH = 62;
+    private const double MarkBox = 27;          // §2 "the stroke silhouette (~34 DIP)"
+    private const double LabelSize = 10;        // §2 "the size label in 13 DIP beneath"
     private const double RuleH = 2;             // §2 the active cell's rule
-    private const double Radius = 16;
+    private const double Radius = 12;
 
     // §2.1 the attached settings popover.
-    private const double SetW = 96;
-    private const double SetRadius = 14;
-    private const double SetGlyph = 24;   // see ToolWheel.SetBox: marks are no longer stretched
-    private const double DotSize = 34;          // §2.1 "the colour dot (filled, ~34 DIP)"
+    private const double SetW = 62;
+    private const double SetRadius = 10;
+    private const double SetGlyph = 17;   // see ToolWheel.SetBox: marks are no longer stretched
+    private const double DotSize = 22;          // §2.1 "the colour dot (filled, ~34 DIP)"
 
-    private const double SatSize = 30;          // undo, same treatment as §1.6
+    private const double SatSize = 22;          // undo, same treatment as §1.6
     private const int TapMs = 450;
     private const double TapSlop = 8;
 
@@ -107,8 +109,17 @@ public sealed class PenBar
     private readonly Border _bar;
     private readonly StackPanel _setRows = new() { Spacing = 0 };
     private readonly Border _settings;
-    private readonly Canvas _undoArt = new();
-    private readonly Border _undoHit;
+    // 9.1: undo AND redo, side by side below the panel. The dark capture shows
+    // the pair; only undo was here.
+    private readonly Canvas _undoArt = new(), _redoArt = new();
+    private readonly Border _undoHit, _redoHit;
+    private readonly StackPanel _satellites = new()
+    {
+        Orientation = Orientation.Horizontal,
+        Spacing = 2,
+        HorizontalAlignment = HorizontalAlignment.Left,
+        VerticalAlignment = VerticalAlignment.Top,
+    };
     private readonly ValuePopover _popover = new();
 
     private bool _on;
@@ -174,24 +185,16 @@ public sealed class PenBar
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(_settings, "PenBarSettings");
 
         // §2: undo floats BELOW the panel, outside it — a bare mark, no cell.
-        _undoArt.Width = _undoArt.Height = SatSize;
-        _undoArt.IsHitTestVisible = false;
-        _undoHit = new Border
-        {
-            Child = _undoArt,
-            Background = new SolidColorBrush(Colors.Transparent),
-            Padding = new Thickness(6),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            VerticalAlignment = VerticalAlignment.Top,
-        };
-        _undoHit.PointerPressed += (_, e) => e.Handled = true;
-        _undoHit.PointerReleased += (_, e) => { e.Handled = true; if (_on) { _surface.Undo(); Refresh(); } };
+        _undoHit = Satellite(_undoArt, () => _surface.Undo());
+        _redoHit = Satellite(_redoArt, () => _surface.Redo());
+        _satellites.Children.Add(_undoHit);
+        _satellites.Children.Add(_redoHit);
 
         _layer = new Grid { Visibility = Visibility.Collapsed };
         Canvas.SetZIndex(_layer, 60);
         _layer.Children.Add(_bar);
         _layer.Children.Add(_settings);
-        _layer.Children.Add(_undoHit);
+        _layer.Children.Add(_satellites);
         _popover.ValueChanged += Refresh;
         _layer.Children.Add(_popover.Element);
         _hostGrid.Children.Add(_layer);
@@ -203,6 +206,24 @@ public sealed class PenBar
 
         _hostGrid.Loaded += (_, _) => Place();
         if (_hostGrid.IsLoaded) Place();
+    }
+
+    /// <summary>One bare satellite - no cell, no background, same treatment as
+    /// the dial's (1.6). Pointer events rather than a Button so a press cannot
+    /// reach InkSurface and start a stroke behind the bar.</summary>
+    private Border Satellite(Canvas art, Action run)
+    {
+        art.Width = art.Height = SatSize;
+        art.IsHitTestVisible = false;
+        var hit = new Border
+        {
+            Child = art,
+            Background = new SolidColorBrush(Colors.Transparent),
+            Padding = new Thickness(4),
+        };
+        hit.PointerPressed += (_, e) => e.Handled = true;
+        hit.PointerReleased += (_, e) => { e.Handled = true; if (_on) { run(); Refresh(); } };
+        return hit;
     }
 
     // ===================================================================
@@ -289,13 +310,13 @@ public sealed class PenBar
         const double pad = 14;
         double top = pad + _topInset;
         // Room for undo below the panel, and never taller than what is left.
-        double room = Math.Max(CellH, h - top - pad - (SatSize + 24));
+        double room = Math.Max(CellH, h - top - pad - (SatSize + 20));
         _cells.Measure(new Size(BarW, double.PositiveInfinity));
         double barH = Math.Clamp(_cells.DesiredSize.Height, CellH, room);
         _bar.Height = barH;
 
         double x = right ? Math.Max(pad, w - BarW - pad) : pad;
-        double y = Math.Clamp(top + (h - top - barH) / 2, top, Math.Max(top, h - barH - pad - (SatSize + 24)));
+        double y = Math.Clamp(top + (h - top - barH) / 2, top, Math.Max(top, h - barH - pad - (SatSize + 20)));
         _bar.Margin = new Thickness(x, y, 0, 0);
 
         // §2.1: docked to the RIGHT of the first cell. On a right-hand dock that
@@ -303,9 +324,10 @@ public sealed class PenBar
         double sx = right ? x - SetW - 8 : x + BarW + 8;
         _settings.Margin = new Thickness(Math.Clamp(sx, 4, Math.Max(4, w - SetW - 4)), y, 0, 0);
 
-        // Undo, below the panel and outside it, centred on the bar's axis.
-        double us = SatSize + 12;
-        _undoHit.Margin = new Thickness(x + (BarW - us) / 2, y + barH + 8, 0, 0);
+        // Undo and redo, below the panel and outside it, centred as a pair on
+        // the bar's own axis.
+        double pairW = (SatSize + 8) * 2 + 2;
+        _satellites.Margin = new Thickness(x + (BarW - pairW) / 2, y + barH + 6, 0, 0);
 
         PlacePopover();
     }
@@ -366,13 +388,21 @@ public sealed class PenBar
             Enabled(Prop.Smooth) ? $"{ap!.Stabiliser * 100:0}%" : "-", Enabled(Prop.Smooth), onSurface, muted));
         _setRows.Children.Add(ColourRow());
 
-        // ---- undo ------------------------------------------------------
-        _undoArt.Children.Clear();
-        _undoArt.Children.Add(Icons.Mark(Icons.Undo,
-            _surface.UndoManager.CanUndo ? onSurface : PageTheme.WithAlpha(onSurface, 77), SatSize));
+        // ---- undo and redo ---------------------------------------------
+        PaintSatellite(_undoArt, false, _surface.UndoManager.CanUndo, onSurface);
+        PaintSatellite(_redoArt, true, _surface.UndoManager.CanRedo, onSurface);
 
         _popover.Sync();
         Place();
+    }
+
+    private static void PaintSatellite(Canvas host, bool mirror, bool live, Color fg)
+    {
+        host.Children.Clear();
+        // Available at full strength, unavailable at 30% - never hidden, so the
+        // pair keeps its place (1.6).
+        host.Children.Add(Icons.Mark(Icons.Undo,
+            live ? fg : PageTheme.WithAlpha(fg, 77), SatSize, mirror: mirror));
     }
 
     /// <summary>One cell: silhouette, the active rule, then the size label.
@@ -381,13 +411,24 @@ public sealed class PenBar
     private FrameworkElement BuildCell(string id, bool active, Color onSurface, Color muted)
     {
         var pen = PenOf(id);
+        // 9.1: the reference marks the active cell TWO different ways, and which
+        // one it uses depends on the ground. On a light page it is the section 2
+        // rule - full cell width, 2 DIP, OnSurface, between the silhouette and
+        // the label, with no fill anywhere. On a dark page the dark capture shows
+        // a FILLED, LIGHTER CELL with a short accent rule down its leading edge
+        // instead: a hairline rule on a near-black panel has almost nothing to
+        // separate itself from, so the fill does the work there. Both are
+        // supported and the ground picks.
+        bool filled = active && PageTheme.IsDark;
+        bool ruled = active && !PageTheme.IsDark;
+
         var stack = new StackPanel { Spacing = 0, VerticalAlignment = VerticalAlignment.Center };
 
         var art = Art(id, pen, onSurface);
         if (art != null)
         {
             art.HorizontalAlignment = HorizontalAlignment.Center;
-            art.Margin = new Thickness(0, 0, 0, 6);
+            art.Margin = new Thickness(0, 0, 0, 4);
             stack.Children.Add(art);
         }
 
@@ -396,13 +437,13 @@ public sealed class PenBar
         stack.Children.Add(new Rectangle
         {
             Height = RuleH,
-            Width = BarW,
-            Fill = new SolidColorBrush(active ? onSurface : Colors.Transparent),
+            Width = BarW - 10,
+            Fill = new SolidColorBrush(ruled ? onSurface : Colors.Transparent),
             HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 0, 0, 4),
+            Margin = new Thickness(0, 0, 0, 3),
         });
 
-        // §2: "Tools without a size show the silhouette alone."
+        // Section 2: "Tools without a size show the silhouette alone."
         if (pen != null)
             stack.Children.Add(new TextBlock
             {
@@ -413,15 +454,47 @@ public sealed class PenBar
                 HorizontalAlignment = HorizontalAlignment.Center,
             });
 
+        var body = new Grid { Height = CellH };
+        body.Children.Add(new Border
+        {
+            CornerRadius = new CornerRadius(Radius - 4),
+            Margin = new Thickness(3, 2, 3, 2),
+            Background = new SolidColorBrush(filled
+                ? Mix(PageTheme.Surface, PageTheme.OnSurface, 0.16)
+                : Colors.Transparent),
+        });
+        body.Children.Add(stack);
+        if (filled)
+            body.Children.Add(new Rectangle
+            {
+                Width = 3,
+                Height = CellH * 0.46,
+                RadiusX = 1.5,
+                RadiusY = 1.5,
+                Fill = new SolidColorBrush(PageTheme.Accent),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(3, 0, 0, 0),
+            });
+
         var cell = new Border
         {
-            Child = stack,
+            Child = body,
             Height = CellH,
-            Background = new SolidColorBrush(Colors.Transparent),   // hit-testable, never a fill
+            Background = new SolidColorBrush(Colors.Transparent),   // hit-testable
             IsTapEnabled = true,
         };
         Tap(cell, () => Commit(id), () => ShowAssign(cell, id));
         return cell;
+    }
+
+    private static Color Mix(Color a, Color b, double t)
+    {
+        t = Math.Clamp(t, 0, 1);
+        return Color.FromArgb(255,
+            (byte)Math.Round(a.R + (b.R - a.R) * t),
+            (byte)Math.Round(a.G + (b.G - a.G) * t),
+            (byte)Math.Round(a.B + (b.B - a.B) * t));
     }
 
     /// <summary>§2.1 row: the dial's own glyph, its value, and a tap that opens
@@ -430,14 +503,16 @@ public sealed class PenBar
                                         bool enabled, Color onSurface, Color muted)
     {
         var col = enabled ? onSurface : muted;
-        var stack = new StackPanel { Spacing = 3, HorizontalAlignment = HorizontalAlignment.Center };
-        var mark = Icons.Mark(glyph, col, SetGlyph, stroked: stroked, thickness: 2.1);
+        var stack = new StackPanel { Spacing = 2, HorizontalAlignment = HorizontalAlignment.Center };
+        // A stroked mark scales its pen with the box, so the wave needs a heavier
+        // authored weight now that the box is 17 rather than 24.
+        var mark = Icons.Mark(glyph, col, SetGlyph, stroked: stroked, thickness: 2.7);
         mark.HorizontalAlignment = HorizontalAlignment.Center;
         stack.Children.Add(mark);
         stack.Children.Add(new TextBlock
         {
             Text = value,
-            FontSize = 12,
+            FontSize = 9,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             Foreground = new SolidColorBrush(col),
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -445,7 +520,7 @@ public sealed class PenBar
         var row = new Border
         {
             Child = stack,
-            Padding = new Thickness(6, 9, 6, 9),
+            Padding = new Thickness(4, 6, 4, 6),
             Background = new SolidColorBrush(Colors.Transparent),
             IsTapEnabled = true,
             Opacity = enabled ? 1 : 0.55,
@@ -467,7 +542,7 @@ public sealed class PenBar
         var row = new Border
         {
             Child = dot,
-            Padding = new Thickness(6, 8, 6, 12),
+            Padding = new Thickness(4, 6, 4, 8),
             Background = new SolidColorBrush(Colors.Transparent),
             IsTapEnabled = true,
         };
