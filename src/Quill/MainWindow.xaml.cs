@@ -614,6 +614,7 @@ public sealed partial class MainWindow : Window
             Notebook = () => _curNb,
             Section = () => _curSec,
             Wheel = _toolWheel,
+            Bar = _penBar,
             OpenGallery = () => OpenGallery_Click(this, new RoutedEventArgs()),
             RenamePage = () => _ = RenamePageFromTitleAsync(),
             OpenSettings = OpenSettingsWindow,

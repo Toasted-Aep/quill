@@ -95,6 +95,9 @@ public sealed class ChromeBars
         public required Func<Notebook?> Notebook { get; init; }
         public required Func<Section?> Section { get; init; }
         public required ToolWheel Wheel { get; init; }
+        /// <summary>The other tool surface (section 2). Gets the same headroom as
+        /// the dial - the chrome bar sits above WHICHEVER of the two is up.</summary>
+        public PenBar? Bar { get; init; }
 
         public required Action OpenGallery { get; init; }
         public required Action RenamePage { get; init; }
@@ -353,6 +356,9 @@ public sealed class ChromeBars
         // Expressed as an inset off the wheel's own resting dock so this class
         // never hard-codes the wheel's padding.
         try { _h.Wheel.TopInset = Math.Max(0, Metrics.DialRimTop - ToolWheel.RestingRimTop); } catch { }
+        // The bar docks from its own top edge rather than from a rim, so it takes
+        // the measured offset directly.
+        try { if (_h.Bar != null) _h.Bar.TopInset = Metrics.DialRimTop; } catch { }
     }
 
     // =====================================================================
