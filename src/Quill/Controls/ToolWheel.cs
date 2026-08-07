@@ -112,7 +112,12 @@ public sealed class ToolWheel
     // geometry to the box - that stretch WAS the K.5 defect - so a mark that
     // does not fill its grid now comes out at its true size. The boxes grow to
     // compensate, rather than the marks being re-authored to touch the edges.
-    private const double SetBox = 20;              // the three property glyphs
+    // 9.1: the readouts and marks were about 1.5x the reference. The RING
+    // geometry above is unchanged - that part was right - but this cluster comes
+    // down by the same ~0.72 the Bar palette does.
+    private const double SetBox = 14;              // the three property glyphs
+    private const double ValueSize = 9;            // 12 x 0.72
+    private const double ReadoutSize = 10;         // 13 x 0.72
 
     // §1.5 colour arcs on the disc rim.
     private const double ArcStroke = 0.035 * R;    // 3.4
@@ -121,7 +126,12 @@ public sealed class ToolWheel
     public const int Slots = 8;                    // §1.1 EIGHT sectors, 45° each
     private const double Span = 360.0 / Slots;
     private const double Sector0 = 315;            // §1.1 sector 0 centred up-and-left
-    private const double Seam = 0.6;               // hairline gap so wedges read apart
+    // 9.2: NO gap. The sectors used to be inset by a hairline each side, which
+    // rendered as eight detached wedges with dead page showing between them. The
+    // reference ring is a continuous annulus DIVIDED BY LINES: neighbours share
+    // an exact edge, and the separator drawn over it is the only thing between
+    // them.
+    private const double Seam = 0;               // hairline gap so wedges read apart
 
     // §1.6 satellite bearings: undo at 9 o'clock, redo at 7:30.
     private const double UndoBearing = 270, RedoBearing = 225;
@@ -156,7 +166,11 @@ public sealed class ToolWheel
 
     /// <summary>The COPIC wheel. MainWindow points this straight at
     /// ColorPickerService.Open (rootPoint, current, onChanged, onClosed).</summary>
-    public Action<Point, Color, Action<Color>, Action?>? ColourPickerHook { get; set; }
+    /// <para>The last argument is the radius THIS control occupies around that
+    /// point: 9.3 opens the wheel on the dial's colour dot and leaves the dial
+    /// where it is, so the wheel must hold its own hub chrome outside the dial
+    /// rather than laying it on top.</para>
+    public Action<Point, Color, Action<Color>, Action?, double>? ColourPickerHook { get; set; }
 
     /// <summary>Raised whenever the occupied slots change (and when the dial is
     /// shown or hidden), carrying the top-bar element keys the dial has taken
@@ -220,16 +234,6 @@ public sealed class ToolWheel
         }
     }
     private double _topInset;
-
-    // §1.8. The COPIC wheel opens CENTRED ON THE DIAL'S CENTRE, and its hole is
-    // 570 DIP across - far wider than 1.25 R - so the dial genuinely sits inside
-    // it. But the dial is corner-docked, and a ring centred on a corner is three
-    // quarters off screen, which is exactly the "only about a quarter of the ring
-    // is visible" the user reported. Both halves of §1.8 are only true at once if
-    // the CENTRE THEY SHARE is somewhere the whole ring fits, so for as long as
-    // the picker is up the dial takes the middle of the viewport and the wheel
-    // follows it there. It goes home when the picker closes.
-    private bool _focus;
 
     private readonly Grid _host;
     private readonly InkSurface _surface;
@@ -574,19 +578,6 @@ public sealed class ToolWheel
         catch { }
     }
 
-    /// <summary>Puts the dial in the middle of the viewport, or back on its
-    /// dock. §1.8 - see the field's own note for why the COPIC wheel needs
-    /// this. Idempotent, and the re-seat replays the gravity drop so the move
-    /// reads as deliberate rather than as a jump.</summary>
-    public void FocusCentre(bool on)
-    {
-        if (_focus == on) return;
-        _focus = on;
-        if (!_on) return;
-        Place();
-        Drop();
-    }
-
     /// <summary>Top-left dock, mirrored to the top-right when the user keeps
     /// their tools on the right, so the wheel sits under the drawing hand.</summary>
     private void Place()
@@ -599,7 +590,6 @@ public sealed class ToolWheel
         double half = Half * _scale;
         double cx = _mirrored ? Math.Max(half, w - half - pad) : half + pad;
         double cy = Math.Min(half + pad + _topInset, Math.Max(half, h - half));
-        if (_focus) { cx = w / 2; cy = h / 2; }
         _centre = new Point(cx, cy);
 
         // Margin, not Canvas.Left: this layer is a GRID, and a Grid ignores the
@@ -800,7 +790,9 @@ public sealed class ToolWheel
     private static void Glyph(Canvas host, string data, Color fg, bool stroked)
     {
         host.Children.Clear();
-        host.Children.Add(Icons.Mark(data, fg, SetBox, stroked: stroked, thickness: 2.1));
+        // A stroked mark scales its pen with the box, so at 14 DIP a 2.1-unit
+        // pen lands under a pixel and the wave greys out. It keeps its weight.
+        host.Children.Add(Icons.Mark(data, fg, SetBox, stroked: stroked, thickness: 2.9));
     }
 
     /// <summary>§1.4 row 1: the size glyph and its readout are a PAIR, centred
@@ -810,12 +802,12 @@ public sealed class ToolWheel
     {
         _sizeText.Measure(new Size(200, 40));
         double tw = _sizeText.DesiredSize.Width;
-        double total = SetBox + 6 + tw;
+        double total = SetBox + 5 + tw;
         double x = Half - total / 2;
         Canvas.SetLeft(_sizeGlyph, x);
         Canvas.SetTop(_sizeGlyph, Half + Row1Y - SetBox / 2);
-        Canvas.SetLeft(_sizeText, x + SetBox + 6);
-        Canvas.SetTop(_sizeText, Half + Row1Y - 9);
+        Canvas.SetLeft(_sizeText, x + SetBox + 5);
+        Canvas.SetTop(_sizeText, Half + Row1Y - ReadoutSize * 0.72);
     }
 
     // ===================================================================
@@ -1015,7 +1007,7 @@ public sealed class ToolWheel
 
         // §1.4 inner disc. Row 1 is laid out at paint time (the glyph and its
         // readout are centred as a pair); rows 2 and 3 are fixed by the ratios.
-        _sizeText.FontSize = 13;                       // §1.4 "size readout 13 DIP semibold"
+        _sizeText.FontSize = ReadoutSize;                       // §1.4 "size readout 13 DIP semibold"
         _sizeText.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
         _sizeText.IsHitTestVisible = false;
         _sizeGlyph.Width = _sizeGlyph.Height = SetBox;
@@ -1049,13 +1041,13 @@ public sealed class ToolWheel
         }
         void PutValue(TextBlock t, double dx, double dy)
         {
-            t.FontSize = 12;                            // §1.4 "values 12 DIP semibold"
+            t.FontSize = ValueSize;                            // §1.4 "values 12 DIP semibold"
             t.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
             t.TextAlignment = TextAlignment.Center;
             t.Width = 56;
             t.IsHitTestVisible = false;
             Canvas.SetLeft(t, Half + dx - 28);
-            Canvas.SetTop(t, Half + dy - 8);
+            Canvas.SetTop(t, Half + dy - ValueSize * 0.65);
             _wheel.Children.Add(t);
         }
         void PutSat(Canvas c, double bearing)
@@ -1680,11 +1672,15 @@ public sealed class ToolWheel
         }
         if (ColourPickerHook != null)
         {
-            // Take the middle FIRST, so DiscRootPoint reports where the dial is
-            // about to be rather than where it was - the wheel is mounted on that
-            // point once and does not follow it afterwards.
-            FocusCentre(true);
-            ColourPickerHook(DiscRootPoint(), start, Apply, () => { FocusCentre(false); Refresh(); });
+            // 9.3, which supersedes 1.8 and the judgement call made when the dial
+            // was rebuilt. Relocating the dial to the middle of the viewport did
+            // put the whole ring on screen, but the user asked for the opposite -
+            // "centred in the middle of the radial dial / centred where the
+            // colour circle is" - so the dial stays exactly where it is, and the
+            // overhang is handled by the wheel shrinking and by the panels giving
+            // way. The dot IS the dial's centre (1.4 row 2, x = 0), so the mount
+            // point and the clearance come from the same place.
+            ColourPickerHook(DotRootPoint(), start, Apply, Refresh, PopOut * _scale);
             return;
         }
 
@@ -1703,7 +1699,7 @@ public sealed class ToolWheel
     /// <see cref="FocusCentre"/> has moved the dial - at which point the new
     /// margin is set but not yet arranged, so asking the shield would mount the
     /// colour wheel on the dial's OLD position.</para></summary>
-    public Point DiscRootPoint()
+    public Point DotRootPoint()
     {
         try
         {

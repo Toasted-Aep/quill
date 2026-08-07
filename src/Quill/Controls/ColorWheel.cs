@@ -98,6 +98,14 @@ public sealed class ColorWheel : UserControl
     // all the way round without spinning; it is the only thing the size guard in
     // Layout defends.
     private const float Tier2OuterRef = 328f;
+    // Tier 1's inner edge at s = 1: the radius of the HOLE, which is what has to
+    // stay clear of whatever the wheel is centred on (9.3).
+    private const float Tier1InnerRef = 285f;
+    // How much annulus the hub's own chrome needs between that caller and Tier 1
+    // - the recents row, the mix row and the three mode plates. Below this the
+    // wheel's chrome and the dial start sharing pixels, which is the "cramped"
+    // the user reported.
+    private const float HubRoom = 104f;
     // Abutting tiles share an edge, and two antialiased edges over the same
     // pixel leave a faint line of background showing through. Each tile is
     // therefore drawn a hair past the side it shares with its successor, which
@@ -168,6 +176,13 @@ public sealed class ColorWheel : UserControl
     /// when the dial is off. With this false the ring keeps its old behaviour
     /// and centres itself in the viewport.</summary>
     public bool CenterOnAnchor { get; set; }
+
+    /// <summary>The radius, in DIPs, that the CALLER occupies around
+    /// <see cref="Anchor"/>. 9.3: the radial dial stays put and the wheel opens
+    /// on its colour dot, so the wheel has to hold its hub chrome outside the
+    /// dial and size its hole to clear it. Zero - the default - means nothing is
+    /// in the hole and the hub lays out exactly as it always did.</summary>
+    public float HubClearance { get; set; }
 
     /// <summary>The colour a mix starts FROM - what the caller was using when
     /// the picker opened. Only read while a mix ratio is armed.</summary>
@@ -440,7 +455,22 @@ public sealed class ColorWheel : UserControl
         // shrink to keep that full circle reachable. No window Quill is used at
         // comes near this, and it never scales the ring UP.
         float halfMin = Math.Min(w, h) * 0.5f - EdgeMargin;
-        if (halfMin < Tier2OuterRef) s = Math.Max(0.45f, halfMin / Tier2OuterRef);
+        if (CenterOnAnchor)
+        {
+            // 9.3. Centred on a corner-docked dial the ring necessarily overhangs
+            // the window; the spec says clip it there and SHRINK so more of it
+            // lands on screen, rather than moving the dial. Two demands pull
+            // opposite ways - shrinking puts more ring on screen, but the hole
+            // must stay wider than the caller PLUS room for this wheel's own hub
+            // chrome, or the two controls sit on top of each other. The hub wins
+            // and the overhang is clipped, because a ring whose middle you cannot
+            // use is worse than a ring that runs off the edge.
+            float reach = Math.Min(Math.Min(_c.X, w - _c.X), Math.Min(_c.Y, h - _c.Y)) - EdgeMargin;
+            float fits = Math.Max(0f, reach) / Tier2OuterRef;
+            float needs = (HubClearance + HubRoom) / Tier1InnerRef;
+            s = Math.Clamp(Math.Max(fits, needs), 0.5f, 1f);
+        }
+        else if (halfMin < Tier2OuterRef) s = Math.Max(0.45f, halfMin / Tier2OuterRef);
 
         _r1In = 285f * s; _r1Out = 302f * s;   // Tier 1 inner arc  (17 units)
         _r2In = 307f * s; _r2Out = 328f * s;   // Tier 2 grey ring  (21 units)
@@ -458,13 +488,19 @@ public sealed class ColorWheel : UserControl
         // The chrome lives in the hub, so it is sized off the HOLE rather than
         // the window: it can never collide with Tier 1 whatever the shape.
         float hole = _r1In;
-        _ui = Math.Clamp(hole / 180f, 0.60f, 1.20f);
+        // 9.3: when a caller SITS in the hole - the dial does - the hub's usable
+        // room is the ANNULUS between it and Tier 1, not the whole disc. The
+        // fractions are unchanged; they are simply taken across that annulus, so
+        // with no clearance this is byte-identical to what it was.
+        float lo = Math.Min(HubClearance, hole * 0.55f);
+        float band = hole - lo;
+        _ui = Math.Clamp(band / 180f, 0.60f, 1.20f);
         _labelFmt.FontSize = 15f * _ui;
         _bubbleFmt.FontSize = 13f * _ui;
-        _rRecent = hole * 0.30f;
-        _chipR = Math.Clamp(hole * 0.045f, 5f, 12f);
-        _rMix = hole * 0.54f;
-        _rLabel = hole * 0.74f;
+        _rRecent = lo + band * 0.30f;
+        _chipR = Math.Clamp(band * 0.045f, 5f, 12f);
+        _rMix = lo + band * 0.54f;
+        _rLabel = lo + band * 0.74f;
         // 9.4.3: the HSL and RGB faces used to be fitted to the VIEWPORT
         // (0.42 / 0.58 / 0.74 of half the window), which put them far inside the
         // COPIC face - switching mode collapsed the control toward the middle

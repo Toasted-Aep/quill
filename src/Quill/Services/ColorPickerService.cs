@@ -64,6 +64,23 @@ public static class ColorPickerService
     private static Color _committed;
     private static bool _closing;   // exit animation in flight
 
+    /// <summary>True while the wheel is up AND centred on its caller, which is
+    /// when 9.3 asks for the floating bars and any open pane to be pushed out of
+    /// the way. PanelLayout already routes around obstacles, so the wheel simply
+    /// declares itself one rather than anything reaching into this file.</summary>
+    public static bool Obstructing { get; private set; }
+
+    /// <summary>Raised when <see cref="Obstructing"/> changes, so the layout
+    /// solver re-runs instead of waiting for an unrelated invalidation.</summary>
+    public static event Action? ObstacleChanged;
+
+    private static void SetObstructing(bool on)
+    {
+        if (Obstructing == on) return;
+        Obstructing = on;
+        ObstacleChanged?.Invoke();
+    }
+
     public static bool IsOpen { get; private set; }
 
     public static void Configure(HostConfig host) => _host = host;
@@ -78,7 +95,8 @@ public static class ColorPickerService
     /// <paramref name="onClosed"/> fires once when the picker is dismissed.
     /// </summary>
     public static void Open(Point rootPoint, Color current,
-        Action<Color> onChanged, Action? onClosed = null, bool centreOnPoint = false)
+        Action<Color> onChanged, Action? onClosed = null, bool centreOnPoint = false,
+        double hubClearance = 0)
     {
         if (_host == null) return;   // not yet configured — safe no-op
         // Re-opened while a previous exit is still playing: drop that animation
@@ -101,6 +119,9 @@ public static class ColorPickerService
         // row's picker when the dial is off, the ring is CENTRED ON that control
         // rather than merely leaning toward it.
         wheel.CenterOnAnchor = centreOnPoint;
+        // 9.3: how much of the hole the caller itself occupies, so the wheel
+        // keeps its hub chrome clear of the control it opened on.
+        wheel.HubClearance = (float)Math.Max(0, hubClearance);
         wheel.Anchor = new Vector2((float)rootPoint.X, (float)rootPoint.Y);
 
         var overlay = _overlay ??= BuildOverlay(wheel);
@@ -112,6 +133,7 @@ public static class ColorPickerService
         }
         overlay.Visibility = Visibility.Visible;
         IsOpen = true;
+        SetObstructing(centreOnPoint);
         wheel.BeginEnter();   // the reference's staggered gravity drop
     }
 
@@ -133,6 +155,7 @@ public static class ColorPickerService
         _closing = false;
         if (!IsOpen) return;
         IsOpen = false;
+        SetObstructing(false);
         if (_overlay != null) _overlay.Visibility = Visibility.Collapsed;
         _host?.PushRecent(_committed);
         var closed = _onClosed;
