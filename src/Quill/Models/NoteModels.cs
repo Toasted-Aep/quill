@@ -387,6 +387,13 @@ public class Library
     public string DefaultFont { get; set; } = "Lora";
     public double DefaultFontSize { get; set; } = 16;
     public string PenDock { get; set; } = "Bottom";
+    // Objects library (UI-SPEC-V3 L). Pack IDS only — never the objects
+    // themselves: library.json is already ~50 MB and a pack's contents are code.
+    // Starred packs float to the top under a Favorites heading; hidden ones are
+    // collapsed out of the library view. Both default empty, so an existing
+    // library.json behaves exactly as it does today.
+    public List<string> FavoriteObjectPacks { get; set; } = new();
+    public List<string> HiddenObjectPacks { get; set; } = new();
     public double NotebookPanelW { get; set; } = 300;
     public double NotebookPanelH { get; set; }
     // Last page the user worked on — restored (and offered as "Continue") at startup.
@@ -495,7 +502,18 @@ public class Library
 // its preset key (plus custom dimensions when the key is Custom), so adding or
 // correcting a preset later fixes every page at once and costs no file size.
 // ===========================================================================
-public enum PageSizeUnit { Pixels, Millimeters, Inches }
+/// <summary>Measurement units (UI-SPEC-V3 C / K.23). APPENDED ONLY, exactly like
+/// <see cref="GridType"/> and <see cref="PageSizePreset"/>: these serialise as
+/// integers, so Pixels/Millimeters/Inches must keep indices 0/1/2 forever and
+/// everything new goes on the end. Grouped Digital / Metric / Imperial, which is
+/// how the picker rows them up.</summary>
+public enum PageSizeUnit
+{
+    Pixels, Millimeters, Inches,      // 0,1,2 — the original three, never move
+    Points,                           // digital: 1 pt = 1/72 in
+    Centimeters, Meters, Kilometers,  // metric
+    Feet, Yards, Miles,               // imperial
+}
 
 // Appended-only, like GridType: these serialise as integers. Infinite stays 0
 // (the default), Custom is the escape hatch; new presets are only ever appended.
@@ -584,7 +602,58 @@ public static class PageSizes
     {
         PageSizeUnit.Inches => value * upi,
         PageSizeUnit.Millimeters => value / 25.4 * upi,
+        // ---- appended units (K.23). All of them route through inches, so the
+        // drawing scale (units-per-inch) stays the single source of truth for
+        // "how big is this really".
+        PageSizeUnit.Points => value / 72.0 * upi,
+        PageSizeUnit.Centimeters => value / 2.54 * upi,
+        PageSizeUnit.Meters => value * 100 / 2.54 * upi,
+        PageSizeUnit.Kilometers => value * 100_000 / 2.54 * upi,
+        PageSizeUnit.Feet => value * 12 * upi,
+        PageSizeUnit.Yards => value * 36 * upi,
+        PageSizeUnit.Miles => value * 63_360 * upi,
         _ => value
+    };
+
+    /// <summary>The short form the circular unit swatches show. Kept beside the
+    /// conversion so a new unit cannot be added without a label.</summary>
+    public static string Abbrev(PageSizeUnit u) => u switch
+    {
+        PageSizeUnit.Pixels => "px",
+        PageSizeUnit.Points => "pt",
+        PageSizeUnit.Millimeters => "mm",
+        PageSizeUnit.Centimeters => "cm",
+        PageSizeUnit.Meters => "m",
+        PageSizeUnit.Kilometers => "km",
+        PageSizeUnit.Inches => "in",
+        PageSizeUnit.Feet => "ft",
+        PageSizeUnit.Yards => "yd",
+        PageSizeUnit.Miles => "mi",
+        _ => u.ToString(),
+    };
+
+    /// <summary>Long name, for the swatch caption and its tooltip.</summary>
+    public static string UnitName(PageSizeUnit u) => u switch
+    {
+        PageSizeUnit.Pixels => "Pixels",
+        PageSizeUnit.Points => "Points",
+        PageSizeUnit.Millimeters => "Millimetres",
+        PageSizeUnit.Centimeters => "Centimetres",
+        PageSizeUnit.Meters => "Metres",
+        PageSizeUnit.Kilometers => "Kilometres",
+        PageSizeUnit.Inches => "Inches",
+        PageSizeUnit.Feet => "Feet",
+        PageSizeUnit.Yards => "Yards",
+        PageSizeUnit.Miles => "Miles",
+        _ => u.ToString(),
+    };
+
+    /// <summary>The picker's three groups, in the spec's order.</summary>
+    public static readonly (string Group, PageSizeUnit[] Units)[] UnitGroups =
+    {
+        ("Digital",  new[] { PageSizeUnit.Pixels, PageSizeUnit.Points }),
+        ("Metric",   new[] { PageSizeUnit.Millimeters, PageSizeUnit.Centimeters, PageSizeUnit.Meters, PageSizeUnit.Kilometers }),
+        ("Imperial", new[] { PageSizeUnit.Inches, PageSizeUnit.Feet, PageSizeUnit.Yards, PageSizeUnit.Miles }),
     };
 
     /// <summary>Resolves a page's size to WORLD units. Returns false for

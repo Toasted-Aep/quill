@@ -562,10 +562,8 @@ public sealed partial class MainWindow : Window
         if (_toolWheel == null) return;
         _toolWheel.ExtraCommands = DialCommands.Build(new DialCommands.Host
         {
-            ToggleComment = () => ToggleComment_Click(this, new RoutedEventArgs()),
-            CommentActive = () => ToolComment.IsChecked == true,
-            ToggleTouchDraw = () => TouchDraw_Click(this, new RoutedEventArgs()),
-            TouchDrawActive = () => TouchDrawToggle.IsChecked == true,
+            OpenComments = () => _chromeBars?.ToggleComments(),
+            CommentsActive = () => _chromeBars?.CommentsOpen == true || Surface.CommentMode,
             ShapeMenu = () => ShapeBtn.Flyout,
             HistoryMenu = () => BtnHistory.Flyout,
         });
@@ -588,8 +586,22 @@ public sealed partial class MainWindow : Window
             RightDockWidth = () => _settingsWin?.OccupiedRightWidth ?? 0,
             PerspectiveVps = () => Math.Max(0, PerspectiveCombo.SelectedIndex),
             SetPerspective = v => PerspectiveCombo.SelectedIndex = v,
+            AiMenu = () => BtnAi.Flyout,
+            InsertShape = (kind, regular) => { SelectTool("Select"); Surface.InsertShape(kind, regular); },
+            CommentMode = () => Surface.CommentMode,
+            SetCommentMode = v => { ToolComment.IsChecked = v; ToggleComment_Click(this, new RoutedEventArgs()); },
+            ReduceMotion = () => _reduceMotion,
+            CollectVectors = pages => CollectVectorPagesAsync(pages.ToList()),
         });
         _chromeBars.OwnedKeysChanged += t => { _barTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
+        // K.21: the Notebooks window and the radial dial join the panel solver.
+        // The dial is an OBSTACLE - ToolWheel owns its own placement through
+        // TopInset - so the Notebooks window is the one that gives way, which is
+        // exactly the collision the user reported.
+        _chromeBars.Layout.Register("notebooks", NotebookPanel, PanelLayout.Anchor.TopLeft, movable: true, order: 10);
+        _chromeBars.Layout.Register("penrow", PenRow);
+        _chromeBars.Layout.Register("calc", CalcPanel);
+        _chromeBars.Layout.RegisterByAutomationId("dial", CanvasArea, "ToolWheel");
     }
 
     private void LogStartupFault(string what, Exception? ex)
@@ -5029,6 +5041,8 @@ public sealed partial class MainWindow : Window
             SetUnitsPerInch = v => { if (_curPage != null) { _curPage.UnitsPerInch = v; Surface.Refresh(); ScheduleSave(); } },
             ApplyTheme = ApplyTheme,
             Save = ScheduleSave,
+            TouchDraw = () => TouchDrawToggle.IsChecked == true,
+            SetTouchDraw = v => { TouchDrawToggle.IsChecked = v; TouchDraw_Click(this, new RoutedEventArgs()); },
             FillLegacySettings = p => { _ = ShowSettingsDialogAsync(p); },
             Status = ShowStatus,
         };
@@ -6151,9 +6165,24 @@ public sealed partial class MainWindow : Window
 
     private void EnsurePageSizeCombo()
     {
-        if (PageSizeCombo.Items.Count > 0) return;
-        foreach (var d in PageSizes.Table)
-            PageSizeCombo.Items.Add(new ComboBoxItem { Content = d.Name, Tag = d.Preset });
+        if (PageSizeCombo.Items.Count == 0)
+            foreach (var d in PageSizes.Table)
+                PageSizeCombo.Items.Add(new ComboBoxItem { Content = d.Name, Tag = d.Preset });
+
+        // The unit list is built FROM THE ENUM, in enum order, so the combo's
+        // index is the enum value by construction. It used to be three items
+        // hard-coded in XAML while this method assigned SelectedIndex =
+        // (int)page.PageUnit - so the moment K.23 appended cm / m / km / ft / yd
+        // / mi, opening a page that used one of them threw
+        // ArgumentException out of Selector.SelectedIndex, and the throw took
+        // SwitchToPage with it: no dial, no floating bars, no page.
+        if (CustomUnitCombo.Items.Count == 0)
+            foreach (PageSizeUnit u in Enum.GetValues<PageSizeUnit>())
+                CustomUnitCombo.Items.Add(new ComboBoxItem
+                {
+                    Content = PageSizes.Abbrev(u),
+                    Tag = u,
+                });
     }
 
     private void SyncPageSizeUi(NotePage page)
@@ -6165,7 +6194,11 @@ public sealed partial class MainWindow : Window
         CustomSizePanel.Visibility = page.PageSize == PageSizePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
         CustomWidthBox.Value = page.PageWidth > 0 ? page.PageWidth : 800;
         CustomHeightBox.Value = page.PageHeight > 0 ? page.PageHeight : 1100;
-        CustomUnitCombo.SelectedIndex = (int)page.PageUnit;
+        // Clamped as well as filled: a library.json written by a newer build
+        // could still carry a unit this one has never heard of, and a settings
+        // combo is never worth throwing a page load away for.
+        CustomUnitCombo.SelectedIndex =
+            Math.Clamp((int)page.PageUnit, 0, Math.Max(0, CustomUnitCombo.Items.Count - 1));
         PerspectiveCombo.SelectedIndex = Math.Clamp(page.Perspective?.Vps.Count ?? 0, 0, 3);
         PerspectiveRecentreBtn.Visibility = page.Perspective == null ? Visibility.Collapsed : Visibility.Visible;
         UpdatePageSizeInfo(page);
@@ -6189,7 +6222,7 @@ public sealed partial class MainWindow : Window
         {
             _curPage.PageWidth = CustomWidthBox.Value;
             _curPage.PageHeight = CustomHeightBox.Value;
-            _curPage.PageUnit = (PageSizeUnit)Math.Max(0, CustomUnitCombo.SelectedIndex);
+            _curPage.PageUnit = (CustomUnitCombo.SelectedItem as ComboBoxItem)?.Tag is PageSizeUnit cu ? cu : PageSizeUnit.Pixels;
         }
         UpdatePageSizeInfo(_curPage);
         Surface.Refresh();
@@ -6210,7 +6243,7 @@ public sealed partial class MainWindow : Window
         if (_syncingUi || _curPage == null || _curPage.PageSize != PageSizePreset.Custom) return;
         if (!double.IsNaN(CustomWidthBox.Value)) _curPage.PageWidth = CustomWidthBox.Value;
         if (!double.IsNaN(CustomHeightBox.Value)) _curPage.PageHeight = CustomHeightBox.Value;
-        _curPage.PageUnit = (PageSizeUnit)Math.Max(0, CustomUnitCombo.SelectedIndex);
+        _curPage.PageUnit = (CustomUnitCombo.SelectedItem as ComboBoxItem)?.Tag is PageSizeUnit cu ? cu : PageSizeUnit.Pixels;
         UpdatePageSizeInfo(_curPage);
         Surface.Refresh();
         ScheduleSave();
@@ -8156,8 +8189,16 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         void Set(FrameworkElement? el, string key, bool inContext = true)
         {
             if (el == null) return;
-            bool on = !_library.HiddenTools.Contains(key) && !_dialTools.Contains(key) &&
-                      !_barTools.Contains(key) && inContext;
+            // V3 K.15 — "Leave free space moves to the toolbar". Free space is a
+            // page-structure edit, not a marking tool: putting it in a dial slot
+            // used to take it OFF the toolbar (the dial hands its keys back), and
+            // then the only way to reach it was to un-assign the slot. It is now
+            // exempt from both hand-backs, so it is on the toolbar whatever the
+            // dial and the bars are doing. The user's own show/hide choice still
+            // rules, so it can still be hidden deliberately.
+            bool pinned = key == "ToolSpace";
+            bool on = !_library.HiddenTools.Contains(key) &&
+                      (pinned || (!_dialTools.Contains(key) && !_barTools.Contains(key))) && inContext;
             el.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         }
         try

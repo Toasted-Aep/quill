@@ -301,6 +301,23 @@ public sealed class InkSurface : UserControl
         // repaint just the pixels around the fresh segment on dense pages.
         _canvas = new CanvasVirtualControl();
         _canvas.RegionsInvalidated += OnRegionsInvalidated;
+        // A LOST DEVICE orphans every baked paper tile. PaperTextures caches its
+        // render targets and image brushes PER DEVICE, so without this the dead
+        // device's resources are pinned by that dictionary for the rest of the
+        // session and the next draw bakes a second set beside them instead of
+        // replacing them. This is the only caller PaperTextures.Invalidate has,
+        // and it is the one it was written for.
+        //
+        // The reason to watch is NewDevice, not a "DeviceLost" constant: Win2D
+        // reports a recovered device loss by handing the control a NEW device
+        // through this same event (the enum is FirstTime / NewDevice /
+        // DpiChanged). DpiChanged is deliberately NOT a trigger - the tiles are
+        // baked at a fixed 96 DPI so one tile pixel is one world unit.
+        _canvas.CreateResources += (_, args) =>
+        {
+            if (args.Reason == Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesReason.NewDevice)
+                PaperTextures.Invalidate();
+        };
         _textLayer = new Canvas { Background = null, RenderTransform = _textTransform };
 
         var root = new Grid();
