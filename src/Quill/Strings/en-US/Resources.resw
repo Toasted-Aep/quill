@@ -469,6 +469,12 @@
   <data name="Wheel.Cmd.Shape" xml:space="preserve">
     <value>Insert shape</value>
   </data>
+  <data name="Wheel.Cmd.Dictate" xml:space="preserve">
+    <value>Dictation</value>
+  </data>
+  <data name="Wheel.Cmd.Record" xml:space="preserve">
+    <value>Record audio</value>
+  </data>
   <data name="Wheel.Cmd.History" xml:space="preserve">
     <value>Edit history</value>
   </data>

@@ -609,7 +609,25 @@ public sealed partial class MainWindow : Window
             CommentsActive = () => _chromeBars?.CommentsOpen == true || Surface.CommentMode,
             ShapeMenu = () => ShapeBtn.Flyout,
             HistoryMenu = () => BtnHistory.Flyout,
+            // Reference 9.7: dictation and recording become selectable tools.
+            // Both drive the EXISTING toggle buttons and their existing handlers
+            // rather than a second copy of the logic, so the dial, the pen bar
+            // and the Voice dropdown can never disagree about what is running.
+            ToggleDictation = () =>
+            {
+                BtnDictate.IsChecked = !(BtnDictate.IsChecked == true);
+                Dictate_Click(this, new RoutedEventArgs());
+            },
+            DictationActive = () => BtnDictate.IsChecked == true,
+            ToggleRecording = () =>
+            {
+                AudioRecordBtn.IsChecked = !(AudioRecordBtn.IsChecked == true);
+                AudioRecord_Click(this, new RoutedEventArgs());
+            },
+            RecordingActive = () => _audioRecorder.IsRecording,
         });
+        // One list, both surfaces (9.7).
+        if (_penBar != null) _penBar.ExtraCommands = _toolWheel.ExtraCommands;
         // The two floating bars. They share PageOps with the settings window, so
         // the page-editing delegates exist exactly once (Controls/ChromeBars.cs).
         _chromeBars = ChromeBars.Attach(CanvasArea, new ChromeBars.Host

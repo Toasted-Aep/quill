@@ -304,6 +304,23 @@ public static class Icons
         "M12 1.5 L14.4 9.6 L22.5 12 L14.4 14.4 L12 22.5 L9.6 14.4 L1.5 12 L9.6 9.6 Z " +
         "M19.5 2.25 L20.4 5.1 L23.25 6 L20.4 6.9 L19.5 9.75 L18.6 6.9 L15.75 6 L18.6 5.1 Z";
 
+    // ---- tools that used to live on the top bar (9.7) --------------------
+
+    /// Dictation: a microphone - capsule head, cradle arc, stem and base, as one
+    /// filled outline. Authored, not a glyph.
+    public const string Microphone =
+        "M12 2.4 A3.2 3.2 0 0 1 15.2 5.6 V11.6 A3.2 3.2 0 0 1 8.8 11.6 V5.6 " +
+        "A3.2 3.2 0 0 1 12 2.4 Z " +
+        "M6.2 10.6 H7.9 A4.1 4.1 0 0 0 16.1 10.6 H17.8 A5.8 5.8 0 0 1 12.85 16.3 " +
+        "V19.2 H15.6 V20.9 H8.4 V19.2 H11.15 V16.3 A5.8 5.8 0 0 1 6.2 10.6 Z";
+
+    /// Recording: the record mark - a ring with a filled dot inside it. F1 so the
+    /// reversed inner circle cuts the ring rather than filling it.
+    public const string Record =
+        "F1 M12 2.6 A9.4 9.4 0 0 1 12 21.4 A9.4 9.4 0 0 1 12 2.6 Z " +
+        "M12 4.6 A7.4 7.4 0 0 0 12 19.4 A7.4 7.4 0 0 0 12 4.6 Z " +
+        "M12 8.2 A3.8 3.8 0 0 1 12 15.8 A3.8 3.8 0 0 1 12 8.2 Z";
+
     // ---- the value popover and the inner disc ----------------------------
 
     /// Decrement, for the value popover's label row. Stroked: the mark IS a rule.
