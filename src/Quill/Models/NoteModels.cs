@@ -415,6 +415,13 @@ public class Library
     // Cleared once, which switches the dial on; after that the user's own
     // choice is respected forever.
     public bool RadialDialMigrated { get; set; }
+    // Which tool palette is on screen: "Wheel" (the radial dial, section 1) or
+    // "Bar" (the vertical pen palette, section 2). Settings > Tool Setup >
+    // Interface writes it through Services.ToolSurfaceService, which is the only
+    // thing that should read it - a string rather than an enum so a value this
+    // build does not recognise degrades to the default instead of making the
+    // whole library.json undeserializable.
+    public string ToolSurface { get; set; } = "Wheel";
     // Which ten tools occupy the dial's outer ring, as "pen:<guid>",
     // "tool:<tag>", "cmd:<name>" or "" for an empty slot. EMPTY means "use the
     // defaults": the list is only written once the user actually customises the

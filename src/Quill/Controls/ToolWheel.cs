@@ -1,6 +1,7 @@
 using System.Numerics;
 using Quill.Helpers;
 using Quill.Models;
+using Quill.Services;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
@@ -19,109 +20,117 @@ using Path = Microsoft.UI.Xaml.Shapes.Path;
 namespace Quill.Controls;
 
 /// <summary>
-/// The radial tool dial (docs/UI-SPEC-V2.md section 1; defects in UI-SPEC-V3.md
-/// section A).
+/// The radial tool dial, rebuilt against the measured Concepts reference
+/// (docs/CONCEPTS-REF-2026-08-07.md §1, which supersedes UI-SPEC-V2 §1).
 ///
-/// THREE CONCENTRIC ANNULI, each cut into equal sectors; a sector IS the button:
+/// ── THE SHAPE ────────────────────────────────────────────────────────────
+/// Let R be the ring's outer radius (nominally 98 DIP). Everything is a ratio
+/// of R, so the whole dial scales from one number:
 ///
-///   CENTRE DISC     the colour button - the live ink colour, WHITE when the
-///                   active tool has none of its own. Opens the COPIC wheel.
-///   INNER ANNULUS   exactly three 120 degree sectors: Size (+30 to +150),
-///                   Smoothness (+150 to -90), Opacity (+30 to -90). 0 degrees
-///                   is at the right. Each carries its own vector mark and greys
-///                   out when it does not apply to the active tool.
-///   OUTER ANNULUS   exactly ten 36 degree sectors: the tool slots, slot 0 at
-///                   twelve o'clock and running clockwise. A slot whose command
-///                   cannot run right now (redo with an empty stack) draws FULLY
-///                   TRANSPARENT - not hidden, not dimmed.
+///     ring outer edge         1.00 R    hairline Outline at 40%
+///     ring inner = disc edge  0.70 R
+///     inner disc              0.70 R    filled Surface, no border
+///     centre colour dot       0.195 R   the active pen's colour
+///     ACTIVE SECTOR outer     1.19 R    the sector is PULLED OUTWARD
 ///
-/// INPUT. Everything the dial listens to arrives on <see cref="_shield"/>, one
-/// transparent circle exactly the size of the outer rim. That single decision
-/// fixes three shipped defects at once:
-///   - no phantom hover: the shield only raises events inside the rim, so a
-///     pointer over the page cannot light a sector (V3 A.1);
-///   - slots can be picked: the press never reaches InkSurface, so InkSurface
-///     never captures the pointer and never releases that capture mid-gesture.
-///     The old build handled presses on the host with handledEventsToo, and
-///     InkSurface.ReleasePointerCaptures() raised PointerCaptureLost BEFORE the
-///     release finished bubbling; the dial's own OnLost then cleared the armed
-///     flag and OnReleased bailed out without ever committing (V3 A.3);
-///   - the dial is still NOT modal: there is no scrim, and the shield is only as
-///     big as the wheel, so a press one pixel beyond the rim belongs to the
-///     canvas and drawing, lasso and the barrel menu work right beside it.
+/// EIGHT sectors of 45°, sector 0 centred up-and-left and running clockwise.
+/// Angles in the reference are COMPASS BEARINGS - 0° at twelve o'clock, positive
+/// clockwise - and every public number in this file is stated that way, because
+/// mixing the two conventions is what put the old build's sectors 45° out.
+/// <see cref="Pt"/> is the single place a bearing becomes a screen point.
 ///
-/// Rendering is code-built <see cref="Path"/> annular sectors (never Win2D,
-/// never inside InkSurface) so the ink renderer pays nothing for the chrome. The
-/// one exception is the live scrub preview, which is a real Win2D surface
-/// precisely because it has to go through the real stroke renderer.
+/// ── WHAT WAS MISSING ─────────────────────────────────────────────────────
+/// The shipped dial had ten sectors, three concentric annuli, and no pop-out at
+/// all. The pop-out is the reference's single strongest cue: the selected tool's
+/// sector is REDRAWN at 1.19 R, filled OnSurface, with its icon and label
+/// inverted to Surface and its outer corners rounded. You can see which tool is
+/// live from across the room, which is the entire point of a radial dial and is
+/// the one thing a colour-only highlight cannot do.
+///
+/// Beneath that: stroke-silhouette marks and size labels ROTATED TO FOLLOW THE
+/// RING (so the ones at the bottom read upside-down - that is correct, and the
+/// reference's text tool shows it plainly), an inner disc laid out from §1.4's
+/// ratio table rather than by eye, a coloured arc on the disc rim under every
+/// sector that holds a coloured tool, and undo/redo as satellites OUTSIDE the
+/// ring with no sector and no background of their own.
+///
+/// ── THEME ────────────────────────────────────────────────────────────────
+/// Every colour comes from <see cref="PageTheme"/>, which derives the whole
+/// shell from the PAGE GROUND. Nothing here reads Settings.Theme and nothing
+/// hard-codes a grey. §7's rule is honoured literally: on a dark ground
+/// (Blueprint, Brown Paper, Darkprint) the RING goes fully transparent - only
+/// separators, marks and labels survive - while the inner disc stays opaque.
+///
+/// ── INPUT ────────────────────────────────────────────────────────────────
+/// Everything arrives on <see cref="_shield"/>, one transparent circle exactly
+/// the size of the POPPED rim, plus two small satellite circles. That keeps the
+/// three shipped input defects fixed: no phantom hover (events only exist inside
+/// the shield), slots can be picked (the press never reaches InkSurface, so
+/// InkSurface never captures and never drops the pointer mid-gesture), and the
+/// dial is still not modal - one pixel beyond the shield belongs to the canvas.
+///
+/// Rendering is code-built <see cref="Path"/> geometry, never Win2D and never
+/// inside InkSurface, so the ink renderer pays nothing for the chrome. The one
+/// exception is the live scrub preview, which must go through the real stroke
+/// renderer to be worth anything.
 /// </summary>
 public sealed class ToolWheel
 {
     // ===================================================================
-    // Geometry - DIPs at scale 1.0. Angles are MATH convention throughout:
-    // 0 degrees at the RIGHT, counter-clockwise positive, y flipped for screen.
+    // Geometry - every length a ratio of R, per §1.1
     // ===================================================================
-    // Every number below is the user's own web build, 1:1 - see
-    // "New folder (4)/Concepts/src/components/RadialDial.jsx", whose SVG is a
-    // 260 box with the dial centred at (130,130). Only the COLOURS differ: the
-    // web hard-codes a slate palette, and Quill's must follow the page
-    // (ThemeSource="Page"), so hues come from the app and never from the JSX.
-    // V3 K.7 asks for a SMALLER dial, and the chance is taken to put the three
-    // radii on Concepts' own measured proportions at the same time
-    // (CONCEPTS-UI-REFERENCE 2.1): 1 : 3 : 5, i.e. r_colour = R/5, r_hub = 3R/5,
-    // r_outer = R, with the rings FLUSH - zero gap, and the outer ring reaching
-    // the rim exactly. The old build was 125 across with a 2 DIP seam at 82->84.
-    private const double Rim = 104;                // was 125: ~17% smaller overall
-    private const double Footprint = 232;          // Rim*2 + room for the grip
-    private const double Half = Footprint / 2;     // 116
+    private const double R = 98;                   // §1.1 nominal outer radius
+    private const double RingIn = 0.70 * R;        // 68.6  ring inner = disc edge
+    private const double RingOut = 1.00 * R;       // 98.0  ring outer edge
+    private const double PopOut = 1.19 * R;        // 116.6 the ACTIVE sector's outer edge
+    private const double DotR = 0.195 * R;         // 19.1  centre colour dot
+    private const double PopCorner = 6;            // §1.2 rounded outer corners
 
-    private const double ColourR = Rim / 5;        // 20.8  centre disc = the colour button
-    private const double InIn = ColourR;           // hub starts where the disc ends
-    private const double InOut = Rim * 0.6;        // 62.4  hub = the 3 settings
-    private const double OutIn = InOut;            // FLUSH, per the reference
-    private const double OutOut = Rim;             // outer annulus = the 10 tools
-    private const double RimR = OutOut;            // hit shield radius == the rim
-    private const double PlateR = Rim;             // the disc the sectors sit on
+    // §1.6: the satellites float OUTSIDE the ring. They set the footprint, since
+    // they are the outermost thing the dial draws.
+    private const double SatR = 1.32 * R;          // 129.4 satellite centres
+    private const double SatSize = 30;             // §1.6 "~30 DIP"
+    private const double Half = SatR + SatSize / 2 + 6;   // 150.4
+    private const double Footprint = Half * 2;
 
-    private const double IconR = (OutIn + OutOut) / 2;   // 83.2: mid outer annulus
-    // Slot content is split by half: the upper half puts the mark below the
-    // anchor and the size text above it, the lower half does the reverse.
-    private const double MarkUpDy = 4, MarkDownDy = -1;
-    private const double TextUpDy = -12, TextDownDy = 11;
-    // MarkBox must be at LEAST as big as the art it hosts. It used to be 17
-    // while SlotArt handed it 22 and 26 DIP marks, and WinUI answers a child
-    // whose desired size exceeds its arrange rect with a LAYOUT CLIP - which is
-    // exactly the "cut off, like erased with an eraser, clipped into a small
-    // square" defect in V3 K.5. Every art factory below is now sized FROM this
-    // constant rather than from a literal, so the two can never drift again.
-    private const double MarkBox = 22;
-    private const double SetBox = 16;              // the three setting marks, same rule
-    private const double SetIconR = (InIn + InOut) / 2 + 8;   // mark ring inside the hub
-    private const double SetTextR = (InIn + InOut) / 2 - 10;  // value ring, nearer the disc
-    private const double GripR = 113;              // handedness grip satellite
+    // §1.3 sector contents, stacked along the radial midline. The reference calls
+    // the silhouette "~26 DIP tall", but the ring band is only 0.30 R = 29.4 DIP
+    // and the size label has to fit under it inside the same band; a 26 DIP mark
+    // plus an 11 DIP label is 37. The ratios are exact and the MARK is what gives,
+    // so both sit inside the band with the mark against the outer edge.
+    private const double MarkBox = 20;
+    private const double MarkR = 0.895 * R;        // 87.7  mark centre
+    private const double LabelR = 0.735 * R;       // 72.0  size-label centre
+    private const double LabelSize = 11;           // §1.3 "11 DIP semibold"
 
-    public const int Slots = 10;                   // exactly ten, user-assignable
-    private const double SlotSpan = 360.0 / Slots; // 36 degrees each
-    private const double SetSpan = 120.0;          // 3 x 120 tile the inner ring
-    private const double Seam = 0.9;               // hairline so wedges read apart
+    // §1.4 inner disc, all offsets in units of r = RingIn.
+    private const double DiscR = RingIn;
+    private const double Row1Y = -0.45 * DiscR;    // size glyph + readout
+    private const double ColX = 0.61 * DiscR;      // smoothness left / opacity right
+    private const double Row3Y = 0.42 * DiscR;     // the two values
+    private const double SetBox = 17;              // the three property glyphs
 
-    // The three setting sectors as (zeroEnd, oneEnd) sweeping CLOCKWISE, so a
-    // clockwise drag always increases the value. The boundaries are exactly the
-    // ones the spec names: Size +30/+150, Opacity +30/-90, Smoothness +150/-90.
-    private const double SizeA0 = 150, SizeA1 = 30;
-    private const double OpacA0 = 30, OpacA1 = -90;
-    private const double SmoothA0 = 270, SmoothA1 = 150;
+    // §1.5 colour arcs on the disc rim.
+    private const double ArcStroke = 0.035 * R;    // 3.4
+    private const double ArcR = RingIn - ArcStroke / 2;   // flush with the disc edge
 
-    private const int TapMs = 400;                 // press shorter than this + no drag = a tap
+    public const int Slots = 8;                    // §1.1 EIGHT sectors, 45° each
+    private const double Span = 360.0 / Slots;
+    private const double Sector0 = 315;            // §1.1 sector 0 centred up-and-left
+    private const double Seam = 0.6;               // hairline gap so wedges read apart
+
+    // §1.6 satellite bearings: undo at 9 o'clock, redo at 7:30.
+    private const double UndoBearing = 270, RedoBearing = 225;
+
+    private const int TapMs = 400;
     private const double TapSlop = 8;
-    private const int AssignMs = 550;              // press-hold on a slot opens its assignment flyout
-
-    // The live preview is a ring drawn CONCENTRIC with the dial, exactly as the
-    // web does it, so it never covers the sector being dragged. Its surface has
-    // to be big enough for the widest ring plus the dashed guide outside it.
+    private const int AssignMs = 550;
     private const double PreviewBox = 420;
 
-    private enum Zone { None, Colour, Arc, Slot }
+    private enum Zone { None, Dot, Size, Opacity, Smooth, Disc, Sector, Undo, Redo }
+
+    /// <summary>The three scrubable properties, in the order §1.4 lays them out.</summary>
+    private enum Prop { Size = 0, Opacity = 1, Smooth = 2 }
 
     /// <summary>Everything the dial needs from MainWindow, as delegates, so it
     /// never takes a dependency on the window itself.</summary>
@@ -134,10 +143,8 @@ public sealed class ToolWheel
         public required Action<string> SelectTool { get; init; }
         /// <summary>PenChipData: the two-tone chip geometry for a pen type.</summary>
         public required Func<PenType, (string Body, string Colour)> ChipData { get; init; }
-        /// <summary>BuildTwoToneChip: the exact visual the linear row draws, so a
-        /// pen looks identical in both surfaces.</summary>
+        /// <summary>BuildTwoToneChip: the exact visual the linear row draws.</summary>
         public required Func<string, string, Color, FrameworkElement> TwoTone { get; init; }
-        /// <summary>SetMouseMode, so the options-menu radios stay in step.</summary>
         public required Action<string> SetMouseMode { get; init; }
         public required Func<bool> ReduceMotion { get; init; }
         public required Action Save { get; init; }
@@ -149,48 +156,29 @@ public sealed class ToolWheel
 
     /// <summary>Raised whenever the occupied slots change (and when the dial is
     /// shown or hidden), carrying the top-bar element keys the dial has taken
-    /// over. A tool that lives in the dial is removed from the top bar rather
-    /// than offered twice - UI-SPEC-V3 A.9.</summary>
+    /// over, so a tool that lives in the dial is not also offered on the bar.</summary>
     public event Action<IReadOnlySet<string>>? SlotsChanged;
 
-    // Slot ids are plain strings so the persisted list stays human-readable and
-    // forward-compatible: "pen:<guid>" | "tool:<tag>" | "cmd:<name>" | "" (empty).
     private const string KindPen = "pen:", KindTool = "tool:", KindCmd = "cmd:";
-
     private static readonly string[] ToolKinds = { "Eraser", "Select", "Text", "FreeSpace", "Fill" };
-    // The three the dial has always known how to run itself. Everything else a
-    // user can put in a slot arrives through ExtraCommands, so the dial never
-    // grows a second dependency on MainWindow.
     private static readonly string[] BuiltInCmds = { "Undo", "Redo", "MouseMode" };
 
-    /// <summary>A top-bar command donated to the dial (UI-SPEC-V3 I: "every
-    /// remaining top-bar feature moves into the radial dial as a selectable
-    /// tool"). The host owns the behaviour; the dial owns the slot, the mark and
-    /// the top-bar hand-back.</summary>
+    /// <summary>A top-bar command donated to the dial. The host owns the
+    /// behaviour; the dial owns the sector, the mark and the top-bar hand-back.</summary>
     public sealed class ExtraCommand
     {
-        /// <summary>Slot id suffix - persisted as "cmd:&lt;Id&gt;".</summary>
         public required string Id { get; init; }
         public required string Label { get; init; }
         /// <summary>Geometry from <see cref="Icons"/>, never a glyph or an emoji.</summary>
         public required string Icon { get; init; }
-        /// <summary>True when the mark IS a stroke rather than a silhouette.</summary>
         public bool Stroked { get; init; }
-        /// <summary>The top-bar element this supersedes, so the bar drops it
-        /// exactly the way it drops the pen and the eraser (V3 A.9).</summary>
         public string? TopBarKey { get; init; }
         public Func<bool>? IsActive { get; init; }
         public Func<bool>? IsAvailable { get; init; }
-        /// <summary>Run on tap. Ignored when <see cref="Flyout"/> is supplied.</summary>
         public Action? Run { get; init; }
-        /// <summary>A menu to open on the dial instead of running a command -
-        /// this is how the shape and history buttons keep their existing menus
-        /// rather than having them re-declared here.</summary>
         public Func<FlyoutBase?>? Flyout { get; init; }
     }
 
-    /// <summary>Commands beyond undo / redo / mouse-mode that may occupy a slot.
-    /// Assign before the first Refresh; changing it re-announces the slots.</summary>
     public IReadOnlyList<ExtraCommand> ExtraCommands
     {
         get => _extras;
@@ -212,16 +200,10 @@ public sealed class ToolWheel
 
     private string CmdLabel(string cmd) => Extra(cmd)?.Label ?? Loc.T("Wheel.Cmd." + cmd);
 
-    /// <summary>Headroom the dock leaves at the top of the host. The floating
-    /// top-left bar sits directly ABOVE the docked dial (UI-SPEC-V3 I), and at
-    /// the shipped dock the wheel's rim is 15 DIPs from the top edge - there is
-    /// no "above" until the dial makes room. ChromeBars sets this to the bar's
-    /// measured height; 0 restores the original dock exactly.</summary>
-    /// <summary>Where the wheel's rim sits, in DIPs below the host's top edge,
-    /// with no inset applied. ChromeBars needs it to convert the measured
-    /// "top of wheel, 52 DIP below the title bar" into an inset without
-    /// hard-coding this control's own dock padding.</summary>
-    public static double RestingRimTop => Half + 10 - RimR;
+    /// <summary>Where the ring's top edge sits below the host's top edge with no
+    /// inset applied. ChromeBars converts its measured bar height into a
+    /// <see cref="TopInset"/> against this, rather than hard-coding the dock.</summary>
+    public static double RestingRimTop => Half + 10 - RingOut;
 
     public double TopInset
     {
@@ -239,33 +221,39 @@ public sealed class ToolWheel
     private readonly InkSurface _surface;
     private readonly Host _h;
 
-    private readonly Grid _layer;        // overlay; Background stays null so ink still gets the pointer
-    private readonly Ellipse _shield;    // the dial's ONLY input surface - exactly the outer rim
+    private readonly Grid _layer;
+    private readonly Ellipse _shield;          // the ring's hit surface, radius PopOut
+    private readonly Ellipse _undoHit, _redoHit;
     private readonly Canvas _wheel;
-    private readonly CanvasControl _preview;  // live scrub preview ring, real ink
-    private readonly Border _bottom;     // tool-specific options rectangle (spec 1.3)
+    private readonly CanvasControl _preview;
+    private readonly Border _bottom;
     private readonly StackPanel _bottomRow;
+    private readonly ValuePopover _popover = new();
 
-    private readonly Ellipse _body = new();
-    private readonly Path[] _slotArc = new Path[Slots];
-    private readonly Grid[] _slotArt = new Grid[Slots];
-    private readonly TextBlock[] _slotNum = new TextBlock[Slots];
-    private readonly Path[] _setArc = new Path[3];
-    private readonly Path[] _setFill = new Path[3];
-    private readonly Grid[] _setIcon = new Grid[3];
-    private readonly TextBlock[] _setText = new TextBlock[3];
-    private readonly Ellipse _colour = new();
-    private readonly Path _grip = new();
+    // ---- painted parts -------------------------------------------------
+    private readonly Ellipse _shadow = new();
+    private readonly Path[] _sector = new Path[Slots];
+    private readonly Path[] _sep = new Path[Slots];
+    private readonly Ellipse _ringEdge = new();
+    private readonly Path _pop = new();            // the active sector, at 1.19 R
+    private readonly Canvas[] _mark = new Canvas[Slots];
+    private readonly TextBlock[] _label = new TextBlock[Slots];
+    private readonly Ellipse _disc = new();
+    private readonly Path[] _rimArc = new Path[Slots];
+    private readonly Ellipse _dot = new();
+    private readonly Canvas _sizeGlyph = new(), _smoothGlyph = new(), _opacGlyph = new();
+    private readonly TextBlock _sizeText = new(), _smoothText = new(), _opacText = new();
+    private readonly Canvas _undoArt = new(), _redoArt = new();
 
     private bool _on;
-    private bool _mirrored;              // handedness: the grip flips on a right dock
+    private bool _mirrored;
     private double _scale = 1;
     private Point _centre;
     private int _hoverSlot = -1;
-    private int _hoverSet = -1;
-    private int _dragSet = -1;           // a setting arc currently being scrubbed
-    private bool _scrubbing;             // ...and whether that press has passed the slop
-    private bool _hoverColour;
+    private int _active = -1;          // the popped sector, cached for the hit test
+    private Zone _hoverZone = Zone.None;
+    private Prop? _dragProp;
+    private bool _scrubbing;
     private bool _pressed;
     private uint? _pointer;
     private Point _pressPt;
@@ -276,27 +264,26 @@ public sealed class ToolWheel
     private HashSet<string> _taken = new(StringComparer.Ordinal);
 
     // ---- visibility, as a REQUEST plus a set of vetoes -------------------
-    // V3 K.1: the dial reappeared over the notebook gallery. The first fix put
-    // a SetVisible(false) in ShowGallery, which is fragile by construction -
-    // ApplyPenRowVisibility recomputes visibility from the dial SETTING alone
-    // and is called from a dozen places (tool change, page load, minimal-UI
-    // toggle...), so the very next one of those puts the dial straight back on
-    // top of the gallery. The host's request and the reasons it must be
-    // overruled are now separate: whoever asks for the dial gets it only if
-    // nothing is vetoing it, so a future caller cannot reintroduce the defect.
+    // V3 K.1 was a REPEAT regression: the dial came back over the notebook
+    // gallery. The first fix put a SetVisible(false) in ShowGallery, which is
+    // fragile by construction - visibility is recomputed from the dial SETTING
+    // in a dozen places (tool change, page load, minimal-UI toggle, surface
+    // switch...), so the very next one of those puts the dial straight back on
+    // top of the gallery.
+    //
+    // The request and the reasons to overrule it are separate here, and -
+    // this is the part that cannot silently regress - EVERY path that could put
+    // the layer on screen runs through Enforce(), including Refresh() and
+    // Place(). There is no code path that shows the dial without re-consulting
+    // the vetoes, so a future caller cannot reintroduce the defect by adding
+    // one more SetVisible(true).
     private bool _want;
     private readonly HashSet<string> _blocks = new(StringComparer.Ordinal);
 
-    /// <summary>A host predicate that vetoes the dial - the gallery and the
-    /// floating Notebooks window (V3 K.1, K.6). Evaluated on every request.</summary>
+    /// <summary>A host predicate that vetoes the dial - the notebook gallery and
+    /// the floating Notebooks window (V3 K.1, K.6). Evaluated on every request
+    /// AND on every repaint.</summary>
     public Func<bool>? IsBlocked { get; set; }
-
-    // ---- the setting slider window (V3 K.4) ------------------------------
-    private readonly Border _panel;
-    private readonly TextBlock _panelName = new(), _panelValue = new();
-    private readonly Slider _panelSlider = new();
-    private int _panelSet = -1;
-    private bool _panelSync;
 
     // ===================================================================
     // Attach
@@ -310,23 +297,12 @@ public sealed class ToolWheel
         _layer = new Grid { Visibility = Visibility.Collapsed };
         Canvas.SetZIndex(_layer, 60);
 
-        // The hit shield goes in FIRST so the wheel paints over it; input order
-        // is unaffected because everything above it is IsHitTestVisible=false.
-        _shield = new Ellipse
-        {
-            Width = RimR * 2,
-            Height = RimR * 2,
-            // Transparent still hit-tests; a null Fill would not. An Ellipse
-            // hit-tests to its actual ellipse, not its bounding box, so the
-            // corners of the square stay with the canvas.
-            Fill = new SolidColorBrush(Colors.Transparent),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            VerticalAlignment = VerticalAlignment.Top,
-        };
-        // The shield is the dial's one hit surface, so it is also the thing an
-        // assistive tool should find: name it, and the whole control becomes
-        // addressable (and locatable) instead of being an anonymous ellipse.
+        _shield = HitCircle(PopOut * 2);
         _layer.Children.Add(_shield);
+        _undoHit = HitCircle(SatSize + 8);
+        _redoHit = HitCircle(SatSize + 8);
+        _layer.Children.Add(_undoHit);
+        _layer.Children.Add(_redoHit);
 
         _wheel = new Canvas
         {
@@ -343,8 +319,6 @@ public sealed class ToolWheel
         _preview.Draw += DrawPreview;
         _layer.Children.Add(_preview);
 
-        // Name the wheel so the whole control is addressable to assistive tools
-        // (and locatable to a test) instead of being an anonymous canvas.
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_wheel, "Tool dial");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(_wheel, "ToolWheel");
         BuildWheel();
@@ -360,53 +334,20 @@ public sealed class ToolWheel
         };
         _layer.Children.Add(_bottom);
 
-        // ---- the setting slider window (V3 K.4) --------------------------
-        // MAN p83: the slider "opens as you interact and closes the instant you
-        // lift". The shipped dial had the scrub and no surface at all, so there
-        // was nothing to read and nothing to aim at. This is a real Slider, so
-        // it can also be dragged directly - the sector scrub is kept exactly as
-        // it was and the two drive the same setter.
-        _panelName.FontSize = 12;
-        _panelName.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
-        _panelName.HorizontalAlignment = HorizontalAlignment.Left;
-        _panelValue.FontSize = 12;
-        _panelValue.HorizontalAlignment = HorizontalAlignment.Right;
-        var head = new Grid { Margin = new Thickness(0, 0, 0, 2) };
-        head.Children.Add(_panelName);
-        head.Children.Add(_panelValue);
-        _panelSlider.Minimum = 0;
-        _panelSlider.Maximum = 100;
-        _panelSlider.StepFrequency = 1;
-        _panelSlider.Width = 176;
-        _panelSlider.IsThumbToolTipEnabled = false;
-        _panelSlider.Margin = new Thickness(0, -4, 0, -6);
-        _panelSlider.ValueChanged += (_, e) =>
-        {
-            if (_panelSync || _panelSet < 0) return;
-            ApplySetting(_panelSet, e.NewValue / 100.0);
-        };
-        var stack = new StackPanel();
-        stack.Children.Add(head);
-        stack.Children.Add(_panelSlider);
-        _panel = new Border
-        {
-            Child = stack, Padding = new Thickness(12, 8, 12, 8), CornerRadius = new CornerRadius(14),
-            BorderThickness = new Thickness(1), Visibility = Visibility.Collapsed,
-            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top
-        };
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(_panel, "ToolWheelSetting");
-        _layer.Children.Add(_panel);
+        // §1.7 - the value popover. One instance for the life of the dial: WinUI
+        // allows an element exactly one parent, and re-adding a live one throws.
+        _popover.ValueChanged += Refresh;
+        _layer.Children.Add(_popover.Element);
 
         _host.Children.Add(_layer);
 
-        // The dock is corner-anchored, so it is re-parked on every resize.
         _host.SizeChanged += (_, _) => { if (_on) Place(); };
-        // Every colour here is captured at paint time, so a theme flip has to
-        // repaint the dial the same way it rebuilds the pen strip.
-        _host.ActualThemeChanged += (_, _) => Refresh();
-        // Undo/redo availability is what makes those two sectors transparent, so
-        // the dial repaints the moment the stacks change.
+        // The whole shell follows the PAGE GROUND now, so a ground change is what
+        // repaints the dial - not ActualThemeChanged, which no longer decides
+        // anything here.
+        PageTheme.Changed += OnThemeChanged;
         _surface.UndoManager.Changed += Refresh;
+        ToolSurfaceService.Changed += _ => Apply();
 
         _shield.PointerPressed += OnPressed;
         _shield.PointerMoved += OnMoved;
@@ -416,11 +357,13 @@ public sealed class ToolWheel
         _shield.PointerExited += (_, _) => { if (!_pressed) ClearHover(); };
         _shield.RightTapped += (_, e) =>
         {
-            var (z, idx, _, _) = Aim(e.GetPosition(_host));
-            if (z != Zone.Slot) return;
+            var (z, idx) = Aim(e.GetPosition(_host));
+            if (z != Zone.Sector) return;
             ShowAssign(idx);
             e.Handled = true;
         };
+        Satellite(_undoHit, () => _surface.Undo());
+        Satellite(_redoHit, () => _surface.Redo());
 
         _assign.Tick += (_, _) =>
         {
@@ -433,56 +376,71 @@ public sealed class ToolWheel
         if (_host.IsLoaded) { Place(); HookKeys(); }
     }
 
-    // The digit shortcuts have to work wherever focus happens to be, so the
-    // handler rides the window's root content.
+    private static Ellipse HitCircle(double d) => new()
+    {
+        Width = d,
+        Height = d,
+        // Transparent still hit-tests; a null Fill would not. An Ellipse
+        // hit-tests to its actual ellipse, so the square's corners stay with the
+        // canvas and drawing works right beside the dial.
+        Fill = new SolidColorBrush(Colors.Transparent),
+        HorizontalAlignment = HorizontalAlignment.Left,
+        VerticalAlignment = VerticalAlignment.Top,
+    };
+
+    private void Satellite(Ellipse hit, Action run)
+    {
+        hit.PointerPressed += (_, e) => { e.Handled = true; };
+        hit.PointerReleased += (_, e) =>
+        {
+            e.Handled = true;
+            if (!_on) return;
+            run();
+            Refresh();
+        };
+    }
+
+    private void OnThemeChanged() { if (_on) Refresh(); }
+
     private void HookKeys()
     {
         if (_keyTarget != null) return;
         if (_host.XamlRoot?.Content is not UIElement top) return;
         _keyTarget = top;
-        // handledEventsToo is DELIBERATELY false. With it true this handler ran
-        // even after a text box had consumed the key, so typing a year into a
-        // note fired slots 2, 0, 1 and 9 - and the default dial puts Redo on 7
-        // and Undo on 8, so a number with those digits in it silently rewrote
-        // the page. The focus guard below is the belt to that brace.
+        // handledEventsToo is DELIBERATELY false. With it true this ran even
+        // after a text box had consumed the key, so typing a year into a note
+        // fired sectors - and a number with the wrong digits in it silently
+        // rewrote the page. The focus guard below is the belt to that brace.
         top.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(OnKeyDown), false);
     }
 
-    /// <summary>True while a text surface owns the keyboard. Mirrors
-    /// MainWindow.TextBoxFocused, which ToolAccel and the eyedropper accelerator
-    /// already use, so every keyboard shortcut in the app defers to typing in
-    /// exactly the same way.</summary>
+    /// <summary>True while a text surface owns the keyboard, so every keyboard
+    /// shortcut in the app defers to typing in exactly the same way.</summary>
     private bool Typing()
     {
         try
         {
             var root = _host.XamlRoot;
             if (root == null) return false;
-            var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(root);
-            return focused is TextBox or RichEditBox or PasswordBox or AutoSuggestBox;
+            return Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(root)
+                   is TextBox or RichEditBox or PasswordBox or AutoSuggestBox;
         }
         catch { return false; }
     }
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (!_on) return;
-        if (e.Handled || Typing()) return;
-        // 1-9 then 0 fire the slots clockwise from twelve o'clock - the keyboard
-        // and assistive path onto the same commit funnel a tap uses.
-        int n = e.Key == Windows.System.VirtualKey.Number0 ? 9 : (int)e.Key - (int)Windows.System.VirtualKey.Number1;
+        if (!_on || e.Handled || Typing()) return;
+        int n = (int)e.Key - (int)Windows.System.VirtualKey.Number1;
         if (n is >= 0 and < Slots) { Commit(n); e.Handled = true; }
     }
 
     // ===================================================================
-    // Public API - the whole surface MainWindow talks to
+    // Public API
     // ===================================================================
 
-    /// <summary>Show or hide the dial. Takes effect immediately, both ways. The
-    /// gallery calls this with false: the dial belongs over a page and nowhere
-    /// else (UI-SPEC-V3 A.2). GalleryPanel is a sibling INSIDE CanvasArea while
-    /// this layer sits at ZIndex 60, so nothing else would ever have covered
-    /// it - the dial floated on top of the gallery.</summary>
+    /// <summary>Show or hide the dial. Takes effect immediately, both ways - but
+    /// a request is only ever a request: the vetoes win (V3 K.1, K.6).</summary>
     public void SetVisible(bool on)
     {
         _want = on;
@@ -490,15 +448,20 @@ public sealed class ToolWheel
     }
 
     /// <summary>Veto the dial for a named reason, and lift it again. The dial
-    /// stays down while ANY reason is outstanding, whatever the host has asked
-    /// for - V3 K.6, the collision with the floating Notebooks window.</summary>
+    /// stays down while ANY reason is outstanding, whatever the host asked for.</summary>
     public void Block(string reason, bool on)
     {
         if (on ? !_blocks.Add(reason) : !_blocks.Remove(reason)) return;
         Apply();
     }
 
-    private bool Wanted => _want && _blocks.Count == 0 && !(IsBlocked?.Invoke() ?? false);
+    /// <summary>The single predicate. The dial is on screen if and only if this
+    /// is true, and it is re-evaluated by every path that paints.</summary>
+    private bool Wanted =>
+        _want
+        && ToolSurfaceService.IsWheel                     // the Bar is the other surface
+        && _blocks.Count == 0
+        && !(IsBlocked?.Invoke() ?? false);
 
     /// <summary>Reconciles what is on screen with <see cref="Wanted"/>. Safe to
     /// call at any time; the host calls it whenever a veto's condition may have
@@ -510,37 +473,55 @@ public sealed class ToolWheel
         _on = on;
         if (!on)
         {
-            ShowPanel(-1);
-            ClearHover();
-            _dragSet = -1;
-            _scrubbing = false;
-            _pressed = false;
-            _pointer = null;
-            _preview.Visibility = Visibility.Collapsed;
-            _bottom.Visibility = Visibility.Collapsed;
-            _taken = new HashSet<string>(StringComparer.Ordinal);
-            SlotsChanged?.Invoke(_taken);      // the top bar takes its buttons back
-            // Collapse NOW rather than on an animation's Completed: a storyboard
-            // that never runs would otherwise leave the dial floating over the
-            // gallery, which is the very defect this call exists to fix.
-            _layer.Visibility = Visibility.Collapsed;
+            Shut();
             return;
         }
         _layer.Visibility = Visibility.Visible;
         // Force the next Refresh to re-announce the slots even if the set is
         // unchanged, so the top bar is always re-trimmed on the way back in.
-        _taken = new HashSet<string>(StringComparer.Ordinal) { "\u0000" };
+        _taken = new HashSet<string>(StringComparer.Ordinal) { " " };
         Place();
         Refresh();
         Drop();
     }
 
-    /// <summary>The web build's "radial gravity drop": scale3d 0.5 -> 1 with
-    /// opacity, over 160 ms on cubic-bezier(0.16, 1, 0.3, 1)
-    /// (index.css .animate-gravity-drop). WinUI's easing functions cannot
-    /// express an arbitrary cubic bezier, so the curve is a spline key frame,
-    /// which can. The dial always LANDS at its resting state first, so a
-    /// storyboard that never runs costs nothing but the motion.</summary>
+    private void Shut()
+    {
+        _popover.Close();
+        ClearHover();
+        _dragProp = null;
+        _scrubbing = false;
+        _pressed = false;
+        _pointer = null;
+        _preview.Visibility = Visibility.Collapsed;
+        _bottom.Visibility = Visibility.Collapsed;
+        _taken = new HashSet<string>(StringComparer.Ordinal);
+        SlotsChanged?.Invoke(_taken);      // the top bar takes its buttons back
+        // Collapse NOW rather than on an animation's Completed: a storyboard that
+        // never runs would otherwise leave the dial floating over the gallery,
+        // which is the very defect this exists to prevent.
+        _layer.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>The last line of defence for K.1/K.6. Called at the top of every
+    /// painting entry point, so there is no way to end up visible while a veto
+    /// stands - not by adding a SetVisible(true), not by calling Refresh
+    /// directly, not by a repaint arriving from the theme or the undo stack.
+    /// Returns false when the caller should stop.</summary>
+    private bool Enforce()
+    {
+        if (!_on) return false;
+        if (Wanted) return true;
+        _on = false;
+        Shut();
+        return false;
+    }
+
+    /// <summary>The "radial gravity drop": scale 0.5 -> 1 with opacity over
+    /// 160 ms. WinUI's easing functions cannot express an arbitrary cubic bezier,
+    /// so the curve is a spline key frame, which can. The dial always LANDS at
+    /// its resting state first, so a storyboard that never runs costs nothing but
+    /// the motion.</summary>
     private void Drop()
     {
         var st = (ScaleTransform)_wheel.RenderTransform;
@@ -574,70 +555,60 @@ public sealed class ToolWheel
     }
 
     /// <summary>Top-left dock, mirrored to the top-right when the user keeps
-    /// their tools on the right, so the wheel sits under the drawing hand rather
-    /// than across the page.</summary>
+    /// their tools on the right, so the wheel sits under the drawing hand.</summary>
     private void Place()
     {
+        if (!Enforce()) return;
         double w = _host.ActualWidth, h = _host.ActualHeight;
         if (w <= 0 || h <= 0) return;
         const double pad = 10;
         _mirrored = string.Equals(_h.Library().PenDock, "Right", StringComparison.OrdinalIgnoreCase);
-        double cx = _mirrored ? Math.Max(Half, w - Half - pad) : Half + pad;
-        double cy = Math.Min(Half + pad + _topInset, Math.Max(Half, h - Half));
+        double half = Half * _scale;
+        double cx = _mirrored ? Math.Max(half, w - half - pad) : half + pad;
+        double cy = Math.Min(half + pad + _topInset, Math.Max(half, h - half));
         _centre = new Point(cx, cy);
 
         // Margin, not Canvas.Left: this layer is a GRID, and a Grid ignores the
-        // Canvas attached properties the shipped build was setting - which parked
-        // the whole wheel at (0,0) while the hit maths believed it sat at the pad.
+        // Canvas attached properties - which parked the whole wheel at (0,0)
+        // while the hit maths believed it sat at the pad.
         _wheel.Margin = new Thickness(cx - Half, cy - Half, 0, 0);
-        // The shield is the dial's ONLY hit surface, so it has to be the size the
-        // wheel is actually PAINTED at. Touch mode scales _wheel by 1.1 and Aim()
-        // divides the pointer radius by that same factor, but the shield used to
-        // stay at its authored RimR - so in touch mode the outer 9% of every
-        // sector was drawn and could not be pressed at all.
-        double rim = RimR * _scale;
+
+        // The shield has to be the size the wheel is actually PAINTED at, or the
+        // outer band of every sector is drawn and cannot be pressed.
+        double rim = PopOut * _scale;
         _shield.Width = _shield.Height = rim * 2;
         _shield.Margin = new Thickness(cx - rim, cy - rim, 0, 0);
+        PlaceSatellite(_undoHit, UndoBearing);
+        PlaceSatellite(_redoHit, RedoBearing);
 
-        // concentric with the dial, so the ring reads as the dial's own halo
         _preview.Margin = new Thickness(cx - PreviewBox / 2, cy - PreviewBox / 2, 0, 0);
-        PlaceGrip();
-        PlacePanel();
+        PlacePopover();
     }
 
-    /// <summary>Parks the slider window beside the rim, on the side away from
-    /// the dock so it never covers the wheel it is describing.</summary>
-    private void PlacePanel()
+    private void PlaceSatellite(Ellipse hit, double bearing)
     {
-        if (_panel.Visibility != Visibility.Visible) return;
-        const double w = 204, h = 60;
-        double x = _mirrored ? _centre.X - RimR * _scale - w - 12 : _centre.X + RimR * _scale + 12;
-        double y = _centre.Y - h / 2;
-        x = Math.Clamp(x, 8, Math.Max(8, _host.ActualWidth - w - 8));
-        y = Math.Clamp(y, 8, Math.Max(8, _host.ActualHeight - h - 8));
-        _panel.Margin = new Thickness(x, y, 0, 0);
+        var at = Polar(bearing, SatR * _scale);
+        double r = hit.Width / 2;
+        hit.Margin = new Thickness(_centre.X + at.X - r, _centre.Y + at.Y - r, 0, 0);
     }
 
-    /// <summary>Opens the slider window on a setting, or closes it with -1.</summary>
-    private void ShowPanel(int i)
+    /// <summary>§1.7: the popover is docked to the RIGHT of the inner disc and
+    /// deliberately overlaps the ring. On a right-hand dock it goes to the left
+    /// instead, or it would hang off the window it is docked against.</summary>
+    private void PlacePopover()
     {
-        if (i < 0 || !SetEnabled(i))
-        {
-            _panelSet = -1;
-            _panel.Visibility = Visibility.Collapsed;
-            return;
-        }
-        _panelSet = i;
-        _panel.Visibility = Visibility.Visible;
-        PlacePanel();
-        Refresh();
+        if (!_popover.IsOpen) return;
+        double x = _mirrored
+            ? _centre.X - DiscR * 0.8 * _scale - ValuePopover.W
+            : _centre.X + DiscR * 0.8 * _scale;
+        _popover.Place(new Point(x, _centre.Y - ValuePopover.H / 2), _host.ActualWidth, _host.ActualHeight);
     }
 
     /// <summary>The ToolUiChanged subscriber: a dumb re-render of whatever the
     /// shared state now says. Never writes state.</summary>
     public void Refresh()
     {
-        if (!_on) return;
+        if (!Enforce()) return;
         var lib = _h.Library();
         double scaleWas = _scale;
         _scale = lib.TouchMode ? 1.1 : 1.0;
@@ -645,69 +616,99 @@ public sealed class ToolWheel
         {
             ((ScaleTransform)_wheel.RenderTransform).ScaleX = _scale;
             ((ScaleTransform)_wheel.RenderTransform).ScaleY = _scale;
-            Place();                      // the shield follows the painted size
+            Place();
         }
-        bool dark = IsDark();
-        var accent = Accent();
-        var ink = Ink();
-        var dim = Color.FromArgb(dark ? (byte)0x70 : (byte)0x66, ink.R, ink.G, ink.B);
-        var edge = dark ? Color.FromArgb(0x3C, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x30, 0x14, 0x14, 0x13);
-        var bodyCol = dark ? Color.FromArgb(0xF2, 0x1C, 0x1B, 0x1F) : Color.FromArgb(0xF2, 0xF7, 0xF5, 0xF0);
-        var slotCol = dark ? Color.FromArgb(0xE8, 0x2A, 0x29, 0x2E) : Color.FromArgb(0xE8, 0xEE, 0xEB, 0xE4);
 
-        // Brush-level writes only: WinUI caches GradientStop mutations, so every
-        // repaint replaces the brush rather than poking a live one.
-        _body.Fill = new SolidColorBrush(bodyCol);
-        _body.Stroke = new SolidColorBrush(edge);
+        // ---- the palette, all of it from the page ground -----------------
+        var onSurface = PageTheme.OnSurface;
+        var surface = PageTheme.Surface;
+        var muted = PageTheme.OnSurfaceMuted;
+        var outline = PageTheme.Outline;
+        bool dark = PageTheme.IsDark;
+
+        // §1.1: "Sector fill is Surface lightened toward the ground - near-white
+        // on a paper page." §7: on a Blueprint / Brown Paper / Darkprint page the
+        // RING goes fully transparent, and only separators, marks and labels
+        // remain. The inner disc stays opaque in every case.
+        var ringFill = dark ? Colors.Transparent : Mix(surface, PageTheme.Ground, 0.62);
+
+        _shadow.Fill = ShadowBrush();
+        _disc.Fill = new SolidColorBrush(surface);
+        _ringEdge.Stroke = new SolidColorBrush(PageTheme.WithAlpha(onSurface, (byte)(0.40 * 36)));
+        _ringEdge.Fill = null;
 
         var ids = ResolveSlots();
+        int active = -1;
+        for (int i = 0; i < Slots; i++) if (IsActive(ids[i])) { active = i; break; }
+        // Aim() runs on every pointer move; resolving the slots there allocated
+        // an array and ran a LINQ lookup per pen, per move.
+        _active = active;
+
         var taken = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 0; i < Slots; i++)
         {
             string id = ids[i];
             bool live = Available(id);
-            bool active = IsActive(id);
-            bool lit = active || _hoverSlot == i;
+            bool act = i == active;
+            bool hover = _hoverSlot == i && !act;
 
-            _slotArc[i].Fill = new SolidColorBrush(_hoverSlot == i ? Tint(accent, 0.85) : active ? accent : slotCol);
-            _slotArc[i].Stroke = new SolidColorBrush(_hoverSlot == i ? accent : edge);
-            _slotArc[i].StrokeThickness = _hoverSlot == i ? 2 : 1;
+            // The plain sector. The ACTIVE one is not painted here at all - it is
+            // redrawn by _pop at 1.19 R, on top of everything.
+            _sector[i].Fill = new SolidColorBrush(
+                act ? Colors.Transparent
+                : hover ? Mix(ringFill, onSurface, dark ? 0.10 : 0.07)
+                : ringFill);
+            _sector[i].Opacity = live ? 1 : 0;
 
-            var fg = lit ? (ColorUtil.IsDark(accent) ? Colors.White : Color.FromArgb(255, 0x14, 0x14, 0x13)) : ink;
+            // §1.1: separators are hairlines in Outline from 0.70 R to 1.00 R,
+            // and §7 keeps them when the ring itself has gone.
+            _sep[i].Stroke = new SolidColorBrush(outline);
 
-            var seat = _hoverSlot == i ? Tint(accent, 0.85) : active ? accent : slotCol;
-            _slotArt[i].Children.Clear();
-            var art = SlotArt(id, fg, seat);
-            if (art != null) _slotArt[i].Children.Add(art);
+            // §1.3: the mark in the tool's OWN colour (grey for a non-drawing
+            // tool), the size label beneath it, both rotated to follow the ring.
+            // On the active sector both invert to Surface against the OnSurface
+            // fill - that inversion IS the pop-out's other half.
+            var fg = act ? surface : onSurface;
+            _mark[i].Children.Clear();
+            var art = SlotArt(id, fg, act);
+            if (art != null) _mark[i].Children.Add(art);
 
-            // Pens carry their own size number on the rim; tools and commands do not.
             var pen = PenOf(id);
-            _slotNum[i].Text = pen != null ? $"{pen.Size:0.#}px" : "";
-            _slotNum[i].Foreground = new SolidColorBrush(lit ? fg : dim);
+            _label[i].Text = pen != null ? SizeLabel(pen.Size) : "";
+            _label[i].Foreground = new SolidColorBrush(act ? surface : onSurface);
 
-            // UNAVAILABLE == FULLY TRANSPARENT. Not collapsed (the sector keeps
-            // its place in the ring and its hit region), not dimmed - the sector,
-            // its mark and its label all go to zero alpha together.
             double a = live ? 1 : 0;
-            _slotArc[i].Opacity = a;
-            _slotArt[i].Opacity = a;
-            _slotNum[i].Opacity = a;
+            _mark[i].Opacity = a;
+            _label[i].Opacity = a;
+
+            // §1.5: a 45° arc on the disc rim, in the tool's colour, aligned to
+            // its sector. Neutral tools paint nothing at all.
+            var arc = SlotColour(id);
+            if (live && arc is { } c)
+            {
+                _rimArc[i].Stroke = new SolidColorBrush(c);
+                _rimArc[i].Opacity = 1;
+            }
+            else _rimArc[i].Opacity = 0;
 
             string? bar = TopBarKey(id);
             if (bar != null) taken.Add(bar);
         }
         if (!taken.SetEquals(_taken)) { _taken = taken; SlotsChanged?.Invoke(_taken); }
 
-        // ---- the three setting sectors ----
+        // ---- §1.2 the active sector, pulled outward ----------------------
+        if (active >= 0)
+        {
+            _pop.Data = PopGeometry(active);
+            _pop.Fill = new SolidColorBrush(onSurface);
+            _pop.Visibility = Visibility.Visible;
+        }
+        else _pop.Visibility = Visibility.Collapsed;
+
+        // ---- §1.4 the inner disc ----------------------------------------
         var ap = ToolPen();
         bool eraser = _h.ToolTag() == "Eraser";
-        bool[] enabled = { SetEnabled(0), SetEnabled(1), SetEnabled(2) };
-        double[] frac =
-        {
-            enabled[0] ? (eraser ? Norm01(lib.EraserSize, 0, 80) : Norm01(ap!.Size, 1, 24)) : 0,
-            enabled[1] ? Math.Clamp(ap!.Opacity, 0, 1) : 0,
-            enabled[2] ? ap!.Stabiliser : 0,
-        };
+        bool[] enabled = { Enabled(Prop.Size), Enabled(Prop.Opacity), Enabled(Prop.Smooth) };
         string[] read =
         {
             enabled[0] ? (eraser ? (lib.EraserSize <= 0 ? Loc.T("Wheel.Auto") : $"{lib.EraserSize:0} px") : $"{ap!.Size:0.#} px") : "-",
@@ -715,229 +716,329 @@ public sealed class ToolWheel
             enabled[2] ? $"{ap!.Stabiliser * 100:0}%" : "-",
         };
 
-        for (int i = 0; i < 3; i++)
+        Glyph(_sizeGlyph, Icons.Size, enabled[0] ? onSurface : muted, stroked: false);
+        Glyph(_opacGlyph, Icons.Opacity, enabled[1] ? onSurface : muted, stroked: false);
+        Glyph(_smoothGlyph, Icons.Smoothness, enabled[2] ? onSurface : muted, stroked: true);
+        _sizeText.Text = read[0];
+        _opacText.Text = read[1];
+        _smoothText.Text = read[2];
+        foreach (var (t, en) in new[] { (_sizeText, enabled[0]), (_opacText, enabled[1]), (_smoothText, enabled[2]) })
         {
-            bool en = enabled[i];
-            _setArc[i].Fill = new SolidColorBrush(_hoverSet == i && en ? Tint(accent, 0.26)
-                : dark ? Color.FromArgb(0x55, 0x00, 0x00, 0x00) : Color.FromArgb(0x14, 0x14, 0x14, 0x13));
-            _setArc[i].Stroke = new SolidColorBrush(edge);
-            _setArc[i].Opacity = en ? 1 : 0.45;      // greyed, never hidden
-
-            // The progress track: an arc from the sector's zero end, swept
-            // clockwise by the value. Replaced wholesale, never mutated.
-            var (a0, _) = SetRange(i);
-            _setFill[i].Data = StrokeArc(a0, a0 - SetSpan * Math.Clamp(frac[i], 0, 1), InOut - 6);
-            _setFill[i].Stroke = new SolidColorBrush(en ? accent : dim);
-            _setFill[i].Opacity = en ? 1 : 0.35;
-
-            _setIcon[i].Children.Clear();
-            var glyph = SetGlyph(i, en ? ink : dim);
-            if (glyph != null) _setIcon[i].Children.Add(glyph);
-            _setIcon[i].Opacity = en ? 1 : 0.5;
-
-            _setText[i].Text = read[i];
-            _setText[i].Foreground = new SolidColorBrush(en ? ink : dim);
-            _setText[i].Opacity = en ? 1 : 0.6;
+            t.Foreground = new SolidColorBrush(en ? onSurface : muted);
+            t.Opacity = en ? 1 : 0.6;
         }
+        LayoutSizeRow();
 
-        // ---- the centre colour disc ----
-        var swatch = ActiveColour();
-        _colour.Fill = new SolidColorBrush(swatch);
-        _colour.Stroke = new SolidColorBrush(_hoverColour ? accent : edge);
-        _colour.StrokeThickness = _hoverColour ? 4 : 3;
-        _grip.Fill = new SolidColorBrush(dim);
+        _dot.Fill = new SolidColorBrush(ActiveColour());
+        _dot.Stroke = new SolidColorBrush(_hoverZone == Zone.Dot ? PageTheme.Accent : outline);
+        _dot.StrokeThickness = _hoverZone == Zone.Dot ? 3 : 2;
 
-        // ---- the slider window mirrors whichever setting it is showing ----
-        if (_panelSet >= 0)
-        {
-            int i = _panelSet;
-            _panel.Background = new SolidColorBrush(bodyCol);
-            _panel.BorderBrush = new SolidColorBrush(edge);
-            _panelName.Text = Loc.T("Wheel.Set." + (i == 0 ? "Size" : i == 1 ? "Opacity" : "Smoothness"));
-            _panelName.Foreground = new SolidColorBrush(ink);
-            _panelValue.Text = read[i];
-            _panelValue.Foreground = new SolidColorBrush(dim);
-            _panelSync = true;
-            try { _panelSlider.Value = Math.Clamp(frac[i] * 100, 0, 100); }
-            finally { _panelSync = false; }
-        }
+        // ---- §1.6 satellites --------------------------------------------
+        Satellite(_undoArt, Icons.Undo, false, _surface.UndoManager.CanUndo, onSurface);
+        Satellite(_redoArt, Icons.Undo, true, _surface.UndoManager.CanRedo, onSurface);
 
-        BuildToolOptions(ink, edge, bodyCol, accent);
-        if (_dragSet >= 0) _preview.Invalidate();
+        BuildToolOptions(onSurface, outline, surface);
+        _popover.Sync();
+        if (_dragProp != null) _preview.Invalidate();
+    }
+
+    private void Satellite(Canvas host, string icon, bool mirror, bool live, Color fg)
+    {
+        host.Children.Clear();
+        // §1.6: OnSurface when available, OnSurface at 30% when not - never
+        // hidden, so the pair keeps its place either side of the ring.
+        var c = live ? fg : PageTheme.WithAlpha(fg, 77);
+        host.Children.Add(Icons.Mark(icon, c, SatSize, mirror: mirror));
+    }
+
+    private static void Glyph(Canvas host, string data, Color fg, bool stroked)
+    {
+        host.Children.Clear();
+        host.Children.Add(Icons.Mark(data, fg, SetBox, stroked: stroked, thickness: 2.1));
+    }
+
+    /// <summary>§1.4 row 1: the size glyph and its readout are a PAIR, centred
+    /// together on the disc's midline - so the pair has to be measured before it
+    /// can be placed, unlike everything else here.</summary>
+    private void LayoutSizeRow()
+    {
+        _sizeText.Measure(new Size(200, 40));
+        double tw = _sizeText.DesiredSize.Width;
+        double total = SetBox + 6 + tw;
+        double x = Half - total / 2;
+        Canvas.SetLeft(_sizeGlyph, x);
+        Canvas.SetTop(_sizeGlyph, Half + Row1Y - SetBox / 2);
+        Canvas.SetLeft(_sizeText, x + SetBox + 6);
+        Canvas.SetTop(_sizeText, Half + Row1Y - 9);
     }
 
     // ===================================================================
-    // Geometry helpers - math convention, y flipped for the screen
+    // Geometry helpers. BEARINGS: 0 at twelve o'clock, positive clockwise -
+    // the reference's own convention, and the only one used in this file.
     // ===================================================================
+    private static Point Polar(double bearing, double r)
+    {
+        double t = (bearing - 90) * Math.PI / 180;
+        return new Point(r * Math.Cos(t), r * Math.Sin(t));
+    }
+
+    /// <summary>A bearing and a radius to a point in the wheel canvas.</summary>
+    private static Point Pt(double bearing, double r)
+    {
+        var p = Polar(bearing, r);
+        return new Point(Half + p.X, Half + p.Y);
+    }
+
     private static double Norm360(double d) => ((d % 360) + 360) % 360;
     private static double Norm01(double v, double lo, double hi) => Math.Clamp((v - lo) / (hi - lo), 0, 1);
 
-    private static Point P(double deg, double r)
-    {
-        double t = deg * Math.PI / 180;
-        return new Point(Half + r * Math.Cos(t), Half - r * Math.Sin(t));
-    }
+    /// <summary>The bearing of sector <paramref name="i"/>'s midline. §1.1:
+    /// sector 0 is centred up-and-left, and they run clockwise from there.</summary>
+    private static double SlotMid(int i) => Norm360(Sector0 + Span * i);
 
-    private static (double A0, double A1) SetRange(int i) => i switch
+    /// <summary>A true annular sector, bearings sweeping clockwise from
+    /// <paramref name="b0"/> to <paramref name="b1"/>.</summary>
+    private static Geometry Sector(double b0, double b1, double rIn, double rOut)
     {
-        0 => (SizeA0, SizeA1),
-        1 => (OpacA0, OpacA1),
-        _ => (SmoothA0, SmoothA1),
-    };
-
-    /// <summary>A true annular sector: outer arc, radial edge, inner arc back,
-    /// radial edge home. This IS the button - not an icon floating on a disc.</summary>
-    private static Geometry Sector(double a0, double a1, double rIn, double rOut)
-    {
-        bool large = Norm360(a0 - a1) > 180;
-        var fig = new PathFigure { StartPoint = P(a0, rOut), IsClosed = true, IsFilled = true };
-        fig.Segments.Add(new ArcSegment { Point = P(a1, rOut), Size = new Size(rOut, rOut),
+        bool large = Norm360(b1 - b0) > 180;
+        var fig = new PathFigure { StartPoint = Pt(b0, rOut), IsClosed = true, IsFilled = true };
+        fig.Segments.Add(new ArcSegment { Point = Pt(b1, rOut), Size = new Size(rOut, rOut),
                                           SweepDirection = SweepDirection.Clockwise, IsLargeArc = large });
-        fig.Segments.Add(new LineSegment { Point = P(a1, rIn) });
-        fig.Segments.Add(new ArcSegment { Point = P(a0, rIn), Size = new Size(rIn, rIn),
+        fig.Segments.Add(new LineSegment { Point = Pt(b1, rIn) });
+        fig.Segments.Add(new ArcSegment { Point = Pt(b0, rIn), Size = new Size(rIn, rIn),
                                           SweepDirection = SweepDirection.Counterclockwise, IsLargeArc = large });
         var geo = new PathGeometry();
         geo.Figures.Add(fig);
         return geo;
     }
 
-    /// <summary>Open arc for the progress tracks, again swept clockwise.</summary>
-    private static Geometry StrokeArc(double a0, double a1, double r)
+    /// <summary>§1.2: the active sector at 1.19 R with its two OUTER corners
+    /// rounded by ~6 DIP. The inner edge stays square against the disc, which is
+    /// what makes the sector read as pulled out of the ring rather than as a
+    /// free-floating lozenge.</summary>
+    private static Geometry PopGeometry(int slot)
     {
+        double mid = SlotMid(slot);
+        double b0 = mid - Span / 2 + Seam, b1 = mid + Span / 2 - Seam;
+        double k = PopCorner;
+        double dB = k / PopOut * 180 / Math.PI;      // the corner's angular bite
+
+        var fig = new PathFigure { StartPoint = Pt(b0, PopOut - k), IsClosed = true, IsFilled = true };
+        fig.Segments.Add(new ArcSegment { Point = Pt(b0 + dB, PopOut), Size = new Size(k, k),
+                                          SweepDirection = SweepDirection.Clockwise });
+        fig.Segments.Add(new ArcSegment { Point = Pt(b1 - dB, PopOut), Size = new Size(PopOut, PopOut),
+                                          SweepDirection = SweepDirection.Clockwise });
+        fig.Segments.Add(new ArcSegment { Point = Pt(b1, PopOut - k), Size = new Size(k, k),
+                                          SweepDirection = SweepDirection.Clockwise });
+        fig.Segments.Add(new LineSegment { Point = Pt(b1, RingIn) });
+        fig.Segments.Add(new ArcSegment { Point = Pt(b0, RingIn), Size = new Size(RingIn, RingIn),
+                                          SweepDirection = SweepDirection.Counterclockwise });
         var geo = new PathGeometry();
-        if (Math.Abs(a0 - a1) < 0.3) return geo;   // an empty track draws nothing at all
-        var fig = new PathFigure { StartPoint = P(a0, r), IsClosed = false, IsFilled = false };
-        fig.Segments.Add(new ArcSegment { Point = P(a1, r), Size = new Size(r, r),
-                                          SweepDirection = SweepDirection.Clockwise,
-                                          IsLargeArc = Norm360(a0 - a1) > 180 });
         geo.Figures.Add(fig);
         return geo;
     }
 
-    private static double SlotMid(int i) => 90 - SlotSpan * i;   // slot 0 at twelve, then clockwise
+    /// <summary>An open arc, for §1.5's rim colours.</summary>
+    private static Geometry Arc(double b0, double b1, double r)
+    {
+        var geo = new PathGeometry();
+        var fig = new PathFigure { StartPoint = Pt(b0, r), IsClosed = false, IsFilled = false };
+        fig.Segments.Add(new ArcSegment { Point = Pt(b1, r), Size = new Size(r, r),
+                                          SweepDirection = SweepDirection.Clockwise,
+                                          IsLargeArc = Norm360(b1 - b0) > 180 });
+        geo.Figures.Add(fig);
+        return geo;
+    }
 
     private void BuildWheel()
     {
-        // The plate the whole dial sits on - the web's r=125 background circle.
-        // It also fills the 82->84 seam between the two annuli, which is what
-        // makes the three rings read as one object.
-        _body.Width = _body.Height = PlateR * 2;
-        _body.StrokeThickness = 2.5;
-        _body.IsHitTestVisible = false;
-        Canvas.SetLeft(_body, Half - PlateR);
-        Canvas.SetTop(_body, Half - PlateR);
-        _wheel.Children.Add(_body);
-
-        for (int i = 0; i < 3; i++)
-        {
-            var (a0, a1) = SetRange(i);
-            var seg = new Path { Data = Sector(a0 - Seam, a1 + Seam, InIn, InOut), StrokeThickness = 1, IsHitTestVisible = false };
-            _setArc[i] = seg;
-            _wheel.Children.Add(seg);
-        }
-        for (int i = 0; i < 3; i++)
-        {
-            var fill = new Path { StrokeThickness = 4, StrokeStartLineCap = PenLineCap.Round,
-                                  StrokeEndLineCap = PenLineCap.Round, IsHitTestVisible = false };
-            _setFill[i] = fill;
-            _wheel.Children.Add(fill);
-        }
+        // §1.1: one soft drop shadow for the whole dial (y+2, blur 12, black at
+        // 18%). A radial-gradient ellipse rather than a composition DropShadow:
+        // the shadow sits over a Win2D swap chain, and a real backdrop-sampling
+        // effect there smears by a frame every time the ink moves under it.
+        _shadow.Width = _shadow.Height = (RingOut + 14) * 2;
+        _shadow.IsHitTestVisible = false;
+        Canvas.SetLeft(_shadow, Half - RingOut - 14);
+        Canvas.SetTop(_shadow, Half - RingOut - 14 + 2);
+        _wheel.Children.Add(_shadow);
 
         for (int i = 0; i < Slots; i++)
         {
             double mid = SlotMid(i);
-            var p = new Path { Data = Sector(mid + SlotSpan / 2 - Seam, mid - SlotSpan / 2 + Seam, OutIn, OutOut),
-                               IsHitTestVisible = false };
-            _slotArc[i] = p;
+            var p = new Path
+            {
+                Data = Sector(mid - Span / 2 + Seam, mid + Span / 2 - Seam, RingIn, RingOut),
+                IsHitTestVisible = false
+            };
+            _sector[i] = p;
             _wheel.Children.Add(p);
         }
 
-        // Slot content rides above every sector so a highlight never paints over
-        // it. Each mark sits in an explicit 30x30 box centred on the sector's
-        // radial midpoint - the shipped build let the Path size itself to its
-        // geometry EXTENT instead, which pulled every asymmetric mark off-centre
-        // inside its wedge (V3 A.7).
+        // The rim colour arcs sit on the disc, under everything the disc carries.
+        _disc.Width = _disc.Height = DiscR * 2;
+        _disc.IsHitTestVisible = false;
+        Canvas.SetLeft(_disc, Half - DiscR);
+        Canvas.SetTop(_disc, Half - DiscR);
+        _wheel.Children.Add(_disc);
+
         for (int i = 0; i < Slots; i++)
         {
             double mid = SlotMid(i);
-            var at = P(mid, IconR);
-            // The size number follows the slot's POSITION, not its radius: ABOVE
-            // the mark for a slot in the upper half, BELOW it in the lower half
-            // (spec 1.2). sin(mid) > 0 is the upper half.
-            bool upper = Math.Sin(mid * Math.PI / 180) > 0;
-
-            var g = new Grid { Width = MarkBox, Height = MarkBox, IsHitTestVisible = false };
-            Canvas.SetLeft(g, at.X - MarkBox / 2);
-            Canvas.SetTop(g, at.Y + (upper ? MarkUpDy : MarkDownDy) - MarkBox / 2);
-            _slotArt[i] = g;
-            _wheel.Children.Add(g);
-
-            var t = new TextBlock { Width = 44, FontSize = 8, TextAlignment = TextAlignment.Center,
-                                    IsHitTestVisible = false, FontWeight = Microsoft.UI.Text.FontWeights.Bold };
-            Canvas.SetLeft(t, at.X - 22);
-            Canvas.SetTop(t, at.Y + (upper ? TextUpDy : TextDownDy) - 6);
-            _slotNum[i] = t;
-            _wheel.Children.Add(t);
+            var p = new Path
+            {
+                Data = Arc(mid - Span / 2, mid + Span / 2, ArcR),
+                StrokeThickness = ArcStroke,
+                IsHitTestVisible = false
+            };
+            _rimArc[i] = p;
+            _wheel.Children.Add(p);
         }
 
-        // Setting mark + readout. These used to sit at literal web coordinates
-        // (112,69)/(160,150)/(62,150) inside a 13x13 box while SetGlyph handed
-        // them a 20 DIP mark - the same undersized-host layout clip as the slot
-        // marks (V3 K.5), and coordinates that stop meaning anything the moment
-        // the dial is resized. Both now derive from the sector angle and the hub
-        // radii, so they follow the geometry: mark on the outer half of the hub,
-        // value on the inner half, both centred on the sector.
-        for (int i = 0; i < 3; i++)
+        // Separators AFTER the sectors so they survive §7's transparent ring.
+        for (int i = 0; i < Slots; i++)
         {
-            var (a0, a1) = SetRange(i);
-            double mid = a0 - SetSpan / 2;                 // sectors sweep clockwise
-            var ip = P(mid, SetIconR);
-            var g = new Grid { Width = SetBox, Height = SetBox, IsHitTestVisible = false };
-            Canvas.SetLeft(g, ip.X - SetBox / 2);
-            Canvas.SetTop(g, ip.Y - SetBox / 2);
-            _setIcon[i] = g;
-            _wheel.Children.Add(g);
-
-            var tp = P(mid, SetTextR);
-            var t = new TextBlock { Width = 52, FontSize = 9.5, TextAlignment = TextAlignment.Center,
-                                    IsHitTestVisible = false, FontWeight = Microsoft.UI.Text.FontWeights.Bold };
-            Canvas.SetLeft(t, tp.X - 26);
-            Canvas.SetTop(t, tp.Y - 7);
-            _setText[i] = t;
-            _wheel.Children.Add(t);
-            _ = a1;
+            double edge = SlotMid(i) - Span / 2;
+            var fig = new PathFigure { StartPoint = Pt(edge, RingIn), IsClosed = false, IsFilled = false };
+            fig.Segments.Add(new LineSegment { Point = Pt(edge, RingOut) });
+            var geo = new PathGeometry();
+            geo.Figures.Add(fig);
+            var l = new Path { Data = geo, StrokeThickness = 1, IsHitTestVisible = false };
+            _sep[i] = l;
+            _wheel.Children.Add(l);
         }
 
-        _colour.Width = _colour.Height = ColourR * 2;
-        _colour.StrokeThickness = 3;          // the web's 3px collar
-        _colour.IsHitTestVisible = false;
-        Canvas.SetLeft(_colour, Half - ColourR);
-        Canvas.SetTop(_colour, Half - ColourR);
-        _wheel.Children.Add(_colour);
+        _ringEdge.Width = _ringEdge.Height = RingOut * 2;
+        _ringEdge.StrokeThickness = 1;
+        _ringEdge.IsHitTestVisible = false;
+        Canvas.SetLeft(_ringEdge, Half - RingOut);
+        Canvas.SetTop(_ringEdge, Half - RingOut);
+        _wheel.Children.Add(_ringEdge);
 
-        // Handedness grip - the app's own six-dot grip mark as vector geometry.
-        _grip.Data = Icons.Geo(
-            "M3 4.5 a1.5 1.5 0 1 0 0.01 0 Z M8 4.5 a1.5 1.5 0 1 0 0.01 0 Z M13 4.5 a1.5 1.5 0 1 0 0.01 0 Z " +
-            "M3 11.5 a1.5 1.5 0 1 0 0.01 0 Z M8 11.5 a1.5 1.5 0 1 0 0.01 0 Z M13 11.5 a1.5 1.5 0 1 0 0.01 0 Z");
-        _grip.Width = _grip.Height = 16;
-        _grip.Stretch = Stretch.Uniform;
-        _grip.IsHitTestVisible = false;
-        _wheel.Children.Add(_grip);
-        PlaceGrip();
+        // The popped sector paints OVER the ring and under the sector content.
+        _pop.IsHitTestVisible = false;
+        _pop.Visibility = Visibility.Collapsed;
+        _wheel.Children.Add(_pop);
+
+        // §1.3: mark and label stacked on the radial midline and ROTATED TO
+        // FOLLOW THE RING. The rotation is the bearing itself: at twelve o'clock
+        // that is 0 and the text is upright, at six o'clock it is 180 and the
+        // text is upside-down - which is exactly what the reference shows.
+        for (int i = 0; i < Slots; i++)
+        {
+            double mid = SlotMid(i);
+
+            var at = Pt(mid, MarkR);
+            var g = new Canvas
+            {
+                Width = MarkBox, Height = MarkBox, IsHitTestVisible = false,
+                RenderTransformOrigin = new Point(0.5, 0.5),
+                RenderTransform = new RotateTransform { Angle = mid }
+            };
+            Canvas.SetLeft(g, at.X - MarkBox / 2);
+            Canvas.SetTop(g, at.Y - MarkBox / 2);
+            _mark[i] = g;
+            _wheel.Children.Add(g);
+
+            var lp = Pt(mid, LabelR);
+            var t = new TextBlock
+            {
+                Width = 52,
+                FontSize = LabelSize,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                TextAlignment = TextAlignment.Center,
+                IsHitTestVisible = false,
+                RenderTransformOrigin = new Point(0.5, 0.5),
+                RenderTransform = new RotateTransform { Angle = mid }
+            };
+            Canvas.SetLeft(t, lp.X - 26);
+            Canvas.SetTop(t, lp.Y - LabelSize * 0.72);
+            _label[i] = t;
+            _wheel.Children.Add(t);
+        }
+
+        // §1.4 inner disc. Row 1 is laid out at paint time (the glyph and its
+        // readout are centred as a pair); rows 2 and 3 are fixed by the ratios.
+        _sizeText.FontSize = 13;                       // §1.4 "size readout 13 DIP semibold"
+        _sizeText.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+        _sizeText.IsHitTestVisible = false;
+        _sizeGlyph.Width = _sizeGlyph.Height = SetBox;
+        _sizeGlyph.IsHitTestVisible = false;
+        _wheel.Children.Add(_sizeGlyph);
+        _wheel.Children.Add(_sizeText);
+
+        Put(_smoothGlyph, -ColX, 0, SetBox);
+        Put(_opacGlyph, +ColX, 0, SetBox);
+        PutValue(_smoothText, -ColX, Row3Y);
+        PutValue(_opacText, +ColX, Row3Y);
+
+        _dot.Width = _dot.Height = DotR * 2;
+        _dot.StrokeThickness = 2;
+        _dot.IsHitTestVisible = false;
+        Canvas.SetLeft(_dot, Half - DotR);
+        Canvas.SetTop(_dot, Half - DotR);
+        _wheel.Children.Add(_dot);
+
+        // §1.6: satellites OUTSIDE the ring - not sectors, and no background.
+        PutSat(_undoArt, UndoBearing);
+        PutSat(_redoArt, RedoBearing);
+
+        void Put(Canvas c, double dx, double dy, double box)
+        {
+            c.Width = c.Height = box;
+            c.IsHitTestVisible = false;
+            Canvas.SetLeft(c, Half + dx - box / 2);
+            Canvas.SetTop(c, Half + dy - box / 2);
+            _wheel.Children.Add(c);
+        }
+        void PutValue(TextBlock t, double dx, double dy)
+        {
+            t.FontSize = 12;                            // §1.4 "values 12 DIP semibold"
+            t.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+            t.TextAlignment = TextAlignment.Center;
+            t.Width = 56;
+            t.IsHitTestVisible = false;
+            Canvas.SetLeft(t, Half + dx - 28);
+            Canvas.SetTop(t, Half + dy - 8);
+            _wheel.Children.Add(t);
+        }
+        void PutSat(Canvas c, double bearing)
+        {
+            var at = Pt(bearing, SatR);
+            c.Width = c.Height = SatSize;
+            c.IsHitTestVisible = false;
+            Canvas.SetLeft(c, at.X - SatSize / 2);
+            Canvas.SetTop(c, at.Y - SatSize / 2);
+            _wheel.Children.Add(c);
+        }
     }
 
-    private void PlaceGrip()
+    private static Brush ShadowBrush()
     {
-        var at = P(_mirrored ? 135 : 45, GripR);
-        Canvas.SetLeft(_grip, at.X - 8);
-        Canvas.SetTop(_grip, at.Y - 8);
+        // Rebuilt every paint, never mutated: WinUI caches GradientStop changes
+        // and a live brush whose stops moved simply does not repaint.
+        var b = new RadialGradientBrush { Center = new Point(0.5, 0.5), RadiusX = 0.5, RadiusY = 0.5 };
+        double solid = RingOut / (RingOut + 14);
+        b.GradientStops.Add(new GradientStop { Offset = 0, Color = Color.FromArgb(46, 0, 0, 0) });
+        b.GradientStops.Add(new GradientStop { Offset = solid * 0.98, Color = Color.FromArgb(46, 0, 0, 0) });
+        b.GradientStops.Add(new GradientStop { Offset = 1, Color = Color.FromArgb(0, 0, 0, 0) });
+        return b;
+    }
+
+    private static Color Mix(Color a, Color b, double t)
+    {
+        t = Math.Clamp(t, 0, 1);
+        return Color.FromArgb(
+            (byte)Math.Round(a.A + (b.A - a.A) * t),
+            (byte)Math.Round(a.R + (b.R - a.R) * t),
+            (byte)Math.Round(a.G + (b.G - a.G) * t),
+            (byte)Math.Round(a.B + (b.B - a.B) * t));
     }
 
     // ===================================================================
     // Slot bindings + persistence
     // ===================================================================
 
-    /// <summary>The ten slot ids. An empty persisted list means "use the spec
+    /// <summary>The eight slot ids. An empty persisted list means "use the spec
     /// defaults", so an existing library.json costs nothing until the user
     /// actually customises the dial.</summary>
     private string[] ResolveSlots()
@@ -946,10 +1047,29 @@ public sealed class ToolWheel
         var stored = lib.WheelSlots;
         string[] outp;
         if (stored.Count == 0) outp = DefaultSlots(lib);
-        else
+        else if (stored.Count == Slots)
         {
             outp = new string[Slots];
-            for (int i = 0; i < Slots; i++) outp[i] = i < stored.Count ? stored[i] ?? "" : "";
+            for (int i = 0; i < Slots; i++) outp[i] = stored[i] ?? "";
+        }
+        else
+        {
+            // MIGRATION. The dial used to have TEN sectors and the spec now says
+            // eight. Undo and redo are satellites in the new shape (§1.6), so
+            // dropping those two from a ten-slot list is usually the whole
+            // difference - and it keeps the user's own tools in their own order,
+            // which is the only part of the layout muscle memory cares about.
+            var kept = new List<string>();
+            foreach (var s in stored)
+            {
+                if (kept.Count >= Slots) break;
+                if (string.IsNullOrEmpty(s)) { kept.Add(""); continue; }
+                if (s is KindCmd + "Undo" or KindCmd + "Redo") continue;
+                kept.Add(s);
+            }
+            var fill = DefaultSlots(lib);
+            outp = new string[Slots];
+            for (int i = 0; i < Slots; i++) outp[i] = i < kept.Count ? kept[i] : fill[i];
         }
         // A deleted preset empties its slot - it never reflows, because muscle
         // memory is the whole payoff.
@@ -959,28 +1079,24 @@ public sealed class ToolWheel
         return outp;
     }
 
-    /// <summary>Spec 1.2, from twelve o'clock going clockwise: pencil, fill,
-    /// selection, eraser, felt-tip, text, fountain, redo, undo, standard pen.</summary>
+    /// <summary>§1.3's reference order, clockwise from sector 0 (up-and-left):
+    /// pen, smudge, eraser, selection, pen, pen, text, marker. Quill has no
+    /// smudge tool, so that sector carries the pencil - the reference's own
+    /// grainy-silhouette slot - and the fill tool takes the spare.</summary>
     private string[] DefaultSlots(Library lib)
     {
         var s = new string[Slots];
-        s[0] = KindPen + EnsurePen(lib, PenType.Pencil, "Pencil", "#3A3A38", 4f);
-        s[1] = KindTool + "Fill";
-        s[2] = KindTool + "Select";
-        s[3] = KindTool + "Eraser";
-        s[4] = KindPen + EnsurePen(lib, PenType.FeltTip, "Felt-tip", "#D97757", 5f);
-        s[5] = KindTool + "Text";
-        s[6] = KindPen + EnsurePen(lib, PenType.Fountain, "Fountain", "#141413", 5f);
-        s[7] = KindCmd + "Redo";
-        s[8] = KindCmd + "Undo";
-        s[9] = KindPen + EnsurePen(lib, PenType.Standard, "Ink", "#141413", 3.5f);
+        s[0] = KindPen + EnsurePen(lib, PenType.Standard, "Ink", "#141413", 3.5f);
+        s[1] = KindPen + EnsurePen(lib, PenType.Pencil, "Pencil", "#3A3A38", 4f);
+        s[2] = KindTool + "Eraser";
+        s[3] = KindTool + "Select";
+        s[4] = KindPen + EnsurePen(lib, PenType.Fountain, "Fountain", "#2F6D4F", 5f);
+        s[5] = KindPen + EnsurePen(lib, PenType.FeltTip, "Felt-tip", "#D97757", 5f);
+        s[6] = KindTool + "Text";
+        s[7] = KindPen + EnsurePen(lib, PenType.Marker, "Marker", "#141413", 8f);
         return s;
     }
 
-    /// <summary>The id of the first preset of <paramref name="type"/>, creating
-    /// one if the library has none. The default dial names four specific pens; a
-    /// library seeded before this spec has no pencil and no felt-tip, and leaving
-    /// those slots empty would ship a dial with holes in it.</summary>
     private static Guid EnsurePen(Library lib, PenType type, string name, string colour, float size)
     {
         var hit = lib.Pens.FirstOrDefault(p => p.Pen == type);
@@ -993,8 +1109,12 @@ public sealed class ToolWheel
     private void AssignSlot(int i, string id)
     {
         var lib = _h.Library();
-        if (lib.WheelSlots.Count == 0) lib.WheelSlots.AddRange(DefaultSlots(lib));
-        while (lib.WheelSlots.Count < Slots) lib.WheelSlots.Add("");
+        // Materialise whatever is on screen before writing one cell of it, or the
+        // migration above would be re-derived from the stale ten-slot list every
+        // time and quietly undo the user's edit.
+        var now = ResolveSlots();
+        lib.WheelSlots.Clear();
+        lib.WheelSlots.AddRange(now);
         lib.WheelSlots[i] = id;
         _h.Save();
         Refresh();
@@ -1017,10 +1137,6 @@ public sealed class ToolWheel
         return false;
     }
 
-    /// <summary>Can this slot's command run RIGHT NOW? False draws the sector
-    /// fully transparent. Undo and redo are the live cases; the fill tool is
-    /// declared by the spec but not yet built, so it honestly reports unavailable
-    /// rather than pretending to be a button that does nothing.</summary>
     private bool Available(string id)
     {
         if (id.Length == 0) return false;
@@ -1033,13 +1149,19 @@ public sealed class ToolWheel
             "Undo" => _surface.UndoManager.CanUndo,
             "Redo" => _surface.UndoManager.CanRedo,
             "MouseMode" => true,
-            // A donated command that reports itself unavailable draws FULLY
-            // TRANSPARENT, exactly like redo with an empty stack.
             _ => Extra(cmd) is { } x && (x.IsAvailable?.Invoke() ?? true),
         };
     }
 
-    /// <summary>The top-bar element a slot supersedes, or null (V3 A.9).</summary>
+    /// <summary>§1.5: the colour a sector contributes to the disc rim, or null
+    /// for a neutral tool - which paints nothing at all.</summary>
+    private Color? SlotColour(string id)
+    {
+        if (PenOf(id) is not { } pen) return null;
+        try { return ColorUtil.Parse(pen.Color); } catch { return null; }
+    }
+
+    /// <summary>The top-bar element a slot supersedes, or null.</summary>
     private string? TopBarKey(string id)
     {
         if (id.StartsWith(KindPen, StringComparison.Ordinal)) return "ToolPen";
@@ -1063,101 +1185,88 @@ public sealed class ToolWheel
     }
 
     // ===================================================================
-    // Hit-testing - one atan2 + radius test, never a per-Path hit test.
-    // Every zone is BOUNDED, which it always should have been: the shipped
-    // build's slot test was `r >= OutIn - 4` with no ceiling, so a pointer
-    // anywhere on the page resolved to a slot by angle alone and lit it up.
-    // That is the phantom hover (V3 A.1); the shield now stops the events
-    // arriving at all, and this ceiling is the belt to that pair of braces.
+    // Hit-testing - one atan2 plus a radius test, never a per-Path hit test.
+    // Every zone is BOUNDED, which is what killed the phantom hover: the old
+    // build's sector test had no ceiling, so a pointer anywhere on the page
+    // resolved to a sector by angle alone and lit it up.
     // ===================================================================
-    private (Zone Z, int Index, double R, double A) Aim(Point p)
+    private (Zone Z, int Index) Aim(Point p)
     {
-        double dx = p.X - _centre.X, dy = p.Y - _centre.Y;
-        double r = Math.Sqrt(dx * dx + dy * dy) / _scale;
-        double a = Norm360(Math.Atan2(-dy, dx) * 180 / Math.PI);
-        if (r <= ColourR) return (Zone.Colour, -1, r, a);
-        if (r >= OutIn - 3 && r <= OutOut + 2) return (Zone.Slot, (int)Math.Round(Norm360(90 - a) / SlotSpan) % Slots, r, a);
-        if (r >= InIn - 3 && r <= InOut + 3) return (Zone.Arc, SetAt(a), r, a);
-        return (Zone.None, -1, r, a);
-    }
+        double dx = (p.X - _centre.X) / _scale, dy = (p.Y - _centre.Y) / _scale;
+        double r = Math.Sqrt(dx * dx + dy * dy);
+        // Screen y is down, so a bearing is atan2(dx, -dy).
+        double b = Norm360(Math.Atan2(dx, -dy) * 180 / Math.PI);
 
-    private static int SetAt(double a)
-    {
-        for (int i = 0; i < 3; i++)
+        if (r <= DotR) return (Zone.Dot, -1);
+        if (r < DiscR)
         {
-            var (a0, _) = SetRange(i);
-            if (Norm360(a0 - a) <= SetSpan) return i;
+            // §1.4's own layout, read back as hit regions: the size pair across
+            // the top, then smoothness left and opacity right of the dot.
+            if (dy < Row1Y / 2) return (Zone.Size, -1);
+            if (dx < -DiscR * 0.18) return (Zone.Smooth, -1);
+            if (dx > DiscR * 0.18) return (Zone.Opacity, -1);
+            return (Zone.Disc, -1);
         }
-        return 0;
+
+        int slot = (int)Math.Round(Norm360(b - Sector0) / Span) % Slots;
+        if (r <= RingOut + 2) return (Zone.Sector, slot);
+        // Beyond the ring only the POPPED sector is there to be pressed; the rest
+        // of that band is empty and belongs to nobody.
+        if (r <= PopOut + 2 && slot == _active) return (Zone.Sector, slot);
+        return (Zone.None, -1);
     }
 
     private void ClearHover()
     {
-        if (_hoverSlot < 0 && _hoverSet < 0 && !_hoverColour) return;
-        _hoverSlot = -1; _hoverSet = -1; _hoverColour = false;
+        if (_hoverSlot < 0 && _hoverZone == Zone.None) return;
+        _hoverSlot = -1; _hoverZone = Zone.None;
         Refresh();
     }
 
     // ===================================================================
-    // Pointer state machine - all of it on the shield, none of it on the host
+    // Pointer state machine - all of it on the shield, none on the host
     // ===================================================================
     private void OnPressed(object sender, PointerRoutedEventArgs e)
     {
-        if (!_on) return;
-        // Someone upstream has already claimed this press. Taking a capture out
-        // from under them is what puts a stale pointer into CapturePointer in
-        // the first place, so the dial simply does not compete for it.
-        if (e.Handled) return;
+        if (!_on || e.Handled) return;
         var pt = e.GetCurrentPoint(_host);
-        var (z, idx, _, a) = Aim(pt.Position);
-        if (z == Zone.None) return;                 // the seam at the rim: ignore, never claim
+        var (z, idx) = Aim(pt.Position);
+        if (z == Zone.None) return;                 // the empty band: never claim it
 
-        // CAPTURE FIRST, THEN ARM. CapturePointer throws ArgumentException when
-        // the pointer is already captured by another element or is no longer in
-        // contact by the time this handler runs - it is the ArgumentException
-        // repeating in the user's crash.log. The old order set _pressed and
-        // _pointer BEFORE the call, so the throw (swallowed by
-        // App.UnhandledException) left the dial ARMED on a pointer id it did not
-        // own. OnMoved, OnReleased and OnLost all early-return on an id
-        // mismatch, so every later pointer was ignored and the dial was dead for
-        // the rest of the session. Nothing is armed unless the capture lands.
+        // CAPTURE FIRST, THEN ARM. CapturePointer throws when the pointer already
+        // belongs to another element or is no longer in contact; the old order
+        // armed on a pointer id it did not own, and every later pointer was then
+        // ignored for the rest of the session.
         bool got;
         try { got = _shield.CapturePointer(e.Pointer); }
         catch (ArgumentException) { got = false; }
-        if (!got)
-        {
-            _pressed = false;
-            _pointer = null;
-            ClearHover();
-            return;                                 // this press belongs to nobody
-        }
+        if (!got) { _pressed = false; _pointer = null; ClearHover(); return; }
 
         _pointer = e.Pointer.PointerId;
         _pressed = true;
         _pressPt = pt.Position;
         _pressMs = Environment.TickCount64;
 
-        _hoverSlot = z == Zone.Slot ? idx : -1;
-        _hoverSet = z == Zone.Arc ? idx : -1;
-        _hoverColour = z == Zone.Colour;
+        _hoverSlot = z == Zone.Sector ? idx : -1;
+        _hoverZone = z;
 
-        if (z == Zone.Slot && pt.Properties.IsRightButtonPressed) { Refresh(); ShowAssign(idx); e.Handled = true; return; }
-        if (z == Zone.Slot) { _assignSlot = idx; _assign.Stop(); _assign.Start(); }
-        if (z == Zone.Arc && SetEnabled(idx))
+        if (z == Zone.Sector && pt.Properties.IsRightButtonPressed) { Refresh(); ShowAssign(idx); e.Handled = true; return; }
+        if (z == Zone.Sector) { _assignSlot = idx; _assign.Stop(); _assign.Start(); }
+
+        var prop = PropOf(z);
+        if (prop is { } pr && Enabled(pr))
         {
-            // A TAP OPENS THE SLIDER AND CHANGES NOTHING; a DRAG scrubs (V3 K.4
-            // asks for both). The press deliberately does NOT call Scrub here:
-            // it used to, so merely reaching for the window jumped the setting to
-            // whatever angle the finger happened to land on - tap near the start
-            // of the opacity arc and the pen went to 5% before the slider was
-            // even on screen. Scrubbing begins in OnMoved, once the pointer has
-            // travelled past TapSlop and the gesture is unambiguously a drag.
-            _dragSet = idx;
+            // A TAP OPENS THE POPOVER AND CHANGES NOTHING; a DRAG scrubs. The
+            // press deliberately does not scrub here: it used to, so merely
+            // reaching for the popover jumped the setting to whatever the finger
+            // landed on. Scrubbing begins in OnMoved, once the gesture is
+            // unambiguously a drag.
+            _dragProp = pr;
             _scrubbing = false;
-            ShowPanel(idx);
+            OpenPopover(pr);
             ShowPreview(true);
         }
-        else { ShowPanel(-1); Refresh(); }
+        else { Refresh(); }
         e.Handled = true;
     }
 
@@ -1168,22 +1277,22 @@ public sealed class ToolWheel
         var p = e.GetCurrentPoint(_host).Position;
         if (_pressed && _assignSlot >= 0 && Dist(p, _pressPt) > TapSlop) { _assign.Stop(); _assignSlot = -1; }
 
-        var (z, idx, _, a) = Aim(p);
-        if (_dragSet >= 0)
+        var (z, idx) = Aim(p);
+        if (_dragProp is { } pr)
         {
-            // Past the slop this is a scrub, and it stays one for the rest of the
-            // gesture even if the finger wanders back toward where it started.
             if (!_scrubbing && Dist(p, _pressPt) > TapSlop) _scrubbing = true;
-            if (_scrubbing) Scrub(_dragSet, a);
+            // The scrub is a straight horizontal drag now, not an angular one:
+            // the three properties live in the inner DISC in §1.4, not on arcs,
+            // so there is no arc to sweep. It tracks the popover's own slider
+            // 1:1, which is the surface the user is looking at.
+            if (_scrubbing) Scrub(pr, p);
             return;
         }
 
-        int slot = z == Zone.Slot ? idx : -1;
-        int set = z == Zone.Arc ? idx : -1;
-        bool col = z == Zone.Colour;
-        if (slot == _hoverSlot && set == _hoverSet && col == _hoverColour) return;
+        int slot = z == Zone.Sector ? idx : -1;
+        if (slot == _hoverSlot && z == _hoverZone) return;
         if (slot != _hoverSlot) { _assign.Stop(); _assignSlot = -1; }
-        _hoverSlot = slot; _hoverSet = set; _hoverColour = col;
+        _hoverSlot = slot; _hoverZone = z;
         Refresh();
     }
 
@@ -1199,29 +1308,27 @@ public sealed class ToolWheel
         try { _shield.ReleasePointerCapture(e.Pointer); } catch { }
         e.Handled = true;
 
-        if (_dragSet >= 0)
+        if (_dragProp != null)
         {
-            // Scrubbing ends where it ends, and the preview goes with it.
             bool scrubbed = _scrubbing;
-            _dragSet = -1;
+            _dragProp = null;
             _scrubbing = false;
             ShowPreview(false);
-            // MAN p83's rule is "closes the instant you lift", which is right for
-            // a SCRUB. A tap is not a scrub - it is the user asking for the
-            // slider - so that one stays up until the dial is touched elsewhere.
-            // The test is "did this gesture ever scrub", not the old elapsed-time
-            // one: a deliberate press held past TapMs without moving is still a
-            // tap, and it used to close the very window it had just opened.
-            if (scrubbed) ShowPanel(-1);
+            // A scrub's popover closes when the finger lifts; a TAP's stays up,
+            // because a tap IS the user asking for it. The test is "did this
+            // gesture ever scrub", not an elapsed time - a deliberate press held
+            // without moving is still a tap, and it used to close the very
+            // popover it had just opened.
+            if (scrubbed) _popover.Close();
             Refresh();
             return;
         }
         if (!wasPressed) return;
 
-        var (z, idx, _, _) = Aim(p);
+        var (z, idx) = Aim(p);
         bool tap = Environment.TickCount64 - _pressMs < TapMs && Dist(p, _pressPt) <= TapSlop;
-        if (z == Zone.Colour && tap) { ShowColourPicker(); return; }
-        if (z == Zone.Slot) { Commit(idx); return; }
+        if (z == Zone.Dot && tap) { ShowColourPicker(); return; }
+        if (z == Zone.Sector) { Commit(idx); return; }
         Refresh();
     }
 
@@ -1231,20 +1338,20 @@ public sealed class ToolWheel
         if (_pointer != null && e.Pointer.PointerId != _pointer) return;
         _pressed = false;
         _pointer = null;
-        if (_dragSet >= 0) { _dragSet = -1; _scrubbing = false; ShowPreview(false); }
+        if (_dragProp != null) { _dragProp = null; _scrubbing = false; ShowPreview(false); }
         ClearHover();
     }
 
     private static double Dist(Point a, Point b) { double dx = a.X - b.X, dy = a.Y - b.Y; return Math.Sqrt(dx * dx + dy * dy); }
 
     // ===================================================================
-    // Commit - every write goes through the host, so the linear row sees it
+    // Commit - every write goes through the host, so the pen bar sees it too
     // ===================================================================
     private void Commit(int slot)
     {
         if (slot < 0 || slot >= Slots) return;
         string id = ResolveSlots()[slot];
-        if (!Available(id)) { Refresh(); return; }   // a transparent sector is inert
+        if (!Available(id)) { Refresh(); return; }
         ClearHover();
         if (PenOf(id) is { } pen) { _h.ApplyPreset(pen); return; }
         if (id.StartsWith(KindTool, StringComparison.Ordinal)) { _h.SelectTool(id[KindTool.Length..]); return; }
@@ -1255,57 +1362,77 @@ public sealed class ToolWheel
             case "Redo": _surface.Redo(); break;
             case "MouseMode": ShowMouseModes(); break;
             case var c when Extra(c) is { } x:
-                // A donated menu opens ON THE DIAL rather than on the (now
-                // hidden) top-bar button it came from.
-                if (x.Flyout != null) { try { x.Flyout()?.ShowAt(_shield, ShieldAt(RimR, RimR)); } catch { } }
+                if (x.Flyout != null) { try { x.Flyout()?.ShowAt(_shield, ShieldAt()); } catch { } }
                 else x.Run?.Invoke();
                 break;
         }
         Refresh();
     }
 
-    // ---- setting scrubbing ---------------------------------------------
-    private bool SetEnabled(int i)
+    // ---- the three properties -------------------------------------------
+    private static Prop? PropOf(Zone z) => z switch
+    {
+        Zone.Size => Prop.Size,
+        Zone.Opacity => Prop.Opacity,
+        Zone.Smooth => Prop.Smooth,
+        _ => null,
+    };
+
+    private bool Enabled(Prop p)
     {
         var ap = ToolPen();
         bool eraser = _h.ToolTag() == "Eraser";
-        return i switch
+        return p switch
         {
-            0 => ap != null || eraser,      // size applies to pens and to the eraser
-            1 => ap != null,                // opacity is real now: PenPreset.Opacity
-            _ => ap != null,                // smoothness is a wet-ink filter
+            Prop.Size => ap != null || eraser,   // size applies to pens and the eraser
+            _ => ap != null,                     // opacity and smoothness are pen-only
         };
     }
 
-    private void Scrub(int i, double a)
+    private double Value(Prop p)
     {
-        if (!SetEnabled(i)) return;
-        var (a0, _) = SetRange(i);
-        ApplySetting(i, Math.Clamp(Norm360(a0 - a) / SetSpan, 0, 1));
-    }
-
-    /// <summary>The one setter behind both the sector scrub and the slider
-    /// window, so the two can never disagree. t is 0..1 across the setting.</summary>
-    private void ApplySetting(int i, double t)
-    {
-        if (!SetEnabled(i)) return;
         var lib = _h.Library();
         var ap = ToolPen();
-        switch (i)
+        bool eraser = _h.ToolTag() == "Eraser";
+        return p switch
         {
-            case 0 when _h.ToolTag() == "Eraser":
+            Prop.Size => eraser ? Norm01(lib.EraserSize, 0, 80) : ap == null ? 0 : Norm01(ap.Size, 1, 24),
+            Prop.Opacity => ap == null ? 0 : Math.Clamp(ap.Opacity, 0, 1),
+            _ => ap?.Stabiliser ?? 0,
+        };
+    }
+
+    /// <summary>A horizontal scrub across the popover's own width. One setter
+    /// behind the scrub, the popover's slider and its chips, so the three can
+    /// never disagree.</summary>
+    private void Scrub(Prop p, Point at)
+    {
+        double reach = ValuePopover.W - 40;
+        double t = Value(p) + (at.X - _pressPt.X) / reach;
+        _pressPt = at;
+        ApplySetting(p, Math.Clamp(t, 0, 1));
+    }
+
+    private void ApplySetting(Prop p, double t)
+    {
+        if (!Enabled(p)) return;
+        var lib = _h.Library();
+        var ap = ToolPen();
+        switch (p)
+        {
+            case Prop.Size when _h.ToolTag() == "Eraser":
                 lib.EraserSize = Math.Round(t * 80);
                 _surface.EraserSize = lib.EraserSize;
                 break;
-            case 0 when ap != null:
+            case Prop.Size when ap != null:
                 ap.Size = (float)Math.Round(1 + t * 23, 1);
                 _surface.PenSize = ap.Size;
                 break;
-            case 1 when ap != null:
+            case Prop.Opacity when ap != null:
                 ap.Opacity = (float)Math.Round(Math.Max(0.05, t), 2);
                 _surface.PenOpacity = ap.Opacity;
                 break;
-            case 2 when ap != null:
+            case Prop.Smooth when ap != null:
                 ap.Stabiliser = (float)Math.Round(t, 2);
                 _surface.PenStabiliser = ap.Stabiliser;
                 break;
@@ -1315,11 +1442,72 @@ public sealed class ToolWheel
         Refresh();
     }
 
+    /// <summary>§1.7. Both surfaces open the same control, so the dial and the
+    /// pen bar cannot drift.</summary>
+    private void OpenPopover(Prop p)
+    {
+        _popover.Open(SpecFor(p), p.ToString(),
+            new Point(_centre.X + DiscR * 0.8 * _scale, _centre.Y - ValuePopover.H / 2),
+            _host.ActualWidth, _host.ActualHeight);
+        PlacePopover();
+    }
+
+    /// <summary>The popover's contract for one property. Shared with the pen bar
+    /// through <see cref="PenBar"/>, which builds the identical thing from the
+    /// same numbers.</summary>
+    private ValuePopover.Spec SpecFor(Prop p)
+    {
+        bool eraser = _h.ToolTag() == "Eraser";
+        return p switch
+        {
+            Prop.Size => new ValuePopover.Spec
+            {
+                Name = Loc.T("Wheel.Set.Size"),
+                ToolName = ToolName(),
+                Get = () => Value(Prop.Size),
+                Set = t => ApplySetting(Prop.Size, t),
+                // Size is not a percentage, so its chips carry real sizes - the
+                // reference's own 0/50/70/100 set is meaningless for a nib.
+                Format = t => eraser ? $"{t * 80:0}" : $"{1 + t * 23:0.#}",
+                Presets = eraser
+                    ? new[] { 0.10, 0.25, 0.50, 1.00 }
+                    : new[] { Norm01(1, 1, 24), Norm01(3, 1, 24), Norm01(8, 1, 24), Norm01(16, 1, 24) },
+                Step = 1.0 / 46,
+            },
+            Prop.Opacity => Percent(Loc.T("Wheel.Set.Opacity"), Prop.Opacity),
+            _ => Percent(Loc.T("Wheel.Set.Smoothness"), Prop.Smooth),
+        };
+
+        ValuePopover.Spec Percent(string name, Prop pr) => new()
+        {
+            Name = name,
+            ToolName = ToolName(),
+            Get = () => Value(pr),
+            Set = t => ApplySetting(pr, t),
+            Format = t => $"{t * 100:0}%",
+            Presets = new[] { 0.0, 0.5, 0.7, 1.0 },   // §1.7's own chip set
+            Step = 0.05,
+        };
+    }
+
+    /// <summary>The tooltip line under the popover: the tool the value belongs
+    /// to, so a card that says 55% is never ambiguous between two pens.</summary>
+    private string ToolName()
+    {
+        if (_h.ToolTag() == "Pen" && ActivePen() is { } p && !string.IsNullOrWhiteSpace(p.Name)) return p.Name;
+        return Loc.T("Wheel.Tool." + _h.ToolTag());
+    }
+
+    /// <summary>§1.3's size label. The reference's own numbers (`1280`, `13K`)
+    /// are Concepts' brush units; Quill's pen size is in DIP, so the label is the
+    /// size itself - the typography, the rotation and the placement are what the
+    /// spec is actually describing.</summary>
+    private static string SizeLabel(double size) =>
+        size >= 1000 ? $"{size / 1000:0.#}K" : size.ToString("0.#");
+
     // ===================================================================
-    // The live scrub preview (spec 1.1) - a REAL circle, drawn by the REAL
-    // stroke renderer through InkSurface.PreviewCircle + RenderStrokeTo, never
-    // a UI ellipse. It sits just outside the rim so it never covers the sector
-    // being dragged, and it goes away the moment the drag ends.
+    // The live scrub preview - a REAL circle through the REAL stroke
+    // renderer, never a UI ellipse.
     // ===================================================================
     private void ShowPreview(bool on)
     {
@@ -1331,16 +1519,13 @@ public sealed class ToolWheel
     {
         var ds = args.DrawingSession;
         var centre = new Vector2((float)PreviewBox / 2, (float)PreviewBox / 2);
-        var accent = Accent();
+        var accent = PageTheme.Accent;
 
         if (_h.ToolTag() == "Eraser")
         {
-            // The eraser lays down no ink, so its preview is its ACTUAL radius -
-            // still a real stroke through the same renderer, never a UI ring.
             double er = _h.Library().EraserSize > 0 ? _h.Library().EraserSize / 2 : _surface.PenSize * 1.5;
             float rr = (float)Math.Clamp(er, 8, PreviewBox / 2 - 12);
-            var mark = ColorUtil.IsDark(PageGround()) ? Colors.White : Color.FromArgb(255, 0x14, 0x14, 0x13);
-            var ring = new PenStroke { Pen = PenType.Monoline, Color = ColorUtil.ToHex(mark), Size = 1.6f, Sens = 1f };
+            var ring = new PenStroke { Pen = PenType.Monoline, Color = ColorUtil.ToHex(PageTheme.OnSurface), Size = 1.6f, Sens = 1f };
             for (int i = 0; i <= 180; i++)
             {
                 double th = i / 180.0 * Math.PI * 2;
@@ -1352,23 +1537,19 @@ public sealed class ToolWheel
             return;
         }
 
-        // The web's own sizing: a ring concentric with the dial that grows a
-        // little with the brush (RadialDial.jsx previewRadius), with a dashed
-        // guide just outside the stroke's outer edge.
         float size = Math.Max(1f, _surface.PenSize);
-        float radius = (float)Math.Clamp(130 + size * 0.8, 134, 180);
+        float radius = (float)Math.Clamp(PopOut + 22 + size * 0.8, PopOut + 22, 180);
         _surface.RenderStrokeTo(ds, sender, _surface.PreviewCircle(centre, radius));
         ds.DrawCircle(centre, radius + size / 2 + 3, accent, 1.5f, _guide);
     }
 
-    // dashed guide ring, the web's strokeDasharray="4 4"
     private static readonly Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle _guide =
         new() { CustomDashStyle = new float[] { 4, 4 } };
 
     // ===================================================================
-    // Tool-specific UI (spec 1.3) - the rectangle at the bottom of the screen
+    // Tool-specific options strip
     // ===================================================================
-    private void BuildToolOptions(Color ink, Color edge, Color plate, Color accent)
+    private void BuildToolOptions(Color ink, Color edge, Color plate)
     {
         string tool = _h.ToolTag();
         if (tool is not ("Select" or "Eraser")) { _bottom.Visibility = Visibility.Collapsed; return; }
@@ -1380,13 +1561,13 @@ public sealed class ToolWheel
 
         void Toggle(string label, bool on, bool enabled, Action click)
         {
-            var fg = !enabled ? Color.FromArgb(0x66, ink.R, ink.G, ink.B)
-                   : on ? (ColorUtil.IsDark(accent) ? Colors.White : Color.FromArgb(255, 0x14, 0x14, 0x13))
+            var fg = !enabled ? PageTheme.WithAlpha(ink, 0x66)
+                   : on ? plate
                    : ink;
             var b = new Button
             {
                 Content = new TextBlock { Text = label, FontSize = 12, Foreground = new SolidColorBrush(fg) },
-                Background = new SolidColorBrush(on ? accent : Colors.Transparent),
+                Background = new SolidColorBrush(on ? ink : Colors.Transparent),
                 BorderBrush = new SolidColorBrush(edge),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(9),
@@ -1399,19 +1580,14 @@ public sealed class ToolWheel
 
         if (tool == "Select")
         {
-            // 1. lasso shape, 2. partial vs complete, 3. layer scope.
             Toggle(Loc.T(_surface.LassoSquare ? "Wheel.Sel.Square" : "Wheel.Sel.Freeform"), _surface.LassoSquare, true,
                    () => { _surface.LassoSquare = !_surface.LassoSquare; Refresh(); });
             Toggle(Loc.T(_surface.SelectPartial ? "Wheel.Sel.Partial" : "Wheel.Sel.Complete"), !_surface.SelectPartial, true,
                    () => { _surface.SelectPartial = !_surface.SelectPartial; Refresh(); });
-            // Quill has no layer model yet, so the third toggle is present and
-            // honest about it rather than lying about a scope it cannot change.
             Toggle(Loc.T("Wheel.Sel.Layer"), false, false, () => { });
             return;
         }
 
-        // Eraser: the four styles InkSurface already implements
-        // (NudgeRuns / SliceRuns / HardMaskRuns / SoftMaskRuns), surfaced at last.
         void Style(EraserStyle s, string key) =>
             Toggle(Loc.T(key), _surface.EraserMode == EraserMode.Point && _surface.EraserStyle == s, true,
                    () => { _surface.EraserMode = EraserMode.Point; _surface.EraserStyle = s; Refresh(); });
@@ -1425,10 +1601,9 @@ public sealed class ToolWheel
 
     // ---- flyouts -------------------------------------------------------
 
-    /// <summary>Opens the COPIC wheel on the centre disc (V3 A.6). The shipped
-    /// build bailed out whenever there was no ACTIVE pen preset, which is most of
-    /// the time right after launch and always outside pen mode - so the disc
-    /// looked dead. It now falls back to the first pen in the library.</summary>
+    /// <summary>§1.8: the COPIC wheel opens CENTRED ON THE DIAL'S CENTRE. It
+    /// falls back to the first pen in the library when nothing is active, which
+    /// is most of the time right after launch - the disc used to look dead.</summary>
     private void ShowColourPicker()
     {
         var ap = ActivePen() ?? _h.Library().Pens.FirstOrDefault();
@@ -1437,7 +1612,7 @@ public sealed class ToolWheel
         void Apply(Color c)
         {
             ap.Color = ColorUtil.ToHex(c);
-            _h.ApplyPreset(ap);   // the shared funnel: the linear row repaints too
+            _h.ApplyPreset(ap);
             _h.Save();
         }
         if (ColourPickerHook != null) { ColourPickerHook(DiscRootPoint(), start, Apply, Refresh); return; }
@@ -1445,19 +1620,17 @@ public sealed class ToolWheel
         var picker = new ColorPicker { Color = start, IsAlphaEnabled = false, IsMoreButtonVisible = true,
                                        IsColorSliderVisible = true, IsHexInputVisible = true, Width = 288 };
         picker.ColorChanged += (_, e) => Apply(e.NewColor);
-        new Flyout { Content = picker }.ShowAt(_shield, ShieldAt(RimR, RimR));
+        new Flyout { Content = picker }.ShowAt(_shield, ShieldAt());
     }
 
-    /// <summary>The DIAL'S OWN CENTRE in XamlRoot coordinates. V3 K.2: the COPIC
-    /// wheel opened from the centre disc must be concentric with the dial, so
-    /// this is the point the picker is centred on, not merely a hint. The shield
-    /// is re-sized with _scale, so its own middle is the dial's middle at any
-    /// scale.</summary>
+    /// <summary>The dial's own centre in XamlRoot coordinates - §1.8's mount
+    /// point for the COPIC wheel, not a hint. The shield is re-sized with the
+    /// scale, so its middle is the dial's middle at any scale.</summary>
     public Point DiscRootPoint()
     {
         try
         {
-            double rim = RimR * _scale;
+            double rim = PopOut * _scale;
             var t = _shield.TransformToVisual((UIElement?)_host.XamlRoot?.Content ?? _host);
             return t.TransformPoint(new Point(rim, rim));
         }
@@ -1465,13 +1638,14 @@ public sealed class ToolWheel
     }
 
     /// <summary>The dial's bounds in host coordinates, for the shared panel
-    /// overlap system - it asks rather than the dial hard-coding a dodge.</summary>
+    /// overlap system - it asks rather than the dial hard-coding a dodge. The
+    /// POPPED radius, since that is the furthest the ring ever reaches.</summary>
     public Rect Bounds =>
-        _on ? new Rect(_centre.X - RimR * _scale, _centre.Y - RimR * _scale, RimR * _scale * 2, RimR * _scale * 2)
+        _on ? new Rect(_centre.X - PopOut * _scale, _centre.Y - PopOut * _scale, PopOut * _scale * 2, PopOut * _scale * 2)
             : new Rect(0, 0, 0, 0);
 
-    private static FlyoutShowOptions ShieldAt(double x, double y) =>
-        new() { Position = new Point(x, y), Placement = FlyoutPlacementMode.Bottom };
+    private static FlyoutShowOptions ShieldAt() =>
+        new() { Position = new Point(PopOut, PopOut), Placement = FlyoutPlacementMode.Bottom };
 
     private void ShowMouseModes()
     {
@@ -1483,11 +1657,11 @@ public sealed class ToolWheel
             item.Click += (_, _) => _h.SetMouseMode(m);
             menu.Items.Add(item);
         }
-        menu.ShowAt(_shield, ShieldAt(RimR, RimR));
+        menu.ShowAt(_shield, ShieldAt());
     }
 
-    /// <summary>The slot-assignment flyout: press-hold or right-click a slot.
-    /// This is how the user chooses which ten tools occupy the dial.</summary>
+    /// <summary>The slot-assignment flyout: press-hold or right-click a sector.
+    /// This is how the user chooses which eight tools occupy the dial.</summary>
     private void ShowAssign(int slot)
     {
         _assignSlot = -1;
@@ -1518,12 +1692,16 @@ public sealed class ToolWheel
         }
 
         foreach (var preset in lib.Pens) Row(KindPen + preset.Id, PenChip(preset, 22), preset.Name);
-        foreach (var t in ToolKinds) Row(KindTool + t, Icons.Filled(Icons.Tool(t), Ink(), 20), Loc.T("Wheel.Tool." + t));
-        foreach (var c in CmdIds()) Row(KindCmd + c, CmdArt(c, Ink(), 20), CmdLabel(c));
+        foreach (var t in ToolKinds) Row(KindTool + t, Icons.Mark(Icons.Tool(t), PageTheme.OnSurface, 20), Loc.T("Wheel.Tool." + t));
+        foreach (var c in CmdIds()) Row(KindCmd + c, CmdArt(c, PageTheme.OnSurface, 20), CmdLabel(c));
         Row("", null, Loc.T("Wheel.Assign.Empty"));
 
-        var at = P(SlotMid(slot), IconR);
-        fly.ShowAt(_shield, ShieldAt(at.X - (Half - RimR), at.Y - (Half - RimR)));
+        var at = Pt(SlotMid(slot), MarkR);
+        fly.ShowAt(_shield, new FlyoutShowOptions
+        {
+            Position = new Point(at.X - (Half - PopOut), at.Y - (Half - PopOut)),
+            Placement = FlyoutPlacementMode.Bottom
+        });
     }
 
     // ===================================================================
@@ -1536,84 +1714,56 @@ public sealed class ToolWheel
     }
 
     /// <summary>The preset the ACTIVE TOOL is actually using, or null when the
-    /// active tool is not a pen. The setting sectors key off this so they grey
-    /// out under the selection, text and free-space tools instead of reporting a
-    /// pen nobody is drawing with - "grey out an arc that does not apply to the
-    /// active tool" (spec 1.1).</summary>
+    /// active tool is not a pen - so the three properties grey out rather than
+    /// reporting a pen nobody is drawing with.</summary>
     private PenPreset? ToolPen() => _h.ToolTag() == "Pen" ? ActivePen() : null;
 
-    // The centre disc shows the live ink colour; a tool that has no colour of its
-    // own shows WHITE, per the spec.
+    /// <summary>The centre dot shows the live ink colour; a tool with no colour
+    /// of its own shows the surface, not white - white is a page colour on a
+    /// blue page and the dot would vanish.</summary>
     private Color ActiveColour() =>
-        _h.ToolTag() == "Pen" && ActivePen() is { } p ? ColorUtil.Parse(p.Color) : Colors.White;
-
-    /// <summary>The live page's own background - what the preview ink will land
-    /// on. Falls back to the dial's plate colour when no page is open.</summary>
-    private Color PageGround()
-    {
-        try
-        {
-            var bg = _surface.Page?.Background;
-            if (!string.IsNullOrWhiteSpace(bg)) return ColorUtil.Parse(bg!);
-        }
-        catch { }
-        return IsDark() ? Color.FromArgb(255, 0x1C, 0x1B, 0x1F) : Color.FromArgb(255, 0xF7, 0xF5, 0xF0);
-    }
-
-    private Color Accent() { try { return ColorUtil.Parse(_h.Library().AccentColor); } catch { return Color.FromArgb(255, 0x2E, 0x94, 0xF2); } }
-    private bool IsDark() => _host.ActualTheme == ElementTheme.Dark;
-    private Color Ink() => IsDark() ? Color.FromArgb(255, 0xEC, 0xE9, 0xE2) : Color.FromArgb(255, 0x2A, 0x28, 0x25);
-    private static Color Tint(Color c, double a) => Color.FromArgb((byte)Math.Clamp(a * 255, 0, 255), c.R, c.G, c.B);
+        _h.ToolTag() == "Pen" && ActivePen() is { } p ? ColorUtil.Parse(p.Color) : PageTheme.SurfaceAlt;
 
     // ===================================================================
     // Art - every mark comes from Helpers/Icons, the same source the top bar
-    // now binds to, so the two surfaces can never drift again (V3 A.8).
+    // binds to, so the two surfaces can never drift again.
     // ===================================================================
-    /// <summary>The mark for one slot, sized to <see cref="MarkBox"/> so its host
-    /// Grid can never layout-clip it (V3 K.5). <paramref name="seat"/> is the
-    /// colour the sector is painted, which is what a pen's own ink has to stay
-    /// legible against.</summary>
-    private FrameworkElement? SlotArt(string id, Color fg, Color seat)
+
+    /// <summary>§1.3: the stroke silhouette for a sector, in the tool's OWN
+    /// colour, grey for a non-drawing tool. On the active (popped) sector it
+    /// inverts to Surface, because the sector beneath it is OnSurface.</summary>
+    private FrameworkElement? SlotArt(string id, Color fg, bool inverted)
     {
         if (id.Length == 0) return null;
-        if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg, seat);
-        if (id.StartsWith(KindTool, StringComparison.Ordinal)) return Icons.Filled(Icons.Tool(id[KindTool.Length..]), fg, MarkBox);
+        if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg, inverted);
+        if (id.StartsWith(KindTool, StringComparison.Ordinal))
+            return Icons.Mark(Icons.Tool(id[KindTool.Length..]), fg, MarkBox);
         if (id.StartsWith(KindCmd, StringComparison.Ordinal)) return CmdArt(id[KindCmd.Length..], fg, MarkBox);
         return null;
     }
 
-    /// <summary>V3 K.8: a pen slot shows THE STROKE THAT PEN LEAVES - a
-    /// hand-authored silhouette of its mark (tapered for a fountain nib, chisel
-    /// for a marker, grainy for a pencil, even and round-ended for a ballpoint),
-    /// painted in the PEN'S OWN COLOUR. Not the pen-body chip the linear row
-    /// uses, and not a live render.</summary>
-    private static FrameworkElement? PenStrokeMark(PenPreset p, Color fg, Color seat)
+    /// <summary>A pen sector shows THE STROKE THAT PEN LEAVES - a hand-authored
+    /// silhouette of its mark (tapered for a nib, chisel for a marker, grainy for
+    /// a pencil, even and round-ended for a ballpoint), painted in the pen's own
+    /// colour. Not the pen-body chip, and not a live render.</summary>
+    private static FrameworkElement? PenStrokeMark(PenPreset p, Color fg, bool inverted)
     {
         try
         {
             var ink = ColorUtil.Parse(p.Color);
-            // The pen's own colour is the point - but a black pen on the dark
-            // plate, or a white one on the accent-filled active sector, would be
-            // an invisible slot. Only when the contrast genuinely collapses does
-            // the mark fall back to the sector's foreground.
-            var paint = Math.Abs(Lum(ink) - Lum(seat)) < 0.14 ? fg : ink;
+            // On the popped sector the seat is OnSurface, so the pen's own colour
+            // would frequently be invisible; there the mark inverts wholesale.
+            // Off it, only a genuine contrast collapse forces the fallback.
+            var seat = inverted ? PageTheme.OnSurface : PageTheme.Surface;
+            var paint = inverted || Math.Abs(Lum(ink) - Lum(seat)) < 0.14 ? fg : ink;
             paint.A = (byte)Math.Clamp(255 * Math.Clamp(p.Opacity, 0.2f, 1f), 60, 255);
-            return new Path
-            {
-                Data = Icons.Geo(Icons.PenStroke(p.Pen)),
-                Fill = new SolidColorBrush(paint),
-                Width = MarkBox, Height = MarkBox, Stretch = Stretch.Uniform,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
+            return Icons.Mark(Icons.PenStroke(p.Pen), paint, MarkBox);
         }
         catch { return null; }
     }
 
     private static double Lum(Color c) => (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0;
 
-    // The pen slot reuses the linear row's own two-tone chip, so a pen looks
-    // identical in both surfaces.
     private FrameworkElement? PenChip(PenPreset p, double size)
     {
         try
@@ -1629,23 +1779,13 @@ public sealed class ToolWheel
         catch { return null; }
     }
 
-    // Sized from SetBox for the same reason SlotArt is sized from MarkBox: the
-    // host Grid is exactly SetBox across, and a 20 DIP mark inside a 13 DIP box
-    // is what "cut off, like erased" looked like (V3 K.5).
-    private static FrameworkElement? SetGlyph(int i, Color fg) => i switch
-    {
-        0 => Icons.Filled(Icons.Size, fg, SetBox),
-        1 => Icons.Filled(Icons.Opacity, fg, SetBox),
-        _ => Icons.Stroked(Icons.Smoothness, fg, SetBox, 1.9),
-    };
-
     private FrameworkElement? CmdArt(string cmd, Color fg, double size) => cmd switch
     {
-        "Undo" => Icons.Filled(Icons.Undo, fg, size),
-        "Redo" => Icons.Filled(Icons.Undo, fg, size, mirror: true),
-        "MouseMode" => Icons.Filled(Icons.Mouse, fg, size),
+        "Undo" => Icons.Mark(Icons.Undo, fg, size),
+        "Redo" => Icons.Mark(Icons.Undo, fg, size, mirror: true),
+        "MouseMode" => Icons.Mark(Icons.Mouse, fg, size),
         _ => Extra(cmd) is { } x
-             ? (x.Stroked ? Icons.Stroked(x.Icon, fg, size, 1.7) : Icons.Filled(x.Icon, fg, size))
-             : Icons.Filled(Icons.Mouse, fg, size),
+             ? Icons.Mark(x.Icon, fg, size, stroked: x.Stroked, thickness: 1.9)
+             : Icons.Mark(Icons.Mouse, fg, size),
     };
 }
