@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Numerics;
+using Quill.Helpers;
 using Quill.Models;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Geometry;
@@ -161,6 +162,21 @@ public sealed class ColorWheel : UserControl
         set { _hint = value; _canvas.Invalidate(); }
     }
 
+    /// <summary>Centre the ring ON <see cref="Anchor"/> instead of in the
+    /// viewport. V3 K.2: opened from the dial's centre disc the wheel has to be
+    /// concentric WITH THE DIAL, and K.9 says the same of the pen row's picker
+    /// when the dial is off. With this false the ring keeps its old behaviour
+    /// and centres itself in the viewport.</summary>
+    public bool CenterOnAnchor { get; set; }
+
+    /// <summary>The colour a mix starts FROM - what the caller was using when
+    /// the picker opened. Only read while a mix ratio is armed.</summary>
+    public Color BaseColor { get; set; } = Colors.White;
+
+    /// <summary>Raised when the user CHOOSES a colour (a swatch or a recent),
+    /// as opposed to merely changing one. V3 K.11: the host closes on this.</summary>
+    public event Action? Picked;
+
     /// The colour the picker is showing. Setting it does NOT raise ColorChanged.
     public Color Color
     {
@@ -229,7 +245,7 @@ public sealed class ColorWheel : UserControl
     private float _r2In, _r2Out;        // Tier 2 (grey ring)
     private float _rOutBase, _band;     // Tier 3+ (outer family columns)
     private float _rIn, _rOut;          // grabbable annulus [inner tier, outer edge]
-    private float _rLabel, _rRecent, _chipR;
+    private float _rLabel, _rRecent, _chipR, _rMix;
     // Chrome scale. The hub shrinks with the window (the ring is fitted to the
     // viewport), and the mode plates / eyedropper / bubbles are authored at a
     // fixed pixel size, so without this they collide with Tier 1 on a small
@@ -243,6 +259,12 @@ public sealed class ColorWheel : UserControl
     private readonly Vector2[] _labelPt = new Vector2[3];
     private Vector2 _dropPt, _puckPt;
     private readonly List<(Vector2 Pt, Color Col)> _chipPts = new();
+    // The mix row: OFF / 25% / 50% / 75% (V3 K.12). 0 is off.
+    private readonly Vector2[] _mixPt = new Vector2[4];
+    private Vector2 _mixCaption;
+    private int _mixIndex;
+    private static readonly string[] MixNames = { "OFF", "25%", "50%", "75%" };
+    private double MixRatio => _mixIndex switch { 1 => 0.25, 2 => 0.5, 3 => 0.75, _ => 0 };
 
     // Cached tile geometry: one 10° cell per outer ring band (reused across all
     // 36 columns by rotation), plus one cell each for the two inner tiers.
@@ -380,7 +402,8 @@ public sealed class ColorWheel : UserControl
     // pointer or the opener, so the wheel is fixed for as long as it is up.
     private void Layout(float w, float h)
     {
-        _c = new Vector2(w * 0.5f, h * 0.5f);
+        var mid = new Vector2(w * 0.5f, h * 0.5f);
+        _c = CenterOnAnchor ? _hint : mid;
         // One reference unit == one DIP. Fixed, so the swatches are the same
         // comfortable size at every window size and only HOW MUCH of the ring
         // you can see changes.
@@ -412,9 +435,10 @@ public sealed class ColorWheel : UserControl
         _ui = Math.Clamp(hole / 180f, 0.60f, 1.20f);
         _labelFmt.FontSize = 15f * _ui;
         _bubbleFmt.FontSize = 13f * _ui;
-        _rRecent = hole * 0.40f;
+        _rRecent = hole * 0.30f;
         _chipR = Math.Clamp(hole * 0.045f, 5f, 12f);
-        _rLabel = hole * 0.68f;
+        _rMix = hole * 0.54f;
+        _rLabel = hole * 0.74f;
         // The HSL / RGB face is three arcs rather than a ring, and there is
         // nothing to spin, so it stays fitted to the viewport as it always was.
         float fit = Math.Max(150f, Math.Min(w, h) * 0.5f - EdgeMargin);
@@ -422,15 +446,28 @@ public sealed class ColorWheel : UserControl
         _arcR[1] = fit * 0.58f;
         _arcR[2] = fit * 0.74f;
 
-        // The only thing the opener's point decides: which way the hub faces.
-        var toHint = _hint - _c;
-        _base = toHint.LengthSquared() < 4f ? 0f : MathF.Atan2(toHint.Y, toHint.X);
+        // Which way the hub's chrome faces. Centred in the viewport that is the
+        // direction of the thing that opened the picker; centred ON that thing
+        // there is no such direction, so the chrome leans toward the middle of
+        // the window, which is the only direction guaranteed to be on screen.
+        var lean = CenterOnAnchor ? mid - _c : _hint - _c;
+        _base = lean.LengthSquared() < 4f ? 0f : MathF.Atan2(lean.Y, lean.X);
 
         _puckPt = At(_rLabel, _base - 0.75f);
         _labelPt[0] = At(_rLabel, _base - 0.42f);
         _labelPt[1] = At(_rLabel, _base - 0.09f);
         _labelPt[2] = At(_rLabel, _base + 0.24f);
         _dropPt = At(_rLabel, _base + 0.57f);
+
+        // The mix row is a SECOND, TIGHTER ARC INSIDE the mode plates, on the
+        // same side of the hub. It was briefly on the opposite side, which reads
+        // well when the ring is centred in the window and is useless when the
+        // ring is centred on a corner-docked dial (K.2) - the far side of the
+        // hub is then off screen entirely, taking the whole control with it.
+        // Everything the user has to reach now hangs off the one direction that
+        // is guaranteed to be visible.
+        for (int i = 0; i < 4; i++) _mixPt[i] = At(_rMix, _base - 0.42f + i * 0.28f);
+        _mixCaption = At(_rMix, _base - 0.78f);
 
         _chipPts.Clear();
         int n = Math.Min(12, Recents.Count);
@@ -463,32 +500,55 @@ public sealed class ColorWheel : UserControl
     // cell is ~120 DIP of arc at r=690, so its centre can sit 60 DIP past the
     // edge while its near corner is still visible.)
     //
-    // The ring is centred, so the viewport is a rectangle centred on the wheel
-    // and along a ray at θ the visible run is [0, R(θ)] with
-    // R = min(halfW/|cos θ|, halfH/|sin θ|). R peaks on the axes and bottoms out
-    // on the diagonals, so over an interval its maximum is at an endpoint or at
-    // whichever axis direction the interval contains — five candidates, exact.
-    // p folds in the entrance cascade's scale about the centre, which only ever
-    // brings MORE of the ring into view.
-    private static bool WedgeVisible(float a0, float a1, float rIn, float p, float halfW, float halfH)
+    // The viewport is a rectangle, so along a ray at θ the visible run is
+    // [0, R(θ)] with R = min(wall_x/|cos θ|, wall_y/|sin θ|), each wall being the
+    // one that ray actually heads toward (see View). R peaks on the axes and
+    // bottoms out on the diagonals, so over an interval its maximum is at an
+    // endpoint or at whichever axis direction the interval contains — five
+    // candidates, exact. p folds in the entrance cascade's scale about the
+    // centre, which only ever brings MORE of the ring into view.
+    // The viewport as four SIGNED distances from the ring's centre. It used to be
+    // two half-extents, which is only right while the ring is centred in the
+    // window; once K.2 centres it on a corner-docked dial the window is entirely
+    // off to one side, and a symmetric box around the dial is about four times
+    // the real viewport. Everything in that phantom three-quarters passed the
+    // cull and was filled AND LABELLED off screen — which is exactly the cost
+    // K.3 could least afford, having just made every marker code draw on every
+    // frame. Signed reaches cull to the actual window instead.
+    private readonly struct View
     {
-        float reach = MathF.Max(RayReach(a0, halfW, halfH), RayReach(a1, halfW, halfH));
+        public readonly float Left, Right, Up, Down;
+        public View(Vector2 c, float w, float h)
+        {
+            Left = MathF.Max(0f, c.X) + 2f;
+            Right = MathF.Max(0f, w - c.X) + 2f;
+            Up = MathF.Max(0f, c.Y) + 2f;
+            Down = MathF.Max(0f, h - c.Y) + 2f;
+        }
+    }
+
+    private static bool WedgeVisible(float a0, float a1, float rIn, float p, View v)
+    {
+        float reach = MathF.Max(RayReach(a0, v), RayReach(a1, v));
         for (int k = -2; k <= 2 && reach < float.MaxValue; k++)
         {
             float axis = k * MathF.PI / 2f;
-            if (axis >= a0 && axis <= a1) reach = MathF.Max(reach, RayReach(axis, halfW, halfH));
+            if (axis >= a0 && axis <= a1) reach = MathF.Max(reach, RayReach(axis, v));
         }
         float scale = p >= 0.999f ? 1f : 0.5f + 0.5f * p;
         return reach > rIn * scale;
     }
 
-    // |cos| and |sin| make this π-periodic and symmetric, so an angle outside
-    // (-π, π] answers identically — the callers do not have to normalise a1.
-    private static float RayReach(float a, float halfW, float halfH)
+    // How far the ray at angle `a` travels from the centre before it leaves the
+    // window. cos/sin are taken SIGNED and pick the near or far wall accordingly;
+    // both are 2π-periodic, so an angle outside (-π, π] still answers correctly
+    // and the callers do not have to normalise a1.
+    private static float RayReach(float a, View v)
     {
-        float ca = MathF.Abs(MathF.Cos(a)), sa = MathF.Abs(MathF.Sin(a));
-        float rx = ca < 1e-6f ? float.MaxValue : halfW / ca;
-        float ry = sa < 1e-6f ? float.MaxValue : halfH / sa;
+        float c = MathF.Cos(a), s = MathF.Sin(a);
+        float ca = MathF.Abs(c), sa = MathF.Abs(s);
+        float rx = ca < 1e-6f ? float.MaxValue : (c > 0 ? v.Right : v.Left) / ca;
+        float ry = sa < 1e-6f ? float.MaxValue : (s > 0 ? v.Down : v.Up) / sa;
         return MathF.Min(rx, ry);
     }
 
@@ -586,20 +646,24 @@ public sealed class ColorWheel : UserControl
 
     private void DrawRing(ICanvasResourceCreator rc, CanvasDrawingSession ds, float w, float h)
     {
-        // The ring is centred on the control, so the viewport is a rectangle
-        // centred on _c and its two half-extents are all the cull needs.
-        float halfW = w * 0.5f + 2f, halfH = h * 0.5f + 2f;
+        // How far the viewport reaches from the ring's centre, per side, so the
+        // cull is exact whether the ring is centred in the window or on the
+        // corner-docked dial (K.2).
+        var view = new View(_c, w, h);
         var near = CopicPalette.Nearest(_color.R, _color.G, _color.B);
-        // Labels are dropped while the ring is really moving: they are the only
-        // per-cell text in the frame, and they are unreadable at speed anyway.
-        bool labels = Math.Abs(_vel) < 1.2f;
+        // V3 K.3. This used to be `Math.Abs(_vel) < 1.2f` - every marker code
+        // vanished the moment the ring was dragged or flicked, which is exactly
+        // when you are hunting for one. The codes ARE the wheel's index; the
+        // cull above already keeps the drawn set to what is on screen, so they
+        // are simply always drawn now.
+        const bool labels = true;
 
         // Tier 1 (inner arc) then Tier 2 (grey ring): disjoint bands, uniform
         // cell width, so one cached geometry rotated to each cell's A0 does it.
         // Each tier carries its own slot in the entrance cascade.
-        DrawInnerTier(ds, halfW, halfH, Tier1Cells, Tier1Cell(rc), _r1In, (_r1In + _r1Out) * 0.5f,
+        DrawInnerTier(ds, view, Tier1Cells, Tier1Cell(rc), _r1In, (_r1In + _r1Out) * 0.5f,
             near, labels, TierProgress(Tier1OpenDelay, Tier1CloseDelay));
-        DrawInnerTier(ds, halfW, halfH, Tier2Cells, Tier2Cell(rc), _r2In, (_r2In + _r2Out) * 0.5f,
+        DrawInnerTier(ds, view, Tier2Cells, Tier2Cell(rc), _r2In, (_r2In + _r2Out) * 0.5f,
             near, labels, TierProgress(Tier2OpenDelay, Tier2CloseDelay));
 
         // Tier 3+ (outer family columns): 36 fixed 10° columns, each a radial
@@ -614,7 +678,7 @@ public sealed class ColorWheel : UserControl
             if (p <= 0.002f) continue;              // not arrived yet / already gone
             float a0 = Norm(OuterStart + col * ColStep + _rot);
             float midA = a0 + ColStep * 0.5f;
-            if (!WedgeVisible(a0, a0 + ColStep, _rOutBase, p, halfW, halfH)) continue;
+            if (!WedgeVisible(a0, a0 + ColStep, _rOutBase, p, view)) continue;
 
             // The column's own gravity drop: scaled about the WHEEL centre, so
             // the ring implodes/explodes as one body rather than each column
@@ -640,7 +704,7 @@ public sealed class ColorWheel : UserControl
 
     // Draws one inner tier: fill each cell by rotating the shared geometry to
     // the cell's start angle, outline the nearest swatch, and label it.
-    private void DrawInnerTier(CanvasDrawingSession ds, float halfW, float halfH,
+    private void DrawInnerTier(CanvasDrawingSession ds, View view,
         Cell[] cells, CanvasGeometry geo, float rIn, float rMid, CopicSwatch near, bool labels, float p)
     {
         if (p <= 0.002f) return;
@@ -650,7 +714,7 @@ public sealed class ColorWheel : UserControl
             float a0 = cell.A0 + _rot;
             float mid = (cell.A0 + cell.A1) * 0.5f + _rot;
             float n0 = Norm(a0);
-            if (!WedgeVisible(n0, n0 + (cell.A1 - cell.A0), rIn, p, halfW, halfH)) continue;
+            if (!WedgeVisible(n0, n0 + (cell.A1 - cell.A0), rIn, p, view)) continue;
 
             var col32 = Color.FromArgb(255, cell.Sw.R, cell.Sw.G, cell.Sw.B);
             ds.Transform = Matrix3x2.CreateRotation(a0, _c) * grow;
@@ -741,7 +805,24 @@ public sealed class ColorWheel : UserControl
     // stacks COPIC / HSL / RGB beside the dial.
     private void DrawChrome(CanvasDrawingSession ds, float a)
     {
-        ds.FillCircle(_puckPt, 17f * _ui, Fade(_color, a));
+        // Armed to mix, the puck shows BOTH colours - the one a pick will be
+        // mixed into on the left, the live colour on the right - so it is clear
+        // the next tap combines rather than replaces.
+        if (_mixIndex > 0)
+        {
+            using var half = new CanvasPathBuilder(ds);
+            half.BeginFigure(_puckPt + new Vector2(0, -17f * _ui));
+            half.AddArc(_puckPt + new Vector2(0, 17f * _ui), 17f * _ui, 17f * _ui, 0f,
+                        CanvasSweepDirection.CounterClockwise, CanvasArcSize.Small);
+            half.EndFigure(CanvasFigureLoop.Closed);
+            using var geo = CanvasGeometry.CreatePath(half);
+            ds.FillCircle(_puckPt, 17f * _ui, Fade(_color, a));
+            ds.FillGeometry(geo, Fade(BaseColor, a));
+        }
+        else
+        {
+            ds.FillCircle(_puckPt, 17f * _ui, Fade(_color, a));
+        }
         ds.DrawCircle(_puckPt, 17f * _ui, Fade(Color.FromArgb(120, 160, 160, 160), a), 1.5f);
 
         string[] names = { "COPIC", "HSL", "RGB" };
@@ -764,6 +845,34 @@ public sealed class ColorWheel : UserControl
         DrawEyedropper(ds, _dropPt, 34f * _ui,
             Fade(_sampling ? Color.FromArgb(255, 217, 119, 87) : Color.FromArgb(235, 236, 234, 228), a),
             a);
+
+        DrawMixRow(ds, a);
+    }
+
+    // V3 K.12's control surface: arm a ratio, then the next swatch you tap is
+    // MIXED into the colour you started with as paint rather than replacing it.
+    private void DrawMixRow(CanvasDrawingSession ds, float a)
+    {
+        var capRect = new Rect(_mixCaption.X - 40 * _ui, _mixCaption.Y - 13 * _ui, 80 * _ui, 26 * _ui);
+        ds.DrawText(Loc.T("Picker.MixLabel"), capRect,
+            Fade(_mixIndex > 0 ? Color.FromArgb(255, 217, 119, 87) : Color.FromArgb(150, 236, 234, 228), a),
+            _bubbleFmt);
+
+        for (int i = 0; i < 4; i++)
+        {
+            var p = _mixPt[i];
+            bool on = _mixIndex == i;
+            var rect = new Rect(p.X - 25 * _ui, p.Y - 15 * _ui, 50 * _ui, 30 * _ui);
+            if (on)
+            {
+                ds.FillRoundedRectangle(rect, 5, 5, Fade(Color.FromArgb(235, 236, 234, 228), a));
+                ds.DrawText(MixNames[i], rect, Fade(Color.FromArgb(255, 20, 20, 19), a), _bubbleFmt);
+            }
+            else
+            {
+                ds.DrawText(MixNames[i], rect, Fade(Color.FromArgb(190, 236, 234, 228), a), _bubbleFmt);
+            }
+        }
     }
 
     // Hand-authored eyedropper: a bulb on a 45° shaft that tapers to a point,
@@ -863,7 +972,11 @@ public sealed class ColorWheel : UserControl
         var pt = e.GetCurrentPoint((UIElement)sender).Position;
         var p = new Vector2((float)pt.X, (float)pt.Y);
         e.Handled = true;
-        _input?.CapturePointer(e.Pointer);
+        // Guarded for the same reason as ToolWheel.OnPressed: CapturePointer
+        // throws ArgumentException on a pointer that is already captured or no
+        // longer in contact, and an unguarded throw here loses the press.
+        try { _input?.CapturePointer(e.Pointer); }
+        catch (ArgumentException) { }
 
         if (_sampling)
         {
@@ -888,12 +1001,20 @@ public sealed class ColorWheel : UserControl
                 return;
             }
         }
+        for (int i = 0; i < 4; i++)
+        {
+            if (Math.Abs(p.X - _mixPt[i].X) < 26 * _ui && Math.Abs(p.Y - _mixPt[i].Y) < 17 * _ui)
+            {
+                _mixIndex = i;
+                _canvas.Invalidate();
+                return;
+            }
+        }
         for (int i = 0; i < _chipPts.Count; i++)
         {
             if (Vector2.Distance(p, _chipPts[i].Pt) < _chipR + 3f)
             {
-                Color = _chipPts[i].Col;
-                ColorChanged?.Invoke(_color);
+                Commit(_chipPts[i].Col);
                 return;
             }
         }
@@ -1010,8 +1131,30 @@ public sealed class ColorWheel : UserControl
         float r = Vector2.Distance(p, _c);
         float a = MathF.Atan2(p.Y - _c.Y, p.X - _c.X) - _rot;
         if (SwatchAt(r, a) is not { } sw) return;
-        Color = Color.FromArgb(255, sw.R, sw.G, sw.B);
+        Commit(Color.FromArgb(255, sw.R, sw.G, sw.B));
+    }
+
+    /// <summary>Chooses a colour: mixes it into <see cref="BaseColor"/> as paint
+    /// when a ratio is armed (V3 K.12), publishes it, and asks the host to close
+    /// (V3 K.11 - "the COPIC wheel closes automatically once a colour is
+    /// chosen").
+    ///
+    /// THE ONE EXCEPTION, and why. K.11 and K.12 pull against each other: closing
+    /// on the first pick makes mixing a single-shot operation, and mixing is by
+    /// nature iterative - each addition starts from the RESULT of the last, which
+    /// is how colour is actually built up on a palette. So the auto-close applies
+    /// only while the mix row is OFF, which is the plain "pick a colour" case K.11
+    /// is written about. Arm a ratio and the wheel deliberately stays up so
+    /// additions can be stacked; tapping away still dismisses it, and setting the
+    /// row back to OFF restores the close-on-pick behaviour exactly.</summary>
+    private void Commit(Color picked)
+    {
+        bool mixing = _mixIndex > 0;
+        Color = mixing ? PigmentMix.Mix(BaseColor, picked, MixRatio) : picked;
+        BaseColor = _color;
         ColorChanged?.Invoke(_color);
+        if (mixing) _canvas.Invalidate();   // the puck's two halves both moved
+        else Picked?.Invoke();
     }
 
     // Pure-arithmetic hit-test: pick the tier by radius, then the cell by angle.
@@ -1232,6 +1375,12 @@ public sealed class ColorWheel : UserControl
     public void BeginEnter()
     {
         _exitDone = null;
+        // The mix ratio is armed for ONE session and disarms on the way in. The
+        // wheel is a single long-lived instance shared by every call site, so
+        // without this a ratio armed on the dial would still be armed the next
+        // time the page-background or accent picker opened, and that picker's
+        // first tap would silently blend instead of choosing (V3 K.12).
+        _mixIndex = 0;
         if (ReduceMotion)
         {
             LandTransition();         // straight to the end state
