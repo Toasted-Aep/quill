@@ -331,3 +331,125 @@ Acceptance: measure per-pixel luminance σ over a 512² render. A blank page
 measures ≈ 0.0. Lightweight must exceed 4.0, Heavyweight and Crumpled must
 exceed 7.0, Blueprint and Brown Paper must exceed 3.0. Save a PNG of each for
 review.
+
+---
+
+## 9. Revision pass, 2026-08-07 evening
+
+Twelve corrections from the user against the just-merged build (`33bb650`),
+plus two new reference screenshots — a **dark-theme** capture of the Bar palette
+with its settings popover and the Settings panel, and a close crop of the COPIC
+wheel showing a border defect. Where these disagree with §1–§3, **§9 wins.**
+
+### 9.1 Everything is too big  (dial + pen row)
+
+Re-measured off the dark-theme capture, which shows the Bar palette at Concepts'
+real proportions. My §2 figures were roughly 1.5× too large.
+
+| Element | Was (§2) | Now |
+|---|---|---|
+| Bar panel width | 86 DIP | **56 DIP** |
+| Bar cell height | 86 DIP | **62 DIP** |
+| Bar tool mark | 34 DIP | **27 DIP** |
+| Bar size label | 13 DIP | **10 DIP** |
+| Settings popover width (§2.1) | 96 DIP | **62 DIP** |
+
+The same shrink applies to the **dial's** size / opacity / smoothness cluster
+(§1.4): glyphs and value type come down by the same ~0.72 factor. The ring
+geometry in §1.1 stays as specified — it is the *readouts and marks* that are
+oversized, not the wheel.
+
+In the dark capture the Bar's active cell is marked by a **filled lighter cell
+background** plus a short accent rule on the leading edge, not by the
+between-icon-and-label rule of §2. Support both: filled cell on dark grounds,
+rule on light. **Undo and redo both** sit below the bar, side by side.
+
+### 9.2 Remove the gaps between dial sectors
+
+Sectors currently render with visible gaps. They must be **contiguous** — a
+hairline separator between neighbours, no dead space. The reference ring is a
+continuous annulus divided by lines, not a ring of detached wedges.
+
+### 9.3 COPIC wheel — open centred on the colour circle
+
+Supersedes §1.8 and the judgement call made when the dial was rebuilt. The
+wheel opens **centred on the dial's colour dot** (the §1.4 row-2 centre swatch),
+not on the viewport, and **the dial does not move.** The user was explicit:
+*"centred in the middle of the radial dial / centred where the colour circle
+is."*
+
+Because the dial is corner-docked, a wheel centred there will overhang the
+window. That is expected — solve it by **making room**, not by relocating the
+dial:
+- the wheel may extend past the window edge; clip it there rather than shifting
+  the centre;
+- shrink the wheel's outer radius while the dial is docked so more of the ring
+  falls on-screen;
+- push the floating bars and any open pane out of the way for the duration
+  (the `PanelLayout` dynamic-overlap system already does this — use it);
+- the user's words are *"when copic colour wheel is open, it is a bit cramped,
+  make room / arrange better."*
+
+### 9.4 COPIC wheel — three defects
+
+1. **Double outline.** The selection outline draws twice along some edges — the
+   close crop shows the selected cell (`BG90`) with a doubled dark border on its
+   shared edges while the outer edges are single. Cause is almost certainly each
+   cell stroking its own centred border so neighbours overlap, with the selected
+   cell then stroking on top. Draw cell borders as a single shared grid, or
+   stroke the selection **inside** the cell bounds only.
+2. **Rotation snapping.** Spinning the wheel snaps to fixed positions. **Remove
+   snapping entirely** — free continuous rotation with inertia.
+3. **RGB and HSL faces start too far inward.** Their rings begin too close to
+   the centre; push them outward so they read at the same radius band as the
+   COPIC face.
+
+### 9.5 Custom colour in Settings — press once to apply, twice to edit
+
+Supersedes UI-SPEC-V3 §K item 10, which had this backwards.
+
+- Pressing **Custom colour** applies **the colour the user previously set**. It
+  does not open a picker.
+- Pressing it **again, while it is already the selected colour**, opens the
+  COPIC wheel to edit it.
+
+So the first press is a selection, the second is an edit. A never-yet-set custom
+colour has nothing to apply, so in that one case the first press opens the
+wheel.
+
+### 9.6 Top bar — thinner, and stripped
+
+*"make top bar smaller thinner to maximise page space, remove unused features
+from there."* Reduce the bar's height to the minimum that still fits the §5
+glyph size (16 DIP) and its hover panel. Anything not in the §5 left/right
+cluster lists comes out. Page space is the priority.
+
+### 9.7 New homes for three features
+
+- **Calculator** moves into the **Quill button dropdown** (the app menu behind
+  the Quill mark in the top bar). It is currently in `HiddenTools` as
+  `BtnCalc` in the user's settings.
+- **Dictation** and **Recording** become **selectable tools** — assignable to a
+  dial sector or a pen-row cell like any other tool. They are in the user's
+  `HiddenTools` as `VoiceBtn`.
+
+Both are part of the §5 goal of a top bar carrying no tools at all.
+
+### 9.8 Settings — the Wheel | Bar circles
+
+Confirmed against the dark capture: **Tool Setup → Interface** shows two 80 DIP
+circles captioned `Wheel` and `Bar`. The selected one carries a 2 DIP `OnSurface`
+ring and a bold caption. The `Wheel` glyph is a filled disc with a bite out of
+it and a small dot; the `Bar` glyph is a tall rounded vertical bar. Both already
+exist as `Icons.SurfaceWheel` and `Icons.SurfaceBar`.
+
+The same capture also confirms a **`Restore Default Settings`** link in
+`Accent`, centred, as the last row of the Workspace tab.
+
+### 9.9 Dark-theme confirmation
+
+The dark capture is the theme system's acceptance case for panels: panel fill
+near-black, section headings and values in near-white, captions muted, swatch
+circles drawn as `Outline` rings with **no fill**, and the selected circle's ring
+in full `OnSurface`. Toggle tracks stay light-grey when off. This is what §6
+must produce on a Darkprint ground.
