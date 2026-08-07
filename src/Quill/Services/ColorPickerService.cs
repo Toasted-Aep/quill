@@ -78,7 +78,7 @@ public static class ColorPickerService
     /// <paramref name="onClosed"/> fires once when the picker is dismissed.
     /// </summary>
     public static void Open(Point rootPoint, Color current,
-        Action<Color> onChanged, Action? onClosed = null)
+        Action<Color> onChanged, Action? onClosed = null, bool centreOnPoint = false)
     {
         if (_host == null) return;   // not yet configured — safe no-op
         // Re-opened while a previous exit is still playing: drop that animation
@@ -95,6 +95,12 @@ public static class ColorPickerService
         wheel.Recents = _host.GetRecents();
         wheel.Mode = _host.GetMode();
         wheel.Color = current;
+        // The colour a mix starts from is whatever the caller was using (K.12).
+        wheel.BaseColor = current;
+        // K.2 / K.9: opened from the radial dial's centre disc, or from the pen
+        // row's picker when the dial is off, the ring is CENTRED ON that control
+        // rather than merely leaning toward it.
+        wheel.CenterOnAnchor = centreOnPoint;
         wheel.Anchor = new Vector2((float)rootPoint.X, (float)rootPoint.Y);
 
         var overlay = _overlay ??= BuildOverlay(wheel);
@@ -146,6 +152,10 @@ public static class ColorPickerService
         w.ModeChanged += m => _host?.SetMode(m);
         w.SampleRequested += p => w.ApplySample(_host?.Sample(p));
         w.Dismissed += Close;
+        // V3 K.11: the wheel closes itself the moment a colour is chosen. The
+        // eyedropper deliberately does NOT go through here - it is a repeatable
+        // tool and closing on every sample would make it unusable.
+        w.Picked += Close;
         return w;
     }
 

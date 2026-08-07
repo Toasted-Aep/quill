@@ -44,6 +44,17 @@ public sealed partial class MainWindow : Window
     // funnel calls, the visibility gate and the Settings toggle are its whole
     // footprint in this file.
     private ToolWheel? _toolWheel;
+
+    /// <summary>The radial dial, exposed for the shared panel-overlap system
+    /// (V3 K.6 / K.21) - null until startup wiring has run. The dial is a
+    /// PARTICIPANT in that system, not a special case: ask it for
+    /// <see cref="ToolWheel.Bounds"/> (empty while it is down) and push it out of
+    /// the way with <see cref="ToolWheel.Block"/>, which stacks named vetoes so
+    /// two panels can hold it down at once without either clearing the other.
+    /// Nothing here should call SetVisible for an overlap - that is the host's
+    /// own request and a panel overwriting it is how V3 K.1 regressed.</summary>
+    public ToolWheel? Dial => _toolWheel;
+
     // Top-bar element keys the dial currently owns: a tool that lives in the
     // dial is removed from the bar rather than offered twice (V3 A.9).
     private HashSet<string> _dialTools = new(StringComparer.Ordinal);
@@ -493,8 +504,25 @@ public sealed partial class MainWindow : Window
         });
         ToolUiChanged += _toolWheel.Refresh;
         // Point the dial's colour disc at the system COPIC picker (the seam the
-        // radial + colour branches were built to meet at).
-        _toolWheel.ColourPickerHook = ColorPickerService.Open;
+        // radial + colour branches were built to meet at). V3 K.2: opened from
+        // the disc, the ring is CENTRED ON THE DIAL, so the point is a mount
+        // point here and not the usual hint.
+        _toolWheel.ColourPickerHook =
+            (pt, current, changed, closed) => ColorPickerService.Open(pt, current, changed, closed, centreOnPoint: true);
+        // V3 K.1 and K.6. The dial belongs over a PAGE: never over the notebook
+        // gallery, and never underneath the floating Notebooks window it shares
+        // the top-left dock with. ApplyPenRowVisibility recomputes the dial from
+        // the SETTING alone and runs from a dozen places, so gating it there
+        // could only ever be undone by the next caller - the dial now refuses
+        // the request itself. Bounds stays queryable so the shared panel-overlap
+        // system can take over the general case without this being re-litigated.
+        _toolWheel.IsBlocked = () =>
+            GalleryPanel.Visibility == Visibility.Visible ||
+            NotebookPanel.Visibility == Visibility.Visible;
+        // Those two are toggled through a dozen FadeIn/FadeOut sites, so the
+        // dial watches the property rather than trusting every one of them.
+        foreach (var veto in new FrameworkElement[] { GalleryPanel, NotebookPanel })
+            veto.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) => _toolWheel?.Apply());
         _toolWheel.SlotsChanged += t => { _dialTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
         // The rest of the top bar's marking commands become assignable slots.
         // What moved and what deliberately did not is argued in DialCommands.cs.
@@ -2391,6 +2419,11 @@ public sealed partial class MainWindow : Window
             PresetPanel.Children.Add(btn);
         }
         RefreshPenSelection();
+        // The row's ink swatch (V3 K.9) is part of the row, so it is repainted
+        // with it. ApplyPreset alone is not enough: the eyedropper and the pen
+        // editor both rewrite the active pen's colour and rebuild the strip
+        // WITHOUT re-applying the preset, and the swatch would sit stale.
+        SyncPenRowColour();
     }
 
     private void BuildEraserChip()
@@ -2891,7 +2924,38 @@ public sealed partial class MainWindow : Window
         // so switching back to Manual restores the user's own pick.
         if (_library.AccentFollow == "Pen")
             try { ApplyAccentLive(ColorUtil.Parse(p.Color)); } catch { }
+        SyncPenRowColour();
         ToolUiChanged?.Invoke();
+    }
+
+    /// <summary>The pen row's ink swatch (V3 K.9). It opens the same COPIC ring
+    /// the dial's centre disc opens, centred on ITSELF - so with the radial dial
+    /// switched off the wheel still arrives around the control that summoned it
+    /// rather than in the middle of the window.</summary>
+    private void PenRowColour_Click(object sender, RoutedEventArgs e)
+    {
+        var p = ActivePreset() ?? _library.Pens.FirstOrDefault();
+        if (p == null) return;
+        var tl = PenRowColourBtn.TransformToVisual(RootGrid).TransformPoint(new Point(0, 0));
+        var at = new Point(tl.X + PenRowColourBtn.ActualWidth / 2, tl.Y + PenRowColourBtn.ActualHeight / 2);
+        ColorPickerService.Open(at, ColorUtil.Parse(p.Color), c =>
+        {
+            p.Color = ColorUtil.ToHex(c);
+            ApplyPreset(p);
+            ScheduleSave();
+        }, null, centreOnPoint: true);
+    }
+
+    /// <summary>Keeps the pen row's ink swatch showing the live colour.</summary>
+    private void SyncPenRowColour()
+    {
+        try
+        {
+            var p = ActivePreset() ?? _library?.Pens.FirstOrDefault();
+            PenRowColourDot.Fill = new SolidColorBrush(
+                p != null ? ColorUtil.Parse(p.Color) : Microsoft.UI.Colors.Transparent);
+        }
+        catch { }
     }
 
     private async void AddPreset_Click(object sender, RoutedEventArgs e)

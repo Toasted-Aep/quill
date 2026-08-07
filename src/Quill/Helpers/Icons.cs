@@ -250,6 +250,50 @@ public static class Icons
     /// Chevron, for the collapsible rows. Stroked.
     public const string ChevronDown = "M5 8.5 L12 15.5 L19 8.5";
 
+    // ---- pen stroke silhouettes (UI-SPEC-V3 K.8) -------------------------
+    // A pen slot on the dial does not show the PEN — it shows THE MARK THE PEN
+    // LEAVES, drawn in that pen's own colour. These are hand-authored
+    // silhouettes of one short stroke running from lower-left to upper-right on
+    // the same 24x24 grid as everything else, filled (they are the outline of
+    // the mark, not a line), so they scale into a dial sector without the
+    // stroke weight drifting. They are deliberately NOT a live render: a slot is
+    // 22 DIP across and a real stroke at that size reads as a smudge.
+
+    /// Even width, round ends — a ballpoint / rollerball / monoline trace.
+    public const string StrokeRound =
+        "M4.35 19.55 C8.2 15.1 12.4 10.6 17.9 5.55 A2.05 2.05 0 0 1 20.65 8.55 " +
+        "C15.35 13.4 11.3 17.75 7.6 22.05 A2.05 2.05 0 0 1 4.35 19.55 Z";
+
+    /// Thin taper — a fountain nib: hairline at both ends, swelling in the belly.
+    public const string StrokeTaper =
+        "M2.9 20.9 C8.6 15.9 14.8 10.4 21.5 5.1 C15.4 11.8 9.6 17.2 2.9 20.9 Z";
+
+    /// Chisel — a marker / felt tip / calligraphy nib: a broad band whose two
+    /// ends are cut off parallel at the nib angle.
+    public const string StrokeChisel =
+        "M2.2 21.4 L9.6 12.6 L21.8 3.4 L14.4 12.2 Z";
+
+    /// Grainy edge — a pencil: the band breaks up along both edges and sheds a
+    /// few specks of graphite where the tooth of the paper caught it.
+    public const string StrokeGrain =
+        "M3.1 20.6 L5.9 18.4 L8.0 19.0 L10.7 16.6 L13.0 17.1 L15.6 14.9 L18.0 15.3 " +
+        "L20.9 12.9 L22.0 14.9 L19.4 17.0 L17.1 16.6 L14.7 18.8 L12.3 18.3 L9.9 20.5 " +
+        "L7.7 20.0 L4.6 22.6 Z " +
+        "M7.4 15.9 L8.9 15.4 L9.2 16.8 L7.7 17.3 Z " +
+        "M13.1 11.9 L14.6 11.4 L14.9 12.8 L13.4 13.3 Z " +
+        "M18.6 8.2 L20.1 7.7 L20.4 9.1 L18.9 9.6 Z";
+
+    /// <summary>The silhouette for a pen type. Anything not explicitly listed
+    /// falls to the round trace, which is what an unremarkable pen leaves.</summary>
+    public static string PenStroke(Models.PenType pen) => pen switch
+    {
+        Models.PenType.Fountain or Models.PenType.Brush or Models.PenType.Watercolor => StrokeTaper,
+        Models.PenType.Marker or Models.PenType.FeltTip
+            or Models.PenType.Calligraphy or Models.PenType.Highlighter => StrokeChisel,
+        Models.PenType.Pencil or Models.PenType.Crayon => StrokeGrain,
+        _ => StrokeRound,
+    };
+
     // ---- factories -------------------------------------------------------
 
     /// <summary>Parses path mini-language into a Geometry. XamlReader is the only

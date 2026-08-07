@@ -701,6 +701,19 @@
                         </Border>
 
                         <StackPanel x:Name="PresetPanel" Orientation="Horizontal" Spacing="2" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+
+                        <!-- Ink colour (UI-SPEC-V3 K.9). With the radial dial off this
+                             is the app's colour button, and the COPIC wheel opens
+                             CENTRED ON IT the way it centres on the dial when the dial
+                             is on. -->
+                        <Button x:Name="PenRowColourBtn" Click="PenRowColour_Click" Padding="0"
+                                Width="30" Height="30" CornerRadius="15"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"
+                                ToolTipService.ToolTip="Ink colour - opens the colour wheel">
+                            <Ellipse x:Name="PenRowColourDot" Width="17" Height="17"
+                                     Stroke="{StaticResource GlassEdgeBrush}" StrokeThickness="1"/>
+                        </Button>
+
                         <Button x:Name="BtnAddPreset" Click="AddPreset_Click" Padding="6,4"
                                 HorizontalAlignment="Center" VerticalAlignment="Center"
                                 ToolTipService.ToolTip="Save the current pen as a new pen (right-click any pen to edit it)">

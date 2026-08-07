@@ -66,23 +66,39 @@ public sealed class ToolWheel
     // 260 box with the dial centred at (130,130). Only the COLOURS differ: the
     // web hard-codes a slate palette, and Quill's must follow the page
     // (ThemeSource="Page"), so hues come from the app and never from the JSX.
-    private const double Footprint = 260;          // viewBox 0 0 260 260
-    private const double Half = Footprint / 2;     // 130
+    // V3 K.7 asks for a SMALLER dial, and the chance is taken to put the three
+    // radii on Concepts' own measured proportions at the same time
+    // (CONCEPTS-UI-REFERENCE 2.1): 1 : 3 : 5, i.e. r_colour = R/5, r_hub = 3R/5,
+    // r_outer = R, with the rings FLUSH - zero gap, and the outer ring reaching
+    // the rim exactly. The old build was 125 across with a 2 DIP seam at 82->84.
+    private const double Rim = 104;                // was 125: ~17% smaller overall
+    private const double Footprint = 232;          // Rim*2 + room for the grip
+    private const double Half = Footprint / 2;     // 116
 
-    private const double ColourR = 26;             // centre disc: the colour button
-    private const double InIn = 27, InOut = 82;    // inner annulus: the 3 settings
-    private const double OutIn = 84, OutOut = 125; // outer annulus: the 10 tools
+    private const double ColourR = Rim / 5;        // 20.8  centre disc = the colour button
+    private const double InIn = ColourR;           // hub starts where the disc ends
+    private const double InOut = Rim * 0.6;        // 62.4  hub = the 3 settings
+    private const double OutIn = InOut;            // FLUSH, per the reference
+    private const double OutOut = Rim;             // outer annulus = the 10 tools
     private const double RimR = OutOut;            // hit shield radius == the rim
-    private const double PlateR = 125;             // the disc the sectors sit on
+    private const double PlateR = Rim;             // the disc the sectors sit on
 
-    private const double IconR = 104;              // slot mark centre, mid-annulus
-    // The web anchors slot content at rCenter and then splits it by half:
-    // upper half puts the mark below the anchor and the size text above it,
-    // lower half does the reverse (RadialDial.jsx lines 200-218).
-    private const double MarkUpDy = 5, MarkDownDy = -1;
-    private const double TextUpDy = -13, TextDownDy = 12;
-    private const double MarkBox = 17;             // web uses 16; +1 keeps the two-tone pen chips legible
-    private const double GripR = 138;              // handedness grip satellite
+    private const double IconR = (OutIn + OutOut) / 2;   // 83.2: mid outer annulus
+    // Slot content is split by half: the upper half puts the mark below the
+    // anchor and the size text above it, the lower half does the reverse.
+    private const double MarkUpDy = 4, MarkDownDy = -1;
+    private const double TextUpDy = -12, TextDownDy = 11;
+    // MarkBox must be at LEAST as big as the art it hosts. It used to be 17
+    // while SlotArt handed it 22 and 26 DIP marks, and WinUI answers a child
+    // whose desired size exceeds its arrange rect with a LAYOUT CLIP - which is
+    // exactly the "cut off, like erased with an eraser, clipped into a small
+    // square" defect in V3 K.5. Every art factory below is now sized FROM this
+    // constant rather than from a literal, so the two can never drift again.
+    private const double MarkBox = 22;
+    private const double SetBox = 16;              // the three setting marks, same rule
+    private const double SetIconR = (InIn + InOut) / 2 + 8;   // mark ring inside the hub
+    private const double SetTextR = (InIn + InOut) / 2 - 10;  // value ring, nearer the disc
+    private const double GripR = 113;              // handedness grip satellite
 
     public const int Slots = 10;                   // exactly ten, user-assignable
     private const double SlotSpan = 360.0 / Slots; // 36 degrees each
@@ -248,6 +264,7 @@ public sealed class ToolWheel
     private int _hoverSlot = -1;
     private int _hoverSet = -1;
     private int _dragSet = -1;           // a setting arc currently being scrubbed
+    private bool _scrubbing;             // ...and whether that press has passed the slop
     private bool _hoverColour;
     private bool _pressed;
     private uint? _pointer;
@@ -257,6 +274,29 @@ public sealed class ToolWheel
     private readonly DispatcherTimer _assign = new() { Interval = TimeSpan.FromMilliseconds(AssignMs) };
     private UIElement? _keyTarget;
     private HashSet<string> _taken = new(StringComparer.Ordinal);
+
+    // ---- visibility, as a REQUEST plus a set of vetoes -------------------
+    // V3 K.1: the dial reappeared over the notebook gallery. The first fix put
+    // a SetVisible(false) in ShowGallery, which is fragile by construction -
+    // ApplyPenRowVisibility recomputes visibility from the dial SETTING alone
+    // and is called from a dozen places (tool change, page load, minimal-UI
+    // toggle...), so the very next one of those puts the dial straight back on
+    // top of the gallery. The host's request and the reasons it must be
+    // overruled are now separate: whoever asks for the dial gets it only if
+    // nothing is vetoing it, so a future caller cannot reintroduce the defect.
+    private bool _want;
+    private readonly HashSet<string> _blocks = new(StringComparer.Ordinal);
+
+    /// <summary>A host predicate that vetoes the dial - the gallery and the
+    /// floating Notebooks window (V3 K.1, K.6). Evaluated on every request.</summary>
+    public Func<bool>? IsBlocked { get; set; }
+
+    // ---- the setting slider window (V3 K.4) ------------------------------
+    private readonly Border _panel;
+    private readonly TextBlock _panelName = new(), _panelValue = new();
+    private readonly Slider _panelSlider = new();
+    private int _panelSet = -1;
+    private bool _panelSync;
 
     // ===================================================================
     // Attach
@@ -320,6 +360,43 @@ public sealed class ToolWheel
         };
         _layer.Children.Add(_bottom);
 
+        // ---- the setting slider window (V3 K.4) --------------------------
+        // MAN p83: the slider "opens as you interact and closes the instant you
+        // lift". The shipped dial had the scrub and no surface at all, so there
+        // was nothing to read and nothing to aim at. This is a real Slider, so
+        // it can also be dragged directly - the sector scrub is kept exactly as
+        // it was and the two drive the same setter.
+        _panelName.FontSize = 12;
+        _panelName.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+        _panelName.HorizontalAlignment = HorizontalAlignment.Left;
+        _panelValue.FontSize = 12;
+        _panelValue.HorizontalAlignment = HorizontalAlignment.Right;
+        var head = new Grid { Margin = new Thickness(0, 0, 0, 2) };
+        head.Children.Add(_panelName);
+        head.Children.Add(_panelValue);
+        _panelSlider.Minimum = 0;
+        _panelSlider.Maximum = 100;
+        _panelSlider.StepFrequency = 1;
+        _panelSlider.Width = 176;
+        _panelSlider.IsThumbToolTipEnabled = false;
+        _panelSlider.Margin = new Thickness(0, -4, 0, -6);
+        _panelSlider.ValueChanged += (_, e) =>
+        {
+            if (_panelSync || _panelSet < 0) return;
+            ApplySetting(_panelSet, e.NewValue / 100.0);
+        };
+        var stack = new StackPanel();
+        stack.Children.Add(head);
+        stack.Children.Add(_panelSlider);
+        _panel = new Border
+        {
+            Child = stack, Padding = new Thickness(12, 8, 12, 8), CornerRadius = new CornerRadius(14),
+            BorderThickness = new Thickness(1), Visibility = Visibility.Collapsed,
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(_panel, "ToolWheelSetting");
+        _layer.Children.Add(_panel);
+
         _host.Children.Add(_layer);
 
         // The dock is corner-anchored, so it is re-parked on every resize.
@@ -363,12 +440,34 @@ public sealed class ToolWheel
         if (_keyTarget != null) return;
         if (_host.XamlRoot?.Content is not UIElement top) return;
         _keyTarget = top;
-        top.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(OnKeyDown), true);
+        // handledEventsToo is DELIBERATELY false. With it true this handler ran
+        // even after a text box had consumed the key, so typing a year into a
+        // note fired slots 2, 0, 1 and 9 - and the default dial puts Redo on 7
+        // and Undo on 8, so a number with those digits in it silently rewrote
+        // the page. The focus guard below is the belt to that brace.
+        top.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler(OnKeyDown), false);
+    }
+
+    /// <summary>True while a text surface owns the keyboard. Mirrors
+    /// MainWindow.TextBoxFocused, which ToolAccel and the eyedropper accelerator
+    /// already use, so every keyboard shortcut in the app defers to typing in
+    /// exactly the same way.</summary>
+    private bool Typing()
+    {
+        try
+        {
+            var root = _host.XamlRoot;
+            if (root == null) return false;
+            var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(root);
+            return focused is TextBox or RichEditBox or PasswordBox or AutoSuggestBox;
+        }
+        catch { return false; }
     }
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (!_on) return;
+        if (e.Handled || Typing()) return;
         // 1-9 then 0 fire the slots clockwise from twelve o'clock - the keyboard
         // and assistive path onto the same commit funnel a tap uses.
         int n = e.Key == Windows.System.VirtualKey.Number0 ? 9 : (int)e.Key - (int)Windows.System.VirtualKey.Number1;
@@ -386,12 +485,35 @@ public sealed class ToolWheel
     /// it - the dial floated on top of the gallery.</summary>
     public void SetVisible(bool on)
     {
+        _want = on;
+        Apply();
+    }
+
+    /// <summary>Veto the dial for a named reason, and lift it again. The dial
+    /// stays down while ANY reason is outstanding, whatever the host has asked
+    /// for - V3 K.6, the collision with the floating Notebooks window.</summary>
+    public void Block(string reason, bool on)
+    {
+        if (on ? !_blocks.Add(reason) : !_blocks.Remove(reason)) return;
+        Apply();
+    }
+
+    private bool Wanted => _want && _blocks.Count == 0 && !(IsBlocked?.Invoke() ?? false);
+
+    /// <summary>Reconciles what is on screen with <see cref="Wanted"/>. Safe to
+    /// call at any time; the host calls it whenever a veto's condition may have
+    /// changed without <see cref="Block"/> being used.</summary>
+    public void Apply()
+    {
+        bool on = Wanted;
         if (_on == on) { if (on) { Place(); Refresh(); } return; }
         _on = on;
         if (!on)
         {
+            ShowPanel(-1);
             ClearHover();
             _dragSet = -1;
+            _scrubbing = false;
             _pressed = false;
             _pointer = null;
             _preview.Visibility = Visibility.Collapsed;
@@ -407,7 +529,7 @@ public sealed class ToolWheel
         _layer.Visibility = Visibility.Visible;
         // Force the next Refresh to re-announce the slots even if the set is
         // unchanged, so the top bar is always re-trimmed on the way back in.
-        _taken = new HashSet<string>(StringComparer.Ordinal) { " " };
+        _taken = new HashSet<string>(StringComparer.Ordinal) { "\u0000" };
         Place();
         Refresh();
         Drop();
@@ -468,11 +590,47 @@ public sealed class ToolWheel
         // Canvas attached properties the shipped build was setting - which parked
         // the whole wheel at (0,0) while the hit maths believed it sat at the pad.
         _wheel.Margin = new Thickness(cx - Half, cy - Half, 0, 0);
-        _shield.Margin = new Thickness(cx - RimR, cy - RimR, 0, 0);
+        // The shield is the dial's ONLY hit surface, so it has to be the size the
+        // wheel is actually PAINTED at. Touch mode scales _wheel by 1.1 and Aim()
+        // divides the pointer radius by that same factor, but the shield used to
+        // stay at its authored RimR - so in touch mode the outer 9% of every
+        // sector was drawn and could not be pressed at all.
+        double rim = RimR * _scale;
+        _shield.Width = _shield.Height = rim * 2;
+        _shield.Margin = new Thickness(cx - rim, cy - rim, 0, 0);
 
         // concentric with the dial, so the ring reads as the dial's own halo
         _preview.Margin = new Thickness(cx - PreviewBox / 2, cy - PreviewBox / 2, 0, 0);
         PlaceGrip();
+        PlacePanel();
+    }
+
+    /// <summary>Parks the slider window beside the rim, on the side away from
+    /// the dock so it never covers the wheel it is describing.</summary>
+    private void PlacePanel()
+    {
+        if (_panel.Visibility != Visibility.Visible) return;
+        const double w = 204, h = 60;
+        double x = _mirrored ? _centre.X - RimR * _scale - w - 12 : _centre.X + RimR * _scale + 12;
+        double y = _centre.Y - h / 2;
+        x = Math.Clamp(x, 8, Math.Max(8, _host.ActualWidth - w - 8));
+        y = Math.Clamp(y, 8, Math.Max(8, _host.ActualHeight - h - 8));
+        _panel.Margin = new Thickness(x, y, 0, 0);
+    }
+
+    /// <summary>Opens the slider window on a setting, or closes it with -1.</summary>
+    private void ShowPanel(int i)
+    {
+        if (i < 0 || !SetEnabled(i))
+        {
+            _panelSet = -1;
+            _panel.Visibility = Visibility.Collapsed;
+            return;
+        }
+        _panelSet = i;
+        _panel.Visibility = Visibility.Visible;
+        PlacePanel();
+        Refresh();
     }
 
     /// <summary>The ToolUiChanged subscriber: a dumb re-render of whatever the
@@ -481,7 +639,14 @@ public sealed class ToolWheel
     {
         if (!_on) return;
         var lib = _h.Library();
+        double scaleWas = _scale;
         _scale = lib.TouchMode ? 1.1 : 1.0;
+        if (Math.Abs(scaleWas - _scale) > 0.001)
+        {
+            ((ScaleTransform)_wheel.RenderTransform).ScaleX = _scale;
+            ((ScaleTransform)_wheel.RenderTransform).ScaleY = _scale;
+            Place();                      // the shield follows the painted size
+        }
         bool dark = IsDark();
         var accent = Accent();
         var ink = Ink();
@@ -510,8 +675,9 @@ public sealed class ToolWheel
 
             var fg = lit ? (ColorUtil.IsDark(accent) ? Colors.White : Color.FromArgb(255, 0x14, 0x14, 0x13)) : ink;
 
+            var seat = _hoverSlot == i ? Tint(accent, 0.85) : active ? accent : slotCol;
             _slotArt[i].Children.Clear();
-            var art = SlotArt(id, fg, active);
+            var art = SlotArt(id, fg, seat);
             if (art != null) _slotArt[i].Children.Add(art);
 
             // Pens carry their own size number on the rim; tools and commands do not.
@@ -580,6 +746,21 @@ public sealed class ToolWheel
         _colour.Stroke = new SolidColorBrush(_hoverColour ? accent : edge);
         _colour.StrokeThickness = _hoverColour ? 4 : 3;
         _grip.Fill = new SolidColorBrush(dim);
+
+        // ---- the slider window mirrors whichever setting it is showing ----
+        if (_panelSet >= 0)
+        {
+            int i = _panelSet;
+            _panel.Background = new SolidColorBrush(bodyCol);
+            _panel.BorderBrush = new SolidColorBrush(edge);
+            _panelName.Text = Loc.T("Wheel.Set." + (i == 0 ? "Size" : i == 1 ? "Opacity" : "Smoothness"));
+            _panelName.Foreground = new SolidColorBrush(ink);
+            _panelValue.Text = read[i];
+            _panelValue.Foreground = new SolidColorBrush(dim);
+            _panelSync = true;
+            try { _panelSlider.Value = Math.Clamp(frac[i] * 100, 0, 100); }
+            finally { _panelSync = false; }
+        }
 
         BuildToolOptions(ink, edge, bodyCol, accent);
         if (_dragSet >= 0) _preview.Invalidate();
@@ -691,7 +872,7 @@ public sealed class ToolWheel
             _slotArt[i] = g;
             _wheel.Children.Add(g);
 
-            var t = new TextBlock { Width = 44, FontSize = 8.5, TextAlignment = TextAlignment.Center,
+            var t = new TextBlock { Width = 44, FontSize = 8, TextAlignment = TextAlignment.Center,
                                     IsHitTestVisible = false, FontWeight = Microsoft.UI.Text.FontWeights.Bold };
             Canvas.SetLeft(t, at.X - 22);
             Canvas.SetTop(t, at.Y + (upper ? TextUpDy : TextDownDy) - 6);
@@ -699,25 +880,32 @@ public sealed class ToolWheel
             _wheel.Children.Add(t);
         }
 
-        // Setting mark + readout, laid out side by side at the web's own
-        // offsets (RadialDial.jsx: translate(112,69) / (160,150) / (62,150),
-        // 13px mark, text 16 to its right on the same line).
-        var setAt = new[] { new Point(112, 69), new Point(160, 150), new Point(62, 150) };
+        // Setting mark + readout. These used to sit at literal web coordinates
+        // (112,69)/(160,150)/(62,150) inside a 13x13 box while SetGlyph handed
+        // them a 20 DIP mark - the same undersized-host layout clip as the slot
+        // marks (V3 K.5), and coordinates that stop meaning anything the moment
+        // the dial is resized. Both now derive from the sector angle and the hub
+        // radii, so they follow the geometry: mark on the outer half of the hub,
+        // value on the inner half, both centred on the sector.
         for (int i = 0; i < 3; i++)
         {
-            var a = setAt[i];
-            var g = new Grid { Width = 13, Height = 13, IsHitTestVisible = false };
-            Canvas.SetLeft(g, a.X);
-            Canvas.SetTop(g, a.Y);
+            var (a0, a1) = SetRange(i);
+            double mid = a0 - SetSpan / 2;                 // sectors sweep clockwise
+            var ip = P(mid, SetIconR);
+            var g = new Grid { Width = SetBox, Height = SetBox, IsHitTestVisible = false };
+            Canvas.SetLeft(g, ip.X - SetBox / 2);
+            Canvas.SetTop(g, ip.Y - SetBox / 2);
             _setIcon[i] = g;
             _wheel.Children.Add(g);
 
-            var t = new TextBlock { Width = 48, FontSize = 9.5, TextAlignment = TextAlignment.Left,
+            var tp = P(mid, SetTextR);
+            var t = new TextBlock { Width = 52, FontSize = 9.5, TextAlignment = TextAlignment.Center,
                                     IsHitTestVisible = false, FontWeight = Microsoft.UI.Text.FontWeights.Bold };
-            Canvas.SetLeft(t, a.X + 16);
-            Canvas.SetTop(t, a.Y - 2);
+            Canvas.SetLeft(t, tp.X - 26);
+            Canvas.SetTop(t, tp.Y - 7);
             _setText[i] = t;
             _wheel.Children.Add(t);
+            _ = a1;
         }
 
         _colour.Width = _colour.Height = ColourR * 2;
@@ -916,15 +1104,38 @@ public sealed class ToolWheel
     private void OnPressed(object sender, PointerRoutedEventArgs e)
     {
         if (!_on) return;
+        // Someone upstream has already claimed this press. Taking a capture out
+        // from under them is what puts a stale pointer into CapturePointer in
+        // the first place, so the dial simply does not compete for it.
+        if (e.Handled) return;
         var pt = e.GetCurrentPoint(_host);
         var (z, idx, _, a) = Aim(pt.Position);
         if (z == Zone.None) return;                 // the seam at the rim: ignore, never claim
+
+        // CAPTURE FIRST, THEN ARM. CapturePointer throws ArgumentException when
+        // the pointer is already captured by another element or is no longer in
+        // contact by the time this handler runs - it is the ArgumentException
+        // repeating in the user's crash.log. The old order set _pressed and
+        // _pointer BEFORE the call, so the throw (swallowed by
+        // App.UnhandledException) left the dial ARMED on a pointer id it did not
+        // own. OnMoved, OnReleased and OnLost all early-return on an id
+        // mismatch, so every later pointer was ignored and the dial was dead for
+        // the rest of the session. Nothing is armed unless the capture lands.
+        bool got;
+        try { got = _shield.CapturePointer(e.Pointer); }
+        catch (ArgumentException) { got = false; }
+        if (!got)
+        {
+            _pressed = false;
+            _pointer = null;
+            ClearHover();
+            return;                                 // this press belongs to nobody
+        }
 
         _pointer = e.Pointer.PointerId;
         _pressed = true;
         _pressPt = pt.Position;
         _pressMs = Environment.TickCount64;
-        _shield.CapturePointer(e.Pointer);
 
         _hoverSlot = z == Zone.Slot ? idx : -1;
         _hoverSet = z == Zone.Arc ? idx : -1;
@@ -932,8 +1143,21 @@ public sealed class ToolWheel
 
         if (z == Zone.Slot && pt.Properties.IsRightButtonPressed) { Refresh(); ShowAssign(idx); e.Handled = true; return; }
         if (z == Zone.Slot) { _assignSlot = idx; _assign.Stop(); _assign.Start(); }
-        if (z == Zone.Arc && SetEnabled(idx)) { _dragSet = idx; ShowPreview(true); Scrub(idx, a); }
-        else Refresh();
+        if (z == Zone.Arc && SetEnabled(idx))
+        {
+            // A TAP OPENS THE SLIDER AND CHANGES NOTHING; a DRAG scrubs (V3 K.4
+            // asks for both). The press deliberately does NOT call Scrub here:
+            // it used to, so merely reaching for the window jumped the setting to
+            // whatever angle the finger happened to land on - tap near the start
+            // of the opacity arc and the pen went to 5% before the slider was
+            // even on screen. Scrubbing begins in OnMoved, once the pointer has
+            // travelled past TapSlop and the gesture is unambiguously a drag.
+            _dragSet = idx;
+            _scrubbing = false;
+            ShowPanel(idx);
+            ShowPreview(true);
+        }
+        else { ShowPanel(-1); Refresh(); }
         e.Handled = true;
     }
 
@@ -945,7 +1169,14 @@ public sealed class ToolWheel
         if (_pressed && _assignSlot >= 0 && Dist(p, _pressPt) > TapSlop) { _assign.Stop(); _assignSlot = -1; }
 
         var (z, idx, _, a) = Aim(p);
-        if (_dragSet >= 0) { Scrub(_dragSet, a); return; }
+        if (_dragSet >= 0)
+        {
+            // Past the slop this is a scrub, and it stays one for the rest of the
+            // gesture even if the finger wanders back toward where it started.
+            if (!_scrubbing && Dist(p, _pressPt) > TapSlop) _scrubbing = true;
+            if (_scrubbing) Scrub(_dragSet, a);
+            return;
+        }
 
         int slot = z == Zone.Slot ? idx : -1;
         int set = z == Zone.Arc ? idx : -1;
@@ -971,8 +1202,17 @@ public sealed class ToolWheel
         if (_dragSet >= 0)
         {
             // Scrubbing ends where it ends, and the preview goes with it.
+            bool scrubbed = _scrubbing;
             _dragSet = -1;
+            _scrubbing = false;
             ShowPreview(false);
+            // MAN p83's rule is "closes the instant you lift", which is right for
+            // a SCRUB. A tap is not a scrub - it is the user asking for the
+            // slider - so that one stays up until the dial is touched elsewhere.
+            // The test is "did this gesture ever scrub", not the old elapsed-time
+            // one: a deliberate press held past TapMs without moving is still a
+            // tap, and it used to close the very window it had just opened.
+            if (scrubbed) ShowPanel(-1);
             Refresh();
             return;
         }
@@ -991,7 +1231,7 @@ public sealed class ToolWheel
         if (_pointer != null && e.Pointer.PointerId != _pointer) return;
         _pressed = false;
         _pointer = null;
-        if (_dragSet >= 0) { _dragSet = -1; ShowPreview(false); }
+        if (_dragSet >= 0) { _dragSet = -1; _scrubbing = false; ShowPreview(false); }
         ClearHover();
     }
 
@@ -1041,7 +1281,14 @@ public sealed class ToolWheel
     {
         if (!SetEnabled(i)) return;
         var (a0, _) = SetRange(i);
-        double t = Math.Clamp(Norm360(a0 - a) / SetSpan, 0, 1);
+        ApplySetting(i, Math.Clamp(Norm360(a0 - a) / SetSpan, 0, 1));
+    }
+
+    /// <summary>The one setter behind both the sector scrub and the slider
+    /// window, so the two can never disagree. t is 0..1 across the setting.</summary>
+    private void ApplySetting(int i, double t)
+    {
+        if (!SetEnabled(i)) return;
         var lib = _h.Library();
         var ap = ToolPen();
         switch (i)
@@ -1201,17 +1448,27 @@ public sealed class ToolWheel
         new Flyout { Content = picker }.ShowAt(_shield, ShieldAt(RimR, RimR));
     }
 
-    // The colour disc's centre in XamlRoot coordinates, which is what
-    // ColorPickerService.Open anchors the ring to.
-    private Point DiscRootPoint()
+    /// <summary>The DIAL'S OWN CENTRE in XamlRoot coordinates. V3 K.2: the COPIC
+    /// wheel opened from the centre disc must be concentric with the dial, so
+    /// this is the point the picker is centred on, not merely a hint. The shield
+    /// is re-sized with _scale, so its own middle is the dial's middle at any
+    /// scale.</summary>
+    public Point DiscRootPoint()
     {
         try
         {
+            double rim = RimR * _scale;
             var t = _shield.TransformToVisual((UIElement?)_host.XamlRoot?.Content ?? _host);
-            return t.TransformPoint(new Point(RimR, RimR));
+            return t.TransformPoint(new Point(rim, rim));
         }
         catch { return _centre; }
     }
+
+    /// <summary>The dial's bounds in host coordinates, for the shared panel
+    /// overlap system - it asks rather than the dial hard-coding a dodge.</summary>
+    public Rect Bounds =>
+        _on ? new Rect(_centre.X - RimR * _scale, _centre.Y - RimR * _scale, RimR * _scale * 2, RimR * _scale * 2)
+            : new Rect(0, 0, 0, 0);
 
     private static FlyoutShowOptions ShieldAt(double x, double y) =>
         new() { Position = new Point(x, y), Placement = FlyoutPlacementMode.Bottom };
@@ -1312,17 +1569,48 @@ public sealed class ToolWheel
     // Art - every mark comes from Helpers/Icons, the same source the top bar
     // now binds to, so the two surfaces can never drift again (V3 A.8).
     // ===================================================================
-    private FrameworkElement? SlotArt(string id, Color fg, bool active)
+    /// <summary>The mark for one slot, sized to <see cref="MarkBox"/> so its host
+    /// Grid can never layout-clip it (V3 K.5). <paramref name="seat"/> is the
+    /// colour the sector is painted, which is what a pen's own ink has to stay
+    /// legible against.</summary>
+    private FrameworkElement? SlotArt(string id, Color fg, Color seat)
     {
         if (id.Length == 0) return null;
-        if (PenOf(id) is { } pen)
-            // The active pen shows a stroke preview instead of its chip - the
-            // dial's answer to "what will this actually lay down?".
-            return active ? StrokePreview(pen, fg) : PenChip(pen, 26);
-        if (id.StartsWith(KindTool, StringComparison.Ordinal)) return Icons.Filled(Icons.Tool(id[KindTool.Length..]), fg, 22);
-        if (id.StartsWith(KindCmd, StringComparison.Ordinal)) return CmdArt(id[KindCmd.Length..], fg, 22);
+        if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg, seat);
+        if (id.StartsWith(KindTool, StringComparison.Ordinal)) return Icons.Filled(Icons.Tool(id[KindTool.Length..]), fg, MarkBox);
+        if (id.StartsWith(KindCmd, StringComparison.Ordinal)) return CmdArt(id[KindCmd.Length..], fg, MarkBox);
         return null;
     }
+
+    /// <summary>V3 K.8: a pen slot shows THE STROKE THAT PEN LEAVES - a
+    /// hand-authored silhouette of its mark (tapered for a fountain nib, chisel
+    /// for a marker, grainy for a pencil, even and round-ended for a ballpoint),
+    /// painted in the PEN'S OWN COLOUR. Not the pen-body chip the linear row
+    /// uses, and not a live render.</summary>
+    private static FrameworkElement? PenStrokeMark(PenPreset p, Color fg, Color seat)
+    {
+        try
+        {
+            var ink = ColorUtil.Parse(p.Color);
+            // The pen's own colour is the point - but a black pen on the dark
+            // plate, or a white one on the accent-filled active sector, would be
+            // an invisible slot. Only when the contrast genuinely collapses does
+            // the mark fall back to the sector's foreground.
+            var paint = Math.Abs(Lum(ink) - Lum(seat)) < 0.14 ? fg : ink;
+            paint.A = (byte)Math.Clamp(255 * Math.Clamp(p.Opacity, 0.2f, 1f), 60, 255);
+            return new Path
+            {
+                Data = Icons.Geo(Icons.PenStroke(p.Pen)),
+                Fill = new SolidColorBrush(paint),
+                Width = MarkBox, Height = MarkBox, Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
+        catch { return null; }
+    }
+
+    private static double Lum(Color c) => (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0;
 
     // The pen slot reuses the linear row's own two-tone chip, so a pen looks
     // identical in both surfaces.
@@ -1341,35 +1629,14 @@ public sealed class ToolWheel
         catch { return null; }
     }
 
-    // A short tapered squiggle in the pen's own colour, its weight following the
-    // preset size and its alpha following the preset opacity.
-    private static FrameworkElement? StrokePreview(PenPreset p, Color fg)
-    {
-        try
-        {
-            var col = ColorUtil.Parse(p.Color);
-            // On the accent highlight a same-value pen would vanish, so fall back
-            // to the highlight's own foreground when contrast collapses.
-            var stroke = ColorUtil.IsDark(col) == ColorUtil.IsDark(fg) ? fg : col;
-            stroke.A = (byte)Math.Clamp(255 * Math.Clamp(p.Opacity, 0.08f, 1f), 20, 255);
-            return new Path
-            {
-                Data = Icons.Geo("M2 17 C6 6 10 20 14 10 C16.5 4 19 9 22 6"),
-                Stroke = new SolidColorBrush(stroke),
-                StrokeThickness = Math.Clamp(p.Size / 2.4, 1.4, 5.5),
-                StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
-                Width = 26, Height = 26, Stretch = Stretch.Uniform,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
-            };
-        }
-        catch { return null; }
-    }
-
+    // Sized from SetBox for the same reason SlotArt is sized from MarkBox: the
+    // host Grid is exactly SetBox across, and a 20 DIP mark inside a 13 DIP box
+    // is what "cut off, like erased" looked like (V3 K.5).
     private static FrameworkElement? SetGlyph(int i, Color fg) => i switch
     {
-        0 => Icons.Filled(Icons.Size, fg, 20),
-        1 => Icons.Filled(Icons.Opacity, fg, 20),
-        _ => Icons.Stroked(Icons.Smoothness, fg, 20, 1.7),
+        0 => Icons.Filled(Icons.Size, fg, SetBox),
+        1 => Icons.Filled(Icons.Opacity, fg, SetBox),
+        _ => Icons.Stroked(Icons.Smoothness, fg, SetBox, 1.9),
     };
 
     private FrameworkElement? CmdArt(string cmd, Color fg, double size) => cmd switch
