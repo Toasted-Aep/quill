@@ -273,6 +273,10 @@ public class NotePage
     public double GridSpacing { get; set; } = 32;
     // Custom gridline colour ("#RRGGBB"); null = automatic (contrast with background).
     public string? GridColor { get; set; }
+    // Grid opacity (UI-SPEC-V3 C), 0..1, applied as a MULTIPLIER over the
+    // automatic alpha InkSurface already picks - so 1 is exactly today's grid
+    // and an existing page (whose JSON has no such key) keeps today's look.
+    public double GridOpacity { get; set; } = 1;
     // Isometric / Triangle grids only: axis tilt in degrees off horizontal.
     // 30 is the isometric standard and is ignored by every other grid kind.
     public double GridAngle { get; set; } = 30;
@@ -501,6 +505,37 @@ public class Library
     public double WinW { get; set; }
     public double WinH { get; set; }
     public bool WinMaximized { get; set; } = true;
+
+    // ---- Settings > Workspace > Measurements (CONCEPTS-REF 3.1, V3 C) ------
+    // The measurement SYSTEM the panel's Units row is showing, and the unit
+    // picked inside it. MeasureUnit is the unit's abbreviation ("mm", "ft", ...)
+    // or "" for the COMBINED option (the first circle: "m/cm/mm"), which is why
+    // it is a string and not the PageSizeUnit enum - the combined option is not
+    // one of the enum's members and never can be.
+    // The page background colour behind the Custom Color swatch. Section 9.5:
+    // the first press APPLIES this, a second press (while it is already the
+    // selected colour) opens the wheel to edit it. Empty = never set, which
+    // is the one case where the first press opens the wheel.
+    public string CustomPageColor { get; set; } = "";
+    public string MeasureSystem { get; set; } = "Digital";      // Digital|Metric|Imperial
+    public string MeasureUnit { get; set; } = "";               // "" = the combined option
+    public string MeasureFormat { get; set; } = "Abbreviated";  // Full|Abbreviated
+    public string MeasurePrecision { get; set; } = "Rounded";   // Rounded|Tenths
+    public bool ShowStrokeLength { get; set; }
+    public bool ShowSelectionScale { get; set; }
+
+    // ---- Settings > Interaction (CONCEPTS-REF 3.3, V3 C) -------------------
+    // The whole keyboard layout, on or off. Defaulted TRUE so an existing
+    // library.json keeps every shortcut it has today.
+    public bool KeyboardShortcuts { get; set; } = true;
+    // What a finger does: DoNothing | UseActiveTool | PenCanvas | Select |
+    // Nudge | Slice | Zoom | Rotate. A string rather than an enum for the same
+    // reason ToolSurface is: an unrecognised value must degrade to the default
+    // rather than make the whole library undeserializable.
+    public string FingerAction { get; set; } = "UseActiveTool";
+    // Gesture bindings as "gesture=command" (the CalcConstants idiom), e.g.
+    // "TwoFingerTap=Undo". Empty = every gesture unassigned.
+    public List<string> GestureBindings { get; set; } = new();
 }
 
 // ===========================================================================
