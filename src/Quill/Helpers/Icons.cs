@@ -304,6 +304,33 @@ public static class Icons
         "M12 1.5 L14.4 9.6 L22.5 12 L14.4 14.4 L12 22.5 L9.6 14.4 L1.5 12 L9.6 9.6 Z " +
         "M19.5 2.25 L20.4 5.1 L23.25 6 L20.4 6.9 L19.5 9.75 L18.6 6.9 L15.75 6 L18.6 5.1 Z";
 
+    // ---- the value popover and the inner disc ----------------------------
+
+    /// Decrement, for the value popover's label row. Stroked: the mark IS a rule.
+    public const string Minus = "M5 12 H19";
+
+    /// Increment. Stroked, and deliberately the same rule plus its upright, so
+    /// the pair reads as one control rather than as two unrelated marks.
+    public const string Plus = "M5 12 H19 M12 5 V19";
+
+    /// The Wheel interface option (Settings > Tool Setup > Interface): a ring cut
+    /// into sectors by four separators, with the dial's centre dot inside it.
+    /// F1 so the reversed inner circle cuts the annulus rather than filling it.
+    public const string SurfaceWheel =
+        "F1 M12 1.6 A10.4 10.4 0 0 1 12 22.4 A10.4 10.4 0 0 1 12 1.6 Z " +
+        "M12 7.4 A4.6 4.6 0 0 0 12 16.6 A4.6 4.6 0 0 0 12 7.4 Z " +
+        "M11.4 2.2 H12.6 V7.0 H11.4 Z M11.4 17.0 H12.6 V21.8 H11.4 Z " +
+        "M2.2 11.4 H7.0 V12.6 H2.2 Z M17.0 11.4 H21.8 V12.6 H17.0 Z " +
+        "M12 9.6 A2.4 2.4 0 0 1 12 14.4 A2.4 2.4 0 0 1 12 9.6 Z";
+
+    /// The Bar interface option: a tall rounded panel divided into three cells,
+    /// which is exactly what section 2 describes.
+    public const string SurfaceBar =
+        "F1 M8.2 1.8 H15.8 A2.6 2.6 0 0 1 18.4 4.4 V19.6 A2.6 2.6 0 0 1 15.8 22.2 " +
+        "H8.2 A2.6 2.6 0 0 1 5.6 19.6 V4.4 A2.6 2.6 0 0 1 8.2 1.8 Z " +
+        "M8.2 3.4 A1.0 1.0 0 0 0 7.2 4.4 V19.6 A1.0 1.0 0 0 0 8.2 20.6 H15.8 " +
+        "A1.0 1.0 0 0 0 16.8 19.6 V4.4 A1.0 1.0 0 0 0 15.8 3.4 Z " +
+        "M7.2 8.6 H16.8 V9.8 H7.2 Z M7.2 14.2 H16.8 V15.4 H7.2 Z";
     // ---- factories -------------------------------------------------------
 
     /// <summary>Parses path mini-language into a Geometry. XamlReader is the only
@@ -367,6 +394,64 @@ public static class Icons
             };
         }
         catch { return null; }
+    }
+
+    /// <summary>A mark that CANNOT be clipped and CANNOT drift (UI-SPEC-V3 K.5).
+    /// 
+    /// <para>Both defects come from the same place. A <c>Path</c> sizes itself to
+    /// its GEOMETRY EXTENT, so a mark whose ink does not touch all four edges of
+    /// the 24 grid ends up a different scale from its neighbours; and
+    /// <c>Stretch.Uniform</c> fits the geometry's CENTRELINE to the box while the
+    /// pen thickness is applied afterwards, so half of a stroked mark's width
+    /// falls outside the arrange rect and the layout clips it. That is precisely
+    /// the Smoothness glyph, the one stroked mark in the dial, which was never
+    /// confirmed fixed - it is a wave spanning x 2..22 and y 7.4..17.2, so
+    /// Stretch.Uniform blew it up to the full box and then cut ~1 DIP off each
+    /// end.</para>
+    ///
+    /// <para>This factory refuses both mechanisms. There is no Stretch: the mark
+    /// is drawn at its authored 24-grid coordinates and scaled by size/24 with a
+    /// render transform, which is a paint-time operation layout never sees. The
+    /// host is a <see cref="Canvas"/> because a Canvas arranges a child at its
+    /// own desired size and never imposes a layout clip, unlike the Grid the
+    /// shipped marks sat in. A stroke that leaves the grid therefore overflows
+    /// harmlessly instead of being erased, and every mark keeps the weight and
+    /// the position the 24 grid gave it.</para></summary>
+    public static FrameworkElement Mark(string data, Color colour, double size,
+                                        bool stroked = false, double thickness = 2, bool mirror = false)
+    {
+        var host = new Canvas { Width = size, Height = size, IsHitTestVisible = false };
+        try
+        {
+            var p = new Shape { Data = Geo(data), Stretch = Stretch.None };
+            if (stroked)
+            {
+                p.Stroke = new SolidColorBrush(colour);
+                // Authored thickness is in GRID units, so it scales with the mark.
+                p.StrokeThickness = thickness;
+                p.StrokeStartLineCap = PenLineCap.Round;
+                p.StrokeEndLineCap = PenLineCap.Round;
+                p.StrokeLineJoin = PenLineJoin.Round;
+            }
+            else p.Fill = new SolidColorBrush(colour);
+
+            double k = size / 24.0;
+            var tg = new TransformGroup();
+            // Mirror about the grid's own centre line FIRST, so redo lands exactly
+            // where undo does rather than off to the left by 24 units.
+            if (mirror)
+            {
+                tg.Children.Add(new ScaleTransform { ScaleX = -1 });
+                tg.Children.Add(new TranslateTransform { X = 24 });
+            }
+            tg.Children.Add(new ScaleTransform { ScaleX = k, ScaleY = k });
+            p.RenderTransform = tg;
+            Canvas.SetLeft(p, 0);
+            Canvas.SetTop(p, 0);
+            host.Children.Add(p);
+        }
+        catch { }
+        return host;
     }
 
     /// <summary>Pushes the canonical marks into the top bar's PathIcons at
