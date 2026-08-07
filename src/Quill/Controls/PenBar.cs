@@ -58,7 +58,7 @@ public sealed class PenBar
     // §2.1 the attached settings popover.
     private const double SetW = 96;
     private const double SetRadius = 14;
-    private const double SetGlyph = 20;
+    private const double SetGlyph = 24;   // see ToolWheel.SetBox: marks are no longer stretched
     private const double DotSize = 34;          // §2.1 "the colour dot (filled, ~34 DIP)"
 
     private const double SatSize = 30;          // undo, same treatment as §1.6

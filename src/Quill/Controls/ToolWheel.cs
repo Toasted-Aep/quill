@@ -108,7 +108,11 @@ public sealed class ToolWheel
     private const double Row1Y = -0.45 * DiscR;    // size glyph + readout
     private const double ColX = 0.61 * DiscR;      // smoothness left / opacity right
     private const double Row3Y = 0.42 * DiscR;     // the two values
-    private const double SetBox = 17;              // the three property glyphs
+    // Icons.Mark draws at the authored 24-grid scale instead of stretching the
+    // geometry to the box - that stretch WAS the K.5 defect - so a mark that
+    // does not fill its grid now comes out at its true size. The boxes grow to
+    // compensate, rather than the marks being re-authored to touch the edges.
+    private const double SetBox = 20;              // the three property glyphs
 
     // §1.5 colour arcs on the disc rim.
     private const double ArcStroke = 0.035 * R;    // 3.4
@@ -664,7 +668,13 @@ public sealed class ToolWheel
 
         _shadow.Fill = ShadowBrush();
         _disc.Fill = new SolidColorBrush(surface);
-        _ringEdge.Stroke = new SolidColorBrush(PageTheme.WithAlpha(onSurface, (byte)(0.40 * 36)));
+        // §1.1 calls this "Outline at 40%". Read literally that is 0.14 x 0.40 =
+        // 5.6% of OnSurface, which is not a hairline - it is nothing, and on a
+        // dark ground where §7 takes the ring's fill away it is the only thing
+        // left holding the outer edge. Read as "the outline token's colour at
+        // 40%" it is a hairline you can actually see, which is what the
+        // reference shows, so that is the reading taken.
+        _ringEdge.Stroke = new SolidColorBrush(PageTheme.WithAlpha(onSurface, 92));
         _ringEdge.Fill = null;
 
         var ids = ResolveSlots();
