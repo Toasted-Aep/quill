@@ -169,3 +169,20 @@ mark shaped like that pen's stroke, in the pen's colour), not a live render.
 24. **App theme selection as coloured circles.**
 25. Textured page backgrounds **more realistic**.
 26. **Tilt** is still unimplemented (canvas rotation).
+
+### L. Objects library panel (2026-08-07)
+
+Opens on the **LEFT** side, in the same family as the old floating resizable
+"iPad-like" settings/export window (drag bar top-centre, close upper-left,
+info upper-right, resize grips).
+
+Layout, per the Concepts reference (`Objects - Concepts Manual-1.pdf`, 111pp,
+and the user's screenshot):
+- A tab row: **Favorites · My Packs · Object Market · Pexels** (plus a close X
+  at its left).
+- A **search** field beneath the tabs.
+- Then **categories**, each a titled row — e.g. "Basic Shapes", "Background
+  People", "iOS Icons", "Hand Drawn Icons Vol 1" — with a star (favourite) and
+  a check (installed/enabled) at the right of each title.
+- **Beneath each category title, the shape visuals themselves** in a
+  horizontally-scrolling strip on a subtly tinted band.
