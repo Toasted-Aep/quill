@@ -217,6 +217,16 @@ public sealed class ToolWheel
     }
     private double _topInset;
 
+    // §1.8. The COPIC wheel opens CENTRED ON THE DIAL'S CENTRE, and its hole is
+    // 570 DIP across - far wider than 1.25 R - so the dial genuinely sits inside
+    // it. But the dial is corner-docked, and a ring centred on a corner is three
+    // quarters off screen, which is exactly the "only about a quarter of the ring
+    // is visible" the user reported. Both halves of §1.8 are only true at once if
+    // the CENTRE THEY SHARE is somewhere the whole ring fits, so for as long as
+    // the picker is up the dial takes the middle of the viewport and the wheel
+    // follows it there. It goes home when the picker closes.
+    private bool _focus;
+
     private readonly Grid _host;
     private readonly InkSurface _surface;
     private readonly Host _h;
@@ -554,6 +564,19 @@ public sealed class ToolWheel
         catch { }
     }
 
+    /// <summary>Puts the dial in the middle of the viewport, or back on its
+    /// dock. §1.8 - see the field's own note for why the COPIC wheel needs
+    /// this. Idempotent, and the re-seat replays the gravity drop so the move
+    /// reads as deliberate rather than as a jump.</summary>
+    public void FocusCentre(bool on)
+    {
+        if (_focus == on) return;
+        _focus = on;
+        if (!_on) return;
+        Place();
+        Drop();
+    }
+
     /// <summary>Top-left dock, mirrored to the top-right when the user keeps
     /// their tools on the right, so the wheel sits under the drawing hand.</summary>
     private void Place()
@@ -566,6 +589,7 @@ public sealed class ToolWheel
         double half = Half * _scale;
         double cx = _mirrored ? Math.Max(half, w - half - pad) : half + pad;
         double cy = Math.Min(half + pad + _topInset, Math.Max(half, h - half));
+        if (_focus) { cx = w / 2; cy = h / 2; }
         _centre = new Point(cx, cy);
 
         // Margin, not Canvas.Left: this layer is a GRID, and a Grid ignores the
@@ -1615,7 +1639,15 @@ public sealed class ToolWheel
             _h.ApplyPreset(ap);
             _h.Save();
         }
-        if (ColourPickerHook != null) { ColourPickerHook(DiscRootPoint(), start, Apply, Refresh); return; }
+        if (ColourPickerHook != null)
+        {
+            // Take the middle FIRST, so DiscRootPoint reports where the dial is
+            // about to be rather than where it was - the wheel is mounted on that
+            // point once and does not follow it afterwards.
+            FocusCentre(true);
+            ColourPickerHook(DiscRootPoint(), start, Apply, () => { FocusCentre(false); Refresh(); });
+            return;
+        }
 
         var picker = new ColorPicker { Color = start, IsAlphaEnabled = false, IsMoreButtonVisible = true,
                                        IsColorSliderVisible = true, IsHexInputVisible = true, Width = 288 };
@@ -1624,15 +1656,20 @@ public sealed class ToolWheel
     }
 
     /// <summary>The dial's own centre in XamlRoot coordinates - §1.8's mount
-    /// point for the COPIC wheel, not a hint. The shield is re-sized with the
-    /// scale, so its middle is the dial's middle at any scale.</summary>
+    /// point for the COPIC wheel, not a hint.
+    ///
+    /// <para>Derived from <c>_centre</c> and the HOST's transform rather than
+    /// from the shield's. The shield's own transform is only correct after a
+    /// layout pass, and this is called immediately after
+    /// <see cref="FocusCentre"/> has moved the dial - at which point the new
+    /// margin is set but not yet arranged, so asking the shield would mount the
+    /// colour wheel on the dial's OLD position.</para></summary>
     public Point DiscRootPoint()
     {
         try
         {
-            double rim = PopOut * _scale;
-            var t = _shield.TransformToVisual((UIElement?)_host.XamlRoot?.Content ?? _host);
-            return t.TransformPoint(new Point(rim, rim));
+            var t = _host.TransformToVisual((UIElement?)_host.XamlRoot?.Content ?? _host);
+            return t.TransformPoint(_centre);
         }
         catch { return _centre; }
     }
