@@ -44,6 +44,10 @@ public sealed partial class MainWindow : Window
     // funnel calls, the visibility gate and the Settings toggle are its whole
     // footprint in this file.
     private ToolWheel? _toolWheel;
+    // The section 2 "Bar" palette - the OTHER tool surface. Exactly one of the
+    // two is ever on screen; ToolSurfaceService decides which, and each control
+    // filters its own visibility on it.
+    private PenBar? _penBar;
 
     /// <summary>The radial dial, exposed for the shared panel-overlap system
     /// (V3 K.6 / K.21) - null until startup wiring has run. The dial is a
@@ -489,6 +493,12 @@ public sealed partial class MainWindow : Window
         BuildTree();
         BuildPenStrip();
         Icons.BindTopBar(IconToolPen, IconToolText, IconToolSelect, IconToolSpace, IconUndo, IconRedo);
+        // Which tool palette is on screen. Configured BEFORE either surface is
+        // attached, so the first Apply() on each already knows the answer and
+        // neither one flashes up before being told it is not the current one.
+        ToolSurfaceService.Configure(
+            () => _library.ToolSurface,
+            v => { _library.ToolSurface = v; ScheduleSave(); });
         _toolWheel = ToolWheel.Attach(CanvasArea, Surface, new ToolWheel.Host
         {
             Library = () => _library,
@@ -524,6 +534,34 @@ public sealed partial class MainWindow : Window
         foreach (var veto in new FrameworkElement[] { GalleryPanel, NotebookPanel })
             veto.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) => _toolWheel?.Apply());
         _toolWheel.SlotsChanged += t => { _dialTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
+
+        // ---- the section 2 pen bar, the dial's alternative -----------------
+        _penBar = PenBar.Attach(CanvasArea, Surface, new PenBar.Host
+        {
+            Library = () => _library,
+            ActivePreset = () => _activePresetId,
+            ToolTag = () => _toolTag,
+            ApplyPreset = ApplyPreset,
+            SelectTool = SelectTool,
+            ReduceMotion = () => _reduceMotion,
+            Save = ScheduleSave,
+        });
+        ToolUiChanged += _penBar.Refresh;
+        // V3 K.9: with the dial off, the ring is centred in the VIEWPORT rather
+        // than on the bar. The bar is docked against an edge, and a ring mounted
+        // on an edge-docked control is three quarters off screen - the dial can
+        // step into the middle to host it (section 1.8) because it is one round
+        // object, but a full-height bar cannot.
+        _penBar.ColourPickerHook =
+            (pt, current, changed, closed) => ColorPickerService.Open(pt, current, changed, closed);
+        // K.1 and K.6 apply to BOTH surfaces: a veto that only covered the dial
+        // would simply move the defect to the other palette.
+        _penBar.IsBlocked = () =>
+            GalleryPanel.Visibility == Visibility.Visible ||
+            NotebookPanel.Visibility == Visibility.Visible;
+        foreach (var veto in new FrameworkElement[] { GalleryPanel, NotebookPanel })
+            veto.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) => _penBar?.Apply());
+        _penBar.OwnedKeysChanged += t => { _dialTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
         // The rest of the top bar's marking commands become assignable slots.
         // What moved and what deliberately did not is argued in DialCommands.cs.
         // Wrapped: startup is the ONE place an exception costs the whole app -
@@ -602,6 +640,7 @@ public sealed partial class MainWindow : Window
         _chromeBars.Layout.Register("penrow", PenRow);
         _chromeBars.Layout.Register("calc", CalcPanel);
         _chromeBars.Layout.RegisterByAutomationId("dial", CanvasArea, "ToolWheel");
+        _chromeBars.Layout.RegisterByAutomationId("penbar", CanvasArea, "PenBar");
     }
 
     private void LogStartupFault(string what, Exception? ex)
@@ -6334,12 +6373,18 @@ public sealed partial class MainWindow : Window
         // on screen (#14-batch4); the floating pen in minimal UI stays manual
         bool penMode = _toolTag is "Pen" or "Eraser";
         if (!penMode && !_uiHidden) { showRow = false; showChip = false; }
-        // the radial dial IS the tool surface when it is on, so the linear row
-        // and its reopen chip stand down entirely (#radial)
+        // Either Concepts surface IS the tool surface when it is on, so the
+        // legacy linear row and its reopen chip stand down entirely.
         if (_library.RadialToolDial) { showRow = false; showChip = false; }
-        bool dialOn = _library.RadialToolDial && (!_uiHidden || _floatPen);
-        _toolWheel?.SetVisible(dialOn);
-        _chromeBars?.SetVisible(dialOn);   // the two floating bars ARE the dial's chrome (V3 I)
+        // ONE request, TWO surfaces. Each of them filters this on
+        // ToolSurfaceService inside its own Wanted, so exactly one can come up -
+        // there is no way for this call site to show both or neither by getting
+        // the condition wrong, which is the whole reason the choice lives in a
+        // service rather than in an if here.
+        bool surfaceOn = _library.RadialToolDial && (!_uiHidden || _floatPen);
+        _toolWheel?.SetVisible(surfaceOn);
+        _penBar?.SetVisible(surfaceOn);
+        _chromeBars?.SetVisible(surfaceOn);   // the floating bars are chrome for both (V3 I)
         // slide in from the bottom edge the dock lives on, like the other bars
         if (showRow) FadeIn(PenRow, slideY: 24); else FadeOut(PenRow);
         if (showChip) FadeIn(PenRowShowBtn); else FadeOut(PenRowShowBtn);
