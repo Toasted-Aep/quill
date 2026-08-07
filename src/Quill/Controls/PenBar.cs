@@ -83,6 +83,25 @@ public sealed class PenBar
         public required Action Save { get; init; }
     }
 
+    /// <summary>Commands that occupy a cell alongside the pens and the tool
+    /// kinds. Reference 9.7 makes dictation and recording selectable tools, and
+    /// they have to be reachable from BOTH surfaces - so the bar renders the same
+    /// list the dial does rather than declaring a second one.</summary>
+    public IReadOnlyList<ToolWheel.ExtraCommand> ExtraCommands
+    {
+        get => _extras;
+        set { _extras = value ?? Array.Empty<ToolWheel.ExtraCommand>(); if (_on) Refresh(); }
+    }
+    private IReadOnlyList<ToolWheel.ExtraCommand> _extras = Array.Empty<ToolWheel.ExtraCommand>();
+
+    private ToolWheel.ExtraCommand? Extra(string id)
+    {
+        if (!id.StartsWith("cmd:", StringComparison.Ordinal)) return null;
+        var key = id[4..];
+        foreach (var x in _extras) if (string.Equals(x.Id, key, StringComparison.Ordinal)) return x;
+        return null;
+    }
+
     /// <summary>The COPIC wheel, wired exactly as the dial's is.</summary>
     public Action<Point, Color, Action<Color>, Action?>? ColourPickerHook { get; set; }
 
@@ -596,6 +615,7 @@ public sealed class PenBar
         yield return "tool:Eraser";
         yield return "tool:Select";
         yield return "tool:Text";
+        foreach (var x in _extras) yield return "cmd:" + x.Id;
     }
 
     private PenPreset? PenOf(string id)
@@ -608,13 +628,16 @@ public sealed class PenBar
     private bool IsActive(string id)
     {
         if (PenOf(id) is { } pen) return _h.ToolTag() == "Pen" && _h.ActivePreset() == pen.Id;
+        if (Extra(id) is { } cmd) return cmd.IsActive?.Invoke() ?? false;
         if (id.StartsWith("tool:", StringComparison.Ordinal)) return _h.ToolTag() == id[5..];
         return false;
     }
 
-    private static string? TopBarKey(string id)
+    private string? TopBarKey(string id)
     {
         if (id.StartsWith("pen:", StringComparison.Ordinal)) return "ToolPen";
+        if (Extra(id) is { } cmd) return cmd.TopBarKey;
+        if (!id.StartsWith("tool:", StringComparison.Ordinal)) return null;
         return id[5..] switch
         {
             "Text" => "ToolText",
@@ -638,6 +661,8 @@ public sealed class PenBar
                 paint.A = (byte)Math.Clamp(255 * Math.Clamp(pen.Opacity, 0.2f, 1f), 60, 255);
                 return Icons.Mark(Icons.PenStroke(pen.Pen), paint, MarkBox);
             }
+            if (Extra(id) is { } cmd)
+                return Icons.Mark(cmd.Icon, fg, MarkBox, stroked: cmd.Stroked, thickness: 2.2);
             return Icons.Mark(Icons.Tool(id[5..]), fg, MarkBox);
         }
         catch { return null; }
@@ -648,6 +673,13 @@ public sealed class PenBar
     private void Commit(string id)
     {
         if (PenOf(id) is { } pen) { _h.ApplyPreset(pen); return; }
+        if (Extra(id) is { } cmd)
+        {
+            if (cmd.IsAvailable?.Invoke() == false) return;
+            cmd.Run?.Invoke();
+            Refresh();
+            return;
+        }
         if (id.StartsWith("tool:", StringComparison.Ordinal)) _h.SelectTool(id[5..]);
     }
 
