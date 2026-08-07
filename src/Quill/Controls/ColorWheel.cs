@@ -217,8 +217,13 @@ public sealed class ColorWheel : UserControl
                                         // grey does not lose its hue mid-drag
     private float _rot = 100f * Deg;    // ring rotation, radians (reference default)
     private float _vel;                 // rad/s, for the inertia glide
-    private float _snapTo;              // settle target once the glide is done
-    private bool _snapping;
+    // §9.4.2: the ring used to ease onto the nearest column boundary once the
+    // glide had decayed. The user asked for that to go - "when spinning the
+    // copic colour wheel it snaps to a set position, remove snapping" - so a
+    // spin now stops where it stops. Nothing downstream wanted the detent: the
+    // hit test resolves a cell from the live angle rather than from a column
+    // index, so a ring resting mid-column answers exactly as well as an aligned
+    // one, and the codes are drawn from the same angle either way.
     private bool _sampling;             // eyedropper armed
 
     // drag bookkeeping
@@ -269,6 +274,23 @@ public sealed class ColorWheel : UserControl
     // Cached tile geometry: one 10° cell per outer ring band (reused across all
     // 36 columns by rotation), plus one cell each for the two inner tiers.
     private readonly CanvasGeometry?[] _outerGeo = new CanvasGeometry?[MaxRings];
+    // 9.4.1. The selection outline is NOT the cell geometry. Cell tiles are
+    // WELDED - grown half a pixel outward and clockwise - so neighbouring fills
+    // leave no seam between swatches. A centred stroke on a welded tile lands
+    // half its width OUTSIDE the true cell on the two grown edges and on the
+    // true boundary on the other two, which is exactly the user's crop of BG90:
+    // doubled along the shared edges, single along the outer ones. Worse, the
+    // stroke was drawn inline, so the next cell's fill painted over part of it
+    // and the survivor read as a second, offset line.
+    //
+    // The outline therefore has its own UNWELDED tile, inset by half the stroke
+    // width so the pen lies strictly inside the cell, and it is drawn in a
+    // second pass after every fill so nothing can cover it. Codes are unique
+    // across the palette, so there is at most one of these per frame.
+    private readonly CanvasGeometry?[] _outerSelGeo = new CanvasGeometry?[MaxRings];
+    private CanvasGeometry? _tier1Sel, _tier2Sel;
+    private (CanvasGeometry Geo, Matrix3x2 T, Color C, float A)? _sel;
+    private const float SelStroke = 2.5f;
     private CanvasGeometry? _tier1Geo, _tier2Geo;
     private bool _geoDirty = true;
 
@@ -385,8 +407,12 @@ public sealed class ColorWheel : UserControl
     private void DisposeGeometry()
     {
         for (int i = 0; i < _outerGeo.Length; i++) { _outerGeo[i]?.Dispose(); _outerGeo[i] = null; }
+        for (int i = 0; i < _outerSelGeo.Length; i++) { _outerSelGeo[i]?.Dispose(); _outerSelGeo[i] = null; }
         _tier1Geo?.Dispose(); _tier1Geo = null;
         _tier2Geo?.Dispose(); _tier2Geo = null;
+        _tier1Sel?.Dispose(); _tier1Sel = null;
+        _tier2Sel?.Dispose(); _tier2Sel = null;
+        _sel = null;
     }
 
     // =======================================================================
@@ -439,12 +465,15 @@ public sealed class ColorWheel : UserControl
         _chipR = Math.Clamp(hole * 0.045f, 5f, 12f);
         _rMix = hole * 0.54f;
         _rLabel = hole * 0.74f;
-        // The HSL / RGB face is three arcs rather than a ring, and there is
-        // nothing to spin, so it stays fitted to the viewport as it always was.
-        float fit = Math.Max(150f, Math.Min(w, h) * 0.5f - EdgeMargin);
-        _arcR[0] = fit * 0.42f;
-        _arcR[1] = fit * 0.58f;
-        _arcR[2] = fit * 0.74f;
+        // 9.4.3: the HSL and RGB faces used to be fitted to the VIEWPORT
+        // (0.42 / 0.58 / 0.74 of half the window), which put them far inside the
+        // COPIC face - switching mode collapsed the control toward the middle
+        // and the three arcs read as a different, smaller instrument. They now
+        // take the COPIC face's own bands: Tier 1, Tier 2 and the first column
+        // ring. One control, one radius, whichever face is up.
+        _arcR[0] = (_r1In + _r1Out) * 0.5f;
+        _arcR[1] = (_r2In + _r2Out) * 0.5f;
+        _arcR[2] = _rOutBase + _band * 0.5f;
 
         // Which way the hub's chrome faces. Centred in the viewport that is the
         // direction of the thing that opened the picker; centred ON that thing
@@ -601,6 +630,33 @@ public sealed class ColorWheel : UserControl
         return _tier2Geo = ArcTile(rc, _r2In, _r2Out, 0f, Tier2Width + Weld / MathF.Max(_r2In, 1f));
     }
 
+    // The three selection tiles: no weld, and inset by half the pen so the
+    // stroke cannot reach a neighbour's territory (9.4.1).
+    private const float SelInset = SelStroke * 0.5f + 0.25f;
+
+    private CanvasGeometry OuterSel(ICanvasResourceCreator rc, int ring)
+    {
+        if (_outerSelGeo[ring] is { } cached) return cached;
+        float r0 = _rOutBase + ring * _band;
+        float da = SelInset / MathF.Max(r0, 1f);
+        return _outerSelGeo[ring] =
+            ArcTile(rc, r0 + SelInset, r0 + _band - SelInset, da, ColStep - da);
+    }
+
+    private CanvasGeometry Tier1Sel(ICanvasResourceCreator rc)
+    {
+        if (_tier1Sel is { } cached) return cached;
+        float da = SelInset / MathF.Max(_r1In, 1f);
+        return _tier1Sel = ArcTile(rc, _r1In + SelInset, _r1Out - SelInset, da, Tier1Width - da);
+    }
+
+    private CanvasGeometry Tier2Sel(ICanvasResourceCreator rc)
+    {
+        if (_tier2Sel is { } cached) return cached;
+        float da = SelInset / MathF.Max(_r2In, 1f);
+        return _tier2Sel = ArcTile(rc, _r2In + SelInset, _r2Out - SelInset, da, Tier2Width - da);
+    }
+
     // =======================================================================
     // Drawing
     // =======================================================================
@@ -661,9 +717,10 @@ public sealed class ColorWheel : UserControl
         // Tier 1 (inner arc) then Tier 2 (grey ring): disjoint bands, uniform
         // cell width, so one cached geometry rotated to each cell's A0 does it.
         // Each tier carries its own slot in the entrance cascade.
-        DrawInnerTier(ds, view, Tier1Cells, Tier1Cell(rc), _r1In, (_r1In + _r1Out) * 0.5f,
+        _sel = null;
+        DrawInnerTier(ds, view, Tier1Cells, Tier1Cell(rc), Tier1Sel(rc), _r1In, (_r1In + _r1Out) * 0.5f,
             near, labels, TierProgress(Tier1OpenDelay, Tier1CloseDelay));
-        DrawInnerTier(ds, view, Tier2Cells, Tier2Cell(rc), _r2In, (_r2In + _r2Out) * 0.5f,
+        DrawInnerTier(ds, view, Tier2Cells, Tier2Cell(rc), Tier2Sel(rc), _r2In, (_r2In + _r2Out) * 0.5f,
             near, labels, TierProgress(Tier2OpenDelay, Tier2CloseDelay));
 
         // Tier 3+ (outer family columns): 36 fixed 10° columns, each a radial
@@ -692,20 +749,29 @@ public sealed class ColorWheel : UserControl
                 ds.Transform = rotate;
                 ds.FillGeometry(OuterCell(rc, ring), Fade(col32, p));
                 if (sw.Code == near.Code)
-                    ds.DrawGeometry(OuterCell(rc, ring),
-                        Fade(IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), p), 3f);
+                    _sel = (OuterSel(rc, ring), rotate,
+                            IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), p);
                 ds.Transform = grow;
 
                 if (labels) DrawCode(ds, sw.Code, _rOutBase + (ring + 0.5f) * _band, midA, col32, p);
                 ds.Transform = Matrix3x2.Identity;
             }
         }
+
+        // 9.4.1: the one selection outline, last, so no later fill covers it.
+        if (_sel is { } hit)
+        {
+            ds.Transform = hit.T;
+            ds.DrawGeometry(hit.Geo, Fade(hit.C, hit.A), SelStroke);
+            ds.Transform = Matrix3x2.Identity;
+        }
     }
 
     // Draws one inner tier: fill each cell by rotating the shared geometry to
     // the cell's start angle, outline the nearest swatch, and label it.
     private void DrawInnerTier(CanvasDrawingSession ds, View view,
-        Cell[] cells, CanvasGeometry geo, float rIn, float rMid, CopicSwatch near, bool labels, float p)
+        Cell[] cells, CanvasGeometry geo, CanvasGeometry sel, float rIn, float rMid,
+        CopicSwatch near, bool labels, float p)
     {
         if (p <= 0.002f) return;
         var grow = TierTransform(p);
@@ -717,11 +783,11 @@ public sealed class ColorWheel : UserControl
             if (!WedgeVisible(n0, n0 + (cell.A1 - cell.A0), rIn, p, view)) continue;
 
             var col32 = Color.FromArgb(255, cell.Sw.R, cell.Sw.G, cell.Sw.B);
-            ds.Transform = Matrix3x2.CreateRotation(a0, _c) * grow;
+            var tile = Matrix3x2.CreateRotation(a0, _c) * grow;
+            ds.Transform = tile;
             ds.FillGeometry(geo, Fade(col32, p));
             if (cell.Sw.Code == near.Code)
-                ds.DrawGeometry(geo,
-                    Fade(IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), p), 2.5f);
+                _sel = (sel, tile, IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), p);
             ds.Transform = grow;
 
             if (labels) DrawCode(ds, cell.Sw.Code, rMid, mid, col32, p);
@@ -1027,7 +1093,6 @@ public sealed class ColorWheel : UserControl
             if (r >= _rIn && r <= _rOut)
             {
                 _spin.Stop();
-                _snapping = false;
                 _vel = 0;
                 _dragRing = true;
                 _dragPointer = e.Pointer.PointerId;
@@ -1116,8 +1181,10 @@ public sealed class ColorWheel : UserControl
             PickAt(p);
             return;
         }
+        // A flick glides; a slow release just stops. Neither settles onto a
+        // column boundary any more (§9.4.2).
         if (Math.Abs(_vel) > StopVel) { _spinTs = Stopwatch.GetTimestamp(); _spin.Start(); }
-        else BeginSnap();
+        else { _vel = 0; _spin.Stop(); }
     }
 
     private void EndDrag()
@@ -1194,8 +1261,7 @@ public sealed class ColorWheel : UserControl
         return null;
     }
 
-    // The glide: exponential falloff, then a short ease onto the nearest column
-    // boundary so the ring always comes to rest square rather than mid-swatch.
+    // The glide: exponential falloff, and nothing after it (§9.4.2).
     private void OnSpinTick(object? sender, object e)
     {
         // A DispatcherTimer is not a frame clock — it drops ticks under load —
@@ -1207,27 +1273,10 @@ public sealed class ColorWheel : UserControl
         float dt = Math.Clamp((float)((now - _spinTs) / (double)Stopwatch.Frequency), 0.001f, 0.05f);
         _spinTs = now;
 
-        if (_snapping)
-        {
-            float d = Norm(_snapTo - _rot);
-            if (Math.Abs(d) < 0.0015f) { _rot = Norm(_snapTo); _snapping = false; _spin.Stop(); }
-            else _rot = Norm(_rot + d * (1f - MathF.Pow(0.72f, dt * 60f)));
-            _canvas.Invalidate();
-            return;
-        }
-
         _rot = Norm(_rot + _vel * dt);
         _vel *= MathF.Pow(Decay, dt * 60f);
-        if (Math.Abs(_vel) < StopVel) BeginSnap();
+        if (Math.Abs(_vel) < StopVel) { _vel = 0; _spin.Stop(); }
         _canvas.Invalidate();
-    }
-
-    private void BeginSnap()
-    {
-        _vel = 0;
-        _snapping = true;
-        _snapTo = MathF.Round(_rot / ColStep) * ColStep;
-        if (!_spin.IsEnabled) { _spinTs = Stopwatch.GetTimestamp(); _spin.Start(); }
     }
 
     /// The host feeds an eyedropper result back in. Null (nothing under the
