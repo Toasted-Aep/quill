@@ -152,7 +152,7 @@ public static class PaperGrain
     /// the papers are now "too noticeable". This dial is the correction, and it
     /// is the right knob to turn again if they are still not happy - the floors
     /// in tools/PaperProof scale with it.</summary>
-    public const float GrainScale = 0.6f;
+    public const float GrainScale = 0.2f;
 
     private static void Compose(byte[] bgra, float[] dr, float[] dg, float[] db,
                                 byte gr, byte gg, byte gb)
