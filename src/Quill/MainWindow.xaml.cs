@@ -2596,7 +2596,10 @@ public sealed partial class MainWindow : Window
                 rowPanel.Children.Add(new TextBlock { Text = penNames[ti], VerticalAlignment = VerticalAlignment.Center });
                 typeCombo.Items.Add(new ComboBoxItem { Content = rowPanel });
             }
-            typeCombo.SelectedIndex = (int)p.Pen;
+            // Clamp: a saved pen can carry a PenType ordinal this build no longer has
+            // (the user's own settings hold Pen=18 against a 14-member enum), and an
+            // out-of-range SelectedIndex throws straight out of a ComboBox setter.
+            typeCombo.SelectedIndex = System.Math.Clamp((int)p.Pen, 0, penNames.Length - 1);
             typeCombo.SelectionChanged += (_, _) =>
             {
                 if (typeCombo.SelectedIndex < 0) return;
