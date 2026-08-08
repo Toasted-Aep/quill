@@ -3398,6 +3398,7 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         }
 
+        EndContrastSession();   // a new page is never a continuation of the last one's edit
         Surface.LoadPage(page);
         // §paper-theme: the page that is now active carries its own ground and
         // the whole shell derives from it. Immediate - a page must never appear
@@ -6177,8 +6178,13 @@ public sealed partial class MainWindow : Window
     private void BgCustom_Click(object sender, RoutedEventArgs e)
     {
         if (_curPage == null) return;
+        // One drag of the picker is ONE edit session: the contrast baseline is
+        // taken on the first callback and held until the picker closes, so the
+        // sixty callbacks in between cannot compound.
+        EndContrastSession();
         OpenColorPicker(BgCustomBtn, ColorUtil.Parse(_curPage.Background),
-            c => SetPageBackground(ColorUtil.ToHex(c)));
+            c => SetPageBackground(ColorUtil.ToHex(c)),
+            EndContrastSession);
     }
 
     // Applies a page background and, when the page flips between light and dark,
@@ -6186,18 +6192,62 @@ public sealed partial class MainWindow : Window
     private void SetPageBackground(string hex)
     {
         if (_curPage == null) return;
-        bool wasDark = ColorUtil.IsDark(ColorUtil.Parse(_curPage.Background));
-        bool nowDark = ColorUtil.IsDark(ColorUtil.Parse(hex));
         _curPage.Background = hex;
-        if (wasDark != nowDark && _curPage.Texts.Count > 0)
-        {
-            FlipTextContrast(_curPage, nowDark);
-            Surface.FlushTexts();
-            Surface.RebuildTextLayer();
-        }
+        ApplyTextContrast();
         Surface.Refresh();
         SyncThemeToPage();   // §paper-theme: a dark page can now darken the whole app
         ScheduleSave();
+    }
+
+    // ---- the contrast flip, made non-destructive --------------------------
+    //
+    // The flip used to run STRAIGHT ON THE STORED RTF, and the colour picker
+    // calls back on every drag frame. Dragging a background across the
+    // light/dark threshold therefore rewrote every text box repeatedly, and it
+    // was lossy each time: a deliberate #303030 became ivory on the way into
+    // dark and #141413 on the way back out, so the colour the user chose was
+    // gone after one wobble of the picker, with nothing to undo.
+    //
+    // Now every flip is computed from a BASELINE captured when the edit session
+    // opened, not from whatever the last frame left behind. That makes the
+    // operation idempotent and exactly reversible: drag into dark and back out
+    // and the text is byte-for-byte what it started as, #303030 included.
+    //
+    // What this deliberately does NOT do is derive the display colour at render
+    // time. Text boxes are real RichEditBoxes and the RTF in the model is what
+    // the control is loaded from and saved back to, so an "automatic" colour
+    // would have to be threaded through every SetText/GetText round trip in
+    // InkSurface. That is the right end state and it is a separate change.
+    private Dictionary<Guid, string>? _contrastBaseline;
+
+    /// <summary>Drops the baseline, so the NEXT background change starts a new
+    /// edit session from the text as it stands now. Called when the page changes
+    /// under us and when the background picker closes - anything later is a
+    /// fresh user action and must not be undone by an older snapshot.</summary>
+    private void EndContrastSession() => _contrastBaseline = null;
+
+    private void ApplyTextContrast()
+    {
+        if (_curPage == null || _curPage.Texts.Count == 0) return;
+        // The live RichEditBox is the truth for whichever box is open, so pull
+        // it into the model BEFORE snapshotting or comparing. The old order
+        // flipped the model and then flushed the editor over the top, which
+        // silently discarded the flip for the box being edited.
+        try { Surface.FlushTexts(); } catch { }
+
+        _contrastBaseline ??= _curPage.Texts.ToDictionary(t => t.Id, t => t.Rtf ?? "");
+
+        bool nowDark = PageTheme.Luminance(PaperGround(_curPage)) < 0.5;
+        bool moved = false;
+        foreach (var t in _curPage.Texts)
+        {
+            if (!_contrastBaseline.TryGetValue(t.Id, out var original)) continue;   // added mid-session
+            var next = FlipTextContrast(original, nowDark);
+            if (next == t.Rtf) continue;
+            t.Rtf = next;
+            moved = true;
+        }
+        if (moved) Surface.RebuildTextLayer();
     }
 
     /// <summary>Applies a paper texture (and the plain colour that goes with it)
@@ -6213,27 +6263,28 @@ public sealed partial class MainWindow : Window
         ScheduleSave();
     }
 
-    // Rewrites each text box's RTF colour table: near-black ink turns ivory on a
-    // dark page and near-white ink turns near-black on a light page. Colours with
-    // real hue (reds, blues, highlights) are left alone.
-    private static void FlipTextContrast(NotePage page, bool nowDark)
+    // Rewrites one RTF colour table: near-black ink turns ivory on a dark page
+    // and near-white ink turns near-black on a light page. Colours with real hue
+    // (reds, blues, highlights) are left alone.
+    //
+    // PURE: it takes the ORIGINAL rtf and returns the flipped one rather than
+    // mutating the page in place, which is what lets ApplyTextContrast recompute
+    // from a baseline on every frame of a drag instead of compounding.
+    private static string FlipTextContrast(string rtf, bool nowDark)
     {
-        foreach (var t in page.Texts)
-        {
-            if (string.IsNullOrEmpty(t.Rtf)) continue;
-            t.Rtf = System.Text.RegularExpressions.Regex.Replace(t.Rtf,
-                @"\\red(\d{1,3})\\green(\d{1,3})\\blue(\d{1,3})",
-                m =>
-                {
-                    int r = int.Parse(m.Groups[1].Value), g = int.Parse(m.Groups[2].Value), b = int.Parse(m.Groups[3].Value);
-                    int max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
-                    bool greyish = max - min < 40;   // only flip near-neutral colours
-                    int lum = (r * 299 + g * 587 + b * 114) / 1000;
-                    if (greyish && nowDark && lum < 100) return @"\red250\green249\blue245";   // ivory
-                    if (greyish && !nowDark && lum > 180) return @"\red20\green20\blue19";     // near-black
-                    return m.Value;
-                });
-        }
+        if (string.IsNullOrEmpty(rtf)) return rtf;
+        return System.Text.RegularExpressions.Regex.Replace(rtf,
+            @"\\red(\d{1,3})\\green(\d{1,3})\\blue(\d{1,3})",
+            m =>
+            {
+                int r = int.Parse(m.Groups[1].Value), g = int.Parse(m.Groups[2].Value), b = int.Parse(m.Groups[3].Value);
+                int max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
+                bool greyish = max - min < 40;   // only flip near-neutral colours
+                int lum = (r * 299 + g * 587 + b * 114) / 1000;
+                if (greyish && nowDark && lum < 100) return @"\red250\green249\blue245";   // ivory
+                if (greyish && !nowDark && lum > 180) return @"\red20\green20\blue19";     // near-black
+                return m.Value;
+            });
     }
 
     private void SetDefaultBg_Click(object sender, RoutedEventArgs e)
@@ -6921,11 +6972,18 @@ public sealed partial class MainWindow : Window
 
     // Opens the system picker centred on a control (its middle, in root coords)
     // or on an explicit root point. onPicked fires live on every change.
+    // Two members rather than one optional parameter: this is passed around as a
+    // method GROUP (Action<FrameworkElement, Color, Action<Color>>), and a method
+    // with an optional trailing parameter does not convert to that delegate.
     private void OpenColorPicker(FrameworkElement anchor, Color current, Action<Color> onPicked)
+        => OpenColorPicker(anchor, current, onPicked, null);
+
+    private void OpenColorPicker(FrameworkElement anchor, Color current, Action<Color> onPicked,
+                                 Action? onClosed)
     {
         var tl = anchor.TransformToVisual(RootGrid).TransformPoint(new Point(0, 0));
         var pt = new Point(tl.X + anchor.ActualWidth / 2, tl.Y + anchor.ActualHeight / 2);
-        ColorPickerService.Open(pt, current, onPicked);
+        ColorPickerService.Open(pt, current, onPicked, onClosed);
     }
 
     private void EyedropAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs args)
