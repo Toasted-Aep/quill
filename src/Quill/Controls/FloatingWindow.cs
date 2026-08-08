@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
+using Quill.Services;
 using Windows.UI;
 using Path = Microsoft.UI.Xaml.Shapes.Path;
 
@@ -52,6 +53,7 @@ public sealed class FloatingWindow
     private readonly ScrollViewer _scroller;
     private readonly Grid _gripLayer;
     private readonly TextBlock _title;
+    private Border? _dragPill;
 
     private readonly List<(string Label, Func<FrameworkElement> Build)> _tabs = new();
     private readonly Dictionary<int, FrameworkElement> _built = new();
@@ -101,8 +103,11 @@ public sealed class FloatingWindow
             CornerRadius = new CornerRadius(Radius),
             BorderThickness = new Thickness(1.5),
         };
-        Bind(_panel, Border.BackgroundProperty, "CardBrushFloat", theme: true);
         Bind(_panel, Border.BorderBrushProperty, "GlassEdgeBrush", theme: false);
+        PaintPanel();
+        // The window survives page turns, so it follows the page rather than
+        // freezing at the ground it was built on.
+        PageTheme.Changed += OnGroundChanged;
 
         var shell = new Grid();
         shell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(HeaderH) });
@@ -141,8 +146,9 @@ public sealed class FloatingWindow
             CornerRadius = new CornerRadius(2.5),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Background = new SolidColorBrush(Color.FromArgb(0x66, 0x9A, 0x9A, 0x9A)),
+            Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 0x66)),
         };
+        _dragPill = bar;
         grab.Children.Add(bar);
         grab.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
         grab.ManipulationDelta += (_, e) => MoveBy(e.Delta.Translation.X, e.Delta.Translation.Y);
@@ -198,6 +204,33 @@ public sealed class FloatingWindow
             ShouldConstrainToRootBounds = false,
         };
         _host.SizeChanged += (_, _) => ClampIntoView();
+    }
+
+    // =======================================================================
+    // Theme
+    // =======================================================================
+
+    /// <summary>§7: the floating windows (Settings, Export, Brushes, Objects)
+    /// take PageTheme.Panel, which is deliberately NEAR-NEUTRAL - the reference
+    /// panels are a flat #F7F7F7 or #141414 whatever hue the page is. What the
+    /// page decides here is WHICH of the two, and on Blueprint, Brown Paper and
+    /// Darkprint that is the dark one with white text.</summary>
+    private void PaintPanel()
+    {
+        // A brush-level assignment: CardBrushFloat is a SHARED acrylic that
+        // ApplyLiquidness re-tints for the whole app, so mutating it here would
+        // repaint surfaces this window does not own.
+        _panel.Background = new SolidColorBrush(PageTheme.Panel);
+        if (_dragPill != null)
+            _dragPill.Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 0x66));
+        try { _panel.RequestedTheme = Theme; } catch { }
+    }
+
+    private void OnGroundChanged()
+    {
+        PaintPanel();
+        // The content captured the old palette at build time; throw it away.
+        RefreshContent();
     }
 
     // =======================================================================
@@ -284,9 +317,10 @@ public sealed class FloatingWindow
     {
         try { _popup.XamlRoot = _host.XamlRoot; ActiveRoot = _host.XamlRoot; } catch { }
         // A popup lives OUTSIDE the RootGrid subtree, so it does not inherit the
-        // ElementTheme ApplyTheme sets there. Stamp the resolved theme onto the
-        // panel explicitly, or a page-driven dark app would open a light window.
-        try { _panel.RequestedTheme = Theme; } catch { }
+        // ElementTheme ApplyTheme sets there. Repaint from the CURRENT ground and
+        // stamp the resolved theme onto the panel explicitly, or a window opened
+        // on a Blueprint page would come up wearing the last page's palette.
+        PaintPanel();
         if (!_placed) PlaceAnchored();
         if (_scroller.Content == null) ShowTab(_active);
         _popup.IsOpen = true;
@@ -388,7 +422,7 @@ public sealed class FloatingWindow
         AddEdge(HorizontalAlignment.Right, VerticalAlignment.Stretch, InputSystemCursorShape.SizeWestEast, +1, 0);
     }
 
-    private static SolidColorBrush GripBrush() => new(Color.FromArgb(0x8C, 0x9A, 0x9A, 0x9A));
+    private static SolidColorBrush GripBrush() => new(PageTheme.WithAlpha(PageTheme.OnSurface, 0x8C));
 
     private void AddCorner(HorizontalAlignment h, VerticalAlignment v, InputSystemCursorShape shape, int sx, int sy)
     {
@@ -566,24 +600,16 @@ public sealed class FloatingWindow
     /// theme lookups below can read the LIVE root element.</summary>
     internal static XamlRoot? ActiveRoot { get; set; }
 
-    /// <summary>The theme the app is ACTUALLY showing. MainWindow drives light/dark
-    /// through RootGrid.RequestedTheme (page-derived or explicit), which is NOT the
-    /// same as Application.Current.RequestedTheme — reading the latter is exactly
-    /// how a surface ends up stuck in the old theme.</summary>
-    internal static ElementTheme Theme
-    {
-        get
-        {
-            try
-            {
-                if (ActiveRoot?.Content is FrameworkElement fe && fe.RequestedTheme != ElementTheme.Default)
-                    return fe.RequestedTheme;
-            }
-            catch { }
-            return Application.Current.RequestedTheme == ApplicationTheme.Dark
-                ? ElementTheme.Dark : ElementTheme.Light;
-        }
-    }
+    /// <summary>Which resolution the app is showing, for the STOCK WinUI controls
+    /// that only understand light and dark.
+    ///
+    /// <para>It is answered by <see cref="PageTheme"/> and nothing else. Walking
+    /// the visual tree for RootGrid.RequestedTheme was an independent second
+    /// answer to the same question, and the two could disagree for a whole frame
+    /// after a page turn - or permanently, since the page-derived threshold and
+    /// the byte-average one put Brown Paper on opposite sides.</para></summary>
+    internal static ElementTheme Theme =>
+        PageTheme.IsDark ? ElementTheme.Dark : ElementTheme.Light;
 
     /// <summary>"Default" (the dark dictionary) or "Light", for the manual theme
     /// dictionary lookups the code-built surfaces do.</summary>
