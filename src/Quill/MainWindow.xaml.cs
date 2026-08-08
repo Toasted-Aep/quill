@@ -499,6 +499,9 @@ public sealed partial class MainWindow : Window
         ToolSurfaceService.Configure(
             () => _library.ToolSurface,
             v => { _library.ToolSurface = v; ScheduleSave(); });
+        // Both Concepts surfaces watch the service themselves; the legacy row
+        // cannot, so the window recomputes all three from one place.
+        ToolSurfaceService.Changed += _ => ApplyPenRowVisibility();
         _toolWheel = ToolWheel.Attach(CanvasArea, Surface, new ToolWheel.Host
         {
             Library = () => _library,
@@ -6545,17 +6548,27 @@ public sealed partial class MainWindow : Window
         // on screen (#14-batch4); the floating pen in minimal UI stays manual
         bool penMode = _toolTag is "Pen" or "Eraser";
         if (!penMode && !_uiHidden) { showRow = false; showChip = false; }
-        // Either Concepts surface IS the tool surface when it is on, so the
-        // legacy linear row and its reopen chip stand down entirely.
-        if (_library.RadialToolDial) { showRow = false; showChip = false; }
-        // ONE request, TWO surfaces. Each of them filters this on
-        // ToolSurfaceService inside its own Wanted, so exactly one can come up -
-        // there is no way for this call site to show both or neither by getting
-        // the condition wrong, which is the whole reason the choice lives in a
+        // ONE request, THREE surfaces, exactly one of them up. The dial and the
+        // section 2 palette each re-filter this on ToolSurfaceService inside
+        // their own Wanted, so this call site cannot show two of them by getting
+        // one condition wrong - which is the whole reason the choice lives in a
         // service rather than in an if here.
+        //
+        // 10.3 item 10: with "Bar" chosen the surface is the ORIGINAL horizontal
+        // pen row, not PenBar. PenBar keeps its place behind the same switch,
+        // one opt-in further in.
         bool surfaceOn = _library.RadialToolDial && (!_uiHidden || _floatPen);
+        bool bar = ToolSurfaceService.Current == ToolSurface.Bar;
+        bool conceptsBar = surfaceOn && bar && _library.ConceptsBarPalette;
+        // The legacy row IS the Bar surface unless that opt-in is set. It then
+        // ignores the pen-mode gate above: inside the Concepts shell it is the
+        // only tool surface on screen, and hiding it the moment the user picks
+        // Text would leave them with nothing to draw from.
+        bool legacyIsSurface = surfaceOn && bar && !_library.ConceptsBarPalette;
+        if (legacyIsSurface) { showRow = rowOn; showChip = !_uiHidden && !rowOn; }
+        else if (_library.RadialToolDial) { showRow = false; showChip = false; }
         _toolWheel?.SetVisible(surfaceOn);
-        _penBar?.SetVisible(surfaceOn);
+        _penBar?.SetVisible(conceptsBar);
         _chromeBars?.SetVisible(surfaceOn);   // the floating bars are chrome for both (V3 I)
         // slide in from the bottom edge the dock lives on, like the other bars
         if (showRow) FadeIn(PenRow, slideY: 24); else FadeOut(PenRow);
