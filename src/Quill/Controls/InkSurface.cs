@@ -305,8 +305,9 @@ public sealed class InkSurface : UserControl
         // render targets and image brushes PER DEVICE, so without this the dead
         // device's resources are pinned by that dictionary for the rest of the
         // session and the next draw bakes a second set beside them instead of
-        // replacing them. This is the only caller PaperTextures.Invalidate has,
-        // and it is the one it was written for.
+        // replacing them. Invalidate went a long time with NO caller at all,
+        // which is precisely how that leak survived; this is the device-loss
+        // caller it was written for, and SetDisplayDpi below is the other.
         //
         // The reason to watch is NewDevice, not a "DeviceLost" constant: Win2D
         // reports a recovered device loss by handing the control a NEW device
