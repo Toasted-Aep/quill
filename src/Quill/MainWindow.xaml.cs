@@ -7030,9 +7030,28 @@ public sealed partial class MainWindow : Window
     private void OpenColorPicker(FrameworkElement anchor, Color current, Action<Color> onPicked,
                                  Action? onClosed)
     {
+        // 10.4 item 13: "page custom colour centres the wheel on the pen colour
+        // icon - the same centre point as 10.2 item 8." Every caller of this
+        // helper is a colour a page carries (background, grid, accent, a table
+        // cell), and all of them used to open the ring centred in the VIEWPORT
+        // while the dial's own colour dot opened it centred on the dial. Two
+        // different mount points for one control is the whole complaint; there
+        // is now exactly one, and it is the dial's, whenever the dial is up.
+        if (_toolWheel is { } dial && dial.Bounds.Width > 0)
+        {
+            ColorPickerService.Open(dial.DotRootPoint(), current, onPicked, onClosed,
+                                    centreOnPoint: true, hubClearance: dial.Bounds.Width / 2);
+            return;
+        }
         var tl = anchor.TransformToVisual(RootGrid).TransformPoint(new Point(0, 0));
         var pt = new Point(tl.X + anchor.ActualWidth / 2, tl.Y + anchor.ActualHeight / 2);
-        ColorPickerService.Open(pt, current, onPicked, onClosed);
+        // With the dial down the pen row's colour button IS the app's colour
+        // control (V3 K.9), so the ring centres on that instead - the same rule,
+        // applied to whichever surface is actually on screen.
+        bool onRow = ReferenceEquals(anchor, PenRowColourBtn);
+        ColorPickerService.Open(pt, current, onPicked, onClosed,
+                                centreOnPoint: onRow,
+                                hubClearance: onRow ? Math.Max(anchor.ActualWidth, anchor.ActualHeight) / 2 : 0);
     }
 
     private void EyedropAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs args)

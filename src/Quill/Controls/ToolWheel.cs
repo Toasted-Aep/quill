@@ -1784,7 +1784,24 @@ public sealed class ToolWheel
         try
         {
             var t = _host.TransformToVisual((UIElement?)_host.XamlRoot?.Content ?? _host);
-            return t.TransformPoint(_centre);
+            var p = t.TransformPoint(_centre);
+            // 10.2 item 8. The dot's own element, not the maths, so a future
+            // change to _centre or to the disc layout that moved the dot
+            // without moving this point would show up as a mismatch here
+            // rather than as a fourth report from the user.
+            if (GeometryProbe.On)
+            {
+                GeometryProbe.Point("DIAL-DOT", p, $"centre={_centre.X:F2},{_centre.Y:F2} scale={_scale:F2} clearance={PopOut * _scale:F2}");
+                try
+                {
+                    var dt = _dot.TransformToVisual((UIElement?)_host.XamlRoot?.Content ?? _host);
+                    GeometryProbe.Point("DIAL-DOT-ELEMENT",
+                        dt.TransformPoint(new Point(_dot.Width / 2, _dot.Height / 2)),
+                        $"r={_dot.Width / 2:F2}");
+                }
+                catch { }
+            }
+            return p;
         }
         catch { return _centre; }
     }
