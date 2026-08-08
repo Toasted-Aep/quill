@@ -79,7 +79,11 @@ public sealed class SettingsWindow
     // =======================================================================
     private const double SwatchD = 69;    // background + grid circles (§3.1)
     private const double UnitD = 80;      // unit + Wheel|Bar circles (§3.1, §9.8)
-    private const double CellGap = 22;    // cell pitch that lands 28 DIP between circles
+    // 3.1: circles "28 DIP apart". The caption's Width is d + 2*CapPad but its
+    // margin is -CapPad either side, so the two cancel and a cell measures
+    // exactly d wide - which makes the strip's Spacing the gap itself, with
+    // no bleed to subtract. It was 22, which measured 22.
+    private const double CellGap = 28;
     private const double CapPad = 6;      // caption bleed either side of a circle
 
     private const double HeadSize = 30;   // collapsible section heading (§3.1)
