@@ -322,14 +322,26 @@ public sealed class SettingsWindow
                 return;
             }
             // SECOND press (or a colour never set): edit it.
-            _h.PickColor(cell, swatchColor, c =>
+            //
+            // Guarded because the host resolves the anchor with
+            // TransformToVisual(RootGrid) and THIS cell lives in a Popup, which
+            // is a sibling of RootGrid rather than a descendant. The transform
+            // does resolve through the shared XamlRoot, but an unparented or
+            // not-yet-arranged anchor throws - and an exception out of a Tapped
+            // handler is not caught by anything above it, so it would take the
+            // window down rather than just failing to open a picker.
+            try
             {
-                string hex = ColorUtil.ToHex(c);
-                lib.CustomPageColor = hex;
-                _h.SetPaper(null, hex);
-                _h.Save();
-                Refresh();
-            });
+                _h.PickColor(cell, swatchColor, c =>
+                {
+                    string hex = ColorUtil.ToHex(c);
+                    lib.CustomPageColor = hex;
+                    _h.SetPaper(null, hex);
+                    _h.Save();
+                    Refresh();
+                });
+            }
+            catch { _h.Status("The colour picker could not be opened here."); }
         }, fill: B(swatchColor));
 
         ToolTipService.SetToolTip(cell, everSet
