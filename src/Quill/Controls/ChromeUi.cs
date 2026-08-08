@@ -1,4 +1,5 @@
 using Quill.Helpers;
+using Quill.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -48,62 +49,39 @@ internal static class ChromeUi
     private const byte PlateAlpha = 0xEE;
 
     /// <summary>The status bar's one rule: 1 x 16 DIP between the gallery icon
-    /// and the page name, LEFT CLUSTER ONLY. Sampled #262829 from the reference
-    /// capture; lightened on a light page so it does not vanish.</summary>
-    public static Color BarDivider => IsDark
-        ? Color.FromArgb(0xFF, 0x26, 0x28, 0x29)
-        : Color.FromArgb(0x59, 0x26, 0x28, 0x29);
+    /// and the page name, LEFT CLUSTER ONLY. Twice the weight of a plain
+    /// hairline, so it still reads as a deliberate rule rather than a seam.</summary>
+    public static Color BarDivider => PageTheme.WithAlpha(Ink, 0x66);
 
     // =====================================================================
-    // Theme reads — the LIVE theme, i.e. whatever RootGrid.RequestedTheme
-    // resolved to, never Application.Current.RequestedTheme.
+    // Theme reads — ONE source, and it is the PAGE.
+    //
+    // This used to be a FrameworkElement whose ActualTheme answered every
+    // question, i.e. a two-state light/dark switch. That cannot express the
+    // thing the reference actually does (CONCEPTS-REF §0/§6/§7): a blue page
+    // gives BLUE chrome and a kraft page gives BROWN chrome, and light/dark is
+    // only a consequence of the ground's luminance. So every colour below is
+    // now a view onto PageTheme, which MainWindow points at the active page.
+    //
+    // Widgets built from these still capture their colours at BUILD time, so a
+    // surface that wants to follow the page subscribes to PageTheme.Changed and
+    // rebuilds - exactly as it used to subscribe to ActualThemeChanged.
     // =====================================================================
-    /// <summary>The element these widgets actually live in. The bars float over
-    /// the PAGE, and the page decides the app's light/dark when ThemeSource is
-    /// "Page" - so the theme has to come from the live visual tree, exactly as
-    /// ToolWheel reads _host.ActualTheme. Reading FloatingWindow.Theme instead
-    /// was wrong the moment settings stopped being a FloatingWindow: nothing set
-    /// ActiveRoot any more, the lookup fell back to Application.Current (always
-    /// Dark), and the bars painted near-white glyphs onto near-white paper.</summary>
-    public static FrameworkElement? ThemeSource { get; set; }
 
-    public static bool IsDark
-    {
-        get
-        {
-            try
-            {
-                if (ThemeSource is { } fe && fe.ActualTheme != ElementTheme.Default)
-                    return fe.ActualTheme == ElementTheme.Dark;
-            }
-            catch { }
-            return FloatingWindow.Theme == ElementTheme.Dark;
-        }
-    }
+    public static bool IsDark => PageTheme.IsDark;
 
-    public static Color Ink => IsDark
-        ? Color.FromArgb(0xFF, 0xF4, 0xF2, 0xEC)
-        : Color.FromArgb(0xFF, 0x1B, 0x1A, 0x18);
+    public static Color Ink => PageTheme.OnSurface;
 
-    public static Color Dim => Color.FromArgb(0x8C, Ink.R, Ink.G, Ink.B);
+    public static Color Dim => PageTheme.OnSurfaceMuted;
 
-    public static Color Hairline => IsDark
-        ? Color.FromArgb(0x59, 0xFF, 0xFF, 0xFF)
-        : Color.FromArgb(0x3D, 0x00, 0x00, 0x00);
+    public static Color Hairline => PageTheme.Outline;
 
-    public static Color Accent
-    {
-        get
-        {
-            try
-            {
-                if (Application.Current.Resources.TryGetValue("BrandOrangeBrush", out var b) &&
-                    b is SolidColorBrush sb) return sb.Color;
-            }
-            catch { }
-            return Color.FromArgb(0xFF, 0xD9, 0x77, 0x57);
-        }
-    }
+    /// <summary>A translucent wash of the ink, for chip and swatch fills that
+    /// have to sit on whatever the page happens to be. Alpha, not a mixed
+    /// colour, so it works on a blue ground and a kraft one alike.</summary>
+    public static Color Wash(byte alpha) => PageTheme.WithAlpha(Ink, alpha);
+
+    public static Color Accent => PageTheme.Accent;
 
     /// <summary>Fetches a theme brush by key, or null. Same lookup the settings
     /// window does, kept here so both surfaces read one implementation.</summary>
@@ -133,9 +111,10 @@ internal static class ChromeUi
         // A brush-level assignment, never a mutation of a shared one: WinUI
         // caches GradientStop changes, and CardBrushFloat is a SHARED acrylic
         // that ApplyLiquidness re-tints for the whole app.
-        var plate = IsDark
-            ? Color.FromArgb(PlateAlpha, 0x1C, 0x1B, 0x1F)
-            : Color.FromArgb(PlateAlpha, 0xF7, 0xF5, 0xF0);
+        // §5: the cluster's plate is Surface - the page's own colour raised one
+        // step - not a fixed near-white/near-black. On a Blueprint page it is a
+        // pale blue plate, on kraft a pale tan one.
+        var plate = PageTheme.WithAlpha(PageTheme.Surface, PlateAlpha);
         return new Border
         {
             Child = content,
@@ -208,9 +187,7 @@ internal static class ChromeUi
             CornerRadius = new CornerRadius(10),
             BorderThickness = new Thickness(selected ? 1.4 : 1),
             IsEnabled = enabled,
-            Background = new SolidColorBrush(selected
-                ? Color.FromArgb(0x2E, 0x9A, 0x9A, 0x9A)
-                : Colors.Transparent),
+            Background = new SolidColorBrush(selected ? Wash(0x24) : Colors.Transparent),
             BorderBrush = new SolidColorBrush(selected ? Accent : Hairline),
         };
         if (tip != null) ToolTipService.SetToolTip(b, tip);
@@ -228,9 +205,7 @@ internal static class ChromeUi
         {
             Width = diameter,
             Height = diameter,
-            Fill = new SolidColorBrush(enabled
-                ? Color.FromArgb(IsDark ? (byte)0x2A : (byte)0x16, 0x9A, 0x9A, 0x9A)
-                : Color.FromArgb(0x10, 0x9A, 0x9A, 0x9A)),
+            Fill = new SolidColorBrush(Wash(enabled ? (byte)0x1E : (byte)0x0E)),
             Stroke = new SolidColorBrush(selected ? Accent : Hairline),
             StrokeThickness = selected ? 2.4 : 1,
         };
@@ -339,7 +314,7 @@ internal static class ChromeUi
             // brush-level writes only
             track.Background = new SolidColorBrush(state
                 ? (enabled ? ToggleOn : Color.FromArgb(0x66, ToggleOn.R, ToggleOn.G, ToggleOn.B))
-                : Color.FromArgb(IsDark ? (byte)0x3A : (byte)0x28, 0x9A, 0x9A, 0x9A));
+                : Wash(0x2E));
             track.BorderBrush = new SolidColorBrush(state ? ToggleOn : Hairline);
             slide.X = state ? w - knob - 6 : 0;
         }
@@ -380,9 +355,8 @@ internal static class ChromeUi
     {
         Text = text,
         FontSize = 11.5,
-        Opacity = 0.62,
         TextWrapping = TextWrapping.Wrap,
-        Foreground = new SolidColorBrush(Ink),
+        Foreground = new SolidColorBrush(Dim),
         Margin = new Thickness(0, 1, 0, 5),
     };
 

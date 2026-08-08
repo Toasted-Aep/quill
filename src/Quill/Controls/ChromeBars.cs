@@ -1,5 +1,6 @@
 using Quill.Helpers;
 using Quill.Models;
+using Quill.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -254,8 +255,6 @@ public sealed class ChromeBars
         // hard-coding, because touch mode and a long page name both change it.
         _left.SizeChanged += (_, _) => PushInset();
 
-        // The widgets read their ink from the LIVE tree, not from a static.
-        ChromeUi.ThemeSource = _host;
         var surface = _h.Surface();
         surface.ViewChanged += OnViewChanged;
         // The Layers pane counts what is on the page and the Comments pane lists
@@ -263,7 +262,10 @@ public sealed class ChromeBars
         // freeze at the moment they were opened. Coalesced onto the dispatcher so
         // a stroke in progress does not rebuild a panel per sample.
         surface.ContentChanged += ScheduleContentRefresh;
-        _host.ActualThemeChanged += (_, _) => { ChromeUi.ThemeSource = _host; Refresh(); };
+        // The bars are custom-drawn and capture their colours at build time, so
+        // they repaint on the PAGE's ground moving - not on ActualTheme, which is
+        // only the two-state shadow of it and never fires for blue -> brown.
+        PageTheme.Changed += Refresh;
     }
 
     // =====================================================================
