@@ -143,6 +143,8 @@ public sealed class ExportWindow
         _h = h;
         _win = FloatingWindow.Attach(host, 512, 660);
         _win.Title = "Export";
+        // §11.6 item 40 — the developer font size reaches every panel.
+        _win.FontPage = "Export";
         _win.InfoRequested = () => _h.Status(
             "Pick a format, then the area to export and what to include. Anything Quill cannot write yet is switched off and says why.");
         _win.SetTabs(new (string, Func<FrameworkElement>)[] { ("Export", BuildRoot) });

@@ -91,6 +91,15 @@
                                 <MenuFlyoutItem Text="Settings…" Click="Settings_Click">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE713;"/></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
+                                <!-- CONCEPTS-REF 4: the Brushes panel. It is a LIBRARY,
+                                     like Objects and Settings, not a tool - so it opens
+                                     from the app menu rather than adding a control to a
+                                     top bar section 5 is emptying. The mark is set in
+                                     code from Icons so it cannot drift from the pen the
+                                     rest of the app draws. -->
+                                <MenuFlyoutItem Text="Brushes…" Click="Brushes_Click">
+                                    <MenuFlyoutItem.Icon><PathIcon x:Name="BrushesMenuIcon"/></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
                                 <MenuFlyoutItem Text="Keyboard shortcuts" Click="ShortcutsMenu_Click">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE765;"/></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
