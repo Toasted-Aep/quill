@@ -103,6 +103,9 @@ public sealed class ObjectsWindow
         _win = FloatingWindow.Attach(host, 430, 620);
         _win.Title = "Objects";
         _win.OpenOn = FloatingWindow.Side.Left;
+        // §11.6 item 40: this panel's type is uniform and has no reference
+        // scale of its own to preserve, so the window scales its finished tree.
+        _win.FontPage = "Objects";
         _win.InfoRequested = () => _h.Status(
             "Tap an object to drop it on the page. Star a pack to float it to the top; the check hides or shows it.");
         _win.SetTabs(new (string, Func<FrameworkElement>)[]

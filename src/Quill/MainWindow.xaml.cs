@@ -493,6 +493,9 @@ public sealed partial class MainWindow : Window
         BuildTree();
         BuildPenStrip();
         Icons.BindTopBar(IconToolPen, IconToolText, IconToolSelect, IconToolSpace, IconUndo, IconRedo);
+        // §11.6 item 40: the panel type scale is a library setting, and the
+        // floating windows have no host delegate of their own to read it with.
+        PanelFonts.Source = () => _library;
         // The Brushes item in the app menu takes the app's own pen mark rather
         // than a Segoe glyph, like everything else Icons owns.
         try { BrushesMenuIcon.Data = Icons.Geo(Icons.Pen); } catch { }
