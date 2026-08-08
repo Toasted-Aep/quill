@@ -265,13 +265,14 @@ public sealed class SettingsWindow
         {
             _restoreArmed = false;
             _previews.Clear();          // the ground may have moved under them
-            var before = PageTheme.Ground;
+            // Exactly ONE rebuild. Setting the ground raises PageTheme.Changed
+            // synchronously and the window answers it with a rebuild of its own;
+            // so might the caller, before ever reaching this method. The window's
+            // revision counter is the only honest way to know whether the content
+            // has already been rebuilt during this call.
+            int rev = _win.ContentRevision;
             SyncGround();
-            // A real ground move already rebuilt the content through the window's
-            // own PageTheme.Changed handler. Asking again would build it twice.
-            bool moved = before.R != PageTheme.Ground.R || before.G != PageTheme.Ground.G
-                                                        || before.B != PageTheme.Ground.B;
-            if (!moved) _win.RefreshContent(preserveScroll: true);
+            if (_win.ContentRevision == rev) _win.RefreshContent(preserveScroll: true);
         }
         finally { _refreshing = false; }
     }

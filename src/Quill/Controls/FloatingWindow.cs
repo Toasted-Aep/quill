@@ -71,6 +71,13 @@ public sealed class FloatingWindow
 
     public bool IsOpen => _popup.IsOpen;
 
+    /// <summary>Bumped every time the active tab's content is rebuilt. A tenant
+    /// whose own Refresh may or may not have already triggered a rebuild (setting
+    /// the ground raises PageTheme.Changed, which this window answers) compares
+    /// this before and after to decide whether a second rebuild is needed —
+    /// which is how §10.5 item 20's triple rebuild is held down to one.</summary>
+    public int ContentRevision { get; private set; }
+
     /// <summary>Where this window is sitting, in the HOST's coordinates, or null
     /// when it is closed. A popup is composited outside the host's visual tree,
     /// so its position cannot be read with TransformToVisual — but the popup's
@@ -247,8 +254,11 @@ public sealed class FloatingWindow
     private void OnGroundChanged()
     {
         PaintPanel();
-        // The content captured the old palette at build time; throw it away.
-        RefreshContent();
+        // The content captured the old palette at build time; throw it away — but
+        // a repaint is not a navigation, so the reader keeps their place (§10.5
+        // item 20). A page turn or a paper swatch is the commonest way this fires
+        // and it was the commonest way the panel jumped to the top.
+        RefreshContent(preserveScroll: true);
     }
 
     // =======================================================================
@@ -351,6 +361,7 @@ public sealed class FloatingWindow
             _built[index] = content;
         }
         _scroller.Content = content;
+        ContentRevision++;
 
         double target = scrollTo ?? 0;
         if (target <= 0.5) { _scroller.ChangeView(null, 0, null, true); return; }
