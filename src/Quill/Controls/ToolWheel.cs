@@ -1673,9 +1673,43 @@ public sealed class ToolWheel
             return;
         }
 
-        float size = Math.Max(1f, _surface.PenSize);
-        float radius = (float)Math.Clamp(PopOut + 22 + size * 0.8, PopOut + 22, 180);
-        _surface.RenderStrokeTo(ds, sender, _surface.PreviewCircle(centre, radius));
+        // 11.1 item 2. Build the stroke first, ask the renderer how wide it
+        // will really be, and only then choose the radius - the reverse of the
+        // old order, which fixed the radius at a floor of PopOut + 22 and let
+        // the pen's width decide whether any hole survived.
+        //
+        // The ring is laid out from the OUTSIDE in. Its outer edge sits just
+        // inside the control, so nothing is ever clipped into a square; its
+        // inner edge is then whatever is left, and if that is less than a
+        // readable hole the whole stroke is drawn TO SCALE instead. Drawing to
+        // scale is honest for a preview - it still mimics the pen's style,
+        // its taper and its nib contrast - and it is the only option that
+        // survives a pen size the rest of the app never expected.
+        const float Edge = 8f;                    // breathing room in the box
+        const float MinHole = 26f;                // the "hollow" in hollow circle
+        float outer = (float)PreviewBox / 2 - Edge;   // 202
+        var stroke = _surface.PreviewCircle(centre, outer * 0.5f);
+        float w = Math.Max(0.5f, _surface.MaxStrokeWidth(stroke));
+        // The widest ring that leaves MinHole of clear middle.
+        float maxW = outer - MinHole / 2f;
+        if (w > maxW)
+        {
+            // Too fat to draw life-size. Scale the stroke down rather than
+            // clipping it - the clip IS the square the user reported.
+            float k = maxW / w;
+            stroke.Size *= k;
+            w = maxW;
+        }
+        float radius = Math.Max(MinHole / 2f + w / 2f, outer - w / 2f);
+        // Re-lay the points at the radius the width just decided.
+        var hoop = _surface.PreviewCircle(centre, radius);
+        hoop.Size = stroke.Size;
+        _surface.RenderStrokeTo(ds, sender, hoop);
+
+        if (GeometryProbe.On)
+            GeometryProbe.Write("PREVIEW",
+                $"tool={_h.ToolTag()} penSize={_surface.PenSize:F2} drawnSize={hoop.Size:F2} " +
+                $"maxWidth={w:F2} radius={radius:F2} hole={radius - w / 2:F2} box={PreviewBox / 2:F0}");
     }
 
     // ===================================================================
