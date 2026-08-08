@@ -96,13 +96,20 @@ public sealed class BrushesWindow
     private readonly InkSurface _surface;
     private readonly FloatingWindow _win;
 
-    private readonly Image _preview = new()
+    // Built FRESH on every rebuild, never reused. WinUI allows an element one
+    // parent, so a field-level Image added to a second BuildBody's tree throws —
+    // and the throw is swallowed by the window's build guard, which would leave
+    // the panel showing "could not be built" the first time anything refreshed it.
+    private Image _preview = NewPreviewImage();
+    private Border _previewHost = new() { Height = PreviewH };
+
+    private static Image NewPreviewImage() => new()
     {
         Height = PreviewH,
         Stretch = Stretch.Fill,
         HorizontalAlignment = HorizontalAlignment.Stretch,
+        VerticalAlignment = VerticalAlignment.Top,
     };
-    private readonly Border _previewHost;
 
     /// <summary>Rendered 40 DIP marks, keyed by pen type and ink. Fourteen live
     /// renders on every rebuild would be the same defect §10.5 item 20 names in
@@ -140,19 +147,6 @@ public sealed class BrushesWindow
             "The strip at the top is the selected brush drawn live by the page's own renderer. " +
             "Basics picks the brush; Tools picks what a drag does instead of marking.");
 
-        _previewHost = new Border
-        {
-            Height = PreviewH,
-            Child = _preview,
-            // A Border with a radius clips its child, which keeps the sample off
-            // the window's own rounded top corners.
-            CornerRadius = new CornerRadius(FloatingWindow.TopRadius, FloatingWindow.TopRadius, 0, 0),
-        };
-        _previewHost.SizeChanged += (_, e) =>
-        {
-            if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 1) DrawPreview();
-        };
-
         _win.SetTabs(new (string, Func<FrameworkElement>)[] { ("Brushes", BuildBody) });
 
         PageTheme.Changed += () => { if (IsOpen) { _marks.Clear(); Refresh(); } };
@@ -188,6 +182,24 @@ public sealed class BrushesWindow
         var root = new StackPanel { Background = B(PanelFill) };
 
         // 2. the live preview strip
+        _preview = NewPreviewImage();
+        _previewHost = new Border
+        {
+            Height = PreviewH,
+            MinHeight = PreviewH,
+            Child = _preview,
+            // A Border with a radius clips its child, which keeps the sample off
+            // the window's own rounded top corners.
+            CornerRadius = new CornerRadius(FloatingWindow.TopRadius, FloatingWindow.TopRadius, 0, 0),
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_previewHost, "Brush preview");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(_previewHost, "BrushPreview");
+        // The strip is full-width, so its render has to follow the window's width
+        // as the reader drags a corner grip.
+        _previewHost.SizeChanged += (_, e) =>
+        {
+            if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 1) DrawPreview();
+        };
         root.Children.Add(_previewHost);
         root.Children.Add(Hairline());
 
