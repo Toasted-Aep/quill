@@ -592,3 +592,42 @@ The reference panel, top to bottom:
 
 Also required: **edit the tilt of the horizon line, and move the grid's centre
 point within the page.**
+
+### 10.8 MIX — resolved by the user, 2026-08-08
+
+Replaces §10.4 item 16. The `OFF · 25% · 50% · 75%` arc in the wheel's centre is
+**removed**; mixing leaves the colour picker entirely.
+
+**Mixing becomes a dedicated Mix tool**, selectable into the dial or the pen row
+like any other tool. Choosing it lets the user combine two colours — picked from
+the canvas with the eyedropper, or from recents and swatches — and produces the
+blend through the spectral mixer in `Helpers/PigmentMix.cs` (the one where blue
+and yellow give `#3DA06B`, a real green, rather than a steel grey). The colour
+wheel goes back to being purely a picker, which also relieves the crowded centre
+the user has flagged twice.
+
+**Scope: pens and brushes only.** Page background, grid colour, accent and table
+cells always replace outright. You mix ink, not paper.
+
+**One exception, and it is the interesting part — mixing with the page
+background dilutes rather than tints.** The user's words: *"if mixing with
+background make paint gradually transparent as if it is mixing with the page
+colour."*
+
+So when one of the two colours is the page ground, the result is **not** a hue
+interpolated toward that ground. It is the original pigment at **reduced alpha**,
+as if thinned with water or medium:
+
+- mixing 50% with the background yields the same hue at roughly 50% opacity;
+- mixing further approaches fully transparent, never approaches the ground's hue.
+
+This distinction is load-bearing, not cosmetic. A hue-lerp toward the ground
+produces a flat opaque colour that *looks* right only on a plain page — on a
+textured, Blueprint or Brown Paper page, genuinely diluted paint must let the
+grain and the ground show **through** it, which an opaque lerp cannot do. It
+also means diluted strokes composite correctly over each other and over ink
+underneath, the way a wash does.
+
+Implementation note: this is the same substrate the oil-paint work uses, so
+prefer extending `PigmentMix` with an explicit "dilute toward transparency"
+path over special-casing the ground colour at each call site.
