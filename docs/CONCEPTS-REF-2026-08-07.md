@@ -813,3 +813,42 @@ both already correct.** What is wrong is the split between the rings.
     alongside the other docs: accounts, collaboration, sharing.
 56. **A web viewer for Quill.** The user marks this *"not important maybe do it
     later"* — do not start it without asking.
+
+### 11.11 Decisions, 2026-08-08 — answered by the user
+
+**Settings tabs (resolves §11.6 item 36).** Four tabs:
+**`Workspace` · `Interaction` · `Gestures` · `Stylus`.**
+
+- `Workspace` — unchanged; the user judges it correct as built.
+- `Interaction` — keeps `Finger Action` and the **mouse modes** (§11.6 item 38).
+- `Gestures` — takes `Tap & Hold`, `Draw & Hold`, and the
+  `Two / Three / Four Finger Tap` rows.
+- `Stylus` — takes `Pressure Response`, the `Preferences` toggles,
+  `Side Button / Right Mouse Button`, and `Eraser Action`.
+
+`Keyboard & Mouse` stays in `Interaction`. The §11.6 item 37 content is
+distributed across these four rather than piled into one tab.
+
+**COPIC colours (resolves §11.3 item 22).** Add **only the real Copic codes that
+are missing.** The Sketch range is 358 markers; the wheel holds 316, so roughly
+42 genuine codes are absent. Add exactly those, calibrated by the same method as
+the existing 316 — **no interpolated swatches, no invented families, nothing
+that is not a marker you could buy.** Every added cell must carry its true code.
+
+The approval gate stands: **produce a before/after image of the wheel and get
+the user's approval before committing.**
+
+**The two new dial cells (resolves §11.2 item 11).** Ship them **empty and
+customisable**, each showing a `+` mark, assigned by the user — which is what
+the Concepts reference itself shows for an unassigned cell. Do **not** pre-fill
+them with the eyedropper, ruler or mix tools; those live in the tool library
+until the user places them.
+
+**Order of work.** Bugs first, then the dial, then the panels:
+
+1. §11.1 — the settings scroll-reset (5/5) and the 16000-size square preview.
+2. §11.2 / §11.3 — the dial geometry rebalance and the colour wheel.
+3. §11.6 / §11.7 — the settings rebuild, the tab split, and the grid editor.
+
+The reasoning the user endorsed: fix what is hit constantly before changing how
+things look.
