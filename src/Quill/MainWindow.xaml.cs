@@ -493,6 +493,9 @@ public sealed partial class MainWindow : Window
         BuildTree();
         BuildPenStrip();
         Icons.BindTopBar(IconToolPen, IconToolText, IconToolSelect, IconToolSpace, IconUndo, IconRedo);
+        // The Brushes item in the app menu takes the app's own pen mark rather
+        // than a Segoe glyph, like everything else Icons owns.
+        try { BrushesMenuIcon.Data = Icons.Geo(Icons.Pen); } catch { }
         // Which tool palette is on screen. Configured BEFORE either surface is
         // attached, so the first Apply() on each already knows the answer and
         // neither one flashes up before being told it is not the current one.
@@ -5128,6 +5131,44 @@ public sealed partial class MainWindow : Window
         _settingsWin.Toggle();
     }
 
+    // ---- CONCEPTS-REF 4: the Brushes panel ------------------------------
+    // The fourth tenant of the floating-window family, and the beginning of the
+    // pen library. Everything it needs is a delegate bundle of the SAME shape
+    // the dial and the pen row already take, pointing at the same ApplyPreset -
+    // so the three surfaces cannot disagree about what is selected.
+    private BrushesWindow? _brushesWin;
+
+    private void Brushes_Click(object sender, RoutedEventArgs e) => OpenBrushesWindow();
+
+    private void OpenBrushesWindow()
+    {
+        try
+        {
+            if (_brushesWin == null)
+            {
+                _brushesWin = BrushesWindow.Attach(CanvasArea, Surface, new BrushesWindow.Host
+                {
+                    Library = () => _library,
+                    ActivePreset = () => _activePresetId,
+                    ToolTag = () => _toolTag,
+                    ApplyPreset = ApplyPreset,
+                    SelectTool = SelectTool,
+                    Save = ScheduleSave,
+                    Status = ShowStatus,
+                    SetEraserStyle = st => { Surface.EraserStyle = st; _library.LastEraserStyle = st; },
+                });
+                // The dial and the pen row change the selection too, so the
+                // panel's highlight and its live sample follow them.
+                ToolUiChanged += _brushesWin.Refresh;
+            }
+            _brushesWin.Toggle();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus("The Brushes panel could not open: " + ex.Message);
+        }
+    }
+
     /// <summary>The page-editing delegate bundle. Hoisted out of the settings
     /// window's attach call so the floating bars' Precision panel and the export
     /// pane drive the page through the SAME code path instead of a second copy.</summary>
@@ -8874,6 +8915,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         Add("New notebook", () => AddNotebook_Click(this, new RoutedEventArgs()));
         Add("Notebook gallery", () => ShowGallery(launcher: false));
         Add("Settings", () => Settings_Click(this, new RoutedEventArgs()));
+        Add("Brushes", OpenBrushesWindow);
         Add("Toggle light / dark theme", () => Theme_Click(this, new RoutedEventArgs()));
         Add("Toggle full screen", () => Fullscreen_Click(this, new RoutedEventArgs()));
         Add("Minimal UI (hide all panels)", () => HideUi_Click(this, new RoutedEventArgs()));
