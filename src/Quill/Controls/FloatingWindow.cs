@@ -45,6 +45,18 @@ public sealed class FloatingWindow
     private const double HeaderH = 40;
     private const double MinW = 320, MinH = 260;
 
+    /// <summary>§11.6 item 42: "must leave a margin at the page edge".</summary>
+    private const double EdgeGap = 14;
+
+    /// <summary>§11.6 item 42: the band the top bar's two clusters occupy — the
+    /// gallery / page name / Layers / Precision / Objects group on the left and
+    /// the zoom / AI / Import / Export / Settings group on the right. A floating
+    /// window opens directly below it and can be neither dragged nor resized over
+    /// it. Derived from the bar's own measured metrics rather than hard-coded, so
+    /// §11.5 item 31's thicker top bar carries this down with it.</summary>
+    private static double TopBand =>
+        ChromeBars.Metrics.RowTop + ChromeBars.Metrics.IconPitch + 8;
+
     private readonly Panel _host;
     // A POPUP, not an in-tree overlay: a popup is composited into the XamlRoot's
     // own popup layer, so it is guaranteed to float above the Win2D canvas, the
@@ -456,7 +468,8 @@ public sealed class FloatingWindow
 
     public Side OpenOn { get; set; } = Side.Right;
 
-    // Anchored to an edge, below the toolbars — the reference position.
+    // Anchored to an edge, directly below the top bar — the reference position,
+    // and §11.6 item 42's "they open as high as possible".
     private void PlaceAnchored()
     {
         double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
@@ -466,11 +479,16 @@ public sealed class FloatingWindow
             _host.SizeChanged += FirstPlacement;
             return;
         }
+        var (maxW, maxH) = MaxSize();
+        _panel.Width = Math.Min(_panel.Width, maxW);
+        _panel.Height = Math.Min(_panel.Height, maxH);
+
         _popup.HorizontalOffset = OpenOn == Side.Left
-            ? 18
-            : Math.Max(12, hostW - _panel.Width - 18);
-        _popup.VerticalOffset = Math.Max(12, Math.Min(96, hostH - _panel.Height - 24));
+            ? EdgeGap
+            : Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap);
+        _popup.VerticalOffset = TopBand;
         _placed = true;
+        Constrain();
     }
 
     private void FirstPlacement(object sender, SizeChangedEventArgs e)
@@ -487,15 +505,11 @@ public sealed class FloatingWindow
         ClampIntoView();
     }
 
-    // A window dragged off-screen is a window the user has lost: always leave a
-    // grabbable strip of the header visible.
-    private void ClampIntoView()
-    {
-        double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
-        if (hostW <= 0 || hostH <= 0) return;
-        _popup.HorizontalOffset = Math.Clamp(_popup.HorizontalOffset, -_panel.Width + 120, hostW - 120);
-        _popup.VerticalOffset = Math.Clamp(_popup.VerticalOffset, 0, Math.Max(0, hostH - HeaderH));
-    }
+    /// <summary>§11.6 item 42. This used to let the window hang most of the way
+    /// off the page as long as 120 DIP of header stayed grabbable, and to sit at
+    /// y = 0 — straight over the top bar's two clusters. It now keeps the whole
+    /// window on the page, inside its margins, and below the chrome.</summary>
+    private void ClampIntoView() => Constrain();
 
     // =======================================================================
     // Resize grips — iPadOS-style corner brackets + edge pills
@@ -506,11 +520,45 @@ public sealed class FloatingWindow
     /// resized it instead.</summary>
     private void BuildGrips()
     {
-        // corners: rounded brackets that echo the window's own 16px radius
-        AddCorner(HorizontalAlignment.Left, VerticalAlignment.Top, InputSystemCursorShape.SizeNorthwestSoutheast, -1, -1);
-        AddCorner(HorizontalAlignment.Right, VerticalAlignment.Top, InputSystemCursorShape.SizeNortheastSouthwest, +1, -1);
+        // §11.6 item 41: no top, bottom or side EDGE handles — corners only.
+        // §11.6 item 42 then takes the TOP two corners as well: a window that
+        // opens as high as it is allowed to go has nothing to gain by growing
+        // upward, and the top-left grip sat directly over the close button while
+        // the top-right sat over the info button. Both remaining grips grow the
+        // window away from the chrome it must not cover.
         AddCorner(HorizontalAlignment.Left, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNortheastSouthwest, -1, +1);
         AddCorner(HorizontalAlignment.Right, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNorthwestSoutheast, +1, +1);
+    }
+
+    // =======================================================================
+    // §11.6 item 42 — the constraints every floating panel obeys
+    // =======================================================================
+    /// <summary>The largest this window may be on the current host: the page
+    /// minus its edge margins, and minus the top-bar band it may not enter.</summary>
+    private (double W, double H) MaxSize()
+    {
+        double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
+        if (hostW <= 0 || hostH <= 0) return (double.PositiveInfinity, double.PositiveInfinity);
+        return (Math.Max(MinW, hostW - EdgeGap * 2),
+                Math.Max(MinH, hostH - TopBand - EdgeGap));
+    }
+
+    /// <summary>Brings the window inside every constraint at once — size first,
+    /// then position, because clamping a position against a size that is itself
+    /// out of bounds gives the wrong answer.</summary>
+    private void Constrain()
+    {
+        double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
+        if (hostW <= 0 || hostH <= 0) return;
+
+        var (maxW, maxH) = MaxSize();
+        if (_panel.Width > maxW) _panel.Width = maxW;
+        if (_panel.Height > maxH) _panel.Height = maxH;
+
+        double left = Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap);
+        _popup.HorizontalOffset = Math.Clamp(_popup.HorizontalOffset, EdgeGap, left);
+        double top = Math.Max(TopBand, hostH - _panel.Height - EdgeGap);
+        _popup.VerticalOffset = Math.Clamp(_popup.VerticalOffset, TopBand, top);
     }
 
     private static SolidColorBrush GripBrush() => new(PageTheme.WithAlpha(PageTheme.OnSurface, 0x8C));
@@ -554,27 +602,29 @@ public sealed class FloatingWindow
         grip.ManipulationDelta += (_, e) =>
         {
             double dx = e.Delta.Translation.X, dy = e.Delta.Translation.Y;
+            var (maxW, maxH) = MaxSize();
             if (sx < 0)
             {
-                double w = Math.Max(MinW, _panel.Width - dx);
+                double w = Math.Clamp(_panel.Width - dx, MinW, maxW);
                 _popup.HorizontalOffset += _panel.Width - w;
                 _panel.Width = w;
             }
             else if (sx > 0)
             {
-                _panel.Width = Math.Max(MinW, _panel.Width + dx);
+                _panel.Width = Math.Clamp(_panel.Width + dx, MinW, maxW);
             }
+            _ = maxH;   // used by the vertical arm below
             if (sy < 0)
             {
-                double h = Math.Max(MinH, _panel.Height - dy);
+                double h = Math.Clamp(_panel.Height - dy, MinH, maxH);
                 _popup.VerticalOffset += _panel.Height - h;
                 _panel.Height = h;
             }
             else if (sy > 0)
             {
-                _panel.Height = Math.Max(MinH, _panel.Height + dy);
+                _panel.Height = Math.Clamp(_panel.Height + dy, MinH, maxH);
             }
-            ClampIntoView();
+            Constrain();
         };
     }
 
