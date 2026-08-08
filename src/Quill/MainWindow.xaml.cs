@@ -5220,6 +5220,14 @@ public sealed partial class MainWindow : Window
             // CONCEPTS-REF 10.5 item 29: mouse modes move into the Interaction
             // page. Routed through SetMouseMode so the top bar's own radio state
             // and glyph stay in step with the circles.
+            // §11.11's Stylus and Gestures tabs drive the live surface, not just
+            // the stored preference. ApplyPen is MainWindow's own ApplyPreset — the
+            // same call the dial, the pen row and the Brushes panel are handed.
+            ActivePen = ActivePreset,
+            ApplyPen = ApplyPreset,
+            SetEraserStyle = st => { Surface.EraserStyle = st; _library.LastEraserStyle = st; },
+            SetEraserSize = v => Surface.EraserSize = v,
+            SetShapeRecognition = v => Surface.ShapeRecognition = v,
             MouseMode = () => Surface.MouseMode.ToString(),
             SetMouseMode = t =>
             {

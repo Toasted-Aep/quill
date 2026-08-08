@@ -45,7 +45,7 @@ public static class PanelFonts
     /// scales the finished tree.</para></summary>
     public static readonly string[] Pages =
     {
-        "Workspace", "Interaction", "Brushes", "Objects", "Export",
+        "Workspace", "Interaction", "Gestures", "Stylus", "Brushes", "Objects", "Export",
     };
 
     /// <summary>Where the live library comes from, so a surface that has no host
