@@ -341,10 +341,28 @@ public sealed class FloatingWindow
                 Visibility = on ? Visibility.Visible : Visibility.Collapsed,
             };
 
-            var cell = new Grid { Background = new SolidColorBrush(Colors.Transparent) };
-            cell.Children.Add(label);
-            cell.Children.Add(underline);
-            cell.Tapped += (_, _) => ShowTab(idx);
+            var art = new Grid();
+            art.Children.Add(label);
+            art.Children.Add(underline);
+
+            // A BUTTON, not a bare Grid with a Tapped handler. The tab strip is
+            // the only way to switch a floating window's page, and as a Grid it
+            // had no keyboard focus, no invoke pattern and no name — unreachable
+            // for a screen reader and untestable from UIA. Stripped to nothing
+            // but its hit area so it still LOOKS like the reference's bare label.
+            var cell = new Button
+            {
+                Content = art,
+                Background = new SolidColorBrush(Colors.Transparent),
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(2, 0, 2, 0),
+                MinWidth = 0,
+                MinHeight = 0,
+                CornerRadius = new CornerRadius(4),
+            };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(cell, _tabs[i].Label);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(cell, "Tab_" + _tabs[i].Label);
+            cell.Click += (_, _) => ShowTab(idx);
             _tabStrip.Children.Add(cell);
         }
     }
