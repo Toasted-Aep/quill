@@ -18,14 +18,22 @@ internal static class Program
     // §8. Papers with no entry here are rendered and measured but not gated:
     // Rippled and Darkprint have no published floor, and Plain White and
     // Transparent are not grain textures at all.
-    private static readonly Dictionary<PaperKind, double> Thresholds = new()
-    {
-        [PaperKind.Lightweight] = 4.0,
-        [PaperKind.Heavyweight] = 7.0,
-        [PaperKind.Crumpled] = 7.0,
-        [PaperKind.Blueprint] = 3.0,
-        [PaperKind.BrownPaper] = 3.0,
-    };
+    //
+    // The published floors describe grain at FULL amplitude. §10.6 turned the
+    // whole set down because the user found it too noticeable, so the gate
+    // scales with PaperGrain.GrainScale rather than being rewritten - the point
+    // of these floors is to catch a texture that has become INVISIBLE, and that
+    // question is still asked correctly at any amplitude. Lower the dial again
+    // and the gate follows; delete the dial and the original numbers return.
+    private static readonly Dictionary<PaperKind, double> Thresholds =
+        new Dictionary<PaperKind, double>
+        {
+            [PaperKind.Lightweight] = 4.0,
+            [PaperKind.Heavyweight] = 7.0,
+            [PaperKind.Crumpled] = 7.0,
+            [PaperKind.Blueprint] = 3.0,
+            [PaperKind.BrownPaper] = 3.0,
+        }.ToDictionary(e => e.Key, e => e.Value * PaperGrain.GrainScale);
 
     private static int Main(string[] args)
     {

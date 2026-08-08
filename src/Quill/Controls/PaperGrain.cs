@@ -139,6 +139,21 @@ public static class PaperGrain
         }
     }
 
+    /// <summary>Global grain amplitude, applied once at the compose step.
+    ///
+    /// Every paper's offsets pass through here, so scaling in one place makes
+    /// the whole set quieter WITHOUT changing any paper's character relative to
+    /// the others - Crumpled stays the loudest, Lightweight the faintest, and
+    /// the multi-scale structure is untouched because scaling is linear.
+    ///
+    /// The per-paper amplitudes were tuned to clear section 8's floors, and
+    /// those floors were set deliberately high to escape a build whose textures
+    /// measured the same sigma as a blank page. They overshot: the user reports
+    /// the papers are now "too noticeable". This dial is the correction, and it
+    /// is the right knob to turn again if they are still not happy - the floors
+    /// in tools/PaperProof scale with it.</summary>
+    public const float GrainScale = 0.2f;
+
     private static void Compose(byte[] bgra, float[] dr, float[] dg, float[] db,
                                 byte gr, byte gg, byte gb)
     {
@@ -148,9 +163,9 @@ public static class PaperGrain
             for (int x = 0; x < Tile; x++)
             {
                 int i = row + x, o = i * 4;
-                bgra[o]     = Clamp8(gb + db[i]);
-                bgra[o + 1] = Clamp8(gg + dg[i]);
-                bgra[o + 2] = Clamp8(gr + dr[i]);
+                bgra[o]     = Clamp8(gb + db[i] * GrainScale);
+                bgra[o + 1] = Clamp8(gg + dg[i] * GrainScale);
+                bgra[o + 2] = Clamp8(gr + dr[i] * GrainScale);
                 bgra[o + 3] = 255;
             }
         });
