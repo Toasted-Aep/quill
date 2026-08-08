@@ -521,6 +521,15 @@ public class Library
     public string MeasureUnit { get; set; } = "";               // "" = the combined option
     public string MeasureFormat { get; set; } = "Abbreviated";  // Full|Abbreviated
     public string MeasurePrecision { get; set; } = "Rounded";   // Rounded|Tenths
+
+    // ---- panel type scale (CONCEPTS-REF 10.5 item 22) ---------------------
+    // "Panel font is too big. Reduce it, and add a developer setting that allows
+    // changing the font of specific pages." One multiplier over the whole of
+    // section 3.1's type scale, so the reference's RATIOS between a heading, a
+    // sub-heading and a caption survive the shrink; plus a per-page override
+    // list, "Workspace=0.8", for the developer setting proper.
+    public double PanelFontScale { get; set; } = 0.85;
+    public List<string> PanelFontOverrides { get; set; } = new();
     public bool ShowStrokeLength { get; set; }
     public bool ShowSelectionScale { get; set; }
 

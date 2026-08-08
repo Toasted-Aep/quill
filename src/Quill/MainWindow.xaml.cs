@@ -5169,6 +5169,18 @@ public sealed partial class MainWindow : Window
                 Surface.Refresh(); ScheduleSave();
             },
             SetUnitsPerInch = v => { if (_curPage != null) { _curPage.UnitsPerInch = v; Surface.Refresh(); ScheduleSave(); } },
+            // The settings panel used to push the PAGE's ground into PageTheme
+            // itself, which overrode a pinned theme every time it opened. This is
+            // the one function in the app that knows what the ground is.
+            Ground = ResolveGround,
+            // CONCEPTS-REF 10.5 item 29: mouse modes move into the Interaction
+            // page. Routed through SetMouseMode so the top bar's own radio state
+            // and glyph stay in step with the circles.
+            MouseMode = () => Surface.MouseMode.ToString(),
+            SetMouseMode = t =>
+            {
+                if (Enum.TryParse<MouseMode>(t, out var m)) SetMouseMode(m);
+            },
             ApplyTheme = ApplyTheme,
             Save = ScheduleSave,
             TouchDraw = () => TouchDrawToggle.IsChecked == true,
