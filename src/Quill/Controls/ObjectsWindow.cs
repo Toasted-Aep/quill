@@ -249,21 +249,22 @@ public sealed class ObjectsWindow
         var strip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Padding = new Thickness(6, 6, 6, 6) };
         foreach (var o in items) strip.Children.Add(ObjectTile(o));
 
+        // §10.5 item 24 — "the Objects library glitches when scrolled sideways".
+        // Two causes, both in this one construction: a bare ScrollViewer nested
+        // in the window's vertical scroller chains its horizontal fling into the
+        // parent and lurches the whole panel, and the band's corner radius did
+        // not clip the scroller inside it so tiles bled over the rounded corners.
+        var scroller = StripScroll.Horizontal(strip);
+        scroller.Height = Band;
+        scroller.CornerRadius = new CornerRadius(10);
+
         box.Children.Add(new Border
         {
             CornerRadius = new CornerRadius(10),
             // a wash of the ink rather than a fixed grey at two alphas: the last
             // two-state colour pick in this window
             Background = new SolidColorBrush(ChromeUi.Wash(0x18)),
-            Child = new ScrollViewer
-            {
-                Height = Band,
-                Content = strip,
-                HorizontalScrollMode = ScrollMode.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
-                VerticalScrollMode = ScrollMode.Disabled,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            },
+            Child = scroller,
         });
         return box;
     }
@@ -298,11 +299,14 @@ public sealed class ObjectsWindow
         });
         ToolTipService.SetToolTip(stack, "Place a " + o.Name.ToLowerInvariant() + " on the page");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(stack, o.Name);
-        stack.Tapped += (_, _) =>
+        // Slop-guarded, not Tapped: a slow sideways drag over the band used to
+        // end in a Tapped on whichever tile the pointer came to rest on, so
+        // scrolling the row dropped a shape on the page (§10.5 item 24).
+        StripScroll.Tap(stack, () =>
         {
             _h.InsertShape(o.Kind, o.Regular);
             _h.Status($"{o.Name} placed — drag it to move, drag a corner to resize.");
-        };
+        });
         return stack;
     }
 

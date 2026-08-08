@@ -376,14 +376,10 @@ internal static class ChromeUi
         Background = new SolidColorBrush(Hairline),
     };
 
-    public static ScrollViewer HScroll(UIElement content) => new()
-    {
-        Content = content,
-        HorizontalScrollMode = ScrollMode.Auto,
-        HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
-        VerticalScrollMode = ScrollMode.Disabled,
-        VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-    };
+    /// <summary>A horizontal strip. Routed through <see cref="StripScroll"/> so
+    /// the wheel, the rail and the scroll chaining behave the same here as in the
+    /// settings rows, the brush strips and the Objects bands (§10.5 items 24-25).</summary>
+    public static ScrollViewer HScroll(UIElement content) => StripScroll.Horizontal(content);
 
     /// <summary>The blue primary action button the spec pins to #3282aa.</summary>
     public static Button PrimaryButton(string label, Action click)
