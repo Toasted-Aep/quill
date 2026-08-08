@@ -1540,12 +1540,15 @@ public sealed class SettingsWindow
     // =======================================================================
     // Bridges to other agents' surfaces
     // =======================================================================
-    /// <summary>SHIM for <c>PaperTextures.GroundOf</c>, which the paper-texture
-    /// rebuild is due to publish. It is not in this worktree yet, so the ground
-    /// is resolved through the overload that IS there — which already answers
-    /// with the fixed grounds for Blueprint / Brown / Darkprint and with the
-    /// option's own colour for everything else. Delete the body and call
-    /// <c>PaperTextures.GroundOf(o.Id)</c> the moment that lands.</summary>
+    /// <summary>The swatch fill. No longer a shim: the paper rebuild has landed,
+    /// and <c>PaperTextures.Ground(id, fallback)</c> now resolves through
+    /// <c>PaperTextures.GroundOf(PaperKind)</c> itself — the fixed ground for
+    /// Blueprint / Brown Paper / Darkprint, and the page’s own colour for the
+    /// white stocks and the plain-colour page.
+    ///
+    /// <para>Kept as one call rather than inlined because it is the single place
+    /// this window decides what colour a paper IS, and §6 makes that the only
+    /// input to the whole theme derivation.</para></summary>
     private static Color GroundOf(PaperOption o) =>
         PaperTextures.Ground(o.Id, ColorUtil.Parse(o.Background));
 
