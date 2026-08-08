@@ -80,10 +80,16 @@ public sealed class ToolWheel
     // Geometry - every length a ratio of R, per §1.1
     // ===================================================================
     private const double R = 98;                   // §1.1 nominal outer radius
-    private const double RingIn = 0.70 * R;        // 68.6  ring inner = disc edge
+    // 11.2 items 3 and 4. The user is explicit that the OVERALL DIAL SIZE and
+    // the COLOUR CIRCLE SIZE are both already correct, so R and DotR do not
+    // move: what was wrong is the SPLIT between the two rings. The inner disc
+    // comes in from 0.70 R to 0.58 R and the tools ring takes every DIP of it,
+    // going from a 29.4 DIP band to 41.2 - forty percent more - which is what
+    // pays for item 5's larger marks and item 8's colour bar.
+    private const double RingIn = 0.58 * R;        // 56.8  ring inner = disc edge
     private const double RingOut = 1.00 * R;       // 98.0  ring outer edge
     private const double PopOut = 1.19 * R;        // 116.6 the ACTIVE sector's outer edge
-    private const double DotR = 0.195 * R;         // 19.1  centre colour dot
+    private const double DotR = 0.195 * R;         // 19.1  centre colour dot - UNCHANGED
     private const double PopCorner = 6;            // §1.2 rounded outer corners
 
     // 10.2 item 5 SUPERSEDES §1.6: undo and redo are no longer satellites
@@ -116,11 +122,26 @@ public sealed class ToolWheel
     // read. LabelLine is set as an explicit LineHeight because a TextBlock's
     // default line box at 9.5 DIP is ~12.7 - taller than the glyphs need and
     // enough on its own to push the label back over the ring edge.
-    private const double MarkBox = 15;
-    private const double MarkR = RingIn + 1.4 + MarkBox / 2;              // 77.5
-    private const double LabelSize = 9.5;
-    private const double LabelLine = 10.5;
-    private const double LabelR = RingIn + 1.4 + MarkBox + 1.2 + LabelLine / 2;   // 91.5
+    // 11.2 items 5, 7, 8 and 9, as one radial budget across the 41.2 DIP band.
+    // Read outward from the disc edge:
+    //
+    //     2.6 colour bar | 1.2 | 23.0 mark | 1.4 | 11.5 label line | 1.5 pad
+    //
+    // which is 41.2 exactly. The mark goes 15 -> 23 (item 5, "tool icons and
+    // stroke previews are too small"), the label keeps 10 item 7's order -
+    // size text OUTER, silhouette INNER - and gains a DIP of type back, and the
+    // per-pen colour preview arrives at the very inner edge (item 8, "into the
+    // TOOLS ring, at that ring's innermost edge, nearest the dial centre").
+    // Nothing crosses 56.8 inward or 96.5 outward, which is what keeps item 7's
+    // "no label may be cut off" true at every angle.
+    private const double ArcStroke = 2.6;          // item 9: was 0.035 R = 3.43
+    private const double ArcR = RingIn + ArcStroke / 2;                   // 58.1
+    private const double MarkBox = 23;
+    private const double MarkR = RingIn + ArcStroke + 1.2 + MarkBox / 2;  // 72.1
+    private const double LabelSize = 10.5;
+    private const double LabelLine = 11.5;
+    private const double LabelR =
+        RingIn + ArcStroke + 1.2 + MarkBox + 1.4 + LabelLine / 2;         // 90.8
     // Wide enough for "4352", the widest string the reference lists, and well
     // inside the 70 DIP chord a 45 degree sector spans at that radius - so a
     // long label cannot reach its neighbour's separator.
@@ -142,13 +163,19 @@ public sealed class ToolWheel
     private const double ValueSize = 9;            // 12 x 0.72
     private const double ReadoutSize = 10;         // 13 x 0.72
 
-    // §1.5 colour arcs on the disc rim.
-    private const double ArcStroke = 0.035 * R;    // 3.4
-    private const double ArcR = RingIn - ArcStroke / 2;   // flush with the disc edge
+    // 11.2 item 9: "the colour preview is too wide - reduce its width." The
+    // arc used to span the WHOLE 45 degree cell, which reads as a coloured rim
+    // rather than as that cell's colour chip. It now covers the middle 58% of
+    // the cell and is 2.6 DIP thick instead of 3.4.
+    private const double ArcSpanFrac = 0.58;
 
-    public const int Slots = 8;                    // §1.1 EIGHT sectors, 45° each
+    // 11.2 item 11. Undo and redo moved inside the hollow centre (item 10), so
+    // the two sectors they used to be worth come back as CUSTOMISABLE CELLS -
+    // the user's own decision, and they ship EMPTY with a + mark rather than
+    // pre-filled, which is what the reference shows for an unassigned cell.
+    public const int Slots = 10;                   // was 8; 36° each
     private const double Span = 360.0 / Slots;
-    private const double Sector0 = 315;            // §1.1 sector 0 centred up-and-left
+    private const double Sector0 = 306;            // §1.1 sector 0 up-and-left, at 36°
     // 9.2: NO gap. The sectors used to be inset by a hairline each side, which
     // rendered as eight detached wedges with dead page showing between them. The
     // reference ring is a continuous annulus DIVIDED BY LINES: neighbours share
@@ -717,9 +744,13 @@ public sealed class ToolWheel
             _label[i].Text = pen != null ? SizeLabel(pen.Size) : "";
             _label[i].Foreground = new SolidColorBrush(act ? surface : onSurface);
 
-            double a = live ? 1 : 0;
+            // 11.2 item 11: an EMPTY cell is not a dead cell. It carries a
+            // muted + and answers a tap by opening the same assignment list a
+            // press-hold does, which is the only way a user could ever fill it.
+            bool empty = id.Length == 0;
+            double a = live ? 1 : empty ? 0.45 : 0;
             _mark[i].Opacity = a;
-            _label[i].Opacity = a;
+            _label[i].Opacity = live ? 1 : 0;
 
             // Ride outward with the pop, along the sector's own radius.
             double push = act ? (PopOut - RingOut) / 2 : 0;
@@ -980,7 +1011,9 @@ public sealed class ToolWheel
             _wheel.Children.Add(p);
         }
 
-        // The rim colour arcs sit on the disc, under everything the disc carries.
+        // 11.2 item 8: the colour bars used to sit ON THE DISC's rim, inside
+        // the inner circle. They are part of the TOOLS ring now, so they are
+        // drawn over the sector fills and the disc is drawn under both.
         _disc.Width = _disc.Height = DiscR * 2;
         _disc.IsHitTestVisible = false;
         Canvas.SetLeft(_disc, Half - DiscR);
@@ -990,10 +1023,14 @@ public sealed class ToolWheel
         for (int i = 0; i < Slots; i++)
         {
             double mid = SlotMid(i);
+            // item 9: the middle ArcSpanFrac of the cell, not all of it.
+            double half = Span * ArcSpanFrac / 2;
             var p = new Path
             {
-                Data = Arc(mid - Span / 2, mid + Span / 2, ArcR),
+                Data = Arc(mid - half, mid + half, ArcR),
                 StrokeThickness = ArcStroke,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
                 IsHitTestVisible = false
             };
             _rimArc[i] = p;
@@ -1202,7 +1239,12 @@ public sealed class ToolWheel
     /// <summary>§1.3's reference order, clockwise from sector 0 (up-and-left):
     /// pen, smudge, eraser, selection, pen, pen, text, marker. Quill has no
     /// smudge tool, so that sector carries the pencil - the reference's own
-    /// grainy-silhouette slot - and the fill tool takes the spare.</summary>
+    /// grainy-silhouette slot - and the fill tool takes the spare.
+    ///
+    /// <para>11.2 item 11 adds two more. They are deliberately EMPTY: the user
+    /// was offered the eyedropper, the ruler and the mix tool pre-placed here
+    /// and chose blank instead, so the two new cells carry a + and wait to be
+    /// assigned, exactly as the reference shows an unassigned cell.</para></summary>
     private string[] DefaultSlots(Library lib)
     {
         var s = new string[Slots];
@@ -1214,6 +1256,8 @@ public sealed class ToolWheel
         s[5] = KindPen + EnsurePen(lib, PenType.FeltTip, "Felt-tip", "#D97757", 5f);
         s[6] = KindTool + "Text";
         s[7] = KindPen + EnsurePen(lib, PenType.Marker, "Marker", "#141413", 8f);
+        s[8] = "";
+        s[9] = "";
         return s;
     }
 
@@ -1480,6 +1524,8 @@ public sealed class ToolWheel
     {
         if (slot < 0 || slot >= Slots) return;
         string id = ResolveSlots()[slot];
+        // 11.2 item 11: tapping an empty cell offers the tool list.
+        if (id.Length == 0) { ClearHover(); ShowAssign(slot); return; }
         if (!Available(id)) { Refresh(); return; }
         // A value card belongs to the tool that was live when it opened, so
         // changing tool closes it rather than silently re-pointing it.
@@ -1937,7 +1983,9 @@ public sealed class ToolWheel
     /// inverts to Surface, because the sector beneath it is OnSurface.</summary>
     private FrameworkElement? SlotArt(string id, Color fg, bool inverted)
     {
-        if (id.Length == 0) return null;
+        // 11.2 item 11's unassigned cell.
+        if (id.Length == 0)
+            return Icons.Mark(Icons.Plus, fg, MarkBox * 0.62, stroked: true, thickness: 2.2);
         if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg, inverted);
         if (id.StartsWith(KindTool, StringComparison.Ordinal))
             return Icons.Mark(Icons.Tool(id[KindTool.Length..]), fg, MarkBox);
