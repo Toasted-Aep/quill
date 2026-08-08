@@ -81,6 +81,22 @@ public sealed class SettingsWindow
         public Func<string>? MouseMode { get; init; }
         public Action<string>? SetMouseMode { get; init; }
 
+        // ---- §11.11's Stylus and Gestures tabs -----------------------------
+        /// <summary>Push the eraser's behaviour and width at the live surface, and
+        /// the shape recogniser's switch. Optional only so an older host
+        /// construction still compiles; without them those rows would store a
+        /// preference that changed nothing until the next launch.</summary>
+        public Action<EraserStyle>? SetEraserStyle { get; init; }
+        public Action<double>? SetEraserSize { get; init; }
+        public Action<bool>? SetShapeRecognition { get; init; }
+
+        /// <summary>The pen the Stylus tab's pressure curve belongs to, and the
+        /// call that makes an edit to it live. Deliberately the SAME ApplyPreset
+        /// the dial, the pen row and the Brushes panel are handed, so a curve
+        /// edited here is the curve those three are drawing with.</summary>
+        public Func<PenPreset?>? ActivePen { get; init; }
+        public Action<PenPreset>? ApplyPen { get; init; }
+
         /// <summary>Grid opacity 0..1 (UI-SPEC-V3 §C). Null = the control hides.</summary>
         public Action<double>? SetGridOpacity { get; init; }
         /// <summary>Reinstall the keyboard layout after this panel changes the
@@ -204,10 +220,16 @@ public sealed class SettingsWindow
         _win.InfoRequested = () => _h.Status(
             "Workspace is the page: its paper, its grid, its artboard and the units everything is measured in. Interaction is the keyboard, the pen and what a finger does.");
         _win.Closed = () => DockChanged?.Invoke();
+        // §11.11: four tabs, decided by the user. Workspace is judged correct as
+        // built; Interaction was "messy" and is split three ways — what a finger
+        // and a mouse do stays here, multi-touch gestures get their own tab, and
+        // everything about the pen gets a third.
         _win.SetTabs(new (string, Func<FrameworkElement>)[]
         {
             ("Workspace", BuildWorkspace),
             ("Interaction", BuildInteraction),
+            ("Gestures", BuildGestureTab),
+            ("Stylus", BuildStylus),
         });
 
         // The two things that can repaint this panel from outside it. The ground
@@ -1219,9 +1241,260 @@ public sealed class SettingsWindow
         var stack = new StackPanel();
         stack.Children.Add(Section("Keyboard & Mouse", true, BuildKeyboard));
         stack.Children.Add(Section("Touch Input", true, BuildTouch));
-        stack.Children.Add(Section("Gesture shortcuts", false, BuildGestures));
+        // Quill's own settings — storage, language, AI, accent, key rebinds — have
+        // no home among §11.11's four headings, so they stay at the foot of this
+        // tab where the "Edit shortcuts" link already points at them.
         stack.Children.Add(Section("All Quill Settings", false, BuildLegacy));
         return Body(stack);
+    }
+
+    // =======================================================================
+    // GESTURES  (§11.11)
+    // =======================================================================
+    /// <summary>§11.11 gives this tab "Tap &amp; Hold, Draw &amp; Hold, and the
+    /// Two / Three / Four Finger Tap rows". Everything Quill can actually
+    /// dispatch is live; everything it cannot is shown, switched off, and says
+    /// why — the same rule the rest of this panel applies, and the reason there
+    /// is no invented default anywhere in here.</summary>
+    private FrameworkElement BuildGestureTab()
+    {
+        _page = "Gestures";
+        var stack = new StackPanel();
+        stack.Children.Add(Section("Draw & Hold", true, BuildDrawHold));
+        stack.Children.Add(Section("Tap & Hold", false, BuildTapHold));
+        stack.Children.Add(Section("Multi-finger taps", true, BuildGestures));
+        return Body(stack);
+    }
+
+    /// <summary>Draw &amp; Hold. Shape recognition is REAL — hold still at the end
+    /// of a stroke and InkSurface snaps it to a clean shape — so this is a live
+    /// switch rather than a recorded preference.</summary>
+    private UIElement BuildDrawHold()
+    {
+        var lib = _h.Library();
+        var box = new StackPanel();
+        box.Children.Add(Caption(
+            "Hold the pen still at the end of a stroke and Quill straightens what you drew into a clean shape."));
+        box.Children.Add(ToggleRow("Enable shape recognition", lib.ShapeRecognition, v =>
+        {
+            lib.ShapeRecognition = v;
+            _h.SetShapeRecognition?.Invoke(v);
+            _h.Save();
+        }, tip: "Live: this is the same switch the Precision panel's Recognition row drives."));
+
+        box.Children.Add(Spacer(6));
+        box.Children.Add(SubHead("Activation time"));
+        box.Children.Add(Caption(
+            "How long to hold still before the shape snaps. Quill's recogniser uses a fixed dwell today, so this " +
+            "is switched off rather than shown as a setting that would not change anything."));
+        var dwell = new Slider { Minimum = 200, Maximum = 1200, StepFrequency = 50, Value = 500, IsEnabled = false };
+        box.Children.Add(dwell);
+        return box;
+    }
+
+    /// <summary>Tap &amp; Hold. Quill dispatches none of these yet — there is no
+    /// press-and-hold router on the canvas — so nothing here is pre-selected.
+    /// §11.11's own instruction about the dial's new cells applies just as well
+    /// to a settings row: leave it blank rather than choose for the user.</summary>
+    private UIElement BuildTapHold()
+    {
+        var box = new StackPanel();
+        box.Children.Add(Caption(
+            "What a press-and-hold on the canvas does. Quill has no press-and-hold router yet, so these are shown " +
+            "unset and switched off — none of them is selected for you, and none of them is faked."));
+
+        var strip = Strip();
+        foreach (var (label, glyph, stroked) in new (string, string, bool)[]
+        {
+            ("Last Used", Icons.History, false),
+            ("Do Nothing", DoNothingGeometry, true),
+            ("Lasso", Icons.Select, false),
+            ("Item Picker", Icons.Objects, false),
+            ("Color Picker", Icons.Fill, false),
+        })
+        {
+            strip.Children.Add(Circle(SwatchD, label, false, () => { },
+                inner: Icons.Mark(glyph, Muted, 30, stroked: stroked, thickness: 2), enabled: false));
+        }
+        box.Children.Add(HRow(strip));
+
+        box.Children.Add(Spacer(10));
+        box.Children.Add(SubHead("Activation time"));
+        box.Children.Add(new Slider { Minimum = 200, Maximum = 1200, StepFrequency = 50, Value = 450, IsEnabled = false });
+        box.Children.Add(ToggleRow("Highlight selection", false, _ => { }, enabled: false,
+            tip: "Needs the press-and-hold router above."));
+        return box;
+    }
+
+    // =======================================================================
+    // STYLUS  (§11.11)
+    // =======================================================================
+    private FrameworkElement BuildStylus()
+    {
+        _page = "Stylus";
+        var stack = new StackPanel();
+        stack.Children.Add(Section("Pressure Response", true, BuildPressure));
+        stack.Children.Add(Section("Preferences", true, BuildStylusPrefs));
+        stack.Children.Add(Section("Eraser Action", true, BuildEraserAction));
+        stack.Children.Add(Section("Side Button", false, BuildSideButton));
+        return Body(stack);
+    }
+
+    /// <summary>§11.6 item 37's "Pressure Response as a two-handle range slider
+    /// (0% - 100%)". The two handles ARE Quill's own model: PressureCurve2 pins
+    /// its control points at input 0 and input 100 and lets only their OUTPUTS
+    /// move, so the range's low handle is Out0 and its high handle is Out100.
+    ///
+    /// <para>Written to the ACTIVE pen and baked to the six-float form the
+    /// renderer reads before the preset is re-applied — otherwise the setting
+    /// would store correctly and change nothing, which is worse than not
+    /// offering it.</para></summary>
+    /// <summary>The pen the Stylus tab edits. Null when the host predates these
+    /// hooks or when the library has no pens at all, and every control below
+    /// switches itself off rather than editing something that is not there.</summary>
+    private PenPreset? StylusPen() => _h.ActivePen?.Invoke();
+
+    private UIElement BuildPressure()
+    {
+        var box = new StackPanel();
+        var pen = _h.ApplyPen == null ? null : StylusPen();
+        if (pen == null)
+        {
+            box.Children.Add(Caption("No pen is selected, so there is no pressure curve to edit."));
+            return box;
+        }
+
+        var r = pen.PressureResponse ?? PressureCurve2.FromLegacy(pen.PressureCurve) ?? new PressureCurve2();
+        box.Children.Add(Caption(
+            $"How hard you press maps to how wide {(string.IsNullOrWhiteSpace(pen.Name) ? "this pen" : pen.Name)} draws. " +
+            "The low handle is the width at no pressure, the high handle the width at full pressure."));
+
+        var readout = Label($"{r.Out0 * 100:0}% - {r.Out100 * 100:0}%");
+        box.Children.Add(readout);
+
+        void Commit()
+        {
+            pen.PressureResponse = r;
+            // Baked down: the renderer reads the legacy six floats, so a v2 curve
+            // that is not sampled into them is a setting with no effect.
+            pen.PressureCurve = r.ToLegacyPoints();
+            readout.Text = $"{r.Out0 * 100:0}% - {r.Out100 * 100:0}%";
+            _h.ApplyPen?.Invoke(pen);
+            _h.Save();
+        }
+
+        var lo = new Slider { Minimum = 0, Maximum = 100, StepFrequency = 1, Value = Math.Round(r.Out0 * 100) };
+        var hi = new Slider { Minimum = 0, Maximum = 100, StepFrequency = 1, Value = Math.Round(r.Out100 * 100) };
+        lo.ValueChanged += (_, e) =>
+        {
+            if (e.NewValue > hi.Value) { lo.Value = hi.Value; return; }
+            r.Out0 = (float)(e.NewValue / 100.0);
+            Commit();
+        };
+        hi.ValueChanged += (_, e) =>
+        {
+            if (e.NewValue < lo.Value) { hi.Value = lo.Value; return; }
+            r.Out100 = (float)(e.NewValue / 100.0);
+            Commit();
+        };
+        box.Children.Add(Label("Width at no pressure"));
+        box.Children.Add(lo);
+        box.Children.Add(Label("Width at full pressure"));
+        box.Children.Add(hi);
+        return box;
+    }
+
+    private UIElement BuildStylusPrefs()
+    {
+        var box = new StackPanel();
+        var pen = _h.ApplyPen == null ? null : StylusPen();
+
+        // Sens is the renderer's own pressure multiplier and ApplyPreset pushes
+        // it, so this one is genuinely live.
+        box.Children.Add(ToggleRow("Enable pressure", pen != null && pen.Sens > 0.01f, v =>
+        {
+            if (pen == null) return;
+            pen.Sens = v ? 1f : 0f;
+            _h.ApplyPen?.Invoke(pen);
+            _h.Save();
+        }, enabled: pen != null,
+           tip: "Off draws every stroke at the pen's full width, whatever the pen reports."));
+
+        box.Children.Add(ToggleRow("Enable tilt", false, _ => { }, enabled: false,
+            tip: "Quill does not read pen tilt from Windows yet, so there is nothing for this to switch."));
+        box.Children.Add(ToggleRow("Enable tap & hold", false, _ => { }, enabled: false,
+            tip: "Needs the press-and-hold router the Gestures tab describes."));
+        box.Children.Add(ToggleRow("Enable artboard drag", false, _ => { }, enabled: false,
+            tip: "The artboard is a reference frame for exports today; it cannot be dragged."));
+        box.Children.Add(ToggleRow("Enable hover brush previews", false, _ => { }, enabled: false,
+            tip: "Quill draws no hover preview under the pen yet."));
+        return box;
+    }
+
+    /// <summary>§11.6 item 37's Eraser Action row, and it is entirely real:
+    /// Quill's EraserStyle already has all four behaviours and EraserSize already
+    /// drives the eraser.</summary>
+    private UIElement BuildEraserAction()
+    {
+        var lib = _h.Library();
+        var box = new StackPanel();
+        box.Children.Add(Caption("What the eraser does to what it touches."));
+
+        var strip = Strip();
+        foreach (var (style, label, glyph, stroked, tip) in EraserActions)
+        {
+            var st = style;
+            bool on = lib.LastEraserStyle == st;
+            var cell = Circle(SwatchD, label, on, () =>
+            {
+                lib.LastEraserStyle = st;
+                _h.SetEraserStyle?.Invoke(st);
+                _h.Save();
+                Touch("Eraser Action");
+            }, inner: Icons.Mark(glyph, on ? Ink : Muted, 30, stroked: stroked, thickness: 2));
+            ToolTipService.SetToolTip(cell, tip);
+            strip.Children.Add(cell);
+        }
+        box.Children.Add(HRow(strip));
+
+        box.Children.Add(Spacer(10));
+        box.Children.Add(SubHead("Size"));
+        var size = Label(lib.EraserSize <= 0 ? "Follows the pen" : $"{lib.EraserSize:0} px");
+        box.Children.Add(size);
+        var slider = new Slider { Minimum = 0, Maximum = 80, StepFrequency = 1, Value = Math.Clamp(lib.EraserSize, 0, 80) };
+        slider.ValueChanged += (_, e) =>
+        {
+            lib.EraserSize = Math.Round(e.NewValue);
+            size.Text = lib.EraserSize <= 0 ? "Follows the pen" : $"{lib.EraserSize:0} px";
+            _h.SetEraserSize?.Invoke(lib.EraserSize);
+            _h.Save();
+        };
+        box.Children.Add(slider);
+        box.Children.Add(Caption("Zero lets the eraser follow the active pen's width."));
+        return box;
+    }
+
+    private static readonly (EraserStyle Style, string Label, string Glyph, bool Stroked, string Tip)[] EraserActions =
+    {
+        (EraserStyle.HardMask, "Hard Mask", Icons.Eraser, false, "Removes everything under the cursor outright."),
+        (EraserStyle.SoftMask, "Soft Mask", SoftMaskGeometry, true, "Fades coverage by distance from the centre."),
+        (EraserStyle.Slice, "Slice", SliceGeometry, true, "Cuts a stroke in two where you cross it, without thinning it."),
+        (EraserStyle.Nudge, "Nudge", NudgeGeometry, true, "Pushes ink out of the way instead of deleting it."),
+    };
+
+    /// <summary>§11.6 item 37's "Side Button / Right Mouse Button" row. The pen's
+    /// barrel button is the same input as the top-button gestures already stored
+    /// in GestureBindings, so this drives those rather than inventing a second
+    /// store that could disagree with them.</summary>
+    private UIElement BuildSideButton()
+    {
+        var box = new StackPanel();
+        box.Children.Add(Caption(
+            "The pen's barrel button and the right mouse button. Windows does not deliver barrel presses to Quill " +
+            "yet, so these are recorded and take effect the moment that input lands — nothing here is faked in the " +
+            "meantime, and nothing is chosen for you."));
+        box.Children.Add(BuildGestureRows(TopButtonGestures));
+        return box;
     }
 
     private UIElement BuildKeyboard()
@@ -1307,6 +1580,12 @@ public sealed class SettingsWindow
 
     /// <summary>§10.5 item 29. Tags are <c>MouseMode</c>'s own member names, so
     /// the host can round-trip them through Enum.Parse without a second table.</summary>
+    /// Soft mask: the eraser's disc with a feathered rim.
+    private const string SoftMaskGeometry =
+        "M12 7.6 A4.4 4.4 0 1 1 11.99 7.6 Z " +
+        "M12 3.9 A8.1 8.1 0 1 1 11.99 3.9 Z " +
+        "M3.1 12 A8.9 8.9 0 0 1 12 3.1 M20.9 12 A8.9 8.9 0 0 1 12 20.9";
+
     private static readonly (string Tag, string Label, string Glyph, bool Stroked, string Tip)[] MouseModes =
     {
         ("Auto", "Normal", Icons.Mouse, false,
@@ -1384,11 +1663,15 @@ public sealed class SettingsWindow
         return box;
     }
 
-    private static readonly (string Tag, string Label)[] Gestures =
+    private static readonly (string Tag, string Label)[] TopButtonGestures =
     {
-        ("TopButtonClick", "Top-button click"),
-        ("TopButtonDouble", "Top-button double-click"),
-        ("TopButtonHold", "Top-button hold"),
+        ("TopButtonClick", "Click"),
+        ("TopButtonDouble", "Double click"),
+        ("TopButtonHold", "Long press"),
+    };
+
+    private static readonly (string Tag, string Label)[] FingerGestures =
+    {
         ("TwoFingerTap", "Two-finger tap"),
         ("ThreeFingerTap", "Three-finger tap"),
         ("FourFingerTap", "Four-finger tap"),
@@ -1401,12 +1684,19 @@ public sealed class SettingsWindow
 
     private UIElement BuildGestures()
     {
-        var lib = _h.Library();
         var box = new StackPanel { Spacing = 2 };
         box.Children.Add(Caption(
-            "Quill does not receive pen-barrel presses or multi-finger taps from Windows yet, so these are recorded and will take effect the moment that input lands. Nothing here is faked in the meantime."));
+            "Quill does not receive multi-finger taps from Windows yet, so these are recorded and will take effect the moment that input lands. Nothing here is faked in the meantime, and nothing is chosen for you."));
+        box.Children.Add(BuildGestureRows(FingerGestures));
+        return box;
+    }
 
-        foreach (var g in Gestures)
+    private FrameworkElement BuildGestureRows((string Tag, string Label)[] rows)
+    {
+        var lib = _h.Library();
+        var box = new StackPanel { Spacing = 2 };
+
+        foreach (var g in rows)
         {
             var tag = g.Tag;
             string cur = ReadGesture(lib, tag);
