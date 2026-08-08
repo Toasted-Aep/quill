@@ -32,15 +32,29 @@ public static class PanelFonts
     /// to the same window so a typo cannot make the panel unusable.</summary>
     public const double Min = 0.60, Max = 1.30;
 
-    /// <summary>The pages a scale can be pinned to — and ONLY the pages that
-    /// actually read it. The Objects library and the Export pane build their type
-    /// through <c>ChromeUi</c> rather than through this, so listing them would be
-    /// a developer control that does nothing; they join the list when they are
-    /// moved onto the same scale.</summary>
+    /// <summary>Every panel, per §11.6 item 40 ("a developer font-size setting
+    /// for every panel"). Named here rather than discovered so the developer
+    /// control lists them in a fixed order.
+    ///
+    /// <para>Two of them get there by different routes, and the difference is
+    /// deliberate. Workspace, Interaction and Brushes author their type AT scale,
+    /// because §3.1 and §4 fix the RATIOS between a 30 DIP heading, a 17 DIP
+    /// sub-head and a 15 DIP caption and those ratios have to survive the shrink.
+    /// Objects and Export have uniform type with no such specification, so they
+    /// hand their page name to <c>FloatingWindow.FontPage</c> and the window
+    /// scales the finished tree.</para></summary>
     public static readonly string[] Pages =
     {
-        "Workspace", "Interaction", "Brushes",
+        "Workspace", "Interaction", "Brushes", "Objects", "Export",
     };
+
+    /// <summary>Where the live library comes from, so a surface that has no host
+    /// delegate of its own — <see cref="Quill.Controls.FloatingWindow"/> — can
+    /// still resolve a scale. Set once, at startup, by MainWindow.</summary>
+    public static Func<Library?>? Source { get; set; }
+
+    /// <summary>The multiplier for one page, resolved through <see cref="Source"/>.</summary>
+    public static double Scale(string page) => ScaleFor(Source?.Invoke(), page);
 
     /// <summary>The multiplier for one page.</summary>
     public static double ScaleFor(Library? lib, string page)

@@ -310,6 +310,53 @@ public sealed class FloatingWindow
         if (IsOpen) ShowTab(_active, preserveScroll ? keep : null);
     }
 
+    /// <summary>Which page's developer font scale this window's CONTENT takes
+    /// (§11.6 item 40).
+    ///
+    /// <para>Left null by a tenant that authors its own type at scale — Settings
+    /// and Brushes do, because §3.1 and §4 fix the RATIOS between their headings
+    /// and their captions and those have to survive the shrink. A tenant whose
+    /// type is uniform names its page here instead and the window scales the
+    /// finished tree, which is the same setting reaching a panel that has no
+    /// specified type scale of its own to preserve.</para></summary>
+    public string? FontPage { get; set; }
+
+    /// <summary>Multiplies every explicit font size in a freshly built tree.
+    /// Applied ONLY on the build, never on a cached tree, or switching back to a
+    /// tab would scale it a second time. Walks the logical containers by type
+    /// rather than using VisualTreeHelper: content has not been arranged when
+    /// this runs, so a Button's template does not exist yet and only its Content
+    /// is reachable.</summary>
+    internal static void ScaleFonts(DependencyObject? node, double k)
+    {
+        if (node == null || Math.Abs(k - 1) < 0.001) return;
+        switch (node)
+        {
+            case TextBlock t:
+                t.FontSize *= k;
+                if (t.LineHeight > 0) t.LineHeight *= k;
+                return;
+            case Control c:
+                c.FontSize *= k;
+                break;
+        }
+        switch (node)
+        {
+            case Panel p:
+                foreach (var child in p.Children) ScaleFonts(child, k);
+                break;
+            case Border b:
+                ScaleFonts(b.Child, k);
+                break;
+            case ContentControl cc:
+                ScaleFonts(cc.Content as DependencyObject, k);
+                break;
+            case ItemsControl ic:
+                foreach (var item in ic.Items) ScaleFonts(item as DependencyObject, k);
+                break;
+        }
+    }
+
     /// <summary>The scroller's inset. Zero lets a tenant paint edge-to-edge —
     /// the Brushes panel's preview strip and its section bands are full-bleed
     /// (§4), so they cannot live inside the window's own padding.</summary>
@@ -388,6 +435,11 @@ public sealed class FloatingWindow
         {
             try { content = _tabs[index].Build(); }
             catch { content = new TextBlock { Text = "This section could not be built." }; }
+            // §11.6 item 40, for the tenants that do not author their own scale.
+            if (FontPage is { Length: > 0 } page)
+            {
+                try { ScaleFonts(content, Services.PanelFonts.Scale(page)); } catch { }
+            }
             _built[index] = content;
         }
         _scroller.Content = content;

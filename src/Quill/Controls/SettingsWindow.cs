@@ -1467,10 +1467,102 @@ public sealed class SettingsWindow
     /// key rebinds. It is a section like any other, collapsed by default.</summary>
     private UIElement BuildLegacy()
     {
-        var panel = new StackPanel { Spacing = 10 };
+        var panel = new StackPanel { Spacing = 12 };
         try { _h.FillLegacySettings(panel); }
         catch { panel.Children.Add(Caption("These settings could not be loaded.")); }
+        // §11.6 item 45: "all Quill-specific settings must match the rest of the
+        // panel's styling." These controls are built by MainWindow — the same
+        // block that used to be a ContentDialog — so they arrive wearing the
+        // dialog's type and the dialog's greys: 15 DIP semibold headers, 12 DIP
+        // descriptions dimmed with Opacity rather than coloured, and fields at
+        // stock radii. Rather than fork three hundred lines into this class and
+        // let the two drift, the adopted tree is normalised onto THIS panel's
+        // vocabulary: the same type scale, the same Ink and OnSurfaceMuted, the
+        // same field radius and the same margins as every section above it.
+        try { Adopt(panel); } catch { }
+        panel.Width = double.NaN;      // MainWindow builds it at a fixed 480
+        panel.HorizontalAlignment = HorizontalAlignment.Stretch;
         return panel;
+    }
+
+    /// <summary>Re-dresses a tree this panel did not build.
+    ///
+    /// <para>Classification is by the role the original size and weight signal,
+    /// not by position: a heading is bold or 15 DIP and up, a caption is 12.5 DIP
+    /// and down, everything else is body. That reads the intent MainWindow's
+    /// builder already expressed instead of requiring it to be re-expressed.</para>
+    ///
+    /// <para>Walks the LOGICAL containers by type. VisualTreeHelper would find
+    /// nothing useful: this runs before the tree is arranged, so no control has a
+    /// template yet and only Content / Child / Children are reachable.</para></summary>
+    private void Adopt(DependencyObject? node)
+    {
+        switch (node)
+        {
+            case null:
+                return;
+
+            case TextBlock t:
+            {
+                bool head = t.FontWeight.Weight >= Microsoft.UI.Text.FontWeights.SemiBold.Weight
+                            || t.FontSize >= 15;
+                bool caption = !head && t.FontSize <= 12.5;
+                t.FontSize = T(head ? SubHeadSize : caption ? CaptionSize : BodySize);
+                t.Foreground = B(caption ? Muted : Ink);
+                // The dialog dimmed its captions with Opacity; this panel colours
+                // them, and the two together would double the fade.
+                t.Opacity = 1;
+                t.TextWrapping = TextWrapping.Wrap;
+                if (head)
+                {
+                    t.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+                    t.Margin = new Thickness(0, 14, 0, 0);
+                }
+                else if (caption)
+                {
+                    t.LineHeight = T(CaptionSize) * 1.4;
+                    // §11.6 item 39 reaches this block too.
+                    t.Margin = new Thickness(0, 4, 0, 10);
+                }
+                return;
+            }
+
+            case Slider s:
+                s.FontSize = T(BodySize);
+                break;
+
+            case TextBox tb:
+                tb.FontSize = T(BodySize);
+                tb.CornerRadius = new CornerRadius(10);
+                break;
+
+            case Button btn:
+                btn.FontSize = T(14);
+                btn.CornerRadius = new CornerRadius(11);
+                btn.Padding = new Thickness(14, 6, 14, 6);
+                break;
+
+            case Control c:
+                // ComboBox, ToggleSwitch, CheckBox and the rest keep their stock chrome — the panel supplies the type, WinUI supplies the control.
+                c.FontSize = T(BodySize);
+                break;
+        }
+
+        switch (node)
+        {
+            case Panel p:
+                foreach (var child in p.Children) Adopt(child);
+                break;
+            case Border b:
+                Adopt(b.Child);
+                break;
+            case ContentControl cc:
+                Adopt(cc.Content as DependencyObject);
+                break;
+            case ItemsControl ic:
+                foreach (var item in ic.Items) Adopt(item as DependencyObject);
+                break;
+        }
     }
 
     // =======================================================================
