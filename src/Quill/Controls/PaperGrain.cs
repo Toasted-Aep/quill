@@ -215,31 +215,54 @@ public static class PaperGrain
         var h = new float[N];
         var warpU = new float[N];
         var warpV = new float[N];
-        Fbm(warpU, 2, 2, 3, 0.5f, 0.040f, 3301);
-        Fbm(warpV, 2, 2, 3, 0.5f, 0.040f, 3307);
+        // Enough to stop the folds being ruler-straight, and no more. Pushed
+        // further the creases start to curve like draped cloth; paper folds are
+        // comparatively angular, because a sheet creases rather than drapes.
+        Fbm(warpU, 2, 2, 4, 0.55f, 0.046f, 3301);
+        Fbm(warpV, 2, 2, 4, 0.55f, 0.046f, 3307);
 
         // Fold families. A family is the set of parallel lines where
         // (a·u + b·v) is a whole number: integer a and b make it exactly periodic
-        // on the tile, and the family's line spacing is Tile/sqrt(a² + b²), i.e.
-        // 121..512 px — long creases that cross the whole sheet, not a rash.
+        // on the tile, and the family's line spacing is Tile/sqrt(a² + b²).
+        //
+        // On its own that is a LATTICE, and a lattice of evenly pitched creases
+        // running edge to edge reads as quilted or embossed, not as crumpled —
+        // which is exactly how the first version of this looked. Real crumpled
+        // paper has folds of unequal length that start and stop, cluster in some
+        // places and leave others nearly flat. So every family carries a
+        // PRESENCE MASK (fm) — a slow periodic field, thresholded — and the
+        // family's creases only exist where its mask is up. Folds then terminate
+        // mid-field, some vanish entirely, and the density clumps.
+        //
+        // The mask has to be a function of (u, v) rather than of the line index:
+        // stepping u by 1 moves the index by a, so per-line randomness could only
+        // wrap if it were constant along gcd(a, b). A 2-D periodic field has no
+        // such problem and tiles for free.
         var rng = new Rng(90210);
-        const int families = 15;
+        const int families = 22;
         var fa = new int[families];
         var fb = new int[families];
         var fw = new float[families];
         var fp = new float[families];
         var fs = new float[families];
+        var fm = new int[families];
+        var fbias = new float[families];
         for (int k = 0; k < families; k++)
         {
             int a, b;
-            do { a = rng.Int(-3, 3); b = rng.Int(-3, 3); } while (a == 0 && b == 0);
+            do { a = rng.Int(-4, 4); b = rng.Int(-4, 4); } while (a == 0 && b == 0);
             fa[k] = a; fb[k] = b;
             float norm = MathF.Sqrt(a * a + b * b);
-            // half the creases are sharp and narrow, half are soft rolled folds
-            float wide = k % 2 == 0 ? rng.Range(11f, 22f) : rng.Range(26f, 52f);
+            // a third sharp, the rest rolled — a sheet has both hard creases and
+            // soft bends and the mix is what stops it looking machine-made
+            float wide = k % 3 == 0 ? rng.Range(9f, 19f) : rng.Range(24f, 58f);
             fw[k] = wide / (Tile / norm);          // width re-expressed as a phase fraction
             fp[k] = rng.Range(0f, 1f);
-            fs[k] = rng.Range(0.55f, 1.25f) * (rng.Next01() < 0.5f ? -1f : 1f);
+            fs[k] = rng.Range(0.45f, 1.30f) * (rng.Next01() < 0.5f ? -1f : 1f);
+            fm[k] = (int)(rng.Next01() * 100000f) + 11;
+            // how much of the sheet this family reaches: some folds cross most of
+            // it, others are a single short crease in one corner
+            fbias[k] = rng.Range(-0.16f, 0.30f);
         }
 
         Parallel.For(0, Tile, y =>
@@ -258,8 +281,18 @@ public static class PaperGrain
                     float dist = t > 0.5f ? 1f - t : t;   // phase distance to the nearest line
                     float w = fw[k];
                     if (dist >= w) continue;
+
+                    // Presence mask — two slow octaves, thresholded soft. Where
+                    // this is 0 the family's crease simply is not there, which is
+                    // what breaks the lattice into folds of unequal length.
+                    int s = fm[k];
+                    float m = Perlin(u * 3f, v * 3f, 3, 3, s)
+                            + 0.55f * Perlin(u * 7f, v * 7f, 7, 7, s + 17);
+                    m = Smooth01((m + 0.30f + fbias[k]) * 2.4f);
+                    if (m <= 0f) continue;
+
                     float e = 1f - dist / w;
-                    acc += fs[k] * e * e;
+                    acc += fs[k] * e * e * m;
                 }
                 h[i] = acc;
             }
@@ -362,11 +395,14 @@ public static class PaperGrain
         // Dark shives: long, thin, near-horizontal and warm — they take the blue
         // channel down hardest, which is what makes them look like wood rather
         // than like dirt.
-        Flecks(dr, dg, db, 420, 5.5f, 0.85f, -22f, 0.20f, 7741, elongate: true,
-               tintG: 0.78f, tintB: 0.55f);
-        // Pale flecks: filler, and the odd bleached fibre.
-        Flecks(dr, dg, db, 200, 2.4f, 1.1f, 18f, 0.35f, 7757, elongate: true,
-               tintG: 0.95f, tintB: 0.90f);
+        // Counts are roughly doubled because the clump test rejects about half
+        // the candidates; what lands is the same quantity of fibre, gathered.
+        Flecks(dr, dg, db, 900, 5.5f, 0.85f, -22f, 0.20f, 7741, elongate: true,
+               tintG: 0.78f, tintB: 0.55f, clump: 5);
+        // Pale flecks: filler, and the odd bleached fibre. Clumped on a different
+        // field so the two do not pile up in the same places.
+        Flecks(dr, dg, db, 430, 2.4f, 1.1f, 18f, 0.35f, 7757, elongate: true,
+               tintG: 0.95f, tintB: 0.90f, clump: 7);
     }
 
     // =====================================================================
@@ -450,7 +486,8 @@ public static class PaperGrain
     /// sheet it sits in.</summary>
     private static void Flecks(float[] dr, float[] dg, float[] db, int count,
                                float length, float width, float amp, float vary, int seed,
-                               bool elongate = false, float tintG = 1f, float tintB = 1f)
+                               bool elongate = false, float tintG = 1f, float tintB = 1f,
+                               int clump = 0)
     {
         bool shared = ReferenceEquals(dr, dg);
         var rng = new Rng(seed);
@@ -458,6 +495,19 @@ public static class PaperGrain
         {
             float cx = rng.Range(0f, Tile);
             float cy = rng.Range(0f, Tile);
+
+            // Fibre CLUMPS. Scattering inclusions uniformly is the giveaway that
+            // a texture is synthetic: real kraft has dense mats of fibre with
+            // visibly emptier sheet between them. Candidates are rejected against
+            // a slow periodic field, so density follows the field instead of
+            // being flat. Rejected candidates are dropped rather than resampled,
+            // which keeps the loop bounded and the output deterministic — callers
+            // raise `count` to compensate.
+            if (clump > 0)
+            {
+                float m = Perlin(cx / Tile * clump, cy / Tile * clump, clump, clump, seed + 991);
+                if (rng.Next01() > Smooth01(0.5f + 2.6f * m)) continue;
+            }
             // aligned flecks sit near the machine direction (horizontal); the rest
             // point anywhere
             float ang = elongate ? rng.Range(-0.42f, 0.42f) : rng.Range(0f, TAU);
@@ -588,6 +638,16 @@ public static class PaperGrain
     {
         int r = a % m;
         return r < 0 ? r + m : r;
+    }
+
+    /// <summary>Clamps to [0,1] and applies the smoothstep ease, so a threshold
+    /// on a noise field produces patches with soft edges rather than a hard
+    /// stencil cut.</summary>
+    private static float Smooth01(float x)
+    {
+        if (x <= 0f) return 0f;
+        if (x >= 1f) return 1f;
+        return x * x * (3f - 2f * x);
     }
 
     /// <summary>A tiny deterministic PRNG. <see cref="System.Random"/>'s sequence
