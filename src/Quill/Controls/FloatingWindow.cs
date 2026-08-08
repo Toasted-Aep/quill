@@ -37,7 +37,11 @@ namespace Quill.Controls;
 public sealed class FloatingWindow
 {
     // ---- chrome geometry (DIPs) ----
-    private const double Radius = 16;
+    /// <summary>The window's corner radius. Exposed so a tenant painting a
+    /// full-bleed element against the top edge (the Brushes panel's preview
+    /// strip) can clip itself to the same curve rather than guessing it.</summary>
+    internal const double TopRadius = 16;
+    private const double Radius = TopRadius;
     private const double HeaderH = 40;
     private const double MinW = 320, MinH = 260;
 
