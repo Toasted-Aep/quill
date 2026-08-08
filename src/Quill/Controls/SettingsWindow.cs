@@ -1783,12 +1783,14 @@ public sealed class SettingsWindow
         };
         cell.Children.Add(disc);
         cell.Children.Add(text);
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(cell, caption);
-        // Slop-guarded rather than Tapped: every one of these circles lives in a
-        // horizontal strip, and a Tapped handler fires at the end of a slow
-        // sideways drag — so scrolling the swatch row used to change the paper.
-        if (enabled) StripScroll.Tap(cell, tap);
-        return cell;
+
+        // A bare Button, not a Tapped handler. These circles are the panel's
+        // primary controls and as StackPanels they had no keyboard focus, no
+        // invoke pattern and no accessible role. The Button also cannot be fired
+        // by a sideways drag: the strip's ScrollViewer takes the pointer capture
+        // when it starts scrolling and the Button raises no Click — which is what
+        // used to change the paper while the reader was only scrolling the row.
+        return StripScroll.Bare(cell, caption, tap, enabled);
     }
 
     /// <summary>Text drawn INSIDE a circle — the unit abbreviations and the
