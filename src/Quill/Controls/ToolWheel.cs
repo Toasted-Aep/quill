@@ -86,22 +86,45 @@ public sealed class ToolWheel
     private const double DotR = 0.195 * R;         // 19.1  centre colour dot
     private const double PopCorner = 6;            // §1.2 rounded outer corners
 
-    // §1.6: the satellites float OUTSIDE the ring. They set the footprint, since
-    // they are the outermost thing the dial draws.
-    private const double SatR = 1.32 * R;          // 129.4 satellite centres
-    private const double SatSize = 30;             // §1.6 "~30 DIP"
-    private const double Half = SatR + SatSize / 2 + 6;   // 150.4
+    // 10.2 item 5 SUPERSEDES §1.6: undo and redo are no longer satellites
+    // outside the ring, they are BUTTONS INSIDE THE WHEEL - on the inner disc's
+    // bottom arc, the one part of §1.4's layout that was empty. The ring is
+    // therefore the outermost thing the dial draws again, and the footprint
+    // comes off the popped radius instead of a satellite orbit: 265 DIP across
+    // rather than 301, so the dial got smaller as well as tidier.
+    private const double SatSize = 18;             // the two glyphs, inside the disc
+    private const double SatX = 0.28 * DiscR;      // 19.2  either side of the midline
+    private const double SatY = 0.68 * DiscR;      // 46.6  below the value row
+    private const double SatHit = SatSize + 8;
+    private const double Half = PopOut + 16;       // 132.6
     private const double Footprint = Half * 2;
 
-    // §1.3 sector contents, stacked along the radial midline. The reference calls
-    // the silhouette "~26 DIP tall", but the ring band is only 0.30 R = 29.4 DIP
-    // and the size label has to fit under it inside the same band; a 26 DIP mark
-    // plus an 11 DIP label is 37. The ratios are exact and the MARK is what gives,
-    // so both sit inside the band with the mark against the outer edge.
-    private const double MarkBox = 20;
-    private const double MarkR = 0.895 * R;        // 87.7  mark centre
-    private const double LabelR = 0.735 * R;       // 72.0  size-label centre
-    private const double LabelSize = 11;           // §1.3 "11 DIP semibold"
+    // 10.2 item 6 SUPERSEDES §1.3's stacking order. The SIZE LABEL takes the
+    // OUTER part of the cell and the STROKE SILHOUETTE the INNER part.
+    //
+    // "The size text is currently cut off" is the same defect stated from the
+    // other side: the label sat at 0.735 R = 72, whose line box reached inward
+    // to r = 65 - four DIP INSIDE the disc, which is a different fill with the
+    // §1.5 colour arc painted across it, so the digits were swallowed. Nothing
+    // may leave the 68.6 -> 98 band now, and the budget is spent explicitly:
+    //
+    //     1.4 pad | 15.0 mark box | 1.2 gap | 10.5 label line | 1.3 pad = 29.4
+    //
+    // which is the band exactly. The MARK is what gives, as §1.3 already said -
+    // there is no arrangement of a 26 DIP silhouette and an 11 DIP label that
+    // fits in 29.4 DIP, and the label is the half the user asked to be able to
+    // read. LabelLine is set as an explicit LineHeight because a TextBlock's
+    // default line box at 9.5 DIP is ~12.7 - taller than the glyphs need and
+    // enough on its own to push the label back over the ring edge.
+    private const double MarkBox = 15;
+    private const double MarkR = RingIn + 1.4 + MarkBox / 2;              // 77.5
+    private const double LabelSize = 9.5;
+    private const double LabelLine = 10.5;
+    private const double LabelR = RingIn + 1.4 + MarkBox + 1.2 + LabelLine / 2;   // 91.5
+    // Wide enough for "4352", the widest string the reference lists, and well
+    // inside the 70 DIP chord a 45 degree sector spans at that radius - so a
+    // long label cannot reach its neighbour's separator.
+    private const double LabelW = 46;
 
     // §1.4 inner disc, all offsets in units of r = RingIn.
     private const double DiscR = RingIn;
@@ -132,9 +155,6 @@ public sealed class ToolWheel
     // an exact edge, and the separator drawn over it is the only thing between
     // them.
     private const double Seam = 0;               // hairline gap so wedges read apart
-
-    // §1.6 satellite bearings: undo at 9 o'clock, redo at 7:30.
-    private const double UndoBearing = 270, RedoBearing = 225;
 
     private const int TapMs = 400;
     private const double TapSlop = 8;
@@ -241,7 +261,6 @@ public sealed class ToolWheel
 
     private readonly Grid _layer;
     private readonly Ellipse _shield;          // the ring's hit surface, radius PopOut
-    private readonly Ellipse _undoHit, _redoHit;
     private readonly Canvas _wheel;
     private readonly CanvasControl _preview;
     private readonly Border _bottom;
@@ -254,6 +273,13 @@ public sealed class ToolWheel
     private readonly Path[] _sep = new Path[Slots];
     private readonly Ellipse _ringEdge = new();
     private readonly Path _pop = new();            // the active sector, at 1.19 R
+    // 10.2 item 7: the same geometry as _pop, in Accent, faded out over the
+    // selection. "Rises AND LIGHTS UP" is two things and this is the second.
+    private readonly Path _flash = new();
+    // Scaled about the DIAL CENTRE, not the path's own bounds, so growing it
+    // reads as the sector being pulled out of the ring along its own radius.
+    private readonly ScaleTransform _popScale = new() { CenterX = Half, CenterY = Half };
+    private readonly ScaleTransform _flashScale = new() { CenterX = Half, CenterY = Half };
     private readonly Canvas[] _mark = new Canvas[Slots];
     private readonly TextBlock[] _label = new TextBlock[Slots];
     // §1.2: when a sector is pulled out to 1.19 R its contents go with it.
@@ -275,6 +301,13 @@ public sealed class ToolWheel
     private Point _centre;
     private int _hoverSlot = -1;
     private int _active = -1;          // the popped sector, cached for the hit test
+    private int _rose = -2;            // which sector the rise animation last played for
+    // Held in a FIELD on purpose: an unrooted Storyboard can be collected while
+    // it is still running, at which point it simply stops and Completed never
+    // fires. Every animation below is FillBehavior.Stop over a value Refresh has
+    // already written, so a collected storyboard costs the motion and nothing
+    // else - but the reference is kept anyway so it normally does not happen.
+    private Storyboard? _riseSb;
     private Zone _hoverZone = Zone.None;
     private Prop? _dragProp;
     private bool _scrubbing;
@@ -323,10 +356,9 @@ public sealed class ToolWheel
 
         _shield = HitCircle(PopOut * 2);
         _layer.Children.Add(_shield);
-        _undoHit = HitCircle(SatSize + 8);
-        _redoHit = HitCircle(SatSize + 8);
-        _layer.Children.Add(_undoHit);
-        _layer.Children.Add(_redoHit);
+        // 10.2 item 5: undo and redo are inside the ring now, so they are inside
+        // the shield too and Aim() resolves them like every other zone. The two
+        // satellite hit circles that used to float outside are gone with them.
 
         _wheel = new Canvas
         {
@@ -361,6 +393,9 @@ public sealed class ToolWheel
         // §1.7 - the value popover. One instance for the life of the dial: WinUI
         // allows an element exactly one parent, and re-adding a live one throws.
         _popover.ValueChanged += Refresh;
+        // 10.2 item 9: the card can go down without the dial asking, so the
+        // preview is driven off the card rather than off the gesture.
+        _popover.Closed += SyncPreview;
         _layer.Children.Add(_popover.Element);
 
         _host.Children.Add(_layer);
@@ -386,9 +421,6 @@ public sealed class ToolWheel
             ShowAssign(idx);
             e.Handled = true;
         };
-        Satellite(_undoHit, () => _surface.Undo());
-        Satellite(_redoHit, () => _surface.Redo());
-
         _assign.Tick += (_, _) =>
         {
             _assign.Stop();
@@ -411,18 +443,6 @@ public sealed class ToolWheel
         HorizontalAlignment = HorizontalAlignment.Left,
         VerticalAlignment = VerticalAlignment.Top,
     };
-
-    private void Satellite(Ellipse hit, Action run)
-    {
-        hit.PointerPressed += (_, e) => { e.Handled = true; };
-        hit.PointerReleased += (_, e) =>
-        {
-            e.Handled = true;
-            if (!_on) return;
-            run();
-            Refresh();
-        };
-    }
 
     private void OnThemeChanged() { if (_on) Refresh(); }
 
@@ -602,18 +622,8 @@ public sealed class ToolWheel
         double rim = PopOut * _scale;
         _shield.Width = _shield.Height = rim * 2;
         _shield.Margin = new Thickness(cx - rim, cy - rim, 0, 0);
-        PlaceSatellite(_undoHit, UndoBearing);
-        PlaceSatellite(_redoHit, RedoBearing);
-
         _preview.Margin = new Thickness(cx - PreviewBox / 2, cy - PreviewBox / 2, 0, 0);
         PlacePopover();
-    }
-
-    private void PlaceSatellite(Ellipse hit, double bearing)
-    {
-        var at = Polar(bearing, SatR * _scale);
-        double r = hit.Width / 2;
-        hit.Margin = new Thickness(_centre.X + at.X - r, _centre.Y + at.Y - r, 0, 0);
     }
 
     /// <summary>§1.7: the popover is docked to the RIGHT of the inner disc and
@@ -738,8 +748,12 @@ public sealed class ToolWheel
             _pop.Data = PopGeometry(active);
             _pop.Fill = new SolidColorBrush(onSurface);
             _pop.Visibility = Visibility.Visible;
+            // A SECOND geometry, not the same instance: WinUI's one-parent
+            // rule covers Geometry too, and sharing it throws mid-Refresh.
+            _flash.Data = PopGeometry(active);
+            _flash.Fill = new SolidColorBrush(PageTheme.Accent);
         }
-        else _pop.Visibility = Visibility.Collapsed;
+        else { _pop.Visibility = Visibility.Collapsed; _flash.Visibility = Visibility.Collapsed; }
 
         // ---- §1.4 the inner disc ----------------------------------------
         var ap = ToolPen();
@@ -769,22 +783,76 @@ public sealed class ToolWheel
         _dot.Stroke = new SolidColorBrush(_hoverZone == Zone.Dot ? PageTheme.Accent : outline);
         _dot.StrokeThickness = _hoverZone == Zone.Dot ? 3 : 2;
 
-        // ---- §1.6 satellites --------------------------------------------
-        Satellite(_undoArt, Icons.Undo, false, _surface.UndoManager.CanUndo, onSurface);
-        Satellite(_redoArt, Icons.Undo, true, _surface.UndoManager.CanRedo, onSurface);
+        // ---- 10.2 item 5: undo and redo, inside the disc -----------------
+        Button(_undoArt, Icons.Undo, false, _surface.UndoManager.CanUndo, onSurface);
+        Button(_redoArt, Icons.Undo, true, _surface.UndoManager.CanRedo, onSurface);
 
         BuildToolOptions(onSurface, outline, surface);
         _popover.Sync();
-        if (_dragProp != null) _preview.Invalidate();
+        // 10.2 item 9: the preview follows the POPOVER, not the drag.
+        SyncPreview();
+        // 10.2 item 7. Last, so the geometry and the fills it animates are
+        // already the ones the frame will use.
+        if (_rose != active) { _rose = active; if (active >= 0) Rise(); }
     }
 
-    private void Satellite(Canvas host, string icon, bool mirror, bool live, Color fg)
+    private void Button(Canvas host, string icon, bool mirror, bool live, Color fg)
     {
         host.Children.Clear();
-        // §1.6: OnSurface when available, OnSurface at 30% when not - never
-        // hidden, so the pair keeps its place either side of the ring.
+        // Same treatment §1.6 gave the satellites - OnSurface when available,
+        // OnSurface at 30% when not, never hidden - now that they are cells on
+        // the disc rather than free-floating marks.
         var c = live ? fg : PageTheme.WithAlpha(fg, 77);
         host.Children.Add(Icons.Mark(icon, c, SatSize, mirror: mirror));
+    }
+
+    /// <summary>10.2 item 7: "on selecting a cell it rises and lights up."
+    ///
+    /// <para>The rise is the popped sector scaled about the DIAL'S centre from
+    /// the ring's own radius up to 1.19 R, so it grows outward along its own
+    /// radial midline rather than swelling in place; the light is the same
+    /// wedge in Accent, fading out over it. Both animate FillBehavior.Stop over
+    /// values Refresh has already written, which is what makes a storyboard
+    /// that is collected or never begins cost the motion and nothing else.</para></summary>
+    private void Rise()
+    {
+        _popScale.ScaleX = _popScale.ScaleY = 1;
+        _flashScale.ScaleX = _flashScale.ScaleY = 1;
+        _flash.Opacity = 0;
+        _flash.Visibility = Visibility.Visible;
+        if (_h.ReduceMotion()) return;
+        try
+        {
+            _riseSb?.Stop();
+            var sb = new Storyboard();
+            void Track(DependencyObject t, string prop, double a, double b, int ms, double c1 = 0.16)
+            {
+                var anim = new DoubleAnimationUsingKeyFrames
+                {
+                    EnableDependentAnimation = true,
+                    FillBehavior = FillBehavior.Stop,
+                };
+                anim.KeyFrames.Add(new DiscreteDoubleKeyFrame { KeyTime = TimeSpan.Zero, Value = a });
+                anim.KeyFrames.Add(new SplineDoubleKeyFrame
+                {
+                    KeyTime = TimeSpan.FromMilliseconds(ms),
+                    Value = b,
+                    KeySpline = new KeySpline { ControlPoint1 = new Point(c1, 1), ControlPoint2 = new Point(0.3, 1) }
+                });
+                Storyboard.SetTarget(anim, t);
+                Storyboard.SetTargetProperty(anim, prop);
+                sb.Children.Add(anim);
+            }
+            double from = RingOut / PopOut;          // start flush with the ring
+            Track(_popScale, "ScaleX", from, 1, 190);
+            Track(_popScale, "ScaleY", from, 1, 190);
+            Track(_flashScale, "ScaleX", from, 1, 190);
+            Track(_flashScale, "ScaleY", from, 1, 190);
+            Track(_flash, "Opacity", 0.8, 0, 340, 0.4);
+            _riseSb = sb;
+            sb.Begin();
+        }
+        catch { }
     }
 
     private static void Glyph(Canvas host, string data, Color fg, bool stroked)
@@ -955,29 +1023,32 @@ public sealed class ToolWheel
         // The popped sector paints OVER the ring and under the sector content.
         _pop.IsHitTestVisible = false;
         _pop.Visibility = Visibility.Collapsed;
+        _pop.RenderTransform = _popScale;
         _wheel.Children.Add(_pop);
 
-        // §1.3: mark and label stacked on the radial midline and ROTATED TO
-        // FOLLOW THE RING. The rotation is the bearing itself: at twelve o'clock
-        // that is 0 and the text is upright, at six o'clock it is 180 and the
-        // text is upside-down - which is exactly what the reference shows.
+        // 10.2 item 7's "lights up", directly over it and under the content.
+        _flash.IsHitTestVisible = false;
+        _flash.Visibility = Visibility.Collapsed;
+        _flash.Opacity = 0;
+        _flash.RenderTransform = _flashScale;
+        _wheel.Children.Add(_flash);
+
+        // 10.2 item 6. The MARK takes the inner part of the cell and is NEVER
+        // rotated - "every mark upright regardless of sector" - so its transform
+        // is the bare radial translate that carries it out with the pop. The
+        // LABEL takes the outer part and keeps §1.3's rotation, which is the one
+        // half of §1.3 that 10.2 explicitly leaves standing: labels below the
+        // horizontal midline still read upside-down, and that is correct.
         for (int i = 0; i < Slots; i++)
         {
             double mid = SlotMid(i);
 
             var at = Pt(mid, MarkR);
-            // Rotate FIRST, then translate: a TransformGroup applies its children
-            // in order, so the translate lands in the parent's (screen) space and
-            // can be a plain radial offset rather than a rotated one.
             _markT[i] = new TranslateTransform();
-            var mg = new TransformGroup();
-            mg.Children.Add(new RotateTransform { Angle = mid });
-            mg.Children.Add(_markT[i]);
             var g = new Canvas
             {
                 Width = MarkBox, Height = MarkBox, IsHitTestVisible = false,
-                RenderTransformOrigin = new Point(0.5, 0.5),
-                RenderTransform = mg
+                RenderTransform = _markT[i]
             };
             Canvas.SetLeft(g, at.X - MarkBox / 2);
             Canvas.SetTop(g, at.Y - MarkBox / 2);
@@ -985,22 +1056,31 @@ public sealed class ToolWheel
             _wheel.Children.Add(g);
 
             var lp = Pt(mid, LabelR);
+            // Rotate FIRST, then translate: a TransformGroup applies its children
+            // in order, so the translate lands in the parent's (screen) space and
+            // can be a plain radial offset rather than a rotated one.
             _labelT[i] = new TranslateTransform();
             var lg = new TransformGroup();
             lg.Children.Add(new RotateTransform { Angle = mid });
             lg.Children.Add(_labelT[i]);
             var t = new TextBlock
             {
-                Width = 52,
+                Width = LabelW,
                 FontSize = LabelSize,
+                // An explicit line box. The default one is ~1.33 em, which at
+                // this size is 12.7 DIP against a 10.5 DIP budget, and that
+                // overflow alone is enough to push the label back over the rim.
+                LineHeight = LabelLine,
+                LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.NoWrap,
                 IsHitTestVisible = false,
                 RenderTransformOrigin = new Point(0.5, 0.5),
                 RenderTransform = lg
             };
-            Canvas.SetLeft(t, lp.X - 26);
-            Canvas.SetTop(t, lp.Y - LabelSize * 0.72);
+            Canvas.SetLeft(t, lp.X - LabelW / 2);
+            Canvas.SetTop(t, lp.Y - LabelLine / 2);
             _label[i] = t;
             _wheel.Children.Add(t);
         }
@@ -1027,9 +1107,9 @@ public sealed class ToolWheel
         Canvas.SetTop(_dot, Half - DotR);
         _wheel.Children.Add(_dot);
 
-        // §1.6: satellites OUTSIDE the ring - not sectors, and no background.
-        PutSat(_undoArt, UndoBearing);
-        PutSat(_redoArt, RedoBearing);
+        // 10.2 item 5: INSIDE the wheel, on the disc's bottom arc.
+        Put(_undoArt, -SatX, SatY, SatSize);
+        Put(_redoArt, +SatX, SatY, SatSize);
 
         void Put(Canvas c, double dx, double dy, double box)
         {
@@ -1049,15 +1129,6 @@ public sealed class ToolWheel
             Canvas.SetLeft(t, Half + dx - 28);
             Canvas.SetTop(t, Half + dy - ValueSize * 0.65);
             _wheel.Children.Add(t);
-        }
-        void PutSat(Canvas c, double bearing)
-        {
-            var at = Pt(bearing, SatR);
-            c.Width = c.Height = SatSize;
-            c.IsHitTestVisible = false;
-            Canvas.SetLeft(c, at.X - SatSize / 2);
-            Canvas.SetTop(c, at.Y - SatSize / 2);
-            _wheel.Children.Add(c);
         }
     }
 
@@ -1247,6 +1318,14 @@ public sealed class ToolWheel
         double b = Norm360(Math.Atan2(dx, -dy) * 180 / Math.PI);
 
         if (r <= DotR) return (Zone.Dot, -1);
+        // 10.2 item 5. Tested BEFORE the §1.4 property regions, or the undo
+        // button would resolve to Zone.Smooth by x alone and pressing it would
+        // open the smoothness card instead of undoing anything.
+        if (Math.Abs(dy - SatY) <= SatHit / 2)
+        {
+            if (Math.Abs(dx + SatX) <= SatHit / 2) return (Zone.Undo, -1);
+            if (Math.Abs(dx - SatX) <= SatHit / 2) return (Zone.Redo, -1);
+        }
         if (r < DiscR)
         {
             // §1.4's own layout, read back as hit regions: the size pair across
@@ -1313,7 +1392,7 @@ public sealed class ToolWheel
             _dragProp = pr;
             _scrubbing = false;
             OpenPopover(pr);
-            ShowPreview(true);
+            SyncPreview();
         }
         else { Refresh(); }
         e.Handled = true;
@@ -1362,7 +1441,6 @@ public sealed class ToolWheel
             bool scrubbed = _scrubbing;
             _dragProp = null;
             _scrubbing = false;
-            ShowPreview(false);
             // A scrub's popover closes when the finger lifts; a TAP's stays up,
             // because a tap IS the user asking for it. The test is "did this
             // gesture ever scrub", not an elapsed time - a deliberate press held
@@ -1377,6 +1455,8 @@ public sealed class ToolWheel
         var (z, idx) = Aim(p);
         bool tap = Environment.TickCount64 - _pressMs < TapMs && Dist(p, _pressPt) <= TapSlop;
         if (z == Zone.Dot && tap) { ShowColourPicker(); return; }
+        if (z == Zone.Undo && tap) { _surface.Undo(); Refresh(); return; }
+        if (z == Zone.Redo && tap) { _surface.Redo(); Refresh(); return; }
         if (z == Zone.Sector) { Commit(idx); return; }
         Refresh();
     }
@@ -1387,7 +1467,7 @@ public sealed class ToolWheel
         if (_pointer != null && e.Pointer.PointerId != _pointer) return;
         _pressed = false;
         _pointer = null;
-        if (_dragProp != null) { _dragProp = null; _scrubbing = false; ShowPreview(false); }
+        if (_dragProp != null) { _dragProp = null; _scrubbing = false; SyncPreview(); }
         ClearHover();
     }
 
@@ -1561,8 +1641,14 @@ public sealed class ToolWheel
     // The live scrub preview - a REAL circle through the REAL stroke
     // renderer, never a UI ellipse.
     // ===================================================================
-    private void ShowPreview(bool on)
+    /// <summary>10.2 item 9: "the pen preview must show whenever the size /
+    /// opacity / smoothness popover is OPEN", not only while a value is being
+    /// dragged. One predicate, called from every path that can change either
+    /// condition - including the popover's own Closed event, since the card can
+    /// be dismissed without the dial being told.</summary>
+    private void SyncPreview()
     {
+        bool on = _popover.IsOpen || _dragProp != null;
         _preview.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         if (on) _preview.Invalidate();
     }
@@ -1571,7 +1657,6 @@ public sealed class ToolWheel
     {
         var ds = args.DrawingSession;
         var centre = new Vector2((float)PreviewBox / 2, (float)PreviewBox / 2);
-        var accent = PageTheme.Accent;
 
         if (_h.ToolTag() == "Eraser")
         {
@@ -1585,18 +1670,13 @@ public sealed class ToolWheel
                                                 centre.Y + (float)(rr * Math.Sin(th)), 0.5f));
             }
             _surface.RenderStrokeTo(ds, sender, ring);
-            ds.DrawCircle(centre, rr + 4, accent, 1.5f, _guide);
             return;
         }
 
         float size = Math.Max(1f, _surface.PenSize);
         float radius = (float)Math.Clamp(PopOut + 22 + size * 0.8, PopOut + 22, 180);
         _surface.RenderStrokeTo(ds, sender, _surface.PreviewCircle(centre, radius));
-        ds.DrawCircle(centre, radius + size / 2 + 3, accent, 1.5f, _guide);
     }
-
-    private static readonly Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle _guide =
-        new() { CustomDashStyle = new float[] { 4, 4 } };
 
     // ===================================================================
     // Tool-specific options strip

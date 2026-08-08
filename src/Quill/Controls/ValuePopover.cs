@@ -108,6 +108,12 @@ public sealed class ValuePopover
     /// the host can repaint the surface behind it.</summary>
     public event Action? ValueChanged;
 
+    /// <summary>Raised once the card goes down, however it went down. Reference
+    /// 10.2 item 9 hangs the dial's pen preview off "is the card open", and the
+    /// card is closed from half a dozen places that do not otherwise tell the
+    /// surface anything.</summary>
+    public event Action? Closed;
+
     public ValuePopover()
     {
         // ---- 1. preset chips ------------------------------------------
@@ -215,6 +221,7 @@ public sealed class ValuePopover
         _pointer = null;
         _spec = null;
         OpenProperty = null;
+        Closed?.Invoke();
     }
 
     /// <summary>Re-park without changing what is shown — for a host resize.</summary>
