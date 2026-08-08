@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The paper acceptance harness (docs/CONCEPTS-REF-2026-08-07.md §8).
+
+       It LINKS the shipping generator rather than copying it, so the sigma
+       figures below are measured against the exact source the app runs. That is
+       the whole point: the previous paper pass shipped a textured page that
+       measured the same sigma 0.72 as a blank one and nobody noticed for weeks,
+       because nothing ever rendered a tile outside the running app.
+
+       PaperGrain.cs is pure managed code with no Win2D / WinUI / Windows.UI
+       reference, which is what lets this be a plain net8.0 console app with no
+       GPU, no Windows App SDK and no packaging.
+
+       Run it with "dotnet run" against this project file, in Release.    -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>PaperProof</RootNamespace>
+    <AssemblyName>PaperProof</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Quill\Controls\PaperGrain.cs" Link="PaperGrain.cs" />
+  </ItemGroup>
+
+</Project>

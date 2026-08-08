@@ -18,10 +18,49 @@
         <!-- ===================== TOP BAR ===================== -->
         <!-- Canvas.ZIndex keeps the bar above anything that escapes the canvas row,
              so unclipped text bubbles can never cover or block its buttons (#3-batch2) -->
-        <Border x:Name="TopBar" Grid.Row="0" Padding="8,5" Canvas.ZIndex="100"
+        <!-- CONCEPTS-REF 9.6: "make top bar smaller thinner to maximise page
+             space". The bar is sized by its BUTTONS, not by its own padding,
+             so shrinking the padding alone moved nothing - WinUI's default
+             Button is 32 DIP tall with 11,5,11,6 padding, and a row of them
+             plus 5 DIP top and bottom came to 74 DIP of chrome above every
+             page. The implicit styles below are the actual lever: a 26 DIP
+             box around the 16 DIP glyph section 5 specifies, which is the
+             smallest square that still leaves a visible hover panel around
+             the mark. They are scoped to this Border, so nothing else in the
+             app is restyled by them. -->
+        <Border x:Name="TopBar" Grid.Row="0" Padding="6,1" Canvas.ZIndex="100"
                 Background="{ThemeResource CardBrush}"
                 BorderBrush="{ThemeResource HairlineBrush}"
                 BorderThickness="0,0,0,1">
+            <Border.Resources>
+                <Style TargetType="Button">
+                    <Setter Property="MinHeight" Value="26"/>
+                    <Setter Property="Height" Value="26"/>
+                    <Setter Property="MinWidth" Value="30"/>
+                    <Setter Property="Padding" Value="5,0,5,0"/>
+                    <Setter Property="CornerRadius" Value="6"/>
+                </Style>
+                <Style TargetType="ToggleButton">
+                    <Setter Property="MinHeight" Value="26"/>
+                    <Setter Property="Height" Value="26"/>
+                    <Setter Property="MinWidth" Value="30"/>
+                    <Setter Property="Padding" Value="5,0,5,0"/>
+                    <Setter Property="CornerRadius" Value="6"/>
+                </Style>
+                <Style TargetType="DropDownButton">
+                    <Setter Property="MinHeight" Value="26"/>
+                    <Setter Property="Height" Value="26"/>
+                    <Setter Property="MinWidth" Value="30"/>
+                    <Setter Property="Padding" Value="5,0,5,0"/>
+                    <Setter Property="CornerRadius" Value="6"/>
+                </Style>
+                <Style TargetType="AppBarSeparator">
+                    <Setter Property="Height" Value="16"/>
+                    <Setter Property="MinHeight" Value="16"/>
+                    <Setter Property="Padding" Value="4,0,4,0"/>
+                    <Setter Property="Margin" Value="0"/>
+                </Style>
+            </Border.Resources>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -55,6 +94,15 @@
                                 <MenuFlyoutItem Text="Keyboard shortcuts" Click="ShortcutsMenu_Click">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE765;"/></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
+                                <MenuFlyoutSeparator/>
+                                <!-- CONCEPTS-REF 9.7: the calculator lives here now,
+                                     not on the bar. Section 5's top bar carries no
+                                     tools, and the user had already hidden this one
+                                     (BtnCalc in HiddenTools) - which left it with no
+                                     way in at all. -->
+                                <ToggleMenuFlyoutItem x:Name="CalcMenuItem" Text="Calculator" Click="Calc_Toggle">
+                                    <ToggleMenuFlyoutItem.Icon><FontIcon Glyph="&#xE8EF;"/></ToggleMenuFlyoutItem.Icon>
+                                </ToggleMenuFlyoutItem>
                                 <MenuFlyoutSeparator/>
                                 <MenuFlyoutItem Text="About Quill" Click="About_Click">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE946;"/></MenuFlyoutItem.Icon>
@@ -379,12 +427,6 @@
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>
-
-                    <AppBarSeparator/>
-
-                    <ToggleButton x:Name="BtnCalc" Click="Calc_Toggle" ToolTipService.ToolTip="Calculator">
-                        <FontIcon Glyph="&#xE8EF;" FontSize="14"/>
-                    </ToggleButton>
                 </StackPanel>
             </ScrollViewer>
             <!-- pinned at the far right, outside the scrolling row (#20-batch2) -->

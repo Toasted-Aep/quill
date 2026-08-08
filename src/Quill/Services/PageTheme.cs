@@ -90,6 +90,32 @@ public static class PageTheme
         Outline = WithAlpha(OnSurface, 36);
         Panel = IsDark ? Color.FromArgb(255, 0x14, 0x14, 0x14)
                        : Color.FromArgb(255, 0xF7, 0xF7, 0xF7);
+        Probe();
+    }
+
+    /// <summary>A one-line hex dump of the whole derived palette, for the
+    /// acceptance pass over the section 7 proof points. "It looks right" is not
+    /// a measurement of a colour, and the surfaces that carry these are drawn
+    /// into a Win2D canvas and into WinUI popups, neither of which a UIA client
+    /// can read a brush out of - so the palette reports itself instead.</summary>
+    public static string Describe() =>
+        $"ground={Hex(Ground)} isDark={(IsDark ? 1 : 0)} lum={Luminance(Ground):F4} " +
+        $"surface={Hex(Surface)} surfaceAlt={Hex(SurfaceAlt)} onSurface={Hex(OnSurface)} " +
+        $"onSurfaceMuted={Hex(OnSurfaceMuted)} outline={Hex(Outline)} panel={Hex(Panel)} accent={Hex(Accent)}";
+
+    private static string Hex(Color c) => $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
+
+    // Off unless QUILL_THEME_PROBE names a file. Resolved once: this runs inside
+    // Apply, which runs on every page turn and on every frame of a background
+    // drag, and an environment read per frame is not free.
+    private static readonly string? ProbePath =
+        Environment.GetEnvironmentVariable("QUILL_THEME_PROBE") is { Length: > 0 } p ? p : null;
+
+    private static void Probe()
+    {
+        if (ProbePath == null) return;
+        try { System.IO.File.AppendAllText(ProbePath, Describe() + Environment.NewLine); }
+        catch { }
     }
 
     public static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
