@@ -541,6 +541,9 @@ public static class LibraryStore
         "PenRepair", "PenRepairDots", "PenRepairBridge", "MotionBlur",
         "ShowCommentPins", "HiddenTools", "KeyOverrides", "Pens",
         "AiProvider", "AiModel", "AiEndpoint",
+        "PanelFontScale", "PanelFontOverrides",
+        "MeasureSystem", "MeasureUnit", "MeasureFormat", "MeasurePrecision",
+        "ShowStrokeLength", "ShowSelectionScale", "CustomPageColor",
         "WinX", "WinY", "WinW", "WinH", "WinMaximized"
     };
 
