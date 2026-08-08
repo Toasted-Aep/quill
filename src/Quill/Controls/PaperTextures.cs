@@ -204,6 +204,12 @@ public static class PaperTextures
                 if (tile == null) return null;
                 var br = new CanvasImageBrush(rc, tile)
                 {
+                    // SourceRectangle is set EXPLICITLY. Win2D requires a source
+                    // rectangle whenever the extend mode is anything but Clamp —
+                    // it is what tells the brush the period to repeat over — and
+                    // leaving it to be inferred is a documented way to get a
+                    // brush that draws nothing at all.
+                    SourceRectangle = new Windows.Foundation.Rect(0, 0, TileSize, TileSize),
                     ExtendX = CanvasEdgeBehavior.Wrap,
                     ExtendY = CanvasEdgeBehavior.Wrap,
                     Interpolation = CanvasImageInterpolation.Linear,
