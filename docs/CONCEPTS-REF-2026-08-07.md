@@ -592,3 +592,224 @@ The reference panel, top to bottom:
 
 Also required: **edit the tilt of the horizon line, and move the grid's centre
 point within the page.**
+
+### 10.8 MIX — resolved by the user, 2026-08-08
+
+Replaces §10.4 item 16. The `OFF · 25% · 50% · 75%` arc in the wheel's centre is
+**removed**; mixing leaves the colour picker entirely.
+
+**Mixing becomes a dedicated Mix tool**, selectable into the dial or the pen row
+like any other tool. Choosing it lets the user combine two colours — picked from
+the canvas with the eyedropper, or from recents and swatches — and produces the
+blend through the spectral mixer in `Helpers/PigmentMix.cs` (the one where blue
+and yellow give `#3DA06B`, a real green, rather than a steel grey). The colour
+wheel goes back to being purely a picker, which also relieves the crowded centre
+the user has flagged twice.
+
+**Scope: pens and brushes only.** Page background, grid colour, accent and table
+cells always replace outright. You mix ink, not paper.
+
+**One exception, and it is the interesting part — mixing with the page
+background dilutes rather than tints.** The user's words: *"if mixing with
+background make paint gradually transparent as if it is mixing with the page
+colour."*
+
+So when one of the two colours is the page ground, the result is **not** a hue
+interpolated toward that ground. It is the original pigment at **reduced alpha**,
+as if thinned with water or medium:
+
+- mixing 50% with the background yields the same hue at roughly 50% opacity;
+- mixing further approaches fully transparent, never approaches the ground's hue.
+
+This distinction is load-bearing, not cosmetic. A hue-lerp toward the ground
+produces a flat opaque colour that *looks* right only on a plain page — on a
+textured, Blueprint or Brown Paper page, genuinely diluted paint must let the
+grain and the ground show **through** it, which an opaque lerp cannot do. It
+also means diluted strokes composite correctly over each other and over ink
+underneath, the way a wash does.
+
+Implementation note: this is the same substrate the oil-paint work uses, so
+prefer extending `PigmentMix` with an explicit "dilute toward transparency"
+path over special-casing the ground colour at each call site.
+
+---
+
+## 11. Revision pass, 2026-08-08 evening
+
+Fourth pass, with eleven new screenshots. **§11 wins over everything above.**
+Items the user re-listed from §10 are marked `[§10]` — those were never
+completed, not re-requested for emphasis, and conflating the two would hide how
+much is still outstanding.
+
+**Standing instruction from this point:** confirm the plan with the user before
+modifying anything, and where a task has several correct implementations, ask
+which they prefer rather than choosing.
+
+### 11.1 CRITICAL
+
+1. **Settings scroll-resets to the top and lags whenever any option is
+   clicked.** The user rates this 5/5 and asks for it to be fixed immediately.
+   Almost certainly a wholesale panel rebuild on every change — updates must be
+   surgical and must preserve scroll offset. `[§10 item 20]`
+2. **The pen preview renders as a SQUARE because the size reads 16000.** The
+   user diagnosed this themselves. Find the real cause — a unit confusion or an
+   unclamped size — rather than clamping the preview to hide it. It should draw
+   as a **hollow circle**: a circle *stroked with the selected pen*, mimicking
+   that pen's style, not a filled shape.
+
+### 11.2 Radial dial — geometry rebalance
+
+The user is explicit that the **overall dial size and the colour circle size are
+both already correct.** What is wrong is the split between the rings.
+
+3. **The inner circle (size / stability / opacity) is too big — shrink it.**
+4. **The outer ring gets thicker in proportion**, taking the freed space.
+5. **Tool icons and stroke previews in the outer ring are too small — enlarge
+   them**, while guaranteeing they never visually overflow the dial.
+6. **Pens still render upside down.** Rotate every mark so it reads upright at
+   any sector angle. `[§10 item 6]`
+7. **Size text goes to the OUTER part of the cell, the stroke to the INNER
+   part**, and no label may be cut off afterwards. `[§10 item 6]`
+8. **The per-pen colour preview moves out of the inner circle and into the
+   TOOLS ring, at that ring's innermost edge** (nearest the dial centre).
+9. **The colour preview is too wide — reduce its width.**
+10. **Undo and redo move inside the hollow centre** as buttons. `[§10 item 5]`
+11. **Now that undo and redo are inside, add two more customisable cells to the
+    outer ring, bringing it to a full ten.**
+12. **Selection animation: the cell rises and lights up.** `[§10 item 7]`
+13. **Hover indicators** on opacity, size, stability, undo and redo.
+14. **Redesign the undo and redo icons.**
+15. **The COPIC wheel is still not centred on the dial.** Fourth request.
+    `[§10 items 8 and 13]`
+
+### 11.3 Colour wheel
+
+16. **HSL exactly as its screenshot**: curved arc sliders, each a gradient
+    stroke with a round knob and its own typeable value box — hue in degrees
+    (`0°`), the others in percent, laid out as concentric arcs.
+17. **RGB exactly as its screenshot**: three curved arc sliders, red / green /
+    blue, each a black-to-full-channel gradient with a knob and a typeable
+    integer box.
+18. **Redesign the eyedropper icon and remove its border/frame.** `[§10 18]`
+19. **Cells are too small and the faces too cramped.** `COPIC`, `HSL` and `RGB`
+    all need a **larger hollow centre** — more empty space inside the ring.
+    `[§10 15]`
+20. **Increase the height of the colour cells**, and make the innermost ring's
+    cells read closer to **square**.
+21. **Colour names are slightly off** — verify each label against its swatch.
+22. **Add more colours.** ⚠️ **Send the user a before/after image of the wheel
+    and get approval BEFORE committing.**
+23. **Text colour must be modifiable from the COPIC wheel.**
+24. **Rotate with the scroll wheel and with horizontal/side scroll.** `[§10 24]`
+25. **A `Colors` tab beside `Brushes`** in the same floating panel, reached from
+    the **star icon** in the colour wheel. Per its screenshot: `Current Color`
+    with a swatch; read-only fields `COPIC`, `HEX`, `R/G/B`, `H/S/B`, each with
+    a gradient underline; the hint *"You can drag the color preview to any of
+    your custom palettes below."*; **`My Palettes`** with an `Add` button and a
+    grid of named 8-colour strips (`Concepts bright`, `My Palette`,
+    `Calm Pastel`, …) plus `+` placeholders, with the hint *"Make palettes of up
+    to 8 colors by dragging colors from anywhere - even other apps. To mix
+    between colors, just tap-hold-drag the palette on canvas."*; and
+    **`Dynamic Palettes`** — `Analogous`, `Monochromatic`, `Complementary`,
+    `Shades`, `Triads`, `Most Used Colors`, `Recently Used Colors`.
+
+### 11.4 Tools and the writing bar
+
+26. **Dictation moves to the writing bar. Recording moves to the Quill
+    dropdown. Remove the microphone options from the top bar.**
+27. **Remove "leave free space" from the top bar**; add it as a tool in the
+    Brushes panel.
+28. **Eyedropper becomes a selectable tool.** `[§10 28]`
+29. **Ruler leaves the pen row and becomes a tool**, tiltable by a two-finger
+    gesture, with a **tilt visualiser** clickable by mouse to type an exact
+    angle. `[§10 29]`
+30. **Toolbar button-hiding behaves oddly now that not every button is present**
+    — rework it.
+
+### 11.5 Top bar
+
+31. **Make the top bar about 15% THICKER.** This reverses §10.6, which took it
+    from 74 to 52 — the user has now seen that and wants some height back.
+32. **Icon sizes are inconsistent** — all equal in normal mode, scaled
+    proportionally together in touch mode. `[§10 32]`
+33. **Undo and redo leave the top bar when the dial is active.** `[§10 33]`
+34. **History moves into the Quill dropdown**, opening a right-side floating
+    panel in the Settings/Export family. `[§10 34]`
+35. **Page name and date come off the page and into the top bar.** `[§10 35]`
+
+### 11.6 Settings and floating panels
+
+36. **More tabs beside `Workspace` and `Interaction`.** Workspace is judged
+    correct; **Interaction is messy** and must be split further.
+    ⚠️ **Ask the user which tabs they want before building.**
+37. **Add the Interaction settings shown in the screenshots**, which are far
+    richer than what exists: `Keyboard & Mouse` (edit-shortcuts link, enable
+    toggle); `Touch Input` → `Finger Action` as circles (`Do Nothing`,
+    `Use Active Tool`, `Pan Canvas`, `Select`, `Nudge`, `Slice`, `Zoom`,
+    `Rotate`); `Two Fingers` toggles (`Enable Canvas Zoom`, `Enable Zoom Snap`,
+    `Enable Canvas Rotation`, `Enable Rotation Snap`); `Tap & Hold` circles
+    (`Last Used`, `Do Nothing`, `Lasso`, `Item Picker`, `Color Picker`) with an
+    `Activation Time` slider and a `Highlight selection` toggle; `Draw & Hold`
+    with `Enable Shape Recognition` and its own activation slider;
+    `Two / Three / Four Finger Tap` rows of circles (`Do Nothing`, `Undo`,
+    `Redo`, `Select Last`, `Show Layers`, `Show Colors`, `Tool Setup`,
+    `Show Objects`, `Toggle Canvas Rotation`, `Toggle Canvas Zoom`,
+    `Select All`, `Toggle Interface`); `Stylus` → `Pressure Response` as a
+    **two-handle range slider** (`0% - 100%`), `Preferences` toggles
+    (`Enable Pressure`, `Enable Tilt`, `Enable Tap & Hold`,
+    `Enable Artboard Drag`, `Enable Hover Brush Previews`);
+    `Side Button / Right Mouse Button` circles; `Eraser Action` circles
+    (`Soft Mask`, `Hard Mask`, `Slice`, `Nudge`) with a `Size` slider; and
+    `Top Button: Click / Double Click / Long Press` rows.
+38. **Mouse modes move into Interaction as circles.** `[§10 38]`
+39. **Bigger margins between subtitles and their explanation text.** `[§10 39]`
+40. **Font is too big** — reduce it, and add a **developer font-size setting for
+    every panel**. `[§10 40]`
+41. **Remove top, bottom and side resize handles from every floating panel —
+    corner handles only.** `[§10 41]`
+42. **Constrain floating panels.** They may not be resized past a limit, must
+    leave a margin at the page edge, and **must never cover the top-left
+    cluster** (gallery, page name, Layers, Precision, Objects) **or the
+    top-right cluster** (zoom/tilt, AI, Import, Export, Settings). They open as
+    high as possible, and the **top corner resize handles are removed.**
+43. **Theme circles: remove "dark appearance"; add a white `Light` circle and
+    rename the black one `Dark`.** `[§10 43]`
+44. **Switching measurement category must not auto-select the first item.**
+    `[§10 44]`
+45. **All Quill-specific settings must match the rest of the panel's styling.**
+46. **`Precision` and `Layers` panes go top and bottom** (either order).
+47. **Objects library glitches when scrolled sideways.** `[§10 47]`
+48. **A vertical wheel over a horizontal strip scrolls it horizontally.**
+    `[§10 48]`
+
+### 11.7 Page background
+
+49. **`Custom colour` moves to the FRONT of the background swatch row** and
+    gains an **`Edit Colour`** link to the right of the `Background` heading,
+    styled like `Edit Grid`. `[§10 49]`
+50. **`Edit Grid` is redesigned to open the full grid editor pane** described in
+    §10.7 — presets, vanishing points, horizon tilt, centre position, density,
+    line weight, colour, opacity, orientation, confine-to-artboard, with a live
+    preview and a `< Back` link.
+51. **Guidelines move into the `Grid Type` category.** `[§10 51]`
+
+### 11.8 Brushes panel
+
+52. **A live preview of the currently selected brush** — the reference draws the
+    stroke large on the transparency checkerboard, updating with the selection.
+53. The `Subscribed` section lists packs with a name, a one-line description, a
+    cover thumbnail and a horizontally scrolling strip of brush thumbnails
+    (`Waterful` → `Watercolor A1`…; `Tiling Patterns` → `Wood Parquet 1`…).
+
+### 11.9 Text mode
+
+54. **Quick-action buttons above the text bubble** for text modification, per
+    the screenshot: a `Cancel Editing` affordance with a red X, and a row of
+    attach / duplicate / lock / delete marks.
+
+### 11.10 New, larger pieces
+
+55. **A user system** — plan it and write the design as a markdown file
+    alongside the other docs: accounts, collaboration, sharing.
+56. **A web viewer for Quill.** The user marks this *"not important maybe do it
+    later"* — do not start it without asking.
