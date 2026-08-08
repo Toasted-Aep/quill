@@ -2,45 +2,42 @@ using System.Numerics;
 using Quill.Helpers;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Brushes;
-using Microsoft.Graphics.Canvas.Effects;
 using Microsoft.Graphics.Canvas.UI.Xaml;
+using Windows.Graphics.DirectX;
 using Windows.UI;
 
 namespace Quill.Controls;
 
 /// <summary>
 /// One entry of the page-background picker (the circular swatch row in the
-/// floating settings window, mirroring the Concepts reference).
+/// floating settings window, §3.1).
 ///
 /// <para><b>Id</b> is what lands in <c>NotePage.Paper</c>. An EMPTY id means "no
-/// texture" — the page keeps today's plain-colour behaviour, which is why every
+/// texture" — the page keeps the plain-colour behaviour, which is why every
 /// existing page (whose Paper is null) is untouched by this feature.</para>
-/// <para><b>Background</b> is the plain colour the option also stamps onto the
-/// page. For the fixed-ground papers (Blueprint / Darkprint / Brown) it matches
-/// <see cref="PaperTextures.Ground"/> so the two can never disagree.</para>
+/// <para><b>Background</b> is the ground colour the option also stamps onto the
+/// page, and it always comes from <see cref="PaperGrain.GroundRgb"/> so the
+/// picker, the renderer and the theme derivation can never disagree.</para>
 /// </summary>
 public sealed record PaperOption(string Id, string Label, string Background, bool CustomColor = false);
 
 /// <summary>
-/// Procedural paper textures (§7.3). Everything here is CODE — nothing is ever
-/// written to library.json, which is already ~70 MB; a page stores only the
-/// texture's short id, exactly like the page-size preset table.
+/// The GPU face of the paper system (§8). All the pixel decisions live in
+/// <see cref="PaperGrain"/>, which is pure CPU code with no Win2D dependency and
+/// is measured offline by <c>tools/PaperProof</c>; this class only uploads what
+/// that produces, caches it, and wraps it in a repeating brush.
 ///
-/// <para><b>How a texture is made.</b> There is no shader compiler in this
-/// toolchain, so every texture is composed from Win2D's BUILT-IN effects:
-/// <see cref="TurbulenceEffect"/> (with <c>Tileable = true</c>) for fibre,
-/// crumple and ripple noise, <see cref="ColorMatrixEffect"/> to flatten that
-/// noise into an opaque grey height-field, <see cref="BlendEffect"/> to lay the
-/// height-field over the page's ground through a <see cref="CanvasCommandList"/>,
-/// and plain drawn lines for Blueprint / Darkprint / the checkerboard.</para>
+/// <para>Nothing here is ever written to library.json — a page stores the
+/// texture's short id and nothing else, exactly like the page-size preset
+/// table.</para>
 ///
 /// <para><b>How a texture is cached.</b> Each texture is baked ONCE into a
-/// 256x256 <see cref="CanvasRenderTarget"/> and repeated with a
-/// <see cref="CanvasImageBrush"/> whose edge behaviour is
-/// <see cref="CanvasEdgeBehavior.Wrap"/>. Nothing is regenerated per frame —
-/// this draws behind every stroke on the page. Every generator is seamless at
-/// the tile edges (tileable turbulence, wave periods that divide 256, grid
-/// lines drawn at both 0 and 256).</para>
+/// <see cref="PaperGrain.Tile"/>-square <see cref="CanvasBitmap"/> and repeated
+/// with a <see cref="CanvasImageBrush"/> whose edge behaviour is
+/// <see cref="CanvasEdgeBehavior.Wrap"/>. Nothing is regenerated per frame; this
+/// draws behind every stroke on the page. Every generator is seamless at the
+/// tile edges by construction — see the class comment on
+/// <see cref="PaperGrain"/>.</para>
 /// </summary>
 public static class PaperTextures
 {
@@ -55,51 +52,45 @@ public static class PaperTextures
     public const string Brown = "brown";
     public const string Darkprint = "darkprint";
 
-    // Fixed grounds. These are the colours the theme derivation reads, so they
-    // are the single source of truth for "is a Blueprint page dark?" (it is).
-    public const string BlueprintHex = "#10365E";
-    public const string DarkprintHex = "#14161C";
-    public const string BrownHex = "#B0824F";
-
-    /// <summary>The picker row, in the reference's order. "Custom Color" opens the
-    /// colour picker and clears the texture; "Plain White" is the plain-colour
-    /// default. Everything after them is a procedural paper.</summary>
-    public static readonly PaperOption[] Options =
-    {
-        new(Plain,       "Custom Color", "#FAF9F5", CustomColor: true),
-        new(Plain,       "Plain White",  "#FFFFFF"),
-        new(Transparent, "Transparent",  "#FFFFFF"),
-        new(Crumpled,    "Crumpled",     "#F1EEE6"),
-        new(Lightweight, "Lightweight",  "#FAF9F5"),
-        new(Heavyweight, "Heavyweight",  "#EFEBE1"),
-        new(Rippled,     "Rippled",      "#F4F2EB"),
-        new(Blueprint,   "Blueprint",    BlueprintHex),
-        new(Brown,       "Brown paper",  BrownHex),
-        new(Darkprint,   "Darkprint",    DarkprintHex),
-    };
-
-    /// <summary>True when the texture tints the page's own colour (so the baked
-    /// tile has to be cached per background) rather than owning a fixed ground.</summary>
-    public static bool TintsPageColor(string? paper) =>
-        paper is Crumpled or Lightweight or Heavyweight or Rippled;
+    // =======================================================================
+    // Grounds — the contract the theme system derives from
+    // =======================================================================
 
     /// <summary>
-    /// The OPAQUE colour a page reads as — the one thing both the renderer's
-    /// <c>ds.Clear</c> and the theme derivation must agree on. Papers with a
-    /// fixed ground (Blueprint, Darkprint, Brown) answer with that ground no
-    /// matter what colour happens to be stored on the page; everything else —
-    /// including a null/empty Paper, i.e. every existing page — answers with the
-    /// page's own background, which is exactly today's behaviour.
+    /// The flat base colour of a paper. <b>This is the single input to the theme
+    /// derivation (§6)</b> — a texture is a ground plus grain, and only the
+    /// ground feeds <c>PageTheme.SetGround</c>. The grain is zero-mean by
+    /// construction, so this is also the page's average colour.
+    ///
+    /// <para>Blueprint (relative luminance 0.199), Brown Paper (0.206) and
+    /// Darkprint (0.024) all land below the 0.5 threshold, which is what flips
+    /// the whole shell to dark chrome on those pages exactly as §7 requires.</para>
     /// </summary>
-    public static Color Ground(string? paper, Color background) => paper switch
+    public static Color GroundOf(PaperKind kind)
     {
-        Blueprint => ColorUtil.Parse(BlueprintHex),
-        Darkprint => ColorUtil.Parse(DarkprintHex),
-        Brown => ColorUtil.Parse(BrownHex),
-        // the checkerboard is a light neutral, so a transparent page is a LIGHT page
-        Transparent => Color.FromArgb(255, 0xF2, 0xF2, 0xF2),
-        _ => background,
-    };
+        var (r, g, b) = PaperGrain.GroundRgb(kind);
+        return Color.FromArgb(255, r, g, b);
+    }
+
+    /// <summary>The ground as a hex string, for the places that store colours as
+    /// text (the picker row, <c>NotePage.Background</c>).</summary>
+    public static string GroundHexOf(PaperKind kind) => ColorUtil.ToHex(GroundOf(kind));
+
+    /// <summary>
+    /// The OPAQUE colour a page reads as — the one thing the renderer's
+    /// <c>ds.Clear</c> and the theme derivation must agree on. Papers with a
+    /// ground of their own (Blueprint, Brown Paper, Darkprint, and the
+    /// checkerboard) answer with that ground whatever colour happens to be stored
+    /// on the page; the white-stock papers and a null/empty Paper — i.e. every
+    /// pre-existing page — answer with the page's own background.
+    /// </summary>
+    public static Color Ground(string? paper, Color background)
+    {
+        var kind = PaperGrain.FromId(paper);
+        if (kind == null) return background;                    // plain colour page
+        if (PaperGrain.TintsPageColor(kind.Value)) return background;
+        return GroundOf(kind.Value);
+    }
 
     /// <summary>Convenience overload for a page: its effective ground colour.</summary>
     public static Color Ground(Models.NotePage? page) =>
@@ -107,31 +98,73 @@ public static class PaperTextures
             ? Color.FromArgb(255, 0xFF, 0xFF, 0xFF)
             : Ground(page.Paper, ColorUtil.Parse(page.Background));
 
+    /// <summary>True when the texture tints the page's own colour (so the baked
+    /// tile has to be cached per background) rather than owning a fixed
+    /// ground.</summary>
+    public static bool TintsPageColor(string? paper)
+    {
+        var k = PaperGrain.FromId(paper);
+        return k != null && PaperGrain.TintsPageColor(k.Value);
+    }
+
+    /// <summary>The picker row, in the §3.1 order. "Custom Color" opens the colour
+    /// picker and clears the texture; "Plain White" is the plain-colour default.
+    /// Everything after them is a procedural paper, and every ground comes from
+    /// <see cref="PaperGrain.GroundRgb"/> rather than a second hard-coded copy.</summary>
+    public static readonly PaperOption[] Options = BuildOptions();
+
+    private static PaperOption[] BuildOptions()
+    {
+        static PaperOption Of(PaperKind k, string label) =>
+            new(PaperGrain.IdOf(k), label, ColorUtil.ToHex(GroundOf(k)));
+
+        return new[]
+        {
+            new PaperOption(Plain, "Custom Color", "#FAF9F5", CustomColor: true),
+            Of(PaperKind.PlainWhite,  "Plain White"),
+            Of(PaperKind.Transparent, "Transparent"),
+            Of(PaperKind.Crumpled,    "Crumpled"),
+            Of(PaperKind.Lightweight, "Lightweight"),
+            Of(PaperKind.Heavyweight, "Heavyweight"),
+            Of(PaperKind.Rippled,     "Rippled"),
+            Of(PaperKind.Blueprint,   "Blueprint"),
+            Of(PaperKind.BrownPaper,  "Brown Paper"),
+            Of(PaperKind.Darkprint,   "Darkprint"),
+        };
+    }
+
     // =======================================================================
     // Cache
     // =======================================================================
-    public const float TileSize = 256f;
+
+    /// <summary>Tile edge, in pixels and in world units (baked at 96 DPI so the
+    /// two are the same number and the grain is glued to the page).</summary>
+    public const float TileSize = PaperGrain.Tile;
 
     private static readonly object _gate = new();
-    private static readonly Dictionary<string, CanvasRenderTarget> _tiles = new();
+    private static readonly Dictionary<string, CanvasBitmap> _tiles = new();
     private static readonly Dictionary<string, CanvasImageBrush> _brushes = new();
+    private static float _dpi = 96f;
 
     // The key carries the DEVICE as well as the paper, because the swatch
     // previews render through CanvasImageSource while the page renders through
     // the CanvasVirtualControl. Were the cache keyed on paper alone, two devices
     // would evict each other's tiles and every frame would re-bake.
-    // Only the tinting papers depend on the page colour; the fixed-ground ones
-    // bake to exactly one tile each however many pages use them.
-    private static string CacheKey(ICanvasResourceCreator rc, string paper, Color g)
+    // Only the white-stock papers depend on the page colour; the fixed-ground
+    // ones bake to exactly one tile each however many pages use them.
+    private static string CacheKey(ICanvasResourceCreator rc, PaperKind kind, Color g)
     {
         int dev = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(rc.Device);
-        return TintsPageColor(paper)
-            ? $"{dev:X}|{paper}|{g.R:X2}{g.G:X2}{g.B:X2}"
-            : $"{dev:X}|{paper}";
+        return PaperGrain.TintsPageColor(kind)
+            ? $"{dev:X}|{(int)kind}|{g.R:X2}{g.G:X2}{g.B:X2}"
+            : $"{dev:X}|{(int)kind}";
     }
 
-    /// <summary>Drops every cached tile/brush — after a device loss, or when the
-    /// app moves to a different Win2D device.</summary>
+    /// <summary>Drops every cached tile and brush. Called on device loss and on a
+    /// DPI change (see <see cref="SetDisplayDpi"/>); both orphan the GPU
+    /// resources this dictionary is holding, and without the drop the dead
+    /// device's tiles stay pinned for the rest of the session while a second set
+    /// is baked beside them.</summary>
     public static void Invalidate()
     {
         lock (_gate)
@@ -143,21 +176,40 @@ public static class PaperTextures
         }
     }
 
+    /// <summary>Records the display DPI the swatch previews should rasterise at,
+    /// and drops the cache when it moves. The page tiles themselves are baked at
+    /// a fixed 96 DPI on purpose — one tile pixel is one world unit — but the
+    /// <see cref="CanvasImageSource"/> previews are XAML-composited and go soft
+    /// when they are rasterised at 96 on a 125% or 150% display.</summary>
+    public static void SetDisplayDpi(float dpi)
+    {
+        if (dpi < 48f || dpi > 800f) return;
+        lock (_gate) { if (Math.Abs(dpi - _dpi) < 0.5f) return; _dpi = dpi; }
+        Invalidate();
+    }
+
     /// <summary>The repeating brush for a paper, or null for "no texture" (the
     /// plain-colour page). Baked on first use and cached thereafter.</summary>
     public static CanvasImageBrush? Brush(ICanvasResourceCreator rc, string? paper, Color ground)
     {
-        if (string.IsNullOrEmpty(paper)) return null;
+        var kind = PaperGrain.FromId(paper);
+        if (kind == null) return null;
         try
         {
             lock (_gate)
             {
-                string k = CacheKey(rc, paper, ground);
+                string k = CacheKey(rc, kind.Value, ground);
                 if (_brushes.TryGetValue(k, out var cached)) return cached;
-                var tile = Tile(rc, paper, ground, k);
+                var tile = TileLocked(rc, kind.Value, ground, k);
                 if (tile == null) return null;
                 var br = new CanvasImageBrush(rc, tile)
                 {
+                    // SourceRectangle is set EXPLICITLY. Win2D requires a source
+                    // rectangle whenever the extend mode is anything but Clamp —
+                    // it is what tells the brush the period to repeat over — and
+                    // leaving it to be inferred is a documented way to get a
+                    // brush that draws nothing at all.
+                    SourceRectangle = new Windows.Foundation.Rect(0, 0, TileSize, TileSize),
                     ExtendX = CanvasEdgeBehavior.Wrap,
                     ExtendY = CanvasEdgeBehavior.Wrap,
                     Interpolation = CanvasImageInterpolation.Linear,
@@ -171,317 +223,42 @@ public static class PaperTextures
 
     /// <summary>The baked tile itself — used by the settings swatches, which draw
     /// a crop of it inside their circle rather than a scaled-down whole tile.</summary>
-    public static CanvasRenderTarget? Tile(ICanvasResourceCreator rc, string? paper, Color ground)
+    public static CanvasBitmap? Tile(ICanvasResourceCreator rc, string? paper, Color ground)
     {
-        if (string.IsNullOrEmpty(paper)) return null;
+        var kind = PaperGrain.FromId(paper);
+        if (kind == null) return null;
         try
         {
-            lock (_gate) return Tile(rc, paper, ground, CacheKey(rc, paper, ground));
+            lock (_gate) return TileLocked(rc, kind.Value, ground, CacheKey(rc, kind.Value, ground));
         }
         catch { return null; }
     }
 
     // caller holds _gate
-    private static CanvasRenderTarget? Tile(ICanvasResourceCreator rc, string paper, Color ground, string key)
+    private static CanvasBitmap? TileLocked(ICanvasResourceCreator rc, PaperKind kind, Color ground, string key)
     {
         if (_tiles.TryGetValue(key, out var hit)) return hit;
-        var rt = Bake(rc, paper, ground);
-        if (rt != null) _tiles[key] = rt;
-        return rt;
+        var bmp = Bake(rc, kind, ground);
+        if (bmp != null) _tiles[key] = bmp;
+        return bmp;
     }
 
-    // =======================================================================
-    // Generators
-    // =======================================================================
-    private static CanvasRenderTarget? Bake(ICanvasResourceCreator rc, string paper, Color g)
+    /// <summary>Synthesises the tile on the CPU and uploads it. 96 DPI so one
+    /// tile pixel is one DIP is one WORLD unit: the brush then repeats every
+    /// <see cref="TileSize"/> world units and the texture pans and zooms with the
+    /// drawing instead of swimming across it.</summary>
+    private static CanvasBitmap? Bake(ICanvasResourceCreator rc, PaperKind kind, Color ground)
     {
         try
         {
-            // 96 DPI so one tile pixel == one DIP == one WORLD unit: the brush
-            // then repeats every 256 world units and is glued to the page.
-            var rt = new CanvasRenderTarget(rc, TileSize, TileSize, 96);
-            using (var ds = rt.CreateDrawingSession())
-            {
-                ds.Clear(g);
-                switch (paper)
-                {
-                    case Transparent:
-                        Checkerboard(ds);
-                        break;
-                    case Lightweight:
-                        // Thin stock: the fibre is FINE and you can see it. Two
-                        // passes at different scales, because one frequency of
-                        // noise reads as television static rather than paper.
-                        Fibre(rc, ds, g, 0.190f, 0.190f, 4, 11, 3.4f, 0.60f);
-                        Fibre(rc, ds, g, 0.055f, 0.055f, 3, 12, 3.0f, 0.34f);
-                        // Lightweight is the SUBTLEST of the papers by design —
-                        // thin stock has few inclusions, so the flecks are
-                        // sparse and faint and the grain does the work.
-                        Speckle(ds, 90, 0.85f, 0x12, true, 47);
-                        break;
-                    case Heavyweight:
-                        // Cartridge paper: a coarse tooth, plus a stretched pass
-                        // that lays the pulp down in one direction the way a
-                        // paper machine does.
-                        Fibre(rc, ds, g, 0.075f, 0.075f, 5, 23, 3.6f, 0.68f);
-                        Fibre(rc, ds, g, 0.012f, 0.340f, 3, 41, 3.0f, 0.40f);
-                        Speckle(ds, 260, 1.15f, 0x26, true, 61);
-                        break;
-                    case Crumpled:
-                        // Creases are RELIEF, not a stain: the ridge field is
-                        // embossed so each fold has a lit side and a shadowed
-                        // side. That is what makes a crumple read as a crumple.
-                        Creases(rc, ds, g);
-                        Fibre(rc, ds, g, 0.160f, 0.160f, 3, 7, 2.4f, 0.16f);
-                        break;
-                    case Rippled:
-                        Ripples(rc, ds, g);
-                        Fibre(rc, ds, g, 0.150f, 0.150f, 3, 5, 2.3f, 0.15f);
-                        break;
-                    case Blueprint:
-                        Fibre(rc, ds, g, 0.140f, 0.140f, 3, 13, 2.2f, 0.20f);
-                        PrintGrid(ds,
-                            Color.FromArgb(0xC8, 0xFF, 0xFF, 0xFF),   // major
-                            Color.FromArgb(0x6E, 0xBE, 0xE1, 0xFF));  // minor
-                        break;
-                    case Darkprint:
-                        Fibre(rc, ds, g, 0.140f, 0.140f, 3, 17, 2.2f, 0.22f);
-                        PrintGrid(ds,
-                            Color.FromArgb(0x8C, 0xE6, 0xEC, 0xF7),
-                            Color.FromArgb(0x47, 0x93, 0xA6, 0xC4));
-                        break;
-                    case Brown:
-                        // KRAFT. Three things make brown paper read as kraft and
-                        // not as a brown rectangle: a coarse tooth, a directional
-                        // pulp streak, and the dark wood-fibre INCLUSIONS that
-                        // are the material's signature. All three are here.
-                        Fibre(rc, ds, g, 0.085f, 0.085f, 5, 31, 2.9f, 0.36f);
-                        Fibre(rc, ds, g, 0.010f, 0.300f, 3, 53, 2.5f, 0.22f);
-                        Speckle(ds, 300, 1.5f, 0x40, true, 97);    // dark flecks
-                        Speckle(ds, 120, 1.1f, 0x24, false, 131);  // pale flecks
-                        break;
-                }
-            }
-            return rt;
+            // The white-stock papers take the page's colour; the rest own theirs.
+            var g = PaperGrain.TintsPageColor(kind) ? ground : GroundOf(kind);
+            var bytes = PaperGrain.Bake(kind, g.R, g.G, g.B);
+            return CanvasBitmap.CreateFromBytes(
+                rc, bytes, PaperGrain.Tile, PaperGrain.Tile,
+                DirectXPixelFormat.B8G8R8A8UIntNormalized, 96f, CanvasAlphaMode.Premultiplied);
         }
         catch { return null; }
-    }
-
-    // Tileable turbulence flattened to an OPAQUE grey height-field. Working in
-    // grey (rather than a translucent overlay) keeps us clear of the premultiplied
-    // alpha the turbulence effect emits: BlendEffect does the modulation instead.
-    private static ICanvasImage Noise(float fx, float fy, int octaves, int seed,
-                                      float contrast, TurbulenceEffectNoise kind)
-    {
-        var turb = new TurbulenceEffect
-        {
-            Frequency = new Vector2(fx, fy),
-            Octaves = Math.Clamp(octaves, 1, 8),
-            Seed = seed,
-            Size = new Vector2(TileSize, TileSize),
-            Tileable = true,
-            Noise = kind,
-        };
-        return new ColorMatrixEffect
-        {
-            Source = turb,
-            ClampOutput = true,
-            ColorMatrix = GreyMatrix(contrast),
-        };
-    }
-
-    // out.rgb = (in.r - 0.25) * contrast + 0.5 ; out.a = 1.
-    // 0.25 is the mean of the turbulence output once premultiplied by its own
-    // (also ~0.5-mean) alpha channel, so the height-field lands centred on mid
-    // grey — the no-op point of the blend.
-    //
-    // ONE CHANNEL, NOT THE AVERAGE OF THREE, and that is the second half of the
-    // "texture is almost not visible" fix. This used to be a luminance matrix:
-    // k = c/3 applied to R, G and B alike, i.e. the mean of the three channels.
-    // TurbulenceEffect emits INDEPENDENT noise per channel, so averaging them is
-    // averaging three independent random variables — it divides the standard
-    // deviation by root three while leaving `contrast` looking like it was doing
-    // its job. Reading the red channel alone and fanning it out to all three
-    // outputs gives the same grey field with ~1.7x the amplitude for the same
-    // number, which is the difference between grain you can see and grain that
-    // measures 4 levels peak-to-peak on a 256-level page.
-    private static Matrix5x4 GreyMatrix(float c)
-    {
-        float o = 0.5f - 0.25f * c;
-        return new Matrix5x4
-        {
-            M11 = c, M12 = c, M13 = c, M14 = 0,   // red -> r, g and b
-            M21 = 0, M22 = 0, M23 = 0, M24 = 0,
-            M31 = 0, M32 = 0, M33 = 0, M34 = 0,
-            M41 = 0, M42 = 0, M43 = 0, M44 = 0,
-            M51 = o, M52 = o, M53 = o, M54 = 1,
-        };
-    }
-
-    /// <summary>
-    /// Lays a height-field over the ground. The ground is a
-    /// <see cref="CanvasCommandList"/> rather than the drawing session itself,
-    /// because a blend needs BOTH operands as images.
-    ///
-    /// <para><b>THE MODE IS LINEAR LIGHT, AND THAT IS THE WHOLE FIX FOR "the
-    /// texture is almost not visible".</b> Every generator here used to blend
-    /// with <c>Overlay</c>, and Overlay is mathematically incapable of texturing
-    /// pale paper. For a base above 0.5 it evaluates to
-    /// <c>1 - 2(1-base)(1-blend)</c>, so on Lightweight's #FAF9F5 ground
-    /// (base 0.96) the ENTIRE output range — blend running from pure black to
-    /// pure white — is 0.92 to 1.00. Eight per cent, before the strength
-    /// multiplier scaled it down again. The grain was being computed correctly
-    /// and then crushed into invisibility by the blend.</para>
-    ///
-    /// <para>Linear Light is <c>base + 2*blend - 1</c>: a height-field centred on
-    /// mid grey moves the ground by its own deviation, by the same amount at any
-    /// base luminance, and <paramref name="strength"/> then scales that
-    /// deviation linearly. So strength finally means what it says — 0.30 is
-    /// roughly ±0.14 luminance at the peaks, about ±35 levels, which is paper
-    /// you can see at 100% and still ink over.</para>
-    /// </summary>
-    private static void Modulate(ICanvasResourceCreator rc, CanvasDrawingSession ds, Color ground,
-                                 ICanvasImage height, float strength,
-                                 BlendEffectMode mode = BlendEffectMode.LinearLight)
-    {
-        using var groundList = new CanvasCommandList(rc);
-        using (var gds = groundList.CreateDrawingSession())
-            gds.FillRectangle(0, 0, TileSize, TileSize, ground);
-        using var blend = new BlendEffect { Background = groundList, Foreground = height, Mode = mode };
-        var box = new Windows.Foundation.Rect(0, 0, TileSize, TileSize);
-        ds.DrawImage(blend, box, box, Math.Clamp(strength, 0f, 1f));
-    }
-
-    private static void Fibre(ICanvasResourceCreator rc, CanvasDrawingSession ds, Color ground,
-                              float fx, float fy, int octaves, int seed, float contrast, float strength)
-    {
-        using var n = (IDisposable)Noise(fx, fy, octaves, seed, contrast, TurbulenceEffectNoise.FractalSum);
-        Modulate(rc, ds, ground, (ICanvasImage)n, strength);
-    }
-
-    /// <summary>Creases as RELIEF. The ridge field alone is a stain — a crumple
-    /// only reads as a crumple when each fold has a lit face and a shadowed one,
-    /// so the blurred ridges are run through <see cref="EmbossEffect"/> first.
-    /// Emboss returns a directional derivative centred on mid grey, which is
-    /// exactly the height-field Linear Light wants, and the result is a sheet
-    /// lit from the upper left rather than a sheet with grey smears on it.</summary>
-    private static void Creases(ICanvasResourceCreator rc, CanvasDrawingSession ds, Color ground)
-    {
-        // TurbulenceEffectNoise.Turbulence is the |noise| variant: its creases are
-        // sharp ridges rather than smooth hills, which is exactly what a folded
-        // sheet looks like. A small blur rounds the fold shoulders.
-        using var ridges = (IDisposable)Noise(0.011f, 0.011f, 5, 71, 3.0f, TurbulenceEffectNoise.Turbulence);
-        using var soft = new GaussianBlurEffect
-        {
-            Source = (ICanvasImage)ridges,
-            BlurAmount = 1.4f,
-            BorderMode = EffectBorderMode.Hard,   // no transparent halo at the tile edge
-        };
-        using var relief = new EmbossEffect
-        {
-            Source = soft,
-            Amount = 3.2f,
-            Angle = 2.36f,   // radians: lit from the upper left, 135 degrees
-        };
-        // The broad fold shading UNDER the sharp relief, so the sheet also has
-        // large soft undulations and not only creases.
-        Modulate(rc, ds, ground, soft, 0.22f);
-        Modulate(rc, ds, ground, relief, 0.60f);
-    }
-
-    /// <summary>Wave relief. The bands are DRAWN (so the waves stay regular and
-    /// tile exactly: two cycles across the 256 tile, bands on a 32 grid) into a
-    /// command list which is then embossed, so the ripples become a lit corrugation
-    /// instead of two faint outlines.</summary>
-    private static void Ripples(ICanvasResourceCreator rc, CanvasDrawingSession ds, Color ground)
-    {
-        using var field = new CanvasCommandList(rc);
-        using (var fds = field.CreateDrawingSession())
-        {
-            // Mid grey is Linear Light's no-op point, so the field starts there
-            // and the waves push away from it in both directions.
-            fds.FillRectangle(0, 0, TileSize, TileSize, Color.FromArgb(0xFF, 0x80, 0x80, 0x80));
-            const int bands = 8;
-            const float step = TileSize / bands;   // 32
-            for (int b = 0; b < bands; b++)
-            {
-                float cy = b * step + step * 0.5f;
-                float phase = b * 0.9f;
-                for (int pass = 0; pass < 2; pass++)
-                {
-                    float dy = pass == 0 ? -3.0f : 3.0f;
-                    var col = pass == 0
-                        ? Color.FromArgb(0xFF, 0xD8, 0xD8, 0xD8)
-                        : Color.FromArgb(0xFF, 0x30, 0x30, 0x30);
-                    var prev = Vector2.Zero;
-                    for (int x = 0; x <= (int)TileSize; x += 4)
-                    {
-                        float y = cy + dy + 4.2f * MathF.Sin(x / TileSize * MathF.Tau * 2f + phase);
-                        var p = new Vector2(x, y);
-                        if (x > 0) fds.DrawLine(prev, p, col, 7.5f);
-                        prev = p;
-                    }
-                }
-            }
-        }
-        using var soft = new GaussianBlurEffect
-        {
-            Source = field,
-            BlurAmount = 2.6f,
-            BorderMode = EffectBorderMode.Hard,
-        };
-        Modulate(rc, ds, ground, soft, 0.42f);
-    }
-
-    /// <summary>The dark wood-fibre inclusions that make kraft paper look like
-    /// kraft paper, and the tooth flecks on heavy stock. Deterministic: the seed
-    /// is explicit, so a tile is byte-identical every time it is baked, and the
-    /// dots are kept clear of the tile edge so nothing is half-cut at the wrap
-    /// seam.</summary>
-    private static void Speckle(CanvasDrawingSession ds, int count, float radius, byte alpha,
-                                bool dark, int seed)
-    {
-        var rng = new Random(seed);
-        var colour = dark
-            ? Color.FromArgb(alpha, 0x2A, 0x1C, 0x0E)
-            : Color.FromArgb(alpha, 0xFF, 0xFA, 0xF0);
-        for (int i = 0; i < count; i++)
-        {
-            float x = (float)(rng.NextDouble() * (TileSize - 2 * radius)) + radius;
-            float y = (float)(rng.NextDouble() * (TileSize - 2 * radius)) + radius;
-            float r = radius * (0.5f + (float)rng.NextDouble());
-            ds.FillCircle(new Vector2(x, y), r, colour);
-        }
-    }
-
-    // Blueprint / Darkprint gridlines. Drawn at 0 AND at TileSize so the two
-    // half-lines either side of the wrap seam add up to one full line.
-    private static void PrintGrid(CanvasDrawingSession ds, Color major, Color minor)
-    {
-        const float minorStep = 16f, majorStep = 64f;
-        for (float v = 0; v <= TileSize; v += minorStep)
-        {
-            bool maj = v % majorStep == 0f;
-            var c = maj ? major : minor;
-            float w = maj ? 1.5f : 0.7f;
-            ds.DrawLine(v, 0, v, TileSize, c, w);
-            ds.DrawLine(0, v, TileSize, v, c, w);
-        }
-    }
-
-    // The standard transparency checkerboard. 16 squares per axis: an even count,
-    // so the pattern is continuous across the wrap.
-    private static void Checkerboard(CanvasDrawingSession ds)
-    {
-        const float s = 16f;
-        var light = Color.FromArgb(255, 0xFF, 0xFF, 0xFF);
-        var dark = Color.FromArgb(255, 0xCF, 0xCF, 0xCF);
-        ds.Clear(light);
-        int n = (int)(TileSize / s);
-        for (int j = 0; j < n; j++)
-            for (int i = 0; i < n; i++)
-                if (((i + j) & 1) == 1)
-                    ds.FillRectangle(i * s, j * s, s, s, dark);
     }
 
     // =======================================================================
@@ -489,21 +266,27 @@ public static class PaperTextures
     // =======================================================================
 
     /// <summary>Renders a paper preview as a XAML <see cref="CanvasImageSource"/>,
-    /// so a swatch can show the REAL texture rather than a flat colour. A CROP of
-    /// the tile is drawn, not the whole tile scaled down, so the grain and the
-    /// blueprint grid read at their true size.</summary>
+    /// so a swatch shows the REAL texture rather than a flat colour. A CROP of the
+    /// tile is drawn, not the whole tile scaled down, so the grain reads near its
+    /// true size; the crop widens for the papers whose character is structural
+    /// (Crumpled's folds, Rippled's waves) because those need more than one
+    /// feature in frame to be recognisable.</summary>
     public static CanvasImageSource? Preview(string? paper, Color ground, float px)
     {
+        var kind = PaperGrain.FromId(paper);
+        if (kind == null) return null;
         try
         {
+            float dpi;
+            lock (_gate) dpi = _dpi;
             var dev = CanvasDevice.GetSharedDevice();
-            var src = new CanvasImageSource(dev, px, px, 96);
+            var src = new CanvasImageSource(dev, px, px, dpi);
             using (var ds = src.CreateDrawingSession(ground))
             {
                 var tile = Tile(dev, paper, ground);
                 if (tile != null)
                 {
-                    float crop = Math.Min(TileSize, px * 2.2f);
+                    float crop = Math.Min(PaperGrain.Tile, px * CropFactor(kind.Value));
                     ds.DrawImage(tile,
                         new Windows.Foundation.Rect(0, 0, px, px),
                         new Windows.Foundation.Rect(0, 0, crop, crop));
@@ -514,14 +297,24 @@ public static class PaperTextures
         catch { return null; }
     }
 
+    private static float CropFactor(PaperKind kind) => kind switch
+    {
+        PaperKind.Crumpled => 4.4f,     // ~2 creases in a 69 DIP circle
+        PaperKind.Rippled => 3.6f,      // ~4 ripples
+        PaperKind.Transparent => 1.4f,  // ~12 squares, at close to true size
+        _ => 2.0f,                      // the grain papers: half size, still legible
+    };
+
     /// <summary>Renders a grid-kind preview the same way, so the grid swatches
     /// show the actual pattern the page will draw.</summary>
     public static CanvasImageSource? GridPreview(Models.GridType grid, Color ground, Color ink, float px)
     {
         try
         {
+            float dpi;
+            lock (_gate) dpi = _dpi;
             var dev = CanvasDevice.GetSharedDevice();
-            var src = new CanvasImageSource(dev, px, px, 96);
+            var src = new CanvasImageSource(dev, px, px, dpi);
             using (var ds = src.CreateDrawingSession(ground))
             {
                 float sp = px / 4.5f;

@@ -305,18 +305,35 @@ public sealed class InkSurface : UserControl
         // render targets and image brushes PER DEVICE, so without this the dead
         // device's resources are pinned by that dictionary for the rest of the
         // session and the next draw bakes a second set beside them instead of
-        // replacing them. This is the only caller PaperTextures.Invalidate has,
-        // and it is the one it was written for.
+        // replacing them. Invalidate went a long time with NO caller at all,
+        // which is precisely how that leak survived; this is the device-loss
+        // caller it was written for, and SetDisplayDpi below is the other.
         //
         // The reason to watch is NewDevice, not a "DeviceLost" constant: Win2D
         // reports a recovered device loss by handing the control a NEW device
         // through this same event (the enum is FirstTime / NewDevice /
-        // DpiChanged). DpiChanged is deliberately NOT a trigger - the tiles are
-        // baked at a fixed 96 DPI so one tile pixel is one world unit.
+        // DpiChanged).
+        //
+        // DpiChanged matters too, but not for the page tiles - those are baked
+        // at a fixed 96 DPI on purpose, so one tile pixel is one world unit and
+        // a display change cannot affect them. It matters for the settings
+        // swatches, which are CanvasImageSource and are XAML-composited:
+        // rasterised at 96 on a 125% or 150% display they come out soft. So the
+        // DPI is pushed into PaperTextures, which re-bakes only if it moved.
         _canvas.CreateResources += (_, args) =>
         {
-            if (args.Reason == Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesReason.NewDevice)
+            var reason = args.Reason;
+            if (reason == Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesReason.NewDevice)
                 PaperTextures.Invalidate();
+            if (reason != Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesReason.FirstTime)
+                PaperTextures.SetDisplayDpi(_canvas.Dpi);
+        };
+        // FirstTime fires before the control has its real DPI in some shells, so
+        // the initial value is taken from the XamlRoot once we are in the tree.
+        Loaded += (_, _) =>
+        {
+            try { PaperTextures.SetDisplayDpi((float)(XamlRoot?.RasterizationScale ?? 1.0) * 96f); }
+            catch { }
         };
         _textLayer = new Canvas { Background = null, RenderTransform = _textTransform };
 
@@ -3442,15 +3459,16 @@ public sealed class InkSurface : UserControl
     // effect, it never assigns to it, so the CVC's per-tile pre-translation
     // survives (overwriting it is what made ink vanish in #inkfix2).
     //
-    // The fill rectangle is the visible world rect and the brush wraps every 256
-    // WORLD units, so the texture is glued to the page: it pans and zooms with
-    // the drawing instead of swimming across it.
+    // The fill rectangle is the visible world rect and the brush wraps every
+    // PaperTextures.TileSize WORLD units, so the texture is glued to the page:
+    // it pans and zooms with the drawing instead of swimming across it.
     private void DrawPaper(CanvasDrawingSession ds, Rect region, Color ground)
     {
         var paper = _page?.Paper;
         if (string.IsNullOrEmpty(paper)) return;   // plain colour: byte-for-byte today's path
-        // zoomed far enough out that a 256-unit tile is a few pixels: the grain
-        // would alias into noise, and the flat ground already reads correctly
+        // Zoomed far enough out that the grain is sub-pixel: it would alias into
+        // noise, and the flat ground already reads correctly on its own. The tile
+        // is 512 world units, so this cuts in when it covers ~90 screen pixels.
         if (ViewZoom < 0.18f) return;
         var brush = PaperTextures.Brush(_canvas, paper, ground);
         if (brush == null) return;
@@ -3484,6 +3502,14 @@ public sealed class InkSurface : UserControl
             try { var c = ColorUtil.Parse(_page.GridColor); gridColor = Color.FromArgb(gridColor.A, c.R, c.G, c.B); }
             catch { }
         }
+        // Grid opacity (UI-SPEC-V3 C) is a MULTIPLIER over the automatic alpha
+        // above, never a replacement for it: 1 is exactly the grid this build
+        // has always drawn, and the setting can only ever fade it out.
+        double gridOpacity = Math.Clamp(_page.GridOpacity, 0, 1);
+        if (gridOpacity < 1)
+            gridColor = Color.FromArgb((byte)Math.Round(gridColor.A * gridOpacity),
+                                       gridColor.R, gridColor.G, gridColor.B);
+        if (gridColor.A == 0) return;
         float lw = 1f / ViewZoom;
 
         switch (_page.Grid)

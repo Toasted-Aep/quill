@@ -252,8 +252,9 @@ public sealed class ObjectsWindow
         box.Children.Add(new Border
         {
             CornerRadius = new CornerRadius(10),
-            Background = new SolidColorBrush(Color.FromArgb(
-                ChromeUi.IsDark ? (byte)0x1E : (byte)0x12, 0x9A, 0x9A, 0x9A)),
+            // a wash of the ink rather than a fixed grey at two alphas: the last
+            // two-state colour pick in this window
+            Background = new SolidColorBrush(ChromeUi.Wash(0x18)),
             Child = new ScrollViewer
             {
                 Height = Band,

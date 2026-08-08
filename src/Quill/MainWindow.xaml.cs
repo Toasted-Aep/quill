@@ -1791,17 +1791,56 @@ public sealed partial class MainWindow : Window
         catch { return true; }
     }
 
-    private bool ResolvedDark()
+    // =======================================================================
+    // The page-derived palette (CONCEPTS-REF-2026-08-07 §0/§6/§7)
+    //
+    // Quill's chrome is NOT a light theme and a dark theme. Every custom-drawn
+    // surface - the dial, the pen row, the value popover, the floating bars, the
+    // export and objects windows - reads Quill.Services.PageTheme, and PageTheme
+    // derives its whole palette from ONE colour: the ground. A blue page gives
+    // blue chrome, a kraft page gives brown chrome. Light and dark fall out of
+    // the ground's luminance rather than being picked.
+    //
+    // Nothing else in the app may call PageTheme.SetGround. This is the only
+    // place that knows what the ground currently is, so it is the only place
+    // allowed to say so.
+    // =======================================================================
+
+    /// <summary>The ONE read of the paper ground table. A texture is a ground
+    /// plus grain and only the GROUND feeds the derivation, so this deliberately
+    /// never looks at the grain. Kept as a single call site because the textures
+    /// are being rebuilt on another branch: if that table is renamed, exactly
+    /// one line here changes.</summary>
+    private static Color PaperGround(NotePage page) => PaperTextures.Ground(page);
+
+    /// <summary>The colour the whole shell derives from.
+    ///
+    /// <para>ThemeSource "Page": the ACTIVE PAGE's effective ground - the fixed
+    /// colour of its paper for Blueprint / Brown / Darkprint, its own background
+    /// otherwise. With no page open (gallery, startup) there is no page to derive
+    /// from, so it falls through.</para>
+    ///
+    /// <para>ThemeSource "Manual": the ground the user pinned, expressed as the
+    /// colour the root actually paints under that choice - including OLED black,
+    /// so pinning Dark with OLED on gives the chrome the true black ground it is
+    /// really sitting on rather than a near-black one it is not.</para></summary>
+    private Color ResolveGround()
     {
-        // "Follow page background" (§paper-theme): the ACTIVE PAGE decides. The
-        // page's EFFECTIVE ground is used, not its raw hex, so a Blueprint or
-        // Darkprint page reads dark even though its stored colour is incidental.
-        // With no page open yet (gallery / startup) fall through to the explicit
-        // mode, which is also what an existing library always does.
         if (_library.ThemeSource == "Page" && _curPage != null)
-            return ColorUtil.IsDark(PaperTextures.Ground(_curPage));
-        return _library.Theme == "System" ? SystemPrefersDark() : _library.Theme == "Dark";
+            return PaperGround(_curPage);
+        bool dark = _library.Theme == "System" ? SystemPrefersDark() : _library.Theme == "Dark";
+        return dark
+            ? (_library.OledBlack ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 0x0F, 0x0E, 0x10))
+            : Color.FromArgb(255, 0xF7, 0xF6, 0xF1);
     }
+
+    /// <summary>Whether the shell is on its dark resolution. Answered by
+    /// PageTheme's own threshold and never by a second one: ColorUtil.IsDark
+    /// averages the raw bytes and puts Brown Paper on the LIGHT side, and Brown
+    /// Paper is one of the three cases §7 calls out as dark with white text.
+    /// Two thresholds would mean the WinUI controls and the custom chrome
+    /// disagreed about the same page.</summary>
+    private bool ResolvedDark() => PageTheme.Luminance(ResolveGround()) < 0.5;
 
     // The theme ApplyTheme last committed. ApplyTheme rebuilds the tree, the pen
     // strip, the calc history, the gallery and the canvas, so calling it on every
@@ -1809,14 +1848,49 @@ public sealed partial class MainWindow : Window
     // is the gate: re-derive cheaply, and only apply when the answer CHANGED.
     private bool? _appliedDark;
 
-    /// <summary>Re-derives the theme after something that can change it (page
-    /// open/switch, page background change, paper change) and applies it only if
-    /// it actually differs from what is on screen.</summary>
-    private void SyncThemeToPage()
+    // The colour picker calls back on EVERY drag frame, so pushing the ground
+    // straight through would re-derive the palette and repaint every custom
+    // surface dozens of times a second while the user scrubs. Coalesce.
+    private DispatcherTimer? _groundTimer;
+
+    /// <summary>Re-points <see cref="PageTheme"/> at whatever the ground is now.
+    /// Call after anything that can move it: page open, page switch, background
+    /// change, paper change, theme-source change.
+    ///
+    /// <para>Discrete events (opening a page, picking a paper) pass
+    /// <paramref name="immediate"/> so a new page never shows for a frame under
+    /// the old page's chrome. Continuous ones (dragging the background picker)
+    /// do not, and are coalesced onto one tick.</para></summary>
+    private void SyncThemeToPage(bool immediate = false)
     {
-        if (_library.ThemeSource != "Page") return;
-        if (_appliedDark == ResolvedDark()) return;   // no change: no rebuild
-        ApplyTheme();
+        if (immediate)
+        {
+            _groundTimer?.Stop();
+            PushGround();
+            return;
+        }
+        if (_groundTimer == null)
+        {
+            _groundTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
+            _groundTimer.Tick += (_, _) => { _groundTimer!.Stop(); PushGround(); };
+        }
+        _groundTimer.Stop();
+        _groundTimer.Start();
+    }
+
+    /// <summary>Hands the current ground to <see cref="PageTheme"/> and, only if
+    /// that flipped the shell between its light and dark resolutions, rebuilds
+    /// the WinUI side with it.
+    ///
+    /// <para>The two halves are separate on purpose. Moving from a blue page to a
+    /// brown one repaints every custom surface (through PageTheme.Changed) but
+    /// must NOT rebuild the tree, the gallery and the pen strip: those read WinUI
+    /// theme resources, which did not move, and rebuilding them on every page
+    /// turn is the cost ApplyTheme's gate has always existed to avoid.</para></summary>
+    private void PushGround()
+    {
+        PageTheme.SetGround(ResolveGround());   // idempotent; raises Changed only on a real move
+        if (_appliedDark != PageTheme.IsDark) ApplyTheme();
     }
 
     // Code-built UI captures its strings at build time exactly the way it
@@ -1842,7 +1916,13 @@ public sealed partial class MainWindow : Window
 
     private void ApplyTheme()
     {
-        bool dark = ResolvedDark();
+        // The palette first: everything rebuilt below - the floating bars, the
+        // settings panel, the dial - reads PageTheme, so it has to be pointing
+        // at the right ground already or they all rebuild from the old one. This
+        // also covers every MANUAL route in (the theme combo, the sun/moon pill,
+        // the OLED toggle), none of which goes through SyncThemeToPage.
+        PageTheme.SetGround(ResolveGround());
+        bool dark = PageTheme.IsDark;
         _appliedDark = dark;   // the anti-thrash baseline SyncThemeToPage compares against
         ApplyOledBlack(dark && _library.OledBlack);
         // with a live Mica/acrylic backdrop the root goes translucent so the
@@ -2079,6 +2159,9 @@ public sealed partial class MainWindow : Window
         res["SystemAccentColorDark1"] = Mix(c, Colors.Black, 0.12);
         res["SystemAccentColorDark2"] = Mix(c, Colors.Black, 0.25);
         res["SystemAccentColorDark3"] = Mix(c, Colors.Black, 0.38);
+        // §6: the accent is the USER's choice, not the paper's - PageTheme leaves
+        // it untouched by the derivation, but it still has to be told what it is.
+        PageTheme.Accent = c;
         if (refreshTheme) RefreshThemeForAccent();
     }
 
@@ -2627,7 +2710,10 @@ public sealed partial class MainWindow : Window
                 rowPanel.Children.Add(new TextBlock { Text = penNames[ti], VerticalAlignment = VerticalAlignment.Center });
                 typeCombo.Items.Add(new ComboBoxItem { Content = rowPanel });
             }
-            typeCombo.SelectedIndex = (int)p.Pen;
+            // Clamp: a saved pen can carry a PenType ordinal this build no longer has
+            // (the user's own settings hold Pen=18 against a 14-member enum), and an
+            // out-of-range SelectedIndex throws straight out of a ComboBox setter.
+            typeCombo.SelectedIndex = System.Math.Clamp((int)p.Pen, 0, penNames.Length - 1);
             typeCombo.SelectionChanged += (_, _) =>
             {
                 if (typeCombo.SelectedIndex < 0) return;
@@ -3346,10 +3432,12 @@ public sealed partial class MainWindow : Window
             ScheduleSave();
         }
 
+        EndContrastSession();   // a new page is never a continuation of the last one's edit
         Surface.LoadPage(page);
-        // §paper-theme: the page that is now active may be light where the last
-        // one was dark. Cheap re-derive; only rebuilds the chrome if it flipped.
-        SyncThemeToPage();
+        // §paper-theme: the page that is now active carries its own ground and
+        // the whole shell derives from it. Immediate - a page must never appear
+        // for a frame wearing the previous page's chrome.
+        SyncThemeToPage(immediate: true);
         if (pageChanged && !_suppressPageFade)
         {
             // gentle cross-fade so the new page eases in rather than snapping
@@ -5093,6 +5181,8 @@ public sealed partial class MainWindow : Window
             },
             SetGridSpacing = v => { if (_curPage != null) { _curPage.GridSpacing = v; Surface.Refresh(); ScheduleSave(); } },
             SetGridColor = c => { if (_curPage != null) { _curPage.GridColor = c; Surface.Refresh(); ScheduleSave(); } },
+            SetGridOpacity = v => { if (_curPage != null) { _curPage.GridOpacity = Math.Clamp(v, 0, 1); Surface.Refresh(); ScheduleSave(); } },
+            ApplyKeyPreset = ApplyKeyPreset,
             SetPageSize = (preset, w, h, unit) =>
             {
                 if (_curPage == null) return;
@@ -6124,8 +6214,13 @@ public sealed partial class MainWindow : Window
     private void BgCustom_Click(object sender, RoutedEventArgs e)
     {
         if (_curPage == null) return;
+        // One drag of the picker is ONE edit session: the contrast baseline is
+        // taken on the first callback and held until the picker closes, so the
+        // sixty callbacks in between cannot compound.
+        EndContrastSession();
         OpenColorPicker(BgCustomBtn, ColorUtil.Parse(_curPage.Background),
-            c => SetPageBackground(ColorUtil.ToHex(c)));
+            c => SetPageBackground(ColorUtil.ToHex(c)),
+            EndContrastSession);
     }
 
     // Applies a page background and, when the page flips between light and dark,
@@ -6133,18 +6228,62 @@ public sealed partial class MainWindow : Window
     private void SetPageBackground(string hex)
     {
         if (_curPage == null) return;
-        bool wasDark = ColorUtil.IsDark(ColorUtil.Parse(_curPage.Background));
-        bool nowDark = ColorUtil.IsDark(ColorUtil.Parse(hex));
         _curPage.Background = hex;
-        if (wasDark != nowDark && _curPage.Texts.Count > 0)
-        {
-            FlipTextContrast(_curPage, nowDark);
-            Surface.FlushTexts();
-            Surface.RebuildTextLayer();
-        }
+        ApplyTextContrast();
         Surface.Refresh();
         SyncThemeToPage();   // §paper-theme: a dark page can now darken the whole app
         ScheduleSave();
+    }
+
+    // ---- the contrast flip, made non-destructive --------------------------
+    //
+    // The flip used to run STRAIGHT ON THE STORED RTF, and the colour picker
+    // calls back on every drag frame. Dragging a background across the
+    // light/dark threshold therefore rewrote every text box repeatedly, and it
+    // was lossy each time: a deliberate #303030 became ivory on the way into
+    // dark and #141413 on the way back out, so the colour the user chose was
+    // gone after one wobble of the picker, with nothing to undo.
+    //
+    // Now every flip is computed from a BASELINE captured when the edit session
+    // opened, not from whatever the last frame left behind. That makes the
+    // operation idempotent and exactly reversible: drag into dark and back out
+    // and the text is byte-for-byte what it started as, #303030 included.
+    //
+    // What this deliberately does NOT do is derive the display colour at render
+    // time. Text boxes are real RichEditBoxes and the RTF in the model is what
+    // the control is loaded from and saved back to, so an "automatic" colour
+    // would have to be threaded through every SetText/GetText round trip in
+    // InkSurface. That is the right end state and it is a separate change.
+    private Dictionary<Guid, string>? _contrastBaseline;
+
+    /// <summary>Drops the baseline, so the NEXT background change starts a new
+    /// edit session from the text as it stands now. Called when the page changes
+    /// under us and when the background picker closes - anything later is a
+    /// fresh user action and must not be undone by an older snapshot.</summary>
+    private void EndContrastSession() => _contrastBaseline = null;
+
+    private void ApplyTextContrast()
+    {
+        if (_curPage == null || _curPage.Texts.Count == 0) return;
+        // The live RichEditBox is the truth for whichever box is open, so pull
+        // it into the model BEFORE snapshotting or comparing. The old order
+        // flipped the model and then flushed the editor over the top, which
+        // silently discarded the flip for the box being edited.
+        try { Surface.FlushTexts(); } catch { }
+
+        _contrastBaseline ??= _curPage.Texts.ToDictionary(t => t.Id, t => t.Rtf ?? "");
+
+        bool nowDark = PageTheme.Luminance(PaperGround(_curPage)) < 0.5;
+        bool moved = false;
+        foreach (var t in _curPage.Texts)
+        {
+            if (!_contrastBaseline.TryGetValue(t.Id, out var original)) continue;   // added mid-session
+            var next = FlipTextContrast(original, nowDark);
+            if (next == t.Rtf) continue;
+            t.Rtf = next;
+            moved = true;
+        }
+        if (moved) Surface.RebuildTextLayer();
     }
 
     /// <summary>Applies a paper texture (and the plain colour that goes with it)
@@ -6156,31 +6295,32 @@ public sealed partial class MainWindow : Window
         _curPage.Paper = string.IsNullOrEmpty(paper) ? null : paper;
         if (!string.IsNullOrEmpty(hex)) { SetPageBackground(hex); return; }   // that path syncs + saves
         Surface.Refresh();
-        SyncThemeToPage();
+        SyncThemeToPage(immediate: true);   // a discrete pick, not a drag
         ScheduleSave();
     }
 
-    // Rewrites each text box's RTF colour table: near-black ink turns ivory on a
-    // dark page and near-white ink turns near-black on a light page. Colours with
-    // real hue (reds, blues, highlights) are left alone.
-    private static void FlipTextContrast(NotePage page, bool nowDark)
+    // Rewrites one RTF colour table: near-black ink turns ivory on a dark page
+    // and near-white ink turns near-black on a light page. Colours with real hue
+    // (reds, blues, highlights) are left alone.
+    //
+    // PURE: it takes the ORIGINAL rtf and returns the flipped one rather than
+    // mutating the page in place, which is what lets ApplyTextContrast recompute
+    // from a baseline on every frame of a drag instead of compounding.
+    private static string FlipTextContrast(string rtf, bool nowDark)
     {
-        foreach (var t in page.Texts)
-        {
-            if (string.IsNullOrEmpty(t.Rtf)) continue;
-            t.Rtf = System.Text.RegularExpressions.Regex.Replace(t.Rtf,
-                @"\\red(\d{1,3})\\green(\d{1,3})\\blue(\d{1,3})",
-                m =>
-                {
-                    int r = int.Parse(m.Groups[1].Value), g = int.Parse(m.Groups[2].Value), b = int.Parse(m.Groups[3].Value);
-                    int max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
-                    bool greyish = max - min < 40;   // only flip near-neutral colours
-                    int lum = (r * 299 + g * 587 + b * 114) / 1000;
-                    if (greyish && nowDark && lum < 100) return @"\red250\green249\blue245";   // ivory
-                    if (greyish && !nowDark && lum > 180) return @"\red20\green20\blue19";     // near-black
-                    return m.Value;
-                });
-        }
+        if (string.IsNullOrEmpty(rtf)) return rtf;
+        return System.Text.RegularExpressions.Regex.Replace(rtf,
+            @"\\red(\d{1,3})\\green(\d{1,3})\\blue(\d{1,3})",
+            m =>
+            {
+                int r = int.Parse(m.Groups[1].Value), g = int.Parse(m.Groups[2].Value), b = int.Parse(m.Groups[3].Value);
+                int max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
+                bool greyish = max - min < 40;   // only flip near-neutral colours
+                int lum = (r * 299 + g * 587 + b * 114) / 1000;
+                if (greyish && nowDark && lum < 100) return @"\red250\green249\blue245";   // ivory
+                if (greyish && !nowDark && lum > 180) return @"\red20\green20\blue19";     // near-black
+                return m.Value;
+            });
     }
 
     private void SetDefaultBg_Click(object sender, RoutedEventArgs e)
@@ -6456,8 +6596,7 @@ public sealed partial class MainWindow : Window
         FadeOut(TopBar);
         FadeOut(FormatBar);
         FadeOut(NotebookPanel);
-        FadeOut(CalcPanel);
-        BtnCalc.IsChecked = false;
+        SetCalcOpen(false);
         // if the cluster was left tucked away as an edge tab, keep it tucked
         // (rather than popping the full 3-button cluster back over it).
         if (_minimalDocked) { PositionDockedTab(); FadeIn(MinimalButtonsTab, pop: false); }
@@ -6869,11 +7008,18 @@ public sealed partial class MainWindow : Window
 
     // Opens the system picker centred on a control (its middle, in root coords)
     // or on an explicit root point. onPicked fires live on every change.
+    // Two members rather than one optional parameter: this is passed around as a
+    // method GROUP (Action<FrameworkElement, Color, Action<Color>>), and a method
+    // with an optional trailing parameter does not convert to that delegate.
     private void OpenColorPicker(FrameworkElement anchor, Color current, Action<Color> onPicked)
+        => OpenColorPicker(anchor, current, onPicked, null);
+
+    private void OpenColorPicker(FrameworkElement anchor, Color current, Action<Color> onPicked,
+                                 Action? onClosed)
     {
         var tl = anchor.TransformToVisual(RootGrid).TransformPoint(new Point(0, 0));
         var pt = new Point(tl.X + anchor.ActualWidth / 2, tl.Y + anchor.ActualHeight / 2);
-        ColorPickerService.Open(pt, current, onPicked);
+        ColorPickerService.Open(pt, current, onPicked, onClosed);
     }
 
     private void EyedropAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs args)
@@ -6948,6 +7094,15 @@ public sealed partial class MainWindow : Window
 
         RootGrid.KeyboardAccelerators.Clear();
         var rows = new List<(string Combo, string Label)>();
+        // Settings > Interaction > Keyboard & Mouse can switch the whole layout
+        // off (CONCEPTS-REF 3.3). Off installs no accelerator at all; the F1
+        // sheet still builds and says why it is empty.
+        if (!_library.KeyboardShortcuts)
+        {
+            BuildShortcutsSheet(id, rows,
+                new List<string> { "Keyboard shortcuts are switched off in Settings > Interaction." });
+            return;
+        }
         var dropped = new List<string>();
         var taken = new Dictionary<(VKey, VMod), string>();
 
@@ -8257,7 +8412,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     private static readonly string[] OptionalTools =
     {
         "ToolSpace", "TouchDrawToggle", "ToolComment", "ShapeBtn", "MouseModeBtn",
-        "BtnHistory", "VoiceBtn", "BtnAi", "ZoomBtn", "PageSettingsBtn", "ExportBtn", "BtnCalc",
+        "BtnHistory", "VoiceBtn", "BtnAi", "ZoomBtn", "PageSettingsBtn", "ExportBtn",
     };
 
     private void ApplyToolbarVisibility()
@@ -8296,7 +8451,6 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             Set(ZoomBtn, "ZoomBtn");
             Set(PageSettingsBtn, "PageSettingsBtn");
             Set(ExportBtn, "ExportBtn");
-            Set(BtnCalc, "BtnCalc");
         }
         catch { }
     }
@@ -9110,9 +9264,19 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     // =======================================================================
     // Calculator
     // =======================================================================
-    private void Calc_Toggle(object sender, RoutedEventArgs e)
+    // The calculator moved into the Quill menu (§9.7), so its open/closed
+    // state can no longer live in a top-bar ToggleButton's IsChecked. It is a
+    // field now, and the menu item is TOLD what it is rather than asked - a
+    // ToggleMenuFlyoutItem toggles itself on click, so reading it back would
+    // make every other close path (Escape, the panel's own X, minimal UI)
+    // leave the tick and the panel disagreeing.
+    private bool _calcOpen;
+
+    private void SetCalcOpen(bool on)
     {
-        if (BtnCalc.IsChecked == true)
+        _calcOpen = on;
+        try { CalcMenuItem.IsChecked = on; } catch { }
+        if (on)
         {
             FadeIn(CalcPanel);
             CalcInput.Focus(FocusState.Programmatic);
@@ -9120,11 +9284,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         else FadeOut(CalcPanel);
     }
 
-    private void Calc_Close(object sender, RoutedEventArgs e)
-    {
-        BtnCalc.IsChecked = false;
-        FadeOut(CalcPanel);
-    }
+    private void Calc_Toggle(object sender, RoutedEventArgs e) => SetCalcOpen(!_calcOpen);
+
+    private void Calc_Close(object sender, RoutedEventArgs e) => SetCalcOpen(false);
 
     private void CalcMode_Click(object sender, RoutedEventArgs e) => BuildCalcButtons();
 

@@ -453,3 +453,142 @@ near-black, section headings and values in near-white, captions muted, swatch
 circles drawn as `Outline` rings with **no fill**, and the selected circle's ring
 in full `OnSurface`. Toggle tracks stay light-grey when off. This is what §6
 must produce on a Darkprint ground.
+
+---
+
+## 10. Revision pass, 2026-08-08
+
+A third pass from the user against the merged build, plus four new screenshots:
+the COPIC wheel's centre controls, the wheel open beside the dial, and two of
+Concepts' **guideline editor** panels. Where §10 disagrees with anything above,
+**§10 wins.**
+
+### 10.1 Top bar
+
+1. **Icon sizes are inconsistent** — some render at touch-mode size while others
+   do not. All top-bar glyphs must be **one size in normal mode**, and scale
+   **proportionally together** in touch mode. No per-icon exceptions.
+2. **Undo and redo leave the top bar** whenever the radial dial is the active
+   tool surface (they live in the dial instead — see §10.2).
+3. **History moves into the Quill button menu.** Selecting it opens a floating
+   window in the Export/Settings family, **docked to the right** of the screen.
+4. **Page name and date come off the page surface** and move into the top bar.
+
+### 10.2 Radial dial
+
+5. **Undo and redo move INSIDE the wheel.** Supersedes §1.6, which had them as
+   satellites outside the ring. They become buttons within the dial itself.
+6. **Sector contents are the wrong way round and clipped.** Supersedes §1.3:
+   - the **size label goes to the OUTER part** of the cell (furthest from the
+     dial centre);
+   - the **stroke silhouette goes to the INNER part** (nearest the centre);
+   - marks below the horizontal midline currently render **upside down** — fix
+     so every mark is upright regardless of sector;
+   - the size text is currently **cut off**. After the re-layout, verify no
+     label is clipped at any sector angle or any size string length (`1280`,
+     `13K`, `4352`, `36K` all differ in width).
+
+   Note the tension with §1.3's "labels rotate to follow the ring": that stays
+   true for the *label*, but the *mark* must read upright.
+7. **Selection animation** — on selecting a cell it **rises and lights up**.
+8. **The COPIC wheel is still not centred on the dial.** §9.3 asked for it to
+   centre on the colour dot and it does not. This is the third request; treat
+   the centre of the dial's colour circle as the required centre point and
+   verify it by measuring both centres, not by eye.
+9. **The pen preview must show whenever the size / opacity / smoothness popover
+   is OPEN**, not only while a value is actively being dragged. Also **remove
+   the blue guideline** that currently draws with it.
+
+### 10.3 Pen row — revert
+
+10. **The user does not want the new Bar palette.** *"I don't like the current
+    pen row revert to the old one."* Restore the previous pen row. The §2 /
+    §9.1 Bar work stays in the tree behind the Wheel|Bar setting but must not
+    be what a user sees by default.
+11. **Remove the ruler from the pen row.** It becomes a **tool**: tiltable with
+    a two-finger tilt gesture, with a **tilt visualiser** that can be clicked
+    with a mouse to type an exact angle.
+12. **Add an eyedropper tool**, selectable from the tool library into either
+    the pen row or the dial.
+
+### 10.4 COPIC wheel
+
+13. **Page custom colour centres the wheel on the pen colour icon** — the same
+    centre point as §10.2 item 8.
+14. **Custom page colour behaves like §9.5**: the chosen colour is saved;
+    switching away and back applies the saved colour **without** opening the
+    wheel; pressing it again while already selected opens the wheel to edit.
+    Add an **`Edit Colour` button to the right of the `Background` heading**,
+    styled exactly like the existing `Edit Grid` link.
+15. **`COPIC`, `HSL` and `RGB` are too close together**, their **font is too
+    big**, and the **eyedropper icon is too big.** Space them out, reduce both.
+    (§9.4 asked for the faces to move outward; this is the follow-on.)
+16. **`MIX` — awaiting the user's decision.** The control currently offers
+    `OFF · 25% · 50% · 75%` and sets how much of a newly picked colour blends
+    into the current one, through the spectral pigment mixer in
+    `Helpers/PigmentMix.cs`. **Do not redesign it until the user has answered.**
+17. **Scroll-wheel rotation** — the wheel must spin with the mouse wheel and
+    with horizontal/side scroll.
+
+### 10.5 Floating windows and Settings
+
+18. **Remove the side and top resize handles.** Corner grips only — the corners
+    already resize.
+19. **Theme circles**: delete the "dark appearance" toggle. The theme row gets a
+    **white circle named `Light`** and the existing black circle renamed
+    **`Dark`**.
+20. **Settings is laggy and scrolls back to the top whenever an option is
+    picked.** Selecting a control must not rebuild the whole panel or lose
+    scroll position. This is the single most-felt defect in the panel.
+21. **Switching measurement category must not auto-select the first item.**
+22. **Panel font is too big.** Reduce it, and add a **developer setting** that
+    allows changing the font of specific pages.
+23. **Bigger margins** around section titles and their explanation lines.
+24. **Objects library glitches when scrolled sideways** — fix.
+25. **A vertical mouse wheel over a horizontally-scrolling strip must scroll it
+    horizontally.** Applies to every horizontal strip: swatches, units, brushes,
+    objects.
+29. **Mouse modes move into the Interaction page**, presented as circles like
+    the other option groups.
+
+### 10.6 Paper
+
+26. **Textures are too noticeable — reduce them.** §8's σ floors were set to
+    escape the previous invisible build and overshot. Scale grain amplitude
+    down and **re-run `tools/PaperProof`**, lowering the floors to match the new
+    target rather than deleting them. The control must still measure 0.00 and
+    the multi-scale decay check must still pass — quieter, not flatter.
+
+### 10.7 Guidelines / grid editor  (new, from two reference screenshots)
+
+27–28. **Guidelines move into the `Grid Type` category** and gain a full editor.
+The reference panel, top to bottom:
+
+- A **live preview strip** at the top, full width, ~200 DIP, rendering the grid
+  as configured — the reference shows a 1-point perspective fan.
+- A **`< Back`** link beneath the preview, left-aligned.
+- The grid's name as a 34 DIP bold heading (`1-Point`).
+- **`Preset`** — circles: `1 Point` (glyph: nested squares with diagonals) and
+  `Custom` (glyph: a circle with eight radiating spokes). Selected carries the
+  2 DIP `OnSurface` ring.
+- **`Vanishing Points`** — an **`Edit Points`** button: filled rounded rect in
+  `SurfaceAlt`, label in `Accent` bold. Caption beneath: *"You can edit the
+  vanishing points with a tap & hold on canvas or by activating the grid
+  layer."*
+- **`Density`** — a right-aligned **typeable value box** (white rounded field,
+  e.g. `30`), caption *"Set the number of vanishing lines per point."*, then a
+  **full-width slider**: 2 DIP `OnSurface` track, white knob with a hairline.
+  Every numeric setting in this panel follows that box-plus-slider pattern —
+  the box is editable directly, so the slider is never the only way in.
+- **`Line Weight`** — same pattern, value box reads `1 pts`.
+- **`Color`** — caption *"Automatic color adapts to your background color.
+  Custom colors are independent of the background color."*, then circles
+  `Automatic` (unfilled) and `Custom` (filled with the chosen colour).
+- **`Opacity`** — value box `20%` plus slider.
+- **`Orientation`** — circles `Landscape` and `Portrait`, glyphs being a
+  rounded rect ruled horizontally and one ruled vertically.
+- **`Confine to artboard`** — a square **checkbox** (not a toggle) with the
+  label *"Only show the grid lines inside the artboard."*
+
+Also required: **edit the tilt of the horizon line, and move the grid's centre
+point within the page.**
