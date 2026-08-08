@@ -38,8 +38,7 @@ public sealed class FloatingWindow
 {
     // ---- chrome geometry (DIPs) ----
     private const double Radius = 16;
-    private const double HeaderH = 38;
-    private const double GripThickness = 9;    // invisible hit band along each edge
+    private const double HeaderH = 40;
     private const double MinW = 320, MinH = 260;
 
     private readonly Panel _host;
@@ -49,6 +48,7 @@ public sealed class FloatingWindow
     // inside a Grid it does not own.
     private readonly Popup _popup;
     private readonly Border _panel;            // the window itself
+    private readonly Border _tabRow;
     private readonly StackPanel _tabStrip;
     private readonly ScrollViewer _scroller;
     private readonly Grid _gripLayer;
@@ -104,10 +104,6 @@ public sealed class FloatingWindow
             BorderThickness = new Thickness(1.5),
         };
         Bind(_panel, Border.BorderBrushProperty, "GlassEdgeBrush", theme: false);
-        PaintPanel();
-        // The window survives page turns, so it follows the page rather than
-        // freezing at the ground it was built on.
-        PageTheme.Changed += OnGroundChanged;
 
         var shell = new Grid();
         shell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(HeaderH) });
@@ -154,10 +150,14 @@ public sealed class FloatingWindow
         grab.ManipulationDelta += (_, e) => MoveBy(e.Delta.Translation.X, e.Delta.Translation.Y);
         header.Children.Add(grab);
 
+        // Section 4 item 1 puts the window's NAME beside the close button, at the
+        // weight of a real title rather than the 12.5 DIP 55%-opacity watermark
+        // this was. Painted from PageTheme, not from an opacity on whatever the
+        // inherited foreground happens to be.
         _title = new TextBlock
         {
-            FontSize = 12.5,
-            Opacity = 0.55,
+            FontSize = 17,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(40, 0, 0, 0),
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -167,16 +167,21 @@ public sealed class FloatingWindow
         shell.Children.Add(header);
 
         // ---- category divider row (the tabs)
-        var tabRow = new Border
+        _tabRow = new Border
         {
             BorderThickness = new Thickness(0, 0, 0, 1),
             Padding = new Thickness(14, 2, 14, 0),
         };
-        Bind(tabRow, Border.BorderBrushProperty, "HairlineBrush", theme: true);
-        _tabStrip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        tabRow.Child = _tabStrip;
-        Grid.SetRow(tabRow, 1);
-        shell.Children.Add(tabRow);
+        // section 3 wants the tabs CENTRED, which a left-aligned strip is not.
+        _tabStrip = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 22,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        _tabRow.Child = _tabStrip;
+        Grid.SetRow(_tabRow, 1);
+        shell.Children.Add(_tabRow);
 
         // ---- content
         _scroller = new ScrollViewer
@@ -196,6 +201,13 @@ public sealed class FloatingWindow
         BuildGrips();
         _panel.PointerEntered += (_, _) => FadeGrips(1);
         _panel.PointerExited += (_, _) => FadeGrips(0);
+
+        // Painted only now: PaintPanel colours the title and the tab rule as well
+        // as the plate, and neither of those existed a moment ago.
+        PaintPanel();
+        // The window survives page turns, so it follows the page rather than
+        // freezing at the ground it was built on.
+        PageTheme.Changed += OnGroundChanged;
 
         _popup = new Popup
         {
@@ -223,6 +235,8 @@ public sealed class FloatingWindow
         _panel.Background = new SolidColorBrush(PageTheme.Panel);
         if (_dragPill != null)
             _dragPill.Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 0x66));
+        _title.Foreground = new SolidColorBrush(PageTheme.OnSurface);
+        _tabRow.BorderBrush = new SolidColorBrush(PageTheme.Outline);
         try { _panel.RequestedTheme = Theme; } catch { }
     }
 
@@ -252,36 +266,68 @@ public sealed class FloatingWindow
     /// <summary>Throws away the built content so the next activation rebuilds it —
     /// used after a theme or language change, exactly like the rest of Quill's
     /// code-built surfaces.</summary>
-    public void RefreshContent()
+    public void RefreshContent() => RefreshContent(false);
+
+    /// <summary>Rebuild the active tab, optionally landing the reader back where
+    /// they were.
+    ///
+    /// <para>§10.5 item 20 — "Settings ... scrolls back to the top whenever an
+    /// option is picked" — is exactly this method throwing the scroll offset
+    /// away. A panel that jumps to the top on every tap is unusable however fast
+    /// the rebuild underneath it is, so a tenant that knows its rebuild is a
+    /// repaint rather than a navigation asks to keep the offset.</para></summary>
+    public void RefreshContent(bool preserveScroll)
     {
+        double keep = 0;
+        try { keep = _scroller.VerticalOffset; } catch { }
         _built.Clear();
-        if (IsOpen) ShowTab(_active);
+        if (IsOpen) ShowTab(_active, preserveScroll ? keep : null);
     }
 
+    /// <summary>The scroller's inset. Zero lets a tenant paint edge-to-edge —
+    /// the Brushes panel's preview strip and its section bands are full-bleed
+    /// (§4), so they cannot live inside the window's own padding.</summary>
+    public Thickness ContentPadding
+    {
+        get => _scroller.Padding;
+        set => _scroller.Padding = value;
+    }
+
+    /// <summary>§3: the tabs are "centred, 17 DIP semibold; the active tab carries
+    /// a 2 DIP OnSurface underline". What shipped was 14 DIP, left-aligned, with
+    /// a BrandOrange rule — neither the size nor the colour, and because this is
+    /// SHARED chrome the same miss was on Settings, Export and Objects at once.
+    /// The underline is now the ink colour of whatever page is up.</summary>
     private void BuildTabStrip()
     {
+        // One tab is not a choice: the row would be a lone label repeating the
+        // header's own title, which is what the Brushes panel (§4) would show.
+        _tabRow.Visibility = _tabs.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
         _tabStrip.Children.Clear();
+        if (_tabs.Count < 2) return;
+
         for (int i = 0; i < _tabs.Count; i++)
         {
             int idx = i;
+            bool on = i == _active;
             var label = new TextBlock
             {
                 Text = _tabs[i].Label,
-                FontSize = 14,
-                Margin = new Thickness(0, 0, 0, 6),
-                FontWeight = i == _active ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal,
-                Opacity = i == _active ? 1.0 : 0.6,
+                FontSize = 17,
+                Margin = new Thickness(0, 0, 0, 7),
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(on ? PageTheme.OnSurface : PageTheme.OnSurfaceMuted),
             };
             var underline = new Border
             {
                 Height = 2,
                 CornerRadius = new CornerRadius(1),
                 VerticalAlignment = VerticalAlignment.Bottom,
-                Visibility = i == _active ? Visibility.Visible : Visibility.Collapsed,
+                Background = new SolidColorBrush(PageTheme.OnSurface),
+                Visibility = on ? Visibility.Visible : Visibility.Collapsed,
             };
-            Bind(underline, Border.BackgroundProperty, "BrandOrangeBrush", theme: false);
 
-            var cell = new Grid { Margin = new Thickness(0, 0, 18, 0), Background = new SolidColorBrush(Colors.Transparent) };
+            var cell = new Grid { Background = new SolidColorBrush(Colors.Transparent) };
             cell.Children.Add(label);
             cell.Children.Add(underline);
             cell.Tapped += (_, _) => ShowTab(idx);
@@ -289,7 +335,7 @@ public sealed class FloatingWindow
         }
     }
 
-    private void ShowTab(int index)
+    private void ShowTab(int index, double? scrollTo = null)
     {
         if (index < 0 || index >= _tabs.Count) return;
         _active = index;
@@ -301,7 +347,20 @@ public sealed class FloatingWindow
             _built[index] = content;
         }
         _scroller.Content = content;
-        _scroller.ChangeView(null, 0, null, true);
+
+        double target = scrollTo ?? 0;
+        if (target <= 0.5) { _scroller.ChangeView(null, 0, null, true); return; }
+        // The scroller has no extent until the new content has been measured, so
+        // a ChangeView issued before that silently clamps to zero. Measure first,
+        // then ask again on the next layout pass as the belt to that brace.
+        try { _scroller.UpdateLayout(); } catch { }
+        try { _scroller.ChangeView(null, target, null, true); } catch { }
+        void Once(object? s, object e)
+        {
+            _scroller.LayoutUpdated -= Once;
+            try { _scroller.ChangeView(null, target, null, true); } catch { }
+        }
+        _scroller.LayoutUpdated += Once;
     }
 
     // =======================================================================
@@ -408,6 +467,10 @@ public sealed class FloatingWindow
     // =======================================================================
     // Resize grips — iPadOS-style corner brackets + edge pills
     // =======================================================================
+    /// <summary>§10.5 item 18: "Remove the side and top resize handles. Corner
+    /// grips only — the corners already resize." The four edge pills were also
+    /// the ones sitting over the header, where a grab meant to move the window
+    /// resized it instead.</summary>
     private void BuildGrips()
     {
         // corners: rounded brackets that echo the window's own 16px radius
@@ -415,11 +478,6 @@ public sealed class FloatingWindow
         AddCorner(HorizontalAlignment.Right, VerticalAlignment.Top, InputSystemCursorShape.SizeNortheastSouthwest, +1, -1);
         AddCorner(HorizontalAlignment.Left, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNortheastSouthwest, -1, +1);
         AddCorner(HorizontalAlignment.Right, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNorthwestSoutheast, +1, +1);
-        // edges: short pills at the midpoints
-        AddEdge(HorizontalAlignment.Stretch, VerticalAlignment.Top, InputSystemCursorShape.SizeNorthSouth, 0, -1);
-        AddEdge(HorizontalAlignment.Stretch, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNorthSouth, 0, +1);
-        AddEdge(HorizontalAlignment.Left, VerticalAlignment.Stretch, InputSystemCursorShape.SizeWestEast, -1, 0);
-        AddEdge(HorizontalAlignment.Right, VerticalAlignment.Stretch, InputSystemCursorShape.SizeWestEast, +1, 0);
     }
 
     private static SolidColorBrush GripBrush() => new(PageTheme.WithAlpha(PageTheme.OnSurface, 0x8C));
@@ -451,31 +509,6 @@ public sealed class FloatingWindow
             RenderTransform = new ScaleTransform { ScaleX = sx < 0 ? 1 : -1, ScaleY = sy < 0 ? 1 : -1 },
         };
         grip.SetMark(mark);
-        HookResize(grip, sx, sy);
-        _gripLayer.Children.Add(grip);
-    }
-
-    private void AddEdge(HorizontalAlignment h, VerticalAlignment v, InputSystemCursorShape shape, int sx, int sy)
-    {
-        bool horizontal = sx == 0;
-        var grip = new Grip(shape)
-        {
-            Width = horizontal ? 64 : GripThickness,
-            Height = horizontal ? GripThickness : 64,
-            HorizontalAlignment = horizontal ? HorizontalAlignment.Center : h,
-            VerticalAlignment = horizontal ? v : VerticalAlignment.Center,
-            Background = new SolidColorBrush(Colors.Transparent),
-        };
-        grip.SetMark(new Border
-        {
-            Width = horizontal ? 34 : 3,
-            Height = horizontal ? 3 : 34,
-            CornerRadius = new CornerRadius(1.5),
-            Background = GripBrush(),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            IsHitTestVisible = false,
-        });
         HookResize(grip, sx, sy);
         _gripLayer.Children.Add(grip);
     }
