@@ -643,11 +643,10 @@ public sealed class BrushesWindow
             HorizontalAlignment = HorizontalAlignment.Center,
         });
 
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(stack, name);
-        // Slop-guarded: these cells live in a horizontal strip and a Tapped
-        // handler fires at the end of a slow sideways drag (§10.5 items 24-25).
-        StripScroll.Tap(stack, tap);
-        return stack;
+        // A bare Button: keyboard focus, an invoke pattern and an accessible name,
+        // and it cannot be fired by a sideways drag because the strip's scroller
+        // takes the pointer capture before any Click is raised.
+        return StripScroll.Bare(stack, name, tap);
     }
 
     private static FrameworkElement Hairline() => new Border { Height = 1, Background = B(Line) };

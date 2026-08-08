@@ -96,6 +96,40 @@ internal static class StripScroll
         catch { }
     }
 
+    /// <summary>A bare, accessible hit target: a Button stripped of every visual
+    /// a Button normally brings, so it still reads as the plain circle / cell the
+    /// reference draws.
+    ///
+    /// <para><b>Why a Button and not a Tapped handler.</b> The option circles in
+    /// Settings and the brush cells in the Brushes panel are the panels' primary
+    /// controls, and as bare StackPanels with Tapped handlers they had no
+    /// keyboard focus, no invoke pattern and no accessible role — unreachable for
+    /// a screen reader, and impossible to drive from a test. A Button also gets
+    /// the drag-safety for free: when the strip beneath it starts a manipulation
+    /// the ScrollViewer takes the pointer capture, the Button loses it, and no
+    /// Click is raised — which is the behaviour <see cref="Tap"/> has to
+    /// hand-roll for elements that are not Buttons.</para></summary>
+    public static Button Bare(UIElement content, string name, Action click, bool enabled = true)
+    {
+        var b = new Button
+        {
+            Content = content,
+            Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            MinWidth = 0,
+            MinHeight = 0,
+            CornerRadius = new CornerRadius(10),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Top,
+            VerticalAlignment = VerticalAlignment.Top,
+            IsEnabled = enabled,
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, name);
+        b.Click += (_, _) => { try { click(); } catch { } };
+        return b;
+    }
+
     /// <summary>A tap that a SCROLL cannot trigger.
     ///
     /// <para>The strips are dragged sideways with a finger or a pen, and a
