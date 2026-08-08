@@ -6509,8 +6509,7 @@ public sealed partial class MainWindow : Window
         FadeOut(TopBar);
         FadeOut(FormatBar);
         FadeOut(NotebookPanel);
-        FadeOut(CalcPanel);
-        BtnCalc.IsChecked = false;
+        SetCalcOpen(false);
         // if the cluster was left tucked away as an edge tab, keep it tucked
         // (rather than popping the full 3-button cluster back over it).
         if (_minimalDocked) { PositionDockedTab(); FadeIn(MinimalButtonsTab, pop: false); }
@@ -8310,7 +8309,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     private static readonly string[] OptionalTools =
     {
         "ToolSpace", "TouchDrawToggle", "ToolComment", "ShapeBtn", "MouseModeBtn",
-        "BtnHistory", "VoiceBtn", "BtnAi", "ZoomBtn", "PageSettingsBtn", "ExportBtn", "BtnCalc",
+        "BtnHistory", "VoiceBtn", "BtnAi", "ZoomBtn", "PageSettingsBtn", "ExportBtn",
     };
 
     private void ApplyToolbarVisibility()
@@ -8349,7 +8348,6 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             Set(ZoomBtn, "ZoomBtn");
             Set(PageSettingsBtn, "PageSettingsBtn");
             Set(ExportBtn, "ExportBtn");
-            Set(BtnCalc, "BtnCalc");
         }
         catch { }
     }
@@ -9163,9 +9161,19 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     // =======================================================================
     // Calculator
     // =======================================================================
-    private void Calc_Toggle(object sender, RoutedEventArgs e)
+    // The calculator moved into the Quill menu (§9.7), so its open/closed
+    // state can no longer live in a top-bar ToggleButton's IsChecked. It is a
+    // field now, and the menu item is TOLD what it is rather than asked - a
+    // ToggleMenuFlyoutItem toggles itself on click, so reading it back would
+    // make every other close path (Escape, the panel's own X, minimal UI)
+    // leave the tick and the panel disagreeing.
+    private bool _calcOpen;
+
+    private void SetCalcOpen(bool on)
     {
-        if (BtnCalc.IsChecked == true)
+        _calcOpen = on;
+        try { CalcMenuItem.IsChecked = on; } catch { }
+        if (on)
         {
             FadeIn(CalcPanel);
             CalcInput.Focus(FocusState.Programmatic);
@@ -9173,11 +9181,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         else FadeOut(CalcPanel);
     }
 
-    private void Calc_Close(object sender, RoutedEventArgs e)
-    {
-        BtnCalc.IsChecked = false;
-        FadeOut(CalcPanel);
-    }
+    private void Calc_Toggle(object sender, RoutedEventArgs e) => SetCalcOpen(!_calcOpen);
+
+    private void Calc_Close(object sender, RoutedEventArgs e) => SetCalcOpen(false);
 
     private void CalcMode_Click(object sender, RoutedEventArgs e) => BuildCalcButtons();
 
