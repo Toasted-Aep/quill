@@ -101,6 +101,13 @@ public sealed class ColorWheel : UserControl
     // Tier 1's inner edge at s = 1: the radius of the HOLE, which is what has to
     // stay clear of whatever the wheel is centred on (9.3).
     private const float Tier1InnerRef = 285f;
+    // 11.12 item 3. How much wider than the reference every band past the hole
+    // is drawn. At the clearance a docked dial forces, s settles near 0.70, so
+    // a 21-unit column cell came out 14.6 DIP tall against ~42 DIP of arc - a
+    // long flat sliver, which is what "too narrow" and 11.3 item 20's "closer
+    // to square" are both describing. 1.85 puts that cell at 27 DIP and the
+    // innermost column ring within a third of square.
+    private const float CellScale = 1.85f;
     // How much annulus the hub's own chrome needs between that caller and
     // Tier 1: the recents row and the mode-plate arc. 10.8 removed the mix row
     // that used to sit between them, so this comes down with it - and because
@@ -484,9 +491,26 @@ public sealed class ColorWheel : UserControl
         }
         else if (halfMin < Tier2OuterRef) s = Math.Max(0.45f, halfMin / Tier2OuterRef);
 
-        _r1In = 285f * s; _r1Out = 302f * s;   // Tier 1 inner arc  (17 units)
-        _r2In = 307f * s; _r2Out = 328f * s;   // Tier 2 grey ring  (21 units)
-        _rOutBase = 333f * s; _band = 21f * s; // Tier 3+ columns   (21 units each)
+        // 11.12 item 3: "widen the width of the cells" - the cell's RADIAL
+        // extent, from the ring's inner edge outward.
+        //
+        // The old line scaled every radius by one s, so the only way to make a
+        // cell wider was to make the hole wider with it - and the hole is the
+        // one thing 11.2 item 15 pins, because the wheel is centred on the
+        // dial's colour dot and the dial has to stay usable inside it. So the
+        // hole keeps its own number and the BANDS get their own scale on top,
+        // laid out cumulatively outward at the reference's own proportions:
+        // 17 units of Tier 1, a 5 unit gap, 21 of Tier 2, another 5, then
+        // columns of 21. At CellScale 1 this is byte-identical to the line it
+        // replaces; above 1 every ring past the hole gets thicker and nothing
+        // inside it moves at all.
+        _r1In = 285f * s;
+        float u = s * CellScale;               // one reference unit, in DIP
+        _r1Out = _r1In + 17f * u;              // Tier 1 inner accent arc
+        _r2In = _r1Out + 5f * u;
+        _r2Out = _r2In + 21f * u;              // Tier 2 grey ring
+        _rOutBase = _r2Out + 5f * u;
+        _band = 21f * u;                       // Tier 3+ columns
         _rIn = _r1In;
         _rOut = _rOutBase + MaxRings * _band;
         // The reference sets its SVG code text to 7 units in a 21-unit band, a
@@ -511,12 +535,21 @@ public sealed class ColorWheel : UserControl
         // Keeping 70 DIP of annulus expresses that guard directly.
         float lo = Math.Min(HubClearance, Math.Max(0f, hole - 70f));
         float band = hole - lo;
-        _ui = Math.Clamp(band / 180f, 0.60f, 1.20f);
-        // 10.4 item 15: "their font is too big". 15 -> 11.
-        _labelFmt.FontSize = 11f * _ui;
-        _bubbleFmt.FontSize = 12f * _ui;
-        _rRecent = lo + band * 0.30f;
-        _chipR = Math.Clamp(band * 0.045f, 5f, 12f);
+        // 11.12: the hub's own scale. band is the annulus between the caller
+        // and Tier 1 - 82 DIP with a dial in the hole - and dividing that by
+        // 180 pinned _ui at its 0.60 floor in every real case, which is how
+        // COPIC / HSL / RGB ended up at 6.6 DIP of type. The divisor is now the
+        // annulus the hub actually gets, so the floor stops being the answer.
+        _ui = Math.Clamp(band / 100f, 0.80f, 1.45f);
+        // 11.12 item 1: "the face labels are far too small." 11 -> 18.
+        _labelFmt.FontSize = 18f * _ui;
+        _bubbleFmt.FontSize = 15f * _ui;
+        // 11.12: the plates are 42 DIP tall now against 26, so they reach
+        // inward to where the recents row used to sit and the first chip landed
+        // ON the HSL plate. The row moves in; the two bands no longer meet.
+        _rRecent = lo + band * 0.15f;
+        // 11.12 item 4: the recents dots scale with everything else.
+        _chipR = Math.Clamp(band * 0.075f, 7f, 14f);
         // 10.8 took the mix row out from between these two, so the mode plates
         // move in to where it was rather than leaving a gap the size of a
         // control that no longer exists.
@@ -564,11 +597,14 @@ public sealed class ColorWheel : UserControl
         // Trailing the fan rather than leading it: spread out to item 15's
         // spacing, a cluster that STARTS with the puck reaches up past the
         // dial and puts it under the top chrome bar.
-        _puckPt = At(_rLabel, _base + 1.28f);
-        _labelPt[0] = At(_rLabel, _base - 0.56f);
-        _labelPt[1] = At(_rLabel, _base - 0.10f);
-        _labelPt[2] = At(_rLabel, _base + 0.36f);
-        _dropPt = At(_rLabel, _base + 0.82f);
+        // 11.12: the plates are 92 DIP wide now against 58, so the fan opens
+        // from 0.46 rad between them to 0.62 or they overlap each other at the
+        // radius a docked dial leaves for the hub.
+        _puckPt = At(_rLabel, _base + 1.72f);
+        _labelPt[0] = At(_rLabel, _base - 0.76f);
+        _labelPt[1] = At(_rLabel, _base - 0.14f);
+        _labelPt[2] = At(_rLabel, _base + 0.48f);
+        _dropPt = At(_rLabel, _base + 1.10f);
 
         _chipPts.Clear();
         int n = Math.Min(12, Recents.Count);
@@ -911,21 +947,22 @@ public sealed class ColorWheel : UserControl
 
             float v = ChannelValue(i);
             var knob = At(r, a0 + (a1 - a0) * v);
-            ds.FillCircle(knob, 11f * _ui, Fade(ChannelColor(i, v), a));
-            ds.DrawCircle(knob, 11f * _ui, Fade(Color.FromArgb(255, 255, 255, 255), a), 2.5f);
-            ds.DrawCircle(knob, 11f * _ui, Fade(Color.FromArgb(70, 0, 0, 0), a), 0.8f);
+            ds.FillCircle(knob, 16f * _ui, Fade(ChannelColor(i, v), a));
+            ds.DrawCircle(knob, 16f * _ui, Fade(Color.FromArgb(255, 255, 255, 255), a), 3f);
+            ds.DrawCircle(knob, 16f * _ui, Fade(Color.FromArgb(70, 0, 0, 0), a), 0.9f);
 
-            var bubble = At(r - 40f * _ui, a0 + (a1 - a0) * v);
+            var bubble = At(r - 52f * _ui, a0 + (a1 - a0) * v);
             Bubble(ds, bubble, ChannelText(i), a);
         }
         ds.Transform = Matrix3x2.Identity;
     }
 
+    // 11.12 item 4: the numeric chips on the HSL and RGB faces scale too.
     private void Bubble(CanvasDrawingSession ds, Vector2 p, string text, float a)
     {
-        var rect = new Rect(p.X - 27 * _ui, p.Y - 15 * _ui, 54 * _ui, 30 * _ui);
-        ds.FillRoundedRectangle(rect, 5, 5, Fade(Color.FromArgb(232, 18, 18, 18), a));
-        ds.DrawRoundedRectangle(rect, 5, 5, Fade(Color.FromArgb(60, 255, 255, 255), a), 1f);
+        var rect = new Rect(p.X - 38 * _ui, p.Y - 21 * _ui, 76 * _ui, 42 * _ui);
+        ds.FillRoundedRectangle(rect, 7, 7, Fade(Color.FromArgb(232, 18, 18, 18), a));
+        ds.DrawRoundedRectangle(rect, 7, 7, Fade(Color.FromArgb(60, 255, 255, 255), a), 1f);
         ds.DrawText(text, rect, Fade(Color.FromArgb(255, 245, 245, 242), a), _bubbleFmt);
     }
 
@@ -945,61 +982,77 @@ public sealed class ColorWheel : UserControl
     {
         // 10.8: one colour, one puck. The split puck existed to show what a
         // pick would be mixed INTO, and there is nothing to mix into here now.
-        ds.FillCircle(_puckPt, 15f * _ui, Fade(_color, a));
-        ds.DrawCircle(_puckPt, 15f * _ui, Fade(Color.FromArgb(120, 160, 160, 160), a), 1.5f);
+        ds.FillCircle(_puckPt, 20f * _ui, Fade(_color, a));
+        ds.DrawCircle(_puckPt, 20f * _ui, Fade(Color.FromArgb(215, 236, 234, 228), a), 2.4f);
 
         string[] names = { "COPIC", "HSL", "RGB" };
         for (int i = 0; i < 3; i++)
         {
             var p = _labelPt[i];
             bool on = (int)_mode == i;
-            // The plate shrinks with the type it holds (item 15), or the three
-            // would still read as one block with smaller words inside it.
-            var rect = new Rect(p.X - 29 * _ui, p.Y - 13 * _ui, 58 * _ui, 26 * _ui);
+            // 11.12 item 1. Two things were wrong at once: the plate was sized
+            // for 11 DIP type, and only the SELECTED face had a plate at all -
+            // HSL and RGB were bare grey words floating on the scrim, which is
+            // why they read as annotations rather than as the two other faces
+            // of the same control. All three carry a plate now; selection is
+            // the difference between a FILLED one and an outlined one.
+            var rect = new Rect(p.X - 46 * _ui, p.Y - 21 * _ui, 92 * _ui, 42 * _ui);
             if (on)
             {
-                ds.FillRoundedRectangle(rect, 5, 5, Fade(Color.FromArgb(235, 236, 234, 228), a));
+                ds.FillRoundedRectangle(rect, 8, 8, Fade(Color.FromArgb(235, 236, 234, 228), a));
                 ds.DrawText(names[i], rect, Fade(Color.FromArgb(255, 20, 20, 19), a), _labelFmt);
             }
             else
             {
-                ds.DrawText(names[i], rect, Fade(Color.FromArgb(210, 236, 234, 228), a), _labelFmt);
+                ds.FillRoundedRectangle(rect, 8, 8, Fade(Color.FromArgb(70, 22, 23, 26), a));
+                ds.DrawRoundedRectangle(rect, 8, 8, Fade(Color.FromArgb(120, 236, 234, 228), a), 1.4f);
+                ds.DrawText(names[i], rect, Fade(Color.FromArgb(232, 236, 234, 228), a), _labelFmt);
             }
         }
 
-        // 10.4 item 15: "the eyedropper icon is too big". 34 down to 25.
-        DrawEyedropper(ds, _dropPt, 25f * _ui,
+        // 11.12 item 2, superseding 10.4 item 15's shrink: at 25 it "reads as
+        // a dark dot". 44, and 11.3 item 18 takes the plate behind it away.
+        DrawEyedropper(ds, _dropPt, 44f * _ui,
             Fade(_sampling ? Color.FromArgb(255, 217, 119, 87) : Color.FromArgb(235, 236, 234, 228), a),
             a);
     }
 
     // Hand-authored eyedropper: a bulb on a 45° shaft that tapers to a point,
     // matching the flat single-weight silhouettes the rest of Quill's icons use.
-    private static void DrawEyedropper(CanvasDrawingSession ds, Vector2 c, float size, Color col, float a)
+    private void DrawEyedropper(CanvasDrawingSession ds, Vector2 c, float size, Color col, float a)
     {
         float k = size / 24f;
         Vector2 L(float x, float y) => c + new Vector2((x - 12f) * k, (y - 12f) * k);
 
-        var plate = new Rect(c.X - size * 0.62, c.Y - size * 0.62, size * 1.24, size * 1.24);
-        ds.FillRoundedRectangle(plate, 6, 6, Fade(Color.FromArgb(150, 18, 18, 18), a));
+        // 11.3 item 18: no border, no frame. The dark plate was what made this
+        // read as a dark dot rather than as a tool.
 
+        // The shaft. It was 2.4 units across, which at any size reads as a
+        // scratch rather than as a pipette - the whole mark was a hairline with
+        // a lozenge on the end. 4.8 units, and the tip is a real point.
         using (var b = new CanvasPathBuilder(ds))
         {
-            b.BeginFigure(L(3.8f, 17.8f));
-            b.AddLine(L(12.8f, 8.8f));
-            b.AddLine(L(15.2f, 11.2f));
-            b.AddLine(L(6.2f, 20.2f));
-            b.AddLine(L(2.4f, 21.6f));
+            b.BeginFigure(L(1.8f, 22.2f));          // the drip tip
+            b.AddLine(L(3.6f, 15.8f));
+            b.AddLine(L(13.4f, 6.0f));
+            b.AddLine(L(18.0f, 10.6f));
+            b.AddLine(L(8.2f, 20.4f));
             b.EndFigure(CanvasFigureLoop.Closed);
             using var geo = CanvasGeometry.CreatePath(b);
             ds.FillGeometry(geo, col);
+            // A hairline of the SCRIM's own dark, not a frame: 11.3 item 18
+            // takes the plate away, and without something separating the mark
+            // from the grey behind it a pale pipette dissolves into the scrim.
+            ds.DrawGeometry(geo, Fade(Color.FromArgb(150, 16, 17, 20), a), 1.2f);
         }
 
-        var bulbC = L(16.6f, 8.4f);
-        var bulb = new Rect(bulbC.X - 5.2 * k, bulbC.Y - 3.6 * k, 10.4 * k, 7.2 * k);
+        // The bulb, squared off across the shaft rather than a thin lozenge.
+        var bulbC = L(18.4f, 5.6f);
+        var bulb = new Rect(bulbC.X - 6.4 * k, bulbC.Y - 4.6 * k, 12.8 * k, 9.2 * k);
         var keep = ds.Transform;
         ds.Transform = Matrix3x2.CreateRotation(-MathF.PI / 4f, bulbC) * keep;
-        ds.FillRoundedRectangle(bulb, 3.2f * k, 3.2f * k, col);
+        ds.FillRoundedRectangle(bulb, 3.6f * k, 3.6f * k, col);
+        ds.DrawRoundedRectangle(bulb, 3.6f * k, 3.6f * k, Fade(Color.FromArgb(150, 16, 17, 20), a), 1.2f);
         ds.Transform = keep;
     }
 
@@ -1085,7 +1138,7 @@ public sealed class ColorWheel : UserControl
         }
 
         // chrome first: it sits over the empty middle of the ring
-        if (Vector2.Distance(p, _dropPt) < 18f * _ui)
+        if (Vector2.Distance(p, _dropPt) < 30f * _ui)
         {
             _sampling = true;
             _canvas.Invalidate();
@@ -1093,7 +1146,7 @@ public sealed class ColorWheel : UserControl
         }
         for (int i = 0; i < 3; i++)
         {
-            if (Math.Abs(p.X - _labelPt[i].X) < 31 * _ui && Math.Abs(p.Y - _labelPt[i].Y) < 15 * _ui)
+            if (Math.Abs(p.X - _labelPt[i].X) < 48 * _ui && Math.Abs(p.Y - _labelPt[i].Y) < 23 * _ui)
             {
                 Mode = (ColorWheelMode)i;
                 return;
