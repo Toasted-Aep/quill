@@ -505,6 +505,9 @@ public sealed partial class MainWindow : Window
         ToolSurfaceService.Configure(
             () => _library.ToolSurface,
             v => { _library.ToolSurface = v; ScheduleSave(); });
+        // Both Concepts surfaces watch the service themselves; the legacy row
+        // cannot, so the window recomputes all three from one place.
+        ToolSurfaceService.Changed += _ => ApplyPenRowVisibility();
         _toolWheel = ToolWheel.Attach(CanvasArea, Surface, new ToolWheel.Host
         {
             Library = () => _library,
@@ -523,8 +526,13 @@ public sealed partial class MainWindow : Window
         // radial + colour branches were built to meet at). V3 K.2: opened from
         // the disc, the ring is CENTRED ON THE DIAL, so the point is a mount
         // point here and not the usual hint.
+        // Reference section 9.3: the wheel opens on the dial's COLOUR DOT and the
+        // dial does not move. The last argument is how much of the wheel's hole
+        // the dial itself fills, so the wheel can hold its hub chrome outside it.
         _toolWheel.ColourPickerHook =
-            (pt, current, changed, closed) => ColorPickerService.Open(pt, current, changed, closed, centreOnPoint: true);
+            (pt, current, changed, closed, clearance) =>
+                ColorPickerService.Open(pt, current, changed, closed,
+                                        centreOnPoint: true, hubClearance: clearance);
         // V3 K.1 and K.6. The dial belongs over a PAGE: never over the notebook
         // gallery, and never underneath the floating Notebooks window it shares
         // the top-left dock with. ApplyPenRowVisibility recomputes the dial from
@@ -610,7 +618,25 @@ public sealed partial class MainWindow : Window
             CommentsActive = () => _chromeBars?.CommentsOpen == true || Surface.CommentMode,
             ShapeMenu = () => ShapeBtn.Flyout,
             HistoryMenu = () => BtnHistory.Flyout,
+            // Reference 9.7: dictation and recording become selectable tools.
+            // Both drive the EXISTING toggle buttons and their existing handlers
+            // rather than a second copy of the logic, so the dial, the pen bar
+            // and the Voice dropdown can never disagree about what is running.
+            ToggleDictation = () =>
+            {
+                BtnDictate.IsChecked = !(BtnDictate.IsChecked == true);
+                Dictate_Click(this, new RoutedEventArgs());
+            },
+            DictationActive = () => BtnDictate.IsChecked == true,
+            ToggleRecording = () =>
+            {
+                AudioRecordBtn.IsChecked = !(AudioRecordBtn.IsChecked == true);
+                AudioRecord_Click(this, new RoutedEventArgs());
+            },
+            RecordingActive = () => _audioRecorder.IsRecording,
         });
+        // One list, both surfaces (9.7).
+        if (_penBar != null) _penBar.ExtraCommands = _toolWheel.ExtraCommands;
         // The two floating bars. They share PageOps with the settings window, so
         // the page-editing delegates exist exactly once (Controls/ChromeBars.cs).
         _chromeBars = ChromeBars.Attach(CanvasArea, new ChromeBars.Host
@@ -648,6 +674,14 @@ public sealed partial class MainWindow : Window
         _chromeBars.Layout.Register("calc", CalcPanel);
         _chromeBars.Layout.RegisterByAutomationId("dial", CanvasArea, "ToolWheel");
         _chromeBars.Layout.RegisterByAutomationId("penbar", CanvasArea, "PenBar");
+        // Section 9.3 asks for the floating bars and any open pane to be pushed
+        // aside while the COPIC wheel is up. The wheel reports itself as an
+        // obstacle over the whole canvas and the existing solver does the rest.
+        _chromeBars.Layout.RegisterRect("copic", () =>
+            ColorPickerService.Obstructing && CanvasArea.ActualWidth > 0
+                ? new Rect(0, 0, CanvasArea.ActualWidth, CanvasArea.ActualHeight)
+                : (Rect?)null);
+        ColorPickerService.ObstacleChanged += () => _chromeBars?.Layout.Invalidate();
     }
 
     private void LogStartupFault(string what, Exception? ex)
@@ -6578,17 +6612,27 @@ public sealed partial class MainWindow : Window
         // on screen (#14-batch4); the floating pen in minimal UI stays manual
         bool penMode = _toolTag is "Pen" or "Eraser";
         if (!penMode && !_uiHidden) { showRow = false; showChip = false; }
-        // Either Concepts surface IS the tool surface when it is on, so the
-        // legacy linear row and its reopen chip stand down entirely.
-        if (_library.RadialToolDial) { showRow = false; showChip = false; }
-        // ONE request, TWO surfaces. Each of them filters this on
-        // ToolSurfaceService inside its own Wanted, so exactly one can come up -
-        // there is no way for this call site to show both or neither by getting
-        // the condition wrong, which is the whole reason the choice lives in a
+        // ONE request, THREE surfaces, exactly one of them up. The dial and the
+        // section 2 palette each re-filter this on ToolSurfaceService inside
+        // their own Wanted, so this call site cannot show two of them by getting
+        // one condition wrong - which is the whole reason the choice lives in a
         // service rather than in an if here.
+        //
+        // 10.3 item 10: with "Bar" chosen the surface is the ORIGINAL horizontal
+        // pen row, not PenBar. PenBar keeps its place behind the same switch,
+        // one opt-in further in.
         bool surfaceOn = _library.RadialToolDial && (!_uiHidden || _floatPen);
+        bool bar = ToolSurfaceService.Current == ToolSurface.Bar;
+        bool conceptsBar = surfaceOn && bar && _library.ConceptsBarPalette;
+        // The legacy row IS the Bar surface unless that opt-in is set. It then
+        // ignores the pen-mode gate above: inside the Concepts shell it is the
+        // only tool surface on screen, and hiding it the moment the user picks
+        // Text would leave them with nothing to draw from.
+        bool legacyIsSurface = surfaceOn && bar && !_library.ConceptsBarPalette;
+        if (legacyIsSurface) { showRow = rowOn; showChip = !_uiHidden && !rowOn; }
+        else if (_library.RadialToolDial) { showRow = false; showChip = false; }
         _toolWheel?.SetVisible(surfaceOn);
-        _penBar?.SetVisible(surfaceOn);
+        _penBar?.SetVisible(conceptsBar);
         _chromeBars?.SetVisible(surfaceOn);   // the floating bars are chrome for both (V3 I)
         // slide in from the bottom edge the dock lives on, like the other bars
         if (showRow) FadeIn(PenRow, slideY: 24); else FadeOut(PenRow);
@@ -7050,9 +7094,28 @@ public sealed partial class MainWindow : Window
     private void OpenColorPicker(FrameworkElement anchor, Color current, Action<Color> onPicked,
                                  Action? onClosed)
     {
+        // 10.4 item 13: "page custom colour centres the wheel on the pen colour
+        // icon - the same centre point as 10.2 item 8." Every caller of this
+        // helper is a colour a page carries (background, grid, accent, a table
+        // cell), and all of them used to open the ring centred in the VIEWPORT
+        // while the dial's own colour dot opened it centred on the dial. Two
+        // different mount points for one control is the whole complaint; there
+        // is now exactly one, and it is the dial's, whenever the dial is up.
+        if (_toolWheel is { } dial && dial.Bounds.Width > 0)
+        {
+            ColorPickerService.Open(dial.DotRootPoint(), current, onPicked, onClosed,
+                                    centreOnPoint: true, hubClearance: dial.Bounds.Width / 2);
+            return;
+        }
         var tl = anchor.TransformToVisual(RootGrid).TransformPoint(new Point(0, 0));
         var pt = new Point(tl.X + anchor.ActualWidth / 2, tl.Y + anchor.ActualHeight / 2);
-        ColorPickerService.Open(pt, current, onPicked, onClosed);
+        // With the dial down the pen row's colour button IS the app's colour
+        // control (V3 K.9), so the ring centres on that instead - the same rule,
+        // applied to whichever surface is actually on screen.
+        bool onRow = ReferenceEquals(anchor, PenRowColourBtn);
+        ColorPickerService.Open(pt, current, onPicked, onClosed,
+                                centreOnPoint: onRow,
+                                hubClearance: onRow ? Math.Max(anchor.ActualWidth, anchor.ActualHeight) / 2 : 0);
     }
 
     private void EyedropAccel_Invoked(KeyboardAccelerator s, KeyboardAcceleratorInvokedEventArgs args)

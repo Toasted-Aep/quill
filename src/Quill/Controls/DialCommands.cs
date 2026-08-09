@@ -50,6 +50,14 @@ public static class DialCommands
         /// opens them on itself rather than on the button they came from.</summary>
         public required Func<FlyoutBase?> ShapeMenu { get; init; }
         public required Func<FlyoutBase?> HistoryMenu { get; init; }
+        /// <summary>Reference 9.7: dictation and audio recording stop being
+        /// top-bar buttons and become SELECTABLE TOOLS, assignable to a dial
+        /// sector or a pen-row cell like any other. Both are toggles, so each
+        /// reports whether it is currently running.</summary>
+        public required Action ToggleDictation { get; init; }
+        public required Func<bool> DictationActive { get; init; }
+        public required Action ToggleRecording { get; init; }
+        public required Func<bool> RecordingActive { get; init; }
     }
 
     public static IReadOnlyList<ToolWheel.ExtraCommand> Build(Host h) => new[]
@@ -70,6 +78,27 @@ public static class DialCommands
             Icon = Icons.Shape,
             TopBarKey = "ShapeBtn",
             Flyout = h.ShapeMenu,
+        },
+        new ToolWheel.ExtraCommand
+        {
+            Id = "Dictate",
+            Label = Loc.T("Wheel.Cmd.Dictate"),
+            Icon = Icons.Microphone,
+            // Deliberately NO TopBarKey. Both of these live under one top-bar
+            // control - the Voice dropdown, "VoiceBtn" - so handing that key back
+            // because ONE of them was placed would take the other one off screen
+            // with it and leave it unreachable. The bar sheds the dropdown when
+            // section 9.6 strips it, which is not this file's call to make.
+            IsActive = h.DictationActive,
+            Run = h.ToggleDictation,
+        },
+        new ToolWheel.ExtraCommand
+        {
+            Id = "Record",
+            Label = Loc.T("Wheel.Cmd.Record"),
+            Icon = Icons.Record,
+            IsActive = h.RecordingActive,
+            Run = h.ToggleRecording,
         },
         new ToolWheel.ExtraCommand
         {

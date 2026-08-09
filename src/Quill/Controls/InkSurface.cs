@@ -3912,6 +3912,24 @@ public sealed class InkSurface : UserControl
     public void RenderStrokeTo(CanvasDrawingSession ds, ICanvasResourceCreator rc,
         PenStroke s, Vector2 offset = default) => DrawStroke(ds, rc, s, offset, null);
 
+    /// <summary>The widest this stroke will actually be drawn, in DIP.
+    ///
+    /// <para>Reference 11.1 item 2. The dial's preview has to choose its radius
+    /// BEFORE it draws, and "a hollow circle stroked with the selected pen" is
+    /// only hollow if that radius is chosen against the width the renderer is
+    /// going to produce. That width is not the pen's size: every pen type maps
+    /// size, pressure and stroke DIRECTION to a width differently - a
+    /// calligraphy nib swings between 0.2x and 1.95x of it, a brush reaches
+    /// 3.3x - so the only honest answer comes from the same function that lays
+    /// the ink down.</para></summary>
+    public float MaxStrokeWidth(PenStroke s)
+    {
+        float max = 0f;
+        for (int i = 1; i < s.Points.Count; i++)
+            max = Math.Max(max, SegmentWidth(s, s.Points[i - 1], s.Points[i], i));
+        return max;
+    }
+
     /// <summary>A perfect circle as a real stroke carrying the LIVE tool state:
     /// pen type, colour, size, opacity and pressure response. Pressure sweeps one
     /// full lobe so the pen's dynamics show, and the points run through the very

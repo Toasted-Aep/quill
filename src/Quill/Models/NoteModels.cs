@@ -426,6 +426,12 @@ public class Library
     // build does not recognise degrades to the default instead of making the
     // whole library.json undeserializable.
     public string ToolSurface { get; set; } = "Wheel";
+    // 10.3 item 10. "Bar" means the ORIGINAL horizontal pen row, which is what
+    // the user asked to have back. The section 2 / 9.1 vertical palette
+    // (Controls/PenBar.cs) is still in the tree and still wired to the same
+    // switch - it is simply one flag further in, so it can never be what a user
+    // sees by default. Turning this on with Bar selected brings it back.
+    public bool ConceptsBarPalette { get; set; }
     // Which ten tools occupy the dial's outer ring, as "pen:<guid>",
     // "tool:<tag>", "cmd:<name>" or "" for an empty slot. EMPTY means "use the
     // defaults": the list is only written once the user actually customises the
