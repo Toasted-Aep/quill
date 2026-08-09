@@ -1004,3 +1004,49 @@ popped sector at radius 116.62 (report the clearance table), and window overrun
 is **clipped at the window edge** — never shrink, re-centre, or move the dial.
 
 ⚠️ Approval gate stands: before/after render, approved before commit.
+
+### 11.16 Colour wheel — margins, type and box styles, 2026-08-09
+
+The user supplied a capture of the wheel and said: *"copy the exact margins and
+writing, box styles of this image and the images in my last message."* The
+"last message" images are the HSL and RGB arc-slider captures already
+transcribed in §11.15 item 6.
+
+These are captures of **Quill's own build**, not an external app, so this is a
+"preserve and match this styling" instruction rather than a port. Transcribed
+below; measurements are from a ~1280 px-wide capture and are proportions rather
+than absolute DIP.
+
+**Face labels — `COPIC` / `HSL` / `RGB`**
+- The **active** face sits in a **filled chip**: light neutral ground, corner
+  radius small (~6 DIP), horizontal padding roughly double the vertical
+  (~14 / ~8), text near-black.
+- The **inactive** faces are **plain text — no box, no border, no ground** — in
+  a muted grey, at the **same type size** as the active one. Only the chip
+  distinguishes them.
+- All three sit on an **arc concentric with the wheel**, stepping down and
+  left, roughly evenly spaced. They are not a straight vertical column.
+
+**Eyedropper**
+- A **bare glyph**: no frame, no border, no background plate, no chip. Just the
+  mark, at roughly the same visual weight as a face label.
+
+**Swatch cells**
+- **Square corners — no rounding anywhere.**
+- Cells **within a family touch** edge to edge, with no gap between neighbours.
+- **Families are separated by a visible gap** of background.
+- A **clear background band separates the inner spine ring** (the `C`/`N`
+  neutrals, `White`, `Black` and the numeric chips) **from the outer family
+  fans**. That band is a real margin, not an artefact.
+- The **inner spine ring is radially narrower** than the family cells.
+
+**Swatch label type**
+- Small relative to the cell, **rotated to follow the ring**.
+- **Colour flips for contrast**: near-black on light swatches, white on dark
+  ones (`N9`, `N8`, `Black`, the dark `C` neutrals all carry white text). This
+  must be derived from the swatch's luminance, not from a hand-maintained list.
+
+**⚠️ One conflict to resolve, not to guess at.** §11.15 item 4 says swatch
+labels move to the **upper-left corner** of each cell. In this capture they read
+as **centred**. Ask the user which they want before building — do not silently
+pick. Everything else above can proceed.
