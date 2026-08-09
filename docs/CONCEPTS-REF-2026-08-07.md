@@ -1050,3 +1050,60 @@ than absolute DIP.
 labels move to the **upper-left corner** of each cell. In this capture they read
 as **centred**. Ask the user which they want before building — do not silently
 pick. Everything else above can proceed.
+
+### 11.17 Correction and additions, 2026-08-09
+
+**§11.16 was framed wrongly and is corrected here.** I described the wheel
+capture as Quill's own build and therefore as a "preserve and match this
+styling" instruction. **It is Concepts.** It is a *target to reach*, not a state
+to keep. The user's words: *"do not say they are the same again quill is nothing
+like this."*
+
+Everything §11.16 transcribed about margins, type and box styles still holds —
+it was an accurate reading of the image — but it must be treated as a
+specification of where the wheel needs to GET TO, and the gap between Quill's
+current wheel and that target is large. Study the structure below before
+concluding any part already matches.
+
+**Structure of the Concepts wheel, read from the capture**
+
+- An inner **spine ring**: one narrow band of neutrals at small radius, holding
+  `White`, `Black`, the numeric chips (`0`, `100`, `110`), the `C1`–`C10` and
+  `N0`–`N9` grey ramps, and the fluorescents (`FV2`, `FB2`, `FBG2`, `FYG2`,
+  `FYG1`, `FY1`, `FYR1`, `FRV1`). It is **radially narrower** than everything
+  outside it.
+- Then a **band of bare background** — a real gap, not an artefact.
+- Then the **family fans**. Each family (`E`, `Y`, `YG`, `G`, `BG`, `B`, `BV`,
+  `V`, `R`, `RV`, `YR` …) is a **block of cells in rows and columns**, radiating
+  outward: darkest values at the inner edge, lightest tints at the outer edge,
+  so `E99 … E93` sits inboard of `E30 … E0000`.
+- Cells **touch edge to edge within a family**; **families are separated by
+  visible gaps** of background.
+- Square corners throughout. Labels rotated to follow the ring, colour flipping
+  to white on dark swatches.
+
+### 11.18 Swatch labels — cornered. Settled.
+
+The user: *"I never asked for a different position for swatch labels"* and
+*"make them cornered."*
+
+**Labels sit in the corner of each cell**, per §11.15 item 4's upper-left
+placement. This is settled — do not raise it again, and do not read the centred
+appearance of any capture as contradicting it.
+
+### 11.19 Dimming while the colour wheel is open
+
+The user: *"make greying while colour wheel is open just reduce opacity of icons
+/ settings / panels in page, the ones on the upper corners."*
+
+When the colour wheel opens, Quill currently lays a **grey scrim** over the
+page. Replace that:
+
+- **No scrim.** Nothing is painted over the page.
+- Instead, **reduce the opacity of the chrome itself** — the top-left cluster
+  (gallery, page name, Layers, Precision, Objects), the top-right cluster
+  (zoom/tilt, AI, Import, Export, Settings), and any open floating panel.
+- The **page, its ink, and the radial dial stay at full opacity.** In the
+  reference the dial is fully saturated while the top-bar icons are visibly
+  faded — that contrast is the whole point of the effect.
+- Restore on close.
