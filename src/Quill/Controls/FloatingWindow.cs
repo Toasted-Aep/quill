@@ -37,10 +37,25 @@ namespace Quill.Controls;
 public sealed class FloatingWindow
 {
     // ---- chrome geometry (DIPs) ----
-    private const double Radius = 16;
-    private const double HeaderH = 38;
-    private const double GripThickness = 9;    // invisible hit band along each edge
+    /// <summary>The window's corner radius. Exposed so a tenant painting a
+    /// full-bleed element against the top edge (the Brushes panel's preview
+    /// strip) can clip itself to the same curve rather than guessing it.</summary>
+    internal const double TopRadius = 16;
+    private const double Radius = TopRadius;
+    private const double HeaderH = 40;
     private const double MinW = 320, MinH = 260;
+
+    /// <summary>§11.6 item 42: "must leave a margin at the page edge".</summary>
+    private const double EdgeGap = 14;
+
+    /// <summary>§11.6 item 42: the band the top bar's two clusters occupy — the
+    /// gallery / page name / Layers / Precision / Objects group on the left and
+    /// the zoom / AI / Import / Export / Settings group on the right. A floating
+    /// window opens directly below it and can be neither dragged nor resized over
+    /// it. Derived from the bar's own measured metrics rather than hard-coded, so
+    /// §11.5 item 31's thicker top bar carries this down with it.</summary>
+    private static double TopBand =>
+        ChromeBars.Metrics.RowTop + ChromeBars.Metrics.IconPitch + 8;
 
     private readonly Panel _host;
     // A POPUP, not an in-tree overlay: a popup is composited into the XamlRoot's
@@ -49,6 +64,7 @@ public sealed class FloatingWindow
     // inside a Grid it does not own.
     private readonly Popup _popup;
     private readonly Border _panel;            // the window itself
+    private readonly Border _tabRow;
     private readonly StackPanel _tabStrip;
     private readonly ScrollViewer _scroller;
     private readonly Grid _gripLayer;
@@ -66,6 +82,13 @@ public sealed class FloatingWindow
     public Action? Closed { get; set; }
 
     public bool IsOpen => _popup.IsOpen;
+
+    /// <summary>Bumped every time the active tab's content is rebuilt. A tenant
+    /// whose own Refresh may or may not have already triggered a rebuild (setting
+    /// the ground raises PageTheme.Changed, which this window answers) compares
+    /// this before and after to decide whether a second rebuild is needed —
+    /// which is how §10.5 item 20's triple rebuild is held down to one.</summary>
+    public int ContentRevision { get; private set; }
 
     /// <summary>Where this window is sitting, in the HOST's coordinates, or null
     /// when it is closed. A popup is composited outside the host's visual tree,
@@ -104,10 +127,6 @@ public sealed class FloatingWindow
             BorderThickness = new Thickness(1.5),
         };
         Bind(_panel, Border.BorderBrushProperty, "GlassEdgeBrush", theme: false);
-        PaintPanel();
-        // The window survives page turns, so it follows the page rather than
-        // freezing at the ground it was built on.
-        PageTheme.Changed += OnGroundChanged;
 
         var shell = new Grid();
         shell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(HeaderH) });
@@ -154,10 +173,14 @@ public sealed class FloatingWindow
         grab.ManipulationDelta += (_, e) => MoveBy(e.Delta.Translation.X, e.Delta.Translation.Y);
         header.Children.Add(grab);
 
+        // Section 4 item 1 puts the window's NAME beside the close button, at the
+        // weight of a real title rather than the 12.5 DIP 55%-opacity watermark
+        // this was. Painted from PageTheme, not from an opacity on whatever the
+        // inherited foreground happens to be.
         _title = new TextBlock
         {
-            FontSize = 12.5,
-            Opacity = 0.55,
+            FontSize = 17,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(40, 0, 0, 0),
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -167,16 +190,21 @@ public sealed class FloatingWindow
         shell.Children.Add(header);
 
         // ---- category divider row (the tabs)
-        var tabRow = new Border
+        _tabRow = new Border
         {
             BorderThickness = new Thickness(0, 0, 0, 1),
             Padding = new Thickness(14, 2, 14, 0),
         };
-        Bind(tabRow, Border.BorderBrushProperty, "HairlineBrush", theme: true);
-        _tabStrip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        tabRow.Child = _tabStrip;
-        Grid.SetRow(tabRow, 1);
-        shell.Children.Add(tabRow);
+        // section 3 wants the tabs CENTRED, which a left-aligned strip is not.
+        _tabStrip = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 22,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        _tabRow.Child = _tabStrip;
+        Grid.SetRow(_tabRow, 1);
+        shell.Children.Add(_tabRow);
 
         // ---- content
         _scroller = new ScrollViewer
@@ -196,6 +224,13 @@ public sealed class FloatingWindow
         BuildGrips();
         _panel.PointerEntered += (_, _) => FadeGrips(1);
         _panel.PointerExited += (_, _) => FadeGrips(0);
+
+        // Painted only now: PaintPanel colours the title and the tab rule as well
+        // as the plate, and neither of those existed a moment ago.
+        PaintPanel();
+        // The window survives page turns, so it follows the page rather than
+        // freezing at the ground it was built on.
+        PageTheme.Changed += OnGroundChanged;
 
         _popup = new Popup
         {
@@ -223,14 +258,19 @@ public sealed class FloatingWindow
         _panel.Background = new SolidColorBrush(PageTheme.Panel);
         if (_dragPill != null)
             _dragPill.Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 0x66));
+        _title.Foreground = new SolidColorBrush(PageTheme.OnSurface);
+        _tabRow.BorderBrush = new SolidColorBrush(PageTheme.Outline);
         try { _panel.RequestedTheme = Theme; } catch { }
     }
 
     private void OnGroundChanged()
     {
         PaintPanel();
-        // The content captured the old palette at build time; throw it away.
-        RefreshContent();
+        // The content captured the old palette at build time; throw it away — but
+        // a repaint is not a navigation, so the reader keeps their place (§10.5
+        // item 20). A page turn or a paper swatch is the commonest way this fires
+        // and it was the commonest way the panel jumped to the top.
+        RefreshContent(preserveScroll: true);
     }
 
     // =======================================================================
@@ -252,44 +292,141 @@ public sealed class FloatingWindow
     /// <summary>Throws away the built content so the next activation rebuilds it —
     /// used after a theme or language change, exactly like the rest of Quill's
     /// code-built surfaces.</summary>
-    public void RefreshContent()
+    public void RefreshContent() => RefreshContent(false);
+
+    /// <summary>Rebuild the active tab, optionally landing the reader back where
+    /// they were.
+    ///
+    /// <para>§10.5 item 20 — "Settings ... scrolls back to the top whenever an
+    /// option is picked" — is exactly this method throwing the scroll offset
+    /// away. A panel that jumps to the top on every tap is unusable however fast
+    /// the rebuild underneath it is, so a tenant that knows its rebuild is a
+    /// repaint rather than a navigation asks to keep the offset.</para></summary>
+    public void RefreshContent(bool preserveScroll)
     {
+        double keep = 0;
+        try { keep = _scroller.VerticalOffset; } catch { }
         _built.Clear();
-        if (IsOpen) ShowTab(_active);
+        if (IsOpen) ShowTab(_active, preserveScroll ? keep : null);
     }
 
+    /// <summary>Which page's developer font scale this window's CONTENT takes
+    /// (§11.6 item 40).
+    ///
+    /// <para>Left null by a tenant that authors its own type at scale — Settings
+    /// and Brushes do, because §3.1 and §4 fix the RATIOS between their headings
+    /// and their captions and those have to survive the shrink. A tenant whose
+    /// type is uniform names its page here instead and the window scales the
+    /// finished tree, which is the same setting reaching a panel that has no
+    /// specified type scale of its own to preserve.</para></summary>
+    public string? FontPage { get; set; }
+
+    /// <summary>Multiplies every explicit font size in a freshly built tree.
+    /// Applied ONLY on the build, never on a cached tree, or switching back to a
+    /// tab would scale it a second time. Walks the logical containers by type
+    /// rather than using VisualTreeHelper: content has not been arranged when
+    /// this runs, so a Button's template does not exist yet and only its Content
+    /// is reachable.</summary>
+    internal static void ScaleFonts(DependencyObject? node, double k)
+    {
+        if (node == null || Math.Abs(k - 1) < 0.001) return;
+        switch (node)
+        {
+            case TextBlock t:
+                t.FontSize *= k;
+                if (t.LineHeight > 0) t.LineHeight *= k;
+                return;
+            case Control c:
+                c.FontSize *= k;
+                break;
+        }
+        switch (node)
+        {
+            case Panel p:
+                foreach (var child in p.Children) ScaleFonts(child, k);
+                break;
+            case Border b:
+                ScaleFonts(b.Child, k);
+                break;
+            case ContentControl cc:
+                ScaleFonts(cc.Content as DependencyObject, k);
+                break;
+            case ItemsControl ic:
+                foreach (var item in ic.Items) ScaleFonts(item as DependencyObject, k);
+                break;
+        }
+    }
+
+    /// <summary>The scroller's inset. Zero lets a tenant paint edge-to-edge —
+    /// the Brushes panel's preview strip and its section bands are full-bleed
+    /// (§4), so they cannot live inside the window's own padding.</summary>
+    public Thickness ContentPadding
+    {
+        get => _scroller.Padding;
+        set => _scroller.Padding = value;
+    }
+
+    /// <summary>§3: the tabs are "centred, 17 DIP semibold; the active tab carries
+    /// a 2 DIP OnSurface underline". What shipped was 14 DIP, left-aligned, with
+    /// a BrandOrange rule — neither the size nor the colour, and because this is
+    /// SHARED chrome the same miss was on Settings, Export and Objects at once.
+    /// The underline is now the ink colour of whatever page is up.</summary>
     private void BuildTabStrip()
     {
+        // One tab is not a choice: the row would be a lone label repeating the
+        // header's own title, which is what the Brushes panel (§4) would show.
+        _tabRow.Visibility = _tabs.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
         _tabStrip.Children.Clear();
+        if (_tabs.Count < 2) return;
+
         for (int i = 0; i < _tabs.Count; i++)
         {
             int idx = i;
+            bool on = i == _active;
             var label = new TextBlock
             {
                 Text = _tabs[i].Label,
-                FontSize = 14,
-                Margin = new Thickness(0, 0, 0, 6),
-                FontWeight = i == _active ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal,
-                Opacity = i == _active ? 1.0 : 0.6,
+                FontSize = 17,
+                Margin = new Thickness(0, 0, 0, 7),
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(on ? PageTheme.OnSurface : PageTheme.OnSurfaceMuted),
             };
             var underline = new Border
             {
                 Height = 2,
                 CornerRadius = new CornerRadius(1),
                 VerticalAlignment = VerticalAlignment.Bottom,
-                Visibility = i == _active ? Visibility.Visible : Visibility.Collapsed,
+                Background = new SolidColorBrush(PageTheme.OnSurface),
+                Visibility = on ? Visibility.Visible : Visibility.Collapsed,
             };
-            Bind(underline, Border.BackgroundProperty, "BrandOrangeBrush", theme: false);
 
-            var cell = new Grid { Margin = new Thickness(0, 0, 18, 0), Background = new SolidColorBrush(Colors.Transparent) };
-            cell.Children.Add(label);
-            cell.Children.Add(underline);
-            cell.Tapped += (_, _) => ShowTab(idx);
+            var art = new Grid();
+            art.Children.Add(label);
+            art.Children.Add(underline);
+
+            // A BUTTON, not a bare Grid with a Tapped handler. The tab strip is
+            // the only way to switch a floating window's page, and as a Grid it
+            // had no keyboard focus, no invoke pattern and no name — unreachable
+            // for a screen reader and untestable from UIA. Stripped to nothing
+            // but its hit area so it still LOOKS like the reference's bare label.
+            var cell = new Button
+            {
+                Content = art,
+                Background = new SolidColorBrush(Colors.Transparent),
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(2, 0, 2, 0),
+                MinWidth = 0,
+                MinHeight = 0,
+                CornerRadius = new CornerRadius(4),
+            };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(cell, _tabs[i].Label);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(cell, "Tab_" + _tabs[i].Label);
+            cell.Click += (_, _) => ShowTab(idx);
             _tabStrip.Children.Add(cell);
         }
     }
 
-    private void ShowTab(int index)
+    private void ShowTab(int index, double? scrollTo = null)
     {
         if (index < 0 || index >= _tabs.Count) return;
         _active = index;
@@ -298,10 +435,29 @@ public sealed class FloatingWindow
         {
             try { content = _tabs[index].Build(); }
             catch { content = new TextBlock { Text = "This section could not be built." }; }
+            // §11.6 item 40, for the tenants that do not author their own scale.
+            if (FontPage is { Length: > 0 } page)
+            {
+                try { ScaleFonts(content, Services.PanelFonts.Scale(page)); } catch { }
+            }
             _built[index] = content;
         }
         _scroller.Content = content;
-        _scroller.ChangeView(null, 0, null, true);
+        ContentRevision++;
+
+        double target = scrollTo ?? 0;
+        if (target <= 0.5) { _scroller.ChangeView(null, 0, null, true); return; }
+        // The scroller has no extent until the new content has been measured, so
+        // a ChangeView issued before that silently clamps to zero. Measure first,
+        // then ask again on the next layout pass as the belt to that brace.
+        try { _scroller.UpdateLayout(); } catch { }
+        try { _scroller.ChangeView(null, target, null, true); } catch { }
+        void Once(object? s, object e)
+        {
+            _scroller.LayoutUpdated -= Once;
+            try { _scroller.ChangeView(null, target, null, true); } catch { }
+        }
+        _scroller.LayoutUpdated += Once;
     }
 
     // =======================================================================
@@ -364,7 +520,8 @@ public sealed class FloatingWindow
 
     public Side OpenOn { get; set; } = Side.Right;
 
-    // Anchored to an edge, below the toolbars — the reference position.
+    // Anchored to an edge, directly below the top bar — the reference position,
+    // and §11.6 item 42's "they open as high as possible".
     private void PlaceAnchored()
     {
         double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
@@ -374,11 +531,16 @@ public sealed class FloatingWindow
             _host.SizeChanged += FirstPlacement;
             return;
         }
+        var (maxW, maxH) = MaxSize();
+        _panel.Width = Math.Min(_panel.Width, maxW);
+        _panel.Height = Math.Min(_panel.Height, maxH);
+
         _popup.HorizontalOffset = OpenOn == Side.Left
-            ? 18
-            : Math.Max(12, hostW - _panel.Width - 18);
-        _popup.VerticalOffset = Math.Max(12, Math.Min(96, hostH - _panel.Height - 24));
+            ? EdgeGap
+            : Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap);
+        _popup.VerticalOffset = TopBand;
         _placed = true;
+        Constrain();
     }
 
     private void FirstPlacement(object sender, SizeChangedEventArgs e)
@@ -395,31 +557,60 @@ public sealed class FloatingWindow
         ClampIntoView();
     }
 
-    // A window dragged off-screen is a window the user has lost: always leave a
-    // grabbable strip of the header visible.
-    private void ClampIntoView()
-    {
-        double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
-        if (hostW <= 0 || hostH <= 0) return;
-        _popup.HorizontalOffset = Math.Clamp(_popup.HorizontalOffset, -_panel.Width + 120, hostW - 120);
-        _popup.VerticalOffset = Math.Clamp(_popup.VerticalOffset, 0, Math.Max(0, hostH - HeaderH));
-    }
+    /// <summary>§11.6 item 42. This used to let the window hang most of the way
+    /// off the page as long as 120 DIP of header stayed grabbable, and to sit at
+    /// y = 0 — straight over the top bar's two clusters. It now keeps the whole
+    /// window on the page, inside its margins, and below the chrome.</summary>
+    private void ClampIntoView() => Constrain();
 
     // =======================================================================
     // Resize grips — iPadOS-style corner brackets + edge pills
     // =======================================================================
+    /// <summary>§10.5 item 18: "Remove the side and top resize handles. Corner
+    /// grips only — the corners already resize." The four edge pills were also
+    /// the ones sitting over the header, where a grab meant to move the window
+    /// resized it instead.</summary>
     private void BuildGrips()
     {
-        // corners: rounded brackets that echo the window's own 16px radius
-        AddCorner(HorizontalAlignment.Left, VerticalAlignment.Top, InputSystemCursorShape.SizeNorthwestSoutheast, -1, -1);
-        AddCorner(HorizontalAlignment.Right, VerticalAlignment.Top, InputSystemCursorShape.SizeNortheastSouthwest, +1, -1);
+        // §11.6 item 41: no top, bottom or side EDGE handles — corners only.
+        // §11.6 item 42 then takes the TOP two corners as well: a window that
+        // opens as high as it is allowed to go has nothing to gain by growing
+        // upward, and the top-left grip sat directly over the close button while
+        // the top-right sat over the info button. Both remaining grips grow the
+        // window away from the chrome it must not cover.
         AddCorner(HorizontalAlignment.Left, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNortheastSouthwest, -1, +1);
         AddCorner(HorizontalAlignment.Right, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNorthwestSoutheast, +1, +1);
-        // edges: short pills at the midpoints
-        AddEdge(HorizontalAlignment.Stretch, VerticalAlignment.Top, InputSystemCursorShape.SizeNorthSouth, 0, -1);
-        AddEdge(HorizontalAlignment.Stretch, VerticalAlignment.Bottom, InputSystemCursorShape.SizeNorthSouth, 0, +1);
-        AddEdge(HorizontalAlignment.Left, VerticalAlignment.Stretch, InputSystemCursorShape.SizeWestEast, -1, 0);
-        AddEdge(HorizontalAlignment.Right, VerticalAlignment.Stretch, InputSystemCursorShape.SizeWestEast, +1, 0);
+    }
+
+    // =======================================================================
+    // §11.6 item 42 — the constraints every floating panel obeys
+    // =======================================================================
+    /// <summary>The largest this window may be on the current host: the page
+    /// minus its edge margins, and minus the top-bar band it may not enter.</summary>
+    private (double W, double H) MaxSize()
+    {
+        double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
+        if (hostW <= 0 || hostH <= 0) return (double.PositiveInfinity, double.PositiveInfinity);
+        return (Math.Max(MinW, hostW - EdgeGap * 2),
+                Math.Max(MinH, hostH - TopBand - EdgeGap));
+    }
+
+    /// <summary>Brings the window inside every constraint at once — size first,
+    /// then position, because clamping a position against a size that is itself
+    /// out of bounds gives the wrong answer.</summary>
+    private void Constrain()
+    {
+        double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
+        if (hostW <= 0 || hostH <= 0) return;
+
+        var (maxW, maxH) = MaxSize();
+        if (_panel.Width > maxW) _panel.Width = maxW;
+        if (_panel.Height > maxH) _panel.Height = maxH;
+
+        double left = Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap);
+        _popup.HorizontalOffset = Math.Clamp(_popup.HorizontalOffset, EdgeGap, left);
+        double top = Math.Max(TopBand, hostH - _panel.Height - EdgeGap);
+        _popup.VerticalOffset = Math.Clamp(_popup.VerticalOffset, TopBand, top);
     }
 
     private static SolidColorBrush GripBrush() => new(PageTheme.WithAlpha(PageTheme.OnSurface, 0x8C));
@@ -455,31 +646,6 @@ public sealed class FloatingWindow
         _gripLayer.Children.Add(grip);
     }
 
-    private void AddEdge(HorizontalAlignment h, VerticalAlignment v, InputSystemCursorShape shape, int sx, int sy)
-    {
-        bool horizontal = sx == 0;
-        var grip = new Grip(shape)
-        {
-            Width = horizontal ? 64 : GripThickness,
-            Height = horizontal ? GripThickness : 64,
-            HorizontalAlignment = horizontal ? HorizontalAlignment.Center : h,
-            VerticalAlignment = horizontal ? v : VerticalAlignment.Center,
-            Background = new SolidColorBrush(Colors.Transparent),
-        };
-        grip.SetMark(new Border
-        {
-            Width = horizontal ? 34 : 3,
-            Height = horizontal ? 3 : 34,
-            CornerRadius = new CornerRadius(1.5),
-            Background = GripBrush(),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            IsHitTestVisible = false,
-        });
-        HookResize(grip, sx, sy);
-        _gripLayer.Children.Add(grip);
-    }
-
     // sx/sy: -1 = this grip moves the left/top edge (so the window origin moves
     // too), +1 = the right/bottom edge, 0 = that axis is not resized.
     private void HookResize(FrameworkElement grip, int sx, int sy)
@@ -488,27 +654,29 @@ public sealed class FloatingWindow
         grip.ManipulationDelta += (_, e) =>
         {
             double dx = e.Delta.Translation.X, dy = e.Delta.Translation.Y;
+            var (maxW, maxH) = MaxSize();
             if (sx < 0)
             {
-                double w = Math.Max(MinW, _panel.Width - dx);
+                double w = Math.Clamp(_panel.Width - dx, MinW, maxW);
                 _popup.HorizontalOffset += _panel.Width - w;
                 _panel.Width = w;
             }
             else if (sx > 0)
             {
-                _panel.Width = Math.Max(MinW, _panel.Width + dx);
+                _panel.Width = Math.Clamp(_panel.Width + dx, MinW, maxW);
             }
+            _ = maxH;   // used by the vertical arm below
             if (sy < 0)
             {
-                double h = Math.Max(MinH, _panel.Height - dy);
+                double h = Math.Clamp(_panel.Height - dy, MinH, maxH);
                 _popup.VerticalOffset += _panel.Height - h;
                 _panel.Height = h;
             }
             else if (sy > 0)
             {
-                _panel.Height = Math.Max(MinH, _panel.Height + dy);
+                _panel.Height = Math.Clamp(_panel.Height + dy, MinH, maxH);
             }
-            ClampIntoView();
+            Constrain();
         };
     }
 
