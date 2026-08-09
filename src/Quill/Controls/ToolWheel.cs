@@ -2088,8 +2088,8 @@ public sealed class ToolWheel
 
     private FrameworkElement? CmdArt(string cmd, Color fg, double size) => cmd switch
     {
-        "Undo" => Icons.Mark(Icons.Undo, fg, size),
-        "Redo" => Icons.Mark(Icons.Undo, fg, size, mirror: true),
+        "Undo" => Icons.Mark(Icons.UndoRound, fg, size),
+        "Redo" => Icons.Mark(Icons.UndoRound, fg, size, mirror: true),
         "MouseMode" => Icons.Mark(Icons.Mouse, fg, size),
         _ => Extra(cmd) is { } x
              ? Icons.Mark(x.Icon, fg, size, stroked: x.Stroked, thickness: 1.9)
