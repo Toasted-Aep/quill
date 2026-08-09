@@ -952,3 +952,55 @@ than assuming), and if the ring overruns the window, **clip at the window edge**
 — never shrink the ring, re-centre it, or move the dial.
 
 ⚠️ Approval gate stands: before/after render, approval before commit.
+
+### 11.15 Colour wheel — the settled numbers, 2026-08-09
+
+**Supersedes §11.14 entirely.** The user ruled on §11.14's contradiction ("as
+built, cells absorb the shrink") and then immediately replaced the whole
+instruction with new figures. These are the ones to build.
+
+1. **COPIC wheel 15% smaller.** Read as the **outer** extent: the ring's outer
+   radius comes in 15%.
+2. **The empty inner circle keeps its CURRENT, pre-shrink radius** — the
+   256.62 DIP hole from §11.13. It does **not** scale with item 1.
+3. **Texts and the other elements in the colour wheel shrink 20%** — swatch
+   labels, the `COPIC`/`HSL`/`RGB` plates, the eyedropper, the recents chips,
+   the value boxes. Applied **independently** of item 1; the two do not
+   compound.
+4. **Cells get 15% MORE depth** — more distance from the inside of the ring
+   outward. This **reverses §11.14 item 3**, which retracted the widening;
+   widening is back on, at +15% over the §11.12 depth of 27.08.
+
+   Note the consequence and report it: with the hole pinned, the outer radius
+   pulled in 15%, and each cell 15% deeper, **fewer rings of colour fit
+   on-screen at once**. That is arithmetic, not a bug — but say how many rings
+   survive so the user can judge.
+
+5. **Fix the overlapping margins.** The user: *"the margins of text and colour
+   wheels are off, they overlap."* Labels are colliding with the swatch ring
+   and with each other. Give every text element a real margin against the
+   geometry around it and verify no two drawn elements intersect.
+
+6. **HSL and RGB must match their screenshots exactly.** Both are **curved arc
+   sliders**, not the ring layout:
+
+   - Each channel is **one thick arc** with round caps, swept about the wheel's
+     centre, each at its **own radius and its own angular span**, arranged so
+     no two arcs touch.
+   - Each arc is a **gradient along its length**: RGB channels run black → full
+     channel (red, green, blue). HSL runs hue → the full spectrum, saturation →
+     grey to the current hue, lightness → black through the hue to white.
+   - Each carries a **round knob** filled with the current value's colour,
+     slightly wider than the arc.
+   - Each has a **value box** beside the knob, outside the arc: a white rounded
+     rect with a hairline border and dark text. RGB shows integers (`216`,
+     `175`, `232`); HSL shows `317°` for hue and percentages (`55%`, `80%`).
+   - The `COPIC` / `HSL` / `RGB` labels sit in a column to the left of the arcs;
+     the **active** face is the one drawn in a filled chip, the others plain.
+
+Everything still binding: the wheel stays centred on the dial's colour dot
+(Δ 0.00 DIP — re-measure and report), hub chrome must not reach the dial's
+popped sector at radius 116.62 (report the clearance table), and window overrun
+is **clipped at the window edge** — never shrink, re-centre, or move the dial.
+
+⚠️ Approval gate stands: before/after render, approved before commit.
