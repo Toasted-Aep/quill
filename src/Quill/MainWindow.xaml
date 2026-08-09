@@ -38,6 +38,7 @@
                     <Setter Property="Height" Value="30"/>
                     <Setter Property="MinWidth" Value="30"/>
                     <Setter Property="Padding" Value="5,0,5,0"/>
+                    <Setter Property="Margin" Value="3,0,3,0"/>
                     <Setter Property="CornerRadius" Value="6"/>
                 </Style>
                 <Style TargetType="ToggleButton">
@@ -45,6 +46,7 @@
                     <Setter Property="Height" Value="30"/>
                     <Setter Property="MinWidth" Value="30"/>
                     <Setter Property="Padding" Value="5,0,5,0"/>
+                    <Setter Property="Margin" Value="3,0,3,0"/>
                     <Setter Property="CornerRadius" Value="6"/>
                 </Style>
                 <Style TargetType="DropDownButton">
@@ -52,6 +54,7 @@
                     <Setter Property="Height" Value="30"/>
                     <Setter Property="MinWidth" Value="30"/>
                     <Setter Property="Padding" Value="5,0,5,0"/>
+                    <Setter Property="Margin" Value="3,0,3,0"/>
                     <Setter Property="CornerRadius" Value="6"/>
                 </Style>
                 <Style TargetType="AppBarSeparator">

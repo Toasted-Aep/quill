@@ -420,7 +420,7 @@ public sealed class PenBar
         host.Children.Clear();
         // Available at full strength, unavailable at 30% - never hidden, so the
         // pair keeps its place (1.6).
-        host.Children.Add(Icons.Mark(Icons.Undo,
+        host.Children.Add(Icons.Mark(Icons.UndoRound,
             live ? fg : PageTheme.WithAlpha(fg, 77), SatSize, mirror: mirror));
     }
 
