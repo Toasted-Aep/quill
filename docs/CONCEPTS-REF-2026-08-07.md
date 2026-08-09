@@ -852,3 +852,37 @@ until the user places them.
 
 The reasoning the user endorsed: fix what is hit constantly before changing how
 things look.
+
+### 11.12 Colour wheel — scale up, 2026-08-09
+
+Supersedes §11.3 items 15, 18, 19 and 20, which asked for the same thing in
+smaller pieces. Against the current build the user's verdict is that **the whole
+wheel is under-scaled**: *"make the colour wheel; copic, rgb, hsl text;
+eyedropper (basically everything) bigger. widen the width of the cells in copic
+colour wheel."*
+
+Concretely, from the reference capture:
+
+1. **The `COPIC` / `HSL` / `RGB` face labels are far too small** relative to the
+   ring, and `HSL` and `RGB` render as bare grey text while `COPIC` sits in a
+   chip. Scale all three up substantially and give them consistent treatment.
+2. **The eyedropper is too small** — it reads as a dark dot at this size. Scale
+   it with the rest. (§11.3 item 18 also removes its border/frame.)
+3. **The COPIC cells are too narrow radially — widen them.** This is the "width"
+   the user means: the cell's extent from the ring's inner edge outward, not its
+   angular span. It pairs with §11.3 item 20, which asked for more cell height
+   and near-square cells on the innermost ring.
+4. **Everything else in the wheel scales with them** — the recents dots, the
+   `Black`/`White` chips, the numeric chips on the HSL/RGB faces, and the
+   swatch labels.
+
+The constraint that makes this non-trivial: the wheel must still **centre on the
+dial's colour dot** (§11.2 item 15, measured at Δ 0.00 DIP) and must not swallow
+the dial, so growing the cells cannot come out of the hole. Take the space
+outward, and if the ring then overruns the window, clip at the edge rather than
+shrinking the hole or moving the dial — the user has rejected both of those
+twice.
+
+⚠️ **Approval gate.** Render a before/after of the wheel and get the user's
+approval before committing, exactly as §11.3 item 22 requires for the added
+colours. Two visual changes to the same surface, one approval step.
