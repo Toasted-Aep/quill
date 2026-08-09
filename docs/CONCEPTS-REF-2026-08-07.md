@@ -917,3 +917,38 @@ What must still hold:
   all three.
 
 ⚠️ Same approval gate: render a before/after and get approval before committing.
+
+### 11.14 Colour wheel — final geometry and label treatment, 2026-08-09
+
+The user reviewed the §11.13 render and refined it. This **supersedes §11.13's
+"widen cells"**, which they have now retracted, and settles the contradiction
+between "9% smaller" and "keep current total radius".
+
+1. **Shrink the whole wheel by 9%.** A scale change on the entire control, and
+   **separate from** the text reductions below — the two do not compound into
+   one factor, they are applied independently.
+2. **Widen the inner empty circle.** §11.13's enlargement stands (hole
+   198.62 → 256.62 DIP) and remains wanted.
+3. **Do NOT widen the cells.** Retracted. If §11.13's uncommitted work deepened
+   them, revert that part — cell radial depth returns to the §11.12 value.
+   (For the record, when the user says a cell's *width* they mean its **radial
+   depth**, measured from the centre outward; *height* is the arc direction.)
+4. **COPIC swatch labels: font 20% smaller**, and **positioned at the upper-left
+   corner of each cell** rather than centred.
+5. **The `COPIC` / `HSL` / `RGB` face plates**: **greatly reduce the border**,
+   **text 15% smaller**, and **bold**. Smaller and heavier at once is
+   deliberate — do not preserve the size to keep the weight.
+
+Item 5 may resolve the `_ui` cap fork on its own: the cap was pinned at 1.10
+because five plates at §11.12's item sizes no longer fit the quadrant a
+corner-docked dial leaves visible, which forced four items at 0.52 rad and a
+0.18 rad clockwise roll. Lighter frames and smaller type free arc length —
+**re-check whether the cap is still needed** and relax it if it is not.
+
+Unchanged and still binding: the wheel stays centred on the dial's colour dot
+(Δ 0.00 DIP — re-measure and report after any geometry edit), hub chrome must
+not land on the dial's popped sector (re-verify against the new geometry rather
+than assuming), and if the ring overruns the window, **clip at the window edge**
+— never shrink the ring, re-centre it, or move the dial.
+
+⚠️ Approval gate stands: before/after render, approval before commit.
