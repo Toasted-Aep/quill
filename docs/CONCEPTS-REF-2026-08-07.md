@@ -886,3 +886,34 @@ twice.
 ⚠️ **Approval gate.** Render a before/after of the wheel and get the user's
 approval before committing, exactly as §11.3 item 22 requires for the added
 colours. Two visual changes to the same surface, one approval step.
+
+### 11.13 Colour wheel — grow the hole and the outer radius, 2026-08-09
+
+The user has approved the §11.12 scale-up (*"great what you did with bigness"*)
+and now wants the wheel bigger again, in two specific ways:
+
+1. **The empty centre of the COPIC wheel gets bigger** — a larger hole.
+2. **The overall circle radius gets bigger** — a larger outer edge.
+
+**This partially reverses the constraint in §11.12**, which said the extra cell
+width must come outward and must not come out of the hole. That instruction was
+written to protect readability: the hole had previously been 220 DIP around a
+116 DIP dial, and shrinking `HubRoom` from 104 to 82 (hole 198) is what stopped
+the mode plates landing on the dial's popped sector. **That reasoning no longer
+binds, because the outer radius grows at the same time** — both edges move
+outward together, so the ring band is preserved rather than being squeezed from
+one side.
+
+What must still hold:
+
+- **The wheel stays centred on the dial's colour dot**, measured at Δ 0.00 DIP.
+  Growing either radius must not disturb that.
+- **The hub chrome must not land on the dial.** The bug that made the old large
+  hole unreadable was the mode plates being laid over the popped sector, not the
+  hole size itself. With a larger hole this hazard returns — re-verify it, do
+  not assume the earlier fix still covers the new geometry.
+- **If the ring overruns the window, clip at the window edge.** Do not shrink
+  the ring, do not re-centre it, and do not move the dial. The user has rejected
+  all three.
+
+⚠️ Same approval gate: render a before/after and get approval before committing.
