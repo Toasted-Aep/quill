@@ -98,7 +98,7 @@ public sealed class ToolWheel
     // therefore the outermost thing the dial draws again, and the footprint
     // comes off the popped radius instead of a satellite orbit: 265 DIP across
     // rather than 301, so the dial got smaller as well as tidier.
-    private const double SatSize = 18;             // the two glyphs, inside the disc
+    private const double SatSize = 21;             // the two glyphs, inside the disc
     private const double SatX = 0.28 * DiscR;      // 19.2  either side of the midline
     private const double SatY = 0.68 * DiscR;      // 46.6  below the value row
     private const double SatHit = SatSize + 8;
@@ -316,6 +316,10 @@ public sealed class ToolWheel
     private readonly TranslateTransform[] _markT = new TranslateTransform[Slots];
     private readonly TranslateTransform[] _labelT = new TranslateTransform[Slots];
     private readonly Ellipse _disc = new();
+    // 11.2 item 13: ONE plate, moved to whichever of the five inner controls is
+    // under the pointer. One element rather than five because only one can be
+    // hovered at a time, and five would each need their own theme sync.
+    private readonly Microsoft.UI.Xaml.Shapes.Rectangle _hoverPlate = new();
     private readonly Path[] _rimArc = new Path[Slots];
     private readonly Ellipse _dot = new();
     private readonly Canvas _sizeGlyph = new(), _smoothGlyph = new(), _opacGlyph = new();
@@ -328,6 +332,7 @@ public sealed class ToolWheel
     private Point _centre;
     private int _hoverSlot = -1;
     private int _active = -1;          // the popped sector, cached for the hit test
+    private double _sizeRowW = 40;     // measured in LayoutSizeRow, read by PlaceHover
     private int _rose = -2;            // which sector the rise animation last played for
     // Held in a FIELD on purpose: an unrooted Storyboard can be collected while
     // it is still running, at which point it simply stops and Completed never
@@ -814,9 +819,13 @@ public sealed class ToolWheel
         _dot.Stroke = new SolidColorBrush(_hoverZone == Zone.Dot ? PageTheme.Accent : outline);
         _dot.StrokeThickness = _hoverZone == Zone.Dot ? 3 : 2;
 
+        // ---- 11.2 item 13: hover indicators ------------------------------
+        PlaceHover(onSurface);
+
         // ---- 10.2 item 5: undo and redo, inside the disc -----------------
-        Button(_undoArt, Icons.Undo, false, _surface.UndoManager.CanUndo, onSurface);
-        Button(_redoArt, Icons.Undo, true, _surface.UndoManager.CanRedo, onSurface);
+        // 11.2 item 14: the redesigned pair.
+        Button(_undoArt, Icons.UndoRound, false, _surface.UndoManager.CanUndo, onSurface);
+        Button(_redoArt, Icons.UndoRound, true, _surface.UndoManager.CanRedo, onSurface);
 
         BuildToolOptions(onSurface, outline, surface);
         _popover.Sync();
@@ -825,6 +834,44 @@ public sealed class ToolWheel
         // 10.2 item 7. Last, so the geometry and the fills it animates are
         // already the ones the frame will use.
         if (_rose != active) { _rose = active; if (active >= 0) Rise(); }
+    }
+
+    /// <summary>11.2 item 13: "hover indicators on opacity, size, stability,
+    /// undo and redo." A soft plate behind whichever of the five the pointer is
+    /// over. The colour dot keeps its own accent ring, which it already had and
+    /// which reads better on a filled circle than a plate behind it would.</summary>
+    private void PlaceHover(Color ink)
+    {
+        double w, h, cx, cy;
+        switch (_hoverZone)
+        {
+            case Zone.Size:
+                w = _sizeRowW + 16; h = SetBox + 12;
+                cx = Half; cy = Half + Row1Y;
+                break;
+            case Zone.Smooth:
+            case Zone.Opacity:
+                w = 52; h = Row3Y + SetBox / 2 + 22;
+                cx = Half + (_hoverZone == Zone.Smooth ? -ColX : ColX);
+                cy = Half + (Row3Y - SetBox / 2) / 2 + 2;
+                break;
+            case Zone.Undo:
+            case Zone.Redo:
+                w = h = SatHit;
+                cx = Half + (_hoverZone == Zone.Undo ? -SatX : SatX);
+                cy = Half + SatY;
+                break;
+            default:
+                _hoverPlate.Visibility = Visibility.Collapsed;
+                return;
+        }
+        _hoverPlate.Width = w;
+        _hoverPlate.Height = h;
+        _hoverPlate.RadiusX = _hoverPlate.RadiusY = Math.Min(10, h / 2);
+        _hoverPlate.Fill = new SolidColorBrush(PageTheme.WithAlpha(ink, 26));
+        Canvas.SetLeft(_hoverPlate, cx - w / 2);
+        Canvas.SetTop(_hoverPlate, cy - h / 2);
+        _hoverPlate.Visibility = Visibility.Visible;
     }
 
     private void Button(Canvas host, string icon, bool mirror, bool live, Color fg)
@@ -902,6 +949,7 @@ public sealed class ToolWheel
         _sizeText.Measure(new Size(200, 40));
         double tw = _sizeText.DesiredSize.Width;
         double total = SetBox + 5 + tw;
+        _sizeRowW = total;                     // 11.2 item 13's hover plate
         double x = Half - total / 2;
         Canvas.SetLeft(_sizeGlyph, x);
         Canvas.SetTop(_sizeGlyph, Half + Row1Y - SetBox / 2);
@@ -1122,6 +1170,13 @@ public sealed class ToolWheel
             _wheel.Children.Add(t);
         }
 
+        // 11.2 item 13's hover plate, under everything the disc carries so the
+        // glyph and its value read on top of it rather than through it.
+        _hoverPlate.RadiusX = _hoverPlate.RadiusY = 8;
+        _hoverPlate.IsHitTestVisible = false;
+        _hoverPlate.Visibility = Visibility.Collapsed;
+        _wheel.Children.Add(_hoverPlate);
+
         // §1.4 inner disc. Row 1 is laid out at paint time (the glyph and its
         // readout are centred as a pair); rows 2 and 3 are fixed by the ratios.
         _sizeText.FontSize = ReadoutSize;                       // §1.4 "size readout 13 DIP semibold"
@@ -1139,6 +1194,7 @@ public sealed class ToolWheel
 
         _dot.Width = _dot.Height = DotR * 2;
         _dot.StrokeThickness = 2;
+
         _dot.IsHitTestVisible = false;
         Canvas.SetLeft(_dot, Half - DotR);
         Canvas.SetTop(_dot, Half - DotR);

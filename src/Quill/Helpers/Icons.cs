@@ -69,6 +69,27 @@ public static class Icons
         "M8.6 3.6 L1.8 9.6 L8.6 15.6 V11.4 H13.8 A4.2 4.2 0 1 1 13.8 19.8 H8.6 V22.4 H13.8 " +
         "A6.8 6.8 0 1 0 13.8 8.8 H8.6 Z";
 
+    /// <summary>Undo, redesigned - reference 11.2 item 14.
+    ///
+    /// <para>The mark above is a straight arrow that hooks round a loop, which
+    /// at the 18 DIP the dial's centre buttons run at reads as a knot. This one
+    /// is what an undo control actually is: a three-quarter ROTATION. A 270
+    /// degree band, 8.6 out and 6.0 in about (12, 12.8), swept anticlockwise
+    /// from the upper right round the bottom to the left, with a triangular
+    /// head where it stops. Redo is this mirrored, exactly as before, so the
+    /// pair still cannot drift apart.</para></summary>
+    public const string UndoRound =
+        // A HALF annulus over the top - 8.4 out, 5.0 in, about (12, 14.2) -
+        // with a triangular head on the left end pointing down. Two earlier
+        // attempts wrapped the band 270 degrees and both collapsed into a
+        // broken ring with a stub at 21 DIP: past about half a turn the head
+        // is no longer at an end you can see, and undo and redo stop being
+        // distinguishable from each other. Half a turn keeps the head on the
+        // silhouette's outline, which is what makes the mirror read as redo.
+        "M0.6 14.2 L5.3 21.8 L10.0 14.2 L7.0 14.2 " +
+        "A5 5 0 0 1 17.0 14.2 L20.4 14.2 " +
+        "A8.4 8.4 0 0 0 3.6 14.2 Z";
+
     /// Mouse mode: the arrow cursor.
     public const string Mouse = "M6 2.6 L6 19.8 L10.3 15.8 L13.1 21.6 L15.8 20.3 L13 14.6 L18.7 14.3 Z";
 
