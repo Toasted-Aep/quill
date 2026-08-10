@@ -4,6 +4,7 @@ using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Quill.Helpers;
 using Quill.Models;
@@ -128,9 +129,13 @@ public sealed class BrushesWindow
         /// own pen when its type already matches.</summary>
         public Func<PenPreset?>? Current { get; init; }
 
-        /// <summary>A tool was chosen for the slot. Null means the slot cannot
-        /// hold one — the pen row is a list of pens — and §4's Tools row is
-        /// then left out rather than offered and quietly ignored.</summary>
+        /// <summary><b>11.25 item 1: brushes and tools come together.</b> The one
+        /// surface has to be able to assign either, so this is REQUIRED for a
+        /// slot that can hold a tool — every dial sector — rather than being an
+        /// optional extra. It stays nullable for the one target that genuinely
+        /// cannot take a tool: a pen-row cell IS a preset, and there is no way
+        /// to store Slice in a PenPreset, so §4's Tools row is left out there
+        /// rather than offered and quietly ignored.</summary>
         public Action<string, EraserStyle?>? PickTool { get; init; }
 
         /// <summary>Empty the slot. Null means the slot cannot be empty.</summary>
@@ -145,6 +150,11 @@ public sealed class BrushesWindow
     private readonly Host _h;
     private readonly InkSurface _surface;
     private readonly FloatingWindow _win;
+
+    /// <summary>The panel this window was attached to. Kept only so the
+    /// page-press dismissal (11.25 item 2) can find the XamlRoot's content,
+    /// which is null at construction time and has to be hooked on first show.</summary>
+    private readonly Panel _hostPanel;
 
     /// <summary>The slot the library is currently aimed at, or null for the
     /// ordinary "apply to what I am drawing with" behaviour.</summary>
@@ -194,6 +204,7 @@ public sealed class BrushesWindow
     {
         _h = h;
         _surface = surface;
+        _hostPanel = host;
 
         _win = FloatingWindow.Attach(host, 432, 690);
         _win.Title = "Brushes";
@@ -230,6 +241,7 @@ public sealed class BrushesWindow
     public void Show()
     {
         _target = null;
+        HookPagePress();
         _win.RefreshContent();
         _win.Show();
         DrawPreview();
@@ -239,14 +251,87 @@ public sealed class BrushesWindow
     /// Every cell then assigns to <paramref name="target"/> instead of to the
     /// live selection, the strip previews what the slot holds, and a banner
     /// says so. This is what 11.22 item 4's right-click and the dial's
-    /// <c>+</c> cells both call.</summary>
+    /// <c>+</c> cells both call.
+    ///
+    /// <para><b>11.25 item 3: idempotent with respect to the window.</b>
+    /// Right-clicking a second tool must RE-AIM the panel that is already open,
+    /// not open another one and not close and reopen it. So the window is only
+    /// shown when it is closed; when it is already up, the target is swapped in
+    /// place and the content rebuilt with the reader's scroll position kept —
+    /// the banner, the highlighted cell and the strip all switch to the new
+    /// slot while the panel itself does not move or blink.</para></summary>
     public void ShowFor(Target target)
     {
-        _wasLive = IsOpen && _target == null;
+        HookPagePress();
+        bool open = IsOpen;
+        // Only recomputed on the way IN to targeting. Re-aiming an already
+        // aimed panel must not forget that it was the reader's own library
+        // before the first right-click, or the second pick would close a panel
+        // that ought to go back to the live selection.
+        if (_target == null) _wasLive = open;
         _target = target;
-        _win.RefreshContent();
-        _win.Show();
+        _win.RefreshContent(preserveScroll: open);
+        if (!open) _win.Show();
         DrawPreview();
+    }
+
+    // =======================================================================
+    // 11.25 item 2 — a press on the page closes the panel
+    // =======================================================================
+    /// <summary>Hooked once, on the XamlRoot's content, so a press anywhere in
+    /// the window is seen whether or not something nearer the pointer already
+    /// handled it. XamlRoot is null in the constructor, so this runs on the
+    /// first show rather than at attach time.</summary>
+    private UIElement? _rootHooked;
+
+    private void HookPagePress()
+    {
+        try
+        {
+            if (_hostPanel.XamlRoot?.Content is not UIElement root) return;
+            if (ReferenceEquals(root, _rootHooked)) return;
+            _rootHooked = root;
+            root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(OnAnyPress), true);
+        }
+        catch { _rootHooked = null; }
+    }
+
+    /// <summary>11.25 item 2: "the panel should close when the page is clicked
+    /// unlike the other floating panels."
+    ///
+    /// <para><b>It never sets Handled</b>, so the press that dismisses the panel
+    /// still reaches the page and lays ink — and there is <b>no scrim</b>, which
+    /// is the page-covering pattern §11.19 removed and the user does not want
+    /// back. That is the same shape as the §11.22 item 3 settings card.</para>
+    ///
+    /// <para><b>Only a press on the PAGE dismisses, not any press.</b> A
+    /// right-click on a dial sector or a pen-row cell is what OPENS this panel,
+    /// and the shield's handler runs BEFORE this one — so treating every press
+    /// as a dismissal would close the panel in the very gesture that aimed it,
+    /// which is exactly the trap the settings card's own comment records. The
+    /// test is therefore whether the press originated inside the ink surface:
+    /// the dial floats OVER the canvas area, so its bounds cannot be used, but
+    /// its shield is a different element and fails an ancestor walk.</para></summary>
+    private void OnAnyPress(object sender, PointerRoutedEventArgs e)
+    {
+        if (!IsOpen) return;
+        if (e.OriginalSource is not DependencyObject src) return;
+        if (!OnThePage(src)) return;
+        Hide();     // deliberately NOT Handled
+    }
+
+    /// <summary>True when <paramref name="src"/> is the ink surface or lives
+    /// inside it. Walks the visual tree rather than testing a rectangle,
+    /// because every floating surface in this app overlaps the page's.</summary>
+    private bool OnThePage(DependencyObject src)
+    {
+        try
+        {
+            for (var d = src; d != null; d = VisualTreeHelper.GetParent(d))
+                if (ReferenceEquals(d, _surface)) return true;
+        }
+        catch { }
+        return false;
     }
 
     /// <summary>The aim is spent. A library that was opened as a picker closes;
@@ -311,9 +396,11 @@ public sealed class BrushesWindow
         foreach (var t in BrushOrder) basics.Children.Add(BrushCell(t));
         root.Children.Add(Inset(StripScroll.Horizontal(basics)));
 
-        // 5. Tools — left out when the slot cannot hold one. The pen row is a
-        // LIST OF PENS, so offering it Slice would be a control that does
-        // nothing, which is worse than a row that is not there.
+        // 5. Tools. 11.25 item 1: brushes and TOOLS travel together, so that
+        // one right-click reaches either - every dial sector supplies PickTool
+        // and therefore always shows this row. It is left out only for the pen
+        // row, whose cells ARE presets and cannot store Slice; offering it
+        // there would be a control that does nothing.
         if (_target == null || _target.PickTool != null)
         {
             root.Children.Add(Group("Tools"));
