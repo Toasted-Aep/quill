@@ -3453,11 +3453,10 @@ public sealed partial class MainWindow : Window
             ColorSpectrumShape = ColorSpectrumShape.Box,
             Color = initial
         };
-        // 11.23: the palette mark identifies a colour picker wherever one opens.
-        // Not the eyedropper - that samples a colour off the page and has its
-        // own mark; this one is the picker itself.
+        // The palette mark (Icons.Palette) is authored and measured but NOT in
+        // use: the user asked for it to be held back until they have decided
+        // where a picker mark belongs. Re-adding it here is a one-line change.
         var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-        head.Children.Add(Icons.Mark(Icons.Palette, PageTheme.OnSurface, 22));
         head.Children.Add(new TextBlock
         {
             Text = title,
