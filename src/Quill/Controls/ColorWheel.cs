@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Numerics;
 using Quill.Helpers;
 using Quill.Models;
@@ -112,7 +113,15 @@ public sealed class ColorWheel : UserControl
     // 11.12, reversing 11.14 item 3's retraction. The cell depth is an absolute
     // number, not a proportion, so the constant is solved for it at the s a
     // docked dial forces: 21 * 0.9004 * 1.6470 = 31.14 DIP.
-    private const float CellScale = 1.6470f;
+    //
+    // 11.20 item 3 then deepens every cell "by a further 20% outward, keeping
+    // the inner empty radius exactly where it is". Both conditions are already
+    // how this works - the hole is its own number and every band past it is
+    // laid out cumulatively outward from there - so item 3 is one factor and
+    // nothing else moves: 1.6470 * 1.20 = 1.9764, and 21 * 0.9004 * 1.9764 =
+    // 37.37 DIP of cell. 11.21 item 2 then lets the outer edge go wherever 17
+    // rings of that put it, which is 1009 DIP.
+    private const float CellScale = 1.9764f;
     // 11.21 RETIRES the outer target. 11.15 item 1 asked for a 15% smaller
     // outer extent; holding a target radius while item 4 deepened every cell
     // meant flooring to the last WHOLE cell that fitted, and at the settled
@@ -137,6 +146,35 @@ public sealed class ColorWheel : UserControl
     // supersedes entirely, and it is taken off the 11.13 sizes because that is
     // the render these instructions are measured against.
     private const float TextScale = 0.80f;
+    // 11.20 item 4: "everything that opens when the colour wheel is pressed
+    // shrinks 20%, proportionally - the whole surface, not selected parts."
+    //
+    // "The whole surface" cannot be read literally as EVERYTHING, because three
+    // things it would have to include are pinned by instructions the user gave
+    // in the same breath and restated afterwards: the hole keeps its radius
+    // (11.15 item 2, restated by 11.21), the cells were just deepened 20% by
+    // item 3 immediately above, and 11.21 items 2-3 make the outer radius the
+    // palette's own size and forbid shrinking the ring at all. Taking 20% off
+    // any of those would undo an instruction rather than add one. What is left
+    // - and what "the whole surface, not selected parts" is distinguishing
+    // itself from - is every element the picker draws that is not palette
+    // geometry: the type, the plates, the puck, the recents, the eyedropper,
+    // the arcs and their boxes, all at one factor rather than a chosen few.
+    //
+    // Kept as its own constant beside TextScale rather than folded into it:
+    // they are two separate instructions (11.15 item 3 and 11.20 item 4) that
+    // happen to land on the same elements, and one of them may be revised
+    // without the other.
+    private const float SurfaceScale = 0.80f;
+    // What an element is actually drawn at: 0.80 x 0.80 = 0.64 of its 11.13
+    // size. The RADII the chrome sits on are deliberately not in here - they
+    // are fractions of the annulus between the dial and Tier 1, and pulling
+    // them in would move the chrome onto the dial rather than make it smaller.
+    private const float Elem = TextScale * SurfaceScale;
+    // 11.20 item 5, on top of item 4: the chip's padding around the word, not
+    // the word. Item 4 already brought the type down; this is what makes the
+    // frame itself tighter rather than merely smaller with its contents.
+    private const float PlateFrame = 0.80f;
     // 11.20 item 2, superseding 11.17's "the inner spine ring is radially
     // narrower": "the two inner rings have a different cell depth from the
     // outermost ring. Equalise them: all rings take the OUTERMOST ring's
@@ -282,10 +320,60 @@ public sealed class ColorWheel : UserControl
         }
     }
 
+    /// <summary>Which face is up. Reading it gives the face the user has ASKED
+    /// for, which during 11.20 item 6's switch is not yet the one being drawn.
+    ///
+    /// <para>Setting it plays that switch: "the outgoing face's elements
+    /// gravitate inwards one by one - the existing closing animation - and only
+    /// then does the incoming face play its open animation. Sequential, not
+    /// crossfaded." So the setter starts an EXIT and records where to go; the
+    /// one animation clock hands over to the entrance when that exit lands (see
+    /// OnAnimTick).</para>
+    ///
+    /// <para>Deliberately not two Storyboards chained on Completed: an unrooted
+    /// Storyboard can be collected while it runs, its Completed never fires,
+    /// and the second stage never starts - which would leave the picker with
+    /// neither face on screen. This control already owns a single DispatcherTimer
+    /// cascade, so the sequence is two runs of that.</para></summary>
     public ColorWheelMode Mode
     {
-        get => _mode;
-        set { if (_mode == value) return; _mode = value; _canvas.Invalidate(); ModeChanged?.Invoke(value); }
+        get => _switchTo ?? _mode;
+        set
+        {
+            if ((_switchTo ?? _mode) == value) return;
+            // Mid-cascade, or with animation turned off in Windows: swap now.
+            // There is no closing animation to run first in either case.
+            if (_phase != Phase.Idle || ReduceMotion) { ApplyMode(value); return; }
+            _switchTo = value;
+            _phase = Phase.Exiting;
+            _clockPending = true;
+            _phaseT0 = Stopwatch.GetTimestamp();
+            if (!_anim.IsEnabled) _anim.Start();
+            // Sequential, not crossfaded, is the whole of item 6, and the
+            // difference is 300 ms long - too short to photograph reliably and
+            // too important to assert. The two stages say when they happen.
+            GeometryProbe.Write("FACE-SWITCH", $"stage=close-begin from={_mode} to={value}");
+            _canvas.Invalidate();
+        }
+    }
+
+    /// <summary>Seeds the face WITHOUT the switch animation and without echoing
+    /// ModeChanged back at the host that just supplied it - for opening the
+    /// picker, where there is nothing on screen to animate away.</summary>
+    public void ResetMode(ColorWheelMode m)
+    {
+        _switchTo = null;
+        _mode = m;
+        _canvas.Invalidate();
+    }
+
+    private void ApplyMode(ColorWheelMode m)
+    {
+        _switchTo = null;
+        if (_mode == m) { _canvas.Invalidate(); return; }
+        _mode = m;
+        _canvas.Invalidate();
+        ModeChanged?.Invoke(m);
     }
 
     /// Recently used colours, newest first. The host owns the list.
@@ -306,6 +394,8 @@ public sealed class ColorWheel : UserControl
     private Vector2 _hint;   // where the picker was opened from (bias only)
     private Color _color = Colors.Black;
     private ColorWheelMode _mode = ColorWheelMode.Copic;
+    // 11.20 item 6: the face the closing cascade is on its way TO, or null.
+    private ColorWheelMode? _switchTo;
     private double _h, _s, _l;          // HSL mirror of _color, kept so that a
                                         // grey does not lose its hue mid-drag
     private float _rot = 100f * Deg;    // ring rotation, radians (reference default)
@@ -359,26 +449,55 @@ public sealed class ColorWheel : UserControl
     private float _base;                // direction from the anchor to the
                                         // viewport centre — everything that has
                                         // to stay on screen hangs off this
-    private readonly float[] _arcR = new float[3];
+    // 11.20 items 7-8 split "arc" from "channel". An ARC is a ring the
+    // instrument draws on - RGB now has one, HSL two - and a CHANNEL is a
+    // segment of one, so three dials can share a single arc.
+    private readonly float[] _arcR = new float[2];
+    private int _arcCount = 1;
+    private readonly int[] _chArc = new int[3];     // channel -> which arc
+    private readonly float[] _chA0 = new float[3];  // the channel's value 0
+    private readonly float[] _chA1 = new float[3];  // the channel's value 1
     // 11.15 item 6: each channel arc gets "its own radius and its own angular
     // span". One shared half-span is what made the three read as one dial with
     // three needles; three spans make them three sliders. They also narrow as
     // they go out, which is what keeps the outermost arc's leading end from
     // reaching up under the top chrome bar at the radius the fan now needs.
-    private readonly float[] _arcHalf = new float[3];
+    // 11.20 item 9: the value boxes are real text fields, so they are XAML on
+    // their own layer rather than marks in the Win2D pass. They exist only
+    // while the instrument is at rest on an HSL/RGB face - during the cascade
+    // the drawn box takes over, because a TextBox cannot gravitate inward with
+    // the rest of the surface.
+    private readonly Canvas _fields = new();
+    private readonly TextBox[] _field = new TextBox[3];
+    private bool _fieldsLive;
+    private int _editing = -1;
     // Half the thickness of a channel arc, and the knob's radius - "slightly
     // wider than the arc" (item 6), so the knob reads as riding ON the track
     // rather than as a bead threaded through it.
     private float _arcW, _arcKnob;
+    // How far clockwise the whole arc ladder is rolled off _base. _base points
+    // at the middle of the window, so on a corner-docked dial an arc centred on
+    // it swings its anticlockwise end - and the value box hung outside that end
+    // - up under the top chrome bar.
+    //
+    // 11.20 items 7-8 make that end further out than it was: the segments now
+    // run to the full 0.86 rad on the OUTER arc rather than narrowing to 0.60,
+    // because three channels have to fit on one of them. Measured at 0.18: the
+    // last segment's box reached y = 81.3 DIP against a bar that ends near 85.
+    // 0.26 puts it at 106.8 and costs nothing at the other end, which is still
+    // 149 DIP clear of the left edge.
+    //
     // Shared by the draw pass and the hit test, so a tap cannot resolve against
     // the unrolled position of an arc that is drawn rolled.
-    private const float ArcRoll = 0.18f;
+    private const float ArcRoll = 0.26f;
     // The measured size of each face's word, so 11.16's chip can be snug on it
     // ("horizontal padding roughly double the vertical") instead of a fixed box
     // with a different margin round every word. Re-measured only when the type
     // size changes, not per frame.
     private readonly Vector2[] _plateSz = new Vector2[3];
     private float _plateFontMeasured = -1f;
+    // 11.20 item 1. The leading above the cap line at the current code size.
+    private float _codeInkMeasured = -1f, _codeInkTop;
     private readonly Vector2[] _labelPt = new Vector2[3];
     private Vector2 _dropPt, _puckPt;
     private readonly List<(Vector2 Pt, Color Col)> _chipPts = new();
@@ -514,6 +633,11 @@ public sealed class ColorWheel : UserControl
     {
         var host = new Grid { Background = new SolidColorBrush(Colors.Transparent) };
         host.Children.Add(_canvas);
+        // 11.20 item 9. A Canvas with no background is hit-test transparent
+        // except over its children, so the ring keeps every press that is not
+        // on a value field.
+        host.Children.Add(_fields);
+        BuildFields();
         Content = host;
         IsTabStop = true;
         _input = host;
@@ -545,6 +669,127 @@ public sealed class ColorWheel : UserControl
             DisposeGeometry();
             _canvas.RemoveFromVisualTree();
         };
+    }
+
+    /// <summary>11.20 item 9: "the value boxes must be typeable - a real text
+    /// field, not a readout."
+    ///
+    /// <para>Styled to the box 11.15 item 6 describes and 11.16 measured - a
+    /// white rounded rect, a hairline border, dark centred text - which means
+    /// overriding the TextBox template's own brushes rather than only the
+    /// control's properties: the default template repaints background, border
+    /// and foreground from theme resources on hover and on focus, so setting
+    /// Background alone leaves a box that changes colour when it is used. The
+    /// white is deliberate and settled: these sit ON a saturated arc, not on
+    /// paper, so they take their contrast from the arc.</para></summary>
+    private void BuildFields()
+    {
+        var ground = new SolidColorBrush(Color.FromArgb(245, 253, 253, 252));
+        var edge = new SolidColorBrush(Color.FromArgb(70, 22, 23, 26));
+        var ink = new SolidColorBrush(Color.FromArgb(255, 24, 24, 26));
+        for (int i = 0; i < 3; i++)
+        {
+            int idx = i;
+            var tb = new TextBox
+            {
+                TextAlignment = TextAlignment.Center,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(0),
+                MinWidth = 0,
+                MinHeight = 0,
+                Background = ground,
+                Foreground = ink,
+                BorderBrush = edge,
+                IsSpellCheckEnabled = false,
+                Visibility = Visibility.Collapsed,
+            };
+            foreach (var key in new[] { "TextControlBackground", "TextControlBackgroundPointerOver",
+                                        "TextControlBackgroundFocused", "TextControlBackgroundDisabled" })
+                tb.Resources[key] = ground;
+            foreach (var key in new[] { "TextControlBorderBrush", "TextControlBorderBrushPointerOver",
+                                        "TextControlBorderBrushFocused", "TextControlBorderBrushDisabled" })
+                tb.Resources[key] = edge;
+            foreach (var key in new[] { "TextControlForeground", "TextControlForegroundPointerOver",
+                                        "TextControlForegroundFocused" })
+                tb.Resources[key] = ink;
+            // The focused template thickens the bottom edge into an accent
+            // underline. 11.16's box has one hairline all the way round.
+            tb.Resources["TextControlBorderThemeThicknessFocused"] = new Thickness(1);
+            tb.GotFocus += (_, _) => _editing = idx;
+            tb.LostFocus += (_, _) => { CommitField(idx); if (_editing == idx) _editing = -1; };
+            tb.KeyDown += (_, ke) =>
+            {
+                if (ke.Key == Windows.System.VirtualKey.Enter)
+                {
+                    CommitField(idx);
+                    ke.Handled = true;
+                }
+                else if (ke.Key == Windows.System.VirtualKey.Escape)
+                {
+                    _field[idx].Text = ChannelText(idx);
+                    ke.Handled = true;
+                }
+            };
+            _field[i] = tb;
+            _fields.Children.Add(tb);
+        }
+    }
+
+    /// Reads one typed value back into the colour. Lenient on purpose: the box
+    /// shows "317°" and "55%", and someone retyping one of those will leave the
+    /// unit on it. Anything that will not parse simply snaps back.
+    private void CommitField(int i)
+    {
+        string raw = (_field[i].Text ?? string.Empty).Trim().TrimEnd('%', '\u00B0', ' ');
+        if (!float.TryParse(raw, NumberStyles.Float, CultureInfo.CurrentCulture, out float v) &&
+            !float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out v))
+        {
+            _field[i].Text = ChannelText(i);
+            return;
+        }
+        // SetChannel clamps, so an out-of-range number is pinned rather than
+        // refused - which is what a slider would have done with the same drag.
+        SetChannel(i, _mode == ColorWheelMode.Hsl
+            ? (i == 0 ? v / 360f : v / 100f)
+            : v / 255f);
+        _field[i].Text = ChannelText(i);
+    }
+
+    /// Puts the live fields where the drawn boxes would be, or takes them away.
+    /// Called at the END of the draw pass, once Layout has resolved the arcs,
+    /// and every write is guarded on a change so this cannot start a layout
+    /// loop with the pass that invoked it.
+    private void SyncFields()
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            var tb = _field[i];
+            if (!_fieldsLive)
+            {
+                if (tb.Visibility != Visibility.Collapsed) tb.Visibility = Visibility.Collapsed;
+                continue;
+            }
+            double w = BoxW, h = BoxH;
+            if (Math.Abs(tb.Width - w) > 0.01) tb.Width = w;
+            if (Math.Abs(tb.Height - h) > 0.01) tb.Height = h;
+            if (Math.Abs(tb.FontSize - _bubbleFmt.FontSize) > 0.01) tb.FontSize = _bubbleFmt.FontSize;
+            if (Math.Abs(tb.CornerRadius.TopLeft - h * 0.28) > 0.01)
+                tb.CornerRadius = new CornerRadius(h * 0.28);
+            var p = FieldCentre(i);
+            double left = p.X - w * 0.5, top = p.Y - h * 0.5;
+            if (Math.Abs(Canvas.GetLeft(tb) - left) > 0.01) Canvas.SetLeft(tb, left);
+            if (Math.Abs(Canvas.GetTop(tb) - top) > 0.01) Canvas.SetTop(tb, top);
+            // Not while it is being typed into: the caret is mid-number and
+            // rewriting the text would move it.
+            if (_editing != i)
+            {
+                string t = ChannelText(i);
+                if (tb.Text != t) tb.Text = t;
+            }
+            if (tb.Visibility != Visibility.Visible) tb.Visibility = Visibility.Visible;
+        }
     }
 
     private void DisposeGeometry()
@@ -642,7 +887,7 @@ public sealed class ColorWheel : UserControl
         // 11.15 item 3: 20% off, and off the 11.13 size - which was the 14 DIP
         // ceiling, since a 35 DIP band had long since run past it. Item 1 is a
         // geometry scale and does not compound into this.
-        _codeFmt.FontSize = Math.Clamp(_band * 0.5f, 7f, 14f) * TextScale;
+        _codeFmt.FontSize = Math.Clamp(_band * 0.5f, 7f, 14f) * Elem;
 
         // The chrome lives in the hub, so it is sized off the HOLE rather than
         // the window: it can never collide with Tier 1 whatever the shape.
@@ -681,8 +926,8 @@ public sealed class ColorWheel : UserControl
         _ui = Math.Clamp(band / 100f, 0.80f, 1.10f);
         // 11.12 item 1: "the face labels are far too small." 11 -> 18.
         // 11.15 item 3 takes 20% back off that, against a bold face.
-        _labelFmt.FontSize = 18f * TextScale * _ui;
-        _bubbleFmt.FontSize = 15f * TextScale * _ui;
+        _labelFmt.FontSize = 18f * Elem * _ui;
+        _bubbleFmt.FontSize = 15f * Elem * _ui;
         // 11.12: the plates are 42 DIP tall now against 26, so they reach
         // inward to where the recents row used to sit and the first chip landed
         // ON the HSL plate. The row moves in; the two bands no longer meet.
@@ -690,7 +935,7 @@ public sealed class ColorWheel : UserControl
         _rRecent = lo + band * 0.13f;
         // 11.12 item 4: the recents dots scale with everything else - and 11.15
         // item 3 names them among the "other elements" that come down 20%.
-        _chipR = Math.Clamp(band * 0.075f, 7f, 14f) * TextScale;
+        _chipR = Math.Clamp(band * 0.075f, 7f, 14f) * Elem;
         // 10.8 took the mix row out from between these two, so the mode plates
         // move in to where it was rather than leaving a gap the size of a
         // control that no longer exists.
@@ -719,16 +964,48 @@ public sealed class ColorWheel : UserControl
         // box hung outside one arc still clears the next arc's inner edge by
         // more than its own height. Nothing is measured off the tiers, so the
         // HSL and RGB faces no longer inherit the COPIC face's band structure.
-        _arcW = 9f * _ui * TextScale;
-        _arcKnob = _arcW + 4.5f * _ui * TextScale;
-        float pitch = _arcW * 2f + 72f * _ui * TextScale;
-        for (int i = 0; i < 3; i++)
+        _arcW = 9f * _ui * Elem;
+        _arcKnob = _arcW + 4.5f * _ui * Elem;
+        float pitch = _arcW * 2f + 72f * _ui * Elem;
+        float arc0 = _r1In + 40f * _ui * Elem;
+        // 11.20 items 7 and 8, superseding 11.15 item 6's one-arc-per-channel
+        // ladder. RGB is "three dials on a SINGLE arc, ordered anticlockwise:
+        // red, green, blue"; HSL is "two arcs - the first carries the hue
+        // wheel, the second carries, anticlockwise, saturation then lightness."
+        //
+        // Anticlockwise is the word both items use, and on a y-down canvas that
+        // is DECREASING angle. So an arc is filled from its clockwise end
+        // downward, and the VALUE runs the same way inside each segment - the
+        // ordering and the scale then progress in one direction rather than
+        // arguing with each other.
+        const float SegGap = 0.16f;
+        float top = _base + ArcRoll + 0.86f, bot = _base + ArcRoll - 0.86f;
+        if (_mode == ColorWheelMode.Hsl)
         {
-            _arcR[i] = _r1In + 40f * _ui * TextScale + i * pitch;
-            // Narrowing outward: at a fixed half-span the outer arc's leading
-            // end swings up into the top chrome bar, and it is the SPAN item 6
-            // gives each arc of its own, so shortening it is not a compromise.
-            _arcHalf[i] = 0.86f - 0.13f * i;
+            _arcCount = 2;
+            _arcR[0] = arc0;
+            _arcR[1] = arc0 + pitch;
+            // The hue wheel gets a whole arc to itself, so it is the one
+            // channel whose segment IS its arc.
+            Segment(0, 0, top, bot);
+            float half = (top - bot - SegGap) * 0.5f;
+            Segment(1, 1, top, top - half);
+            Segment(2, 1, top - half - SegGap, bot);
+        }
+        else
+        {
+            _arcCount = 1;
+            // The outer of the two radii, not the inner: one arc carrying three
+            // channels needs the circumference, and a value box hung off a knob
+            // at the inner radius would sit where the second arc no longer is.
+            _arcR[0] = arc0 + pitch;
+            _arcR[1] = _arcR[0];
+            float third = (top - bot - SegGap * 2f) / 3f;
+            for (int i = 0; i < 3; i++)
+            {
+                float s0 = top - i * (third + SegGap);
+                Segment(i, 0, s0, s0 - third);
+            }
         }
 
         // Which way the hub's chrome faces. Centred in the viewport that is the
@@ -758,8 +1035,9 @@ public sealed class ColorWheel : UserControl
                     $"r1Out={_r1Out:F2} r2In={_r2In:F2} r2Out={_r2Out:F2} rOutBase={_rOutBase:F2} " +
                     $"spine={(_r2Out - _r2In):F2} gapBand={(_rOutBase - _r2Out):F2} " +
                     $"label={_labelFmt.FontSize:F2} bubble={_bubbleFmt.FontSize:F2} " +
-                    $"arcR={_arcR[0]:F1},{_arcR[1]:F1},{_arcR[2]:F1} arcW={_arcW:F2} " +
-                    $"drop={44f * _ui * TextScale:F1} puck={20f * _ui * TextScale:F1}");
+                    $"arcs={_arcCount} arcR={_arcR[0]:F1},{_arcR[1]:F1} arcW={_arcW:F2} " +
+                    $"drop={44f * _ui * Elem:F1} puck={20f * _ui * Elem:F1} " +
+                    $"surface={SurfaceScale:F2} elem={Elem:F3} codeInkTop={_codeInkTop:F2}");
             }
             catch { }
         }
@@ -801,6 +1079,25 @@ public sealed class ColorWheel : UserControl
     }
 
     private Vector2 At(float r, float a) => _c + new Vector2(r * MathF.Cos(a), r * MathF.Sin(a));
+
+    /// Records where one channel lives: which arc, and the two angles its
+    /// value 0 and value 1 sit at (11.20 items 7-8).
+    private void Segment(int ch, int arc, float a0, float a1)
+    {
+        _chArc[ch] = arc;
+        _chA0[ch] = a0;
+        _chA1[ch] = a1;
+    }
+
+    /// Where an angle falls along a channel's segment: 0 at its value-zero end,
+    /// 1 at the other, outside [0,1] past either. Norm keeps the ±π seam from
+    /// turning a near miss into a hit on the far side of the ring.
+    private float SegT(int ch, float a)
+    {
+        float span = _chA1[ch] - _chA0[ch];
+        if (MathF.Abs(span) < 1e-4f) return 0f;
+        return Norm(a - _chA0[ch]) / span;
+    }
 
     private static float Norm(float a)
     {
@@ -988,6 +1285,14 @@ public sealed class ColorWheel : UserControl
         // ring used to be authored against a fixed dark backdrop, so all of it
         // now comes from PageTheme instead (section 0 - never a hardcoded grey).
 
+        // 11.20 item 9's hand-off, decided BEFORE anything is drawn so the one
+        // pass agrees with itself: the live text fields own the value boxes
+        // only while the instrument is at rest on an arc face. Mid-cascade -
+        // including the face switch of item 6 - the drawn box stands in, since
+        // a XAML control cannot be scaled about the wheel centre frame by frame
+        // along with everything else.
+        _fieldsLive = _mode != ColorWheelMode.Copic && _phase == Phase.Idle && _switchTo == null;
+
         if (_mode == ColorWheelMode.Copic) DrawRing(sender, ds, w, h);
         else DrawArcs(ds, p1);
 
@@ -998,6 +1303,8 @@ public sealed class ColorWheel : UserControl
             DrawChrome(ds, p1);
             ds.Transform = Matrix3x2.Identity;
         }
+
+        SyncFields();
     }
 
     private void DrawRing(ICanvasResourceCreator rc, CanvasDrawingSession ds, float w, float h)
@@ -1006,6 +1313,7 @@ public sealed class ColorWheel : UserControl
         // cull is exact whether the ring is centred in the window or on the
         // corner-docked dial (K.2).
         var view = new View(_c, w, h);
+        MeasureCodeInk(rc);
         var near = CopicPalette.Nearest(_color.R, _color.G, _color.B);
         // V3 K.3. This used to be `Math.Abs(_vel) < 1.2f` - every marker code
         // vanished the moment the ring was dragged or flicked, which is exactly
@@ -1137,12 +1445,45 @@ public sealed class ColorWheel : UserControl
         float inner = r - depth * 0.5f;
         float halfArc = span * MathF.Max(inner, 1f) * 0.5f;
         const float Pad = 2.5f;
+        // 11.20 item 1: "swatch names have too much upper margin inside their
+        // cells - tighten it."
+        //
+        // Most of that margin was never a margin. A text layout's box starts at
+        // the top of the LINE, and a line carries the font's ascent above the
+        // cap height - about a quarter of the size for Segoe UI - so the gap
+        // the user is looking at was Pad plus that leading, roughly three times
+        // what the number in the source said. Subtracting the measured leading
+        // makes the constant mean what it reads as, and the constant itself is
+        // then a fraction of the type rather than a fixed 2.5 DIP, so it stays
+        // proportional now that item 4 has taken the type down again.
+        float padTop = (float)_codeFmt.FontSize * 0.20f;
         ds.DrawText(code,
-            new Rect(p.X - halfArc + Pad, p.Y - depth * 0.5 + Pad,
+            new Rect(p.X - halfArc + Pad, p.Y - depth * 0.5 + padTop - _codeInkTop,
                      Math.Max(4.0, halfArc * 2f - Pad * 2f), boxH),
             Fade(LabelInk(bg), a),
             _codeFmt);
         ds.Transform = keep;
+    }
+
+    /// <summary>How far below the top of a code label's line box its glyph ink
+    /// actually starts, so <see cref="DrawCode"/> can take it back off and the
+    /// designed margin is the one on screen (11.20 item 1).
+    ///
+    /// <para>Measured, not assumed: it depends on the font's own metrics at the
+    /// current size. Once per size change, like the mode plates - a text layout
+    /// per cell per frame is 600 layouts a frame on a 17-ring wheel.</para></summary>
+    private void MeasureCodeInk(ICanvasResourceCreator rc)
+    {
+        if (Math.Abs(_codeInkMeasured - (float)_codeFmt.FontSize) <= 0.01f) return;
+        _codeInkMeasured = (float)_codeFmt.FontSize;
+        try
+        {
+            // Caps and digits only - which is every code in the palette, and
+            // the one string whose ink top is the ink top of all of them.
+            using var tl = new CanvasTextLayout(rc, "E0000", _codeFmt, 400f, 100f);
+            _codeInkTop = (float)(tl.DrawBounds.Top - tl.LayoutBounds.Top);
+        }
+        catch { _codeInkTop = 0f; }
     }
 
     // HSL and RGB share one shape: three concentric arcs, each a tapered
@@ -1153,14 +1494,13 @@ public sealed class ColorWheel : UserControl
         ds.Transform = TierTransform(a);
         for (int i = 0; i < 3; i++)
         {
-            float r = _arcR[i], half = _arcHalf[i];
-            // The same 0.18 rad clockwise roll the plate fan takes, and for the
-            // same reason: _base points at the middle of the window, so on a
-            // corner-docked dial an arc centred on it puts its leading end - and
-            // the value box hung outside that end - up under the top chrome bar.
-            // Measured at 0.86 half-span: the zero end sat at y = 59 DIP with
-            // its box at y = 34. Rolled, it sits at 109.
-            float a0 = _base + ArcRoll - half, a1 = _base + ArcRoll + half;
+            float r = _arcR[_chArc[i]];
+            // The segment Layout gave this channel. The 0.18 rad clockwise roll
+            // is already in it, and for the same reason it always was: _base
+            // points at the middle of the window, so on a corner-docked dial an
+            // arc centred on it puts its leading end - and the value box hung
+            // outside that end - up under the top chrome bar.
+            float a0 = _chA0[i], a1 = _chA1[i];
             // "One thick arc with round caps, a gradient along its length."
             //
             // Stamped as overlapping discs rather than stroked with a gradient
@@ -1208,8 +1548,13 @@ public sealed class ColorWheel : UserControl
             // "A value box beside the knob, OUTSIDE the arc" - so radially out,
             // past the knob, at the knob's own bearing. Inside is where it used
             // to be, and inside is where the next arc in is.
-            ValueBox(ds, At(r + _arcW + 11f * _ui * TextScale + BoxH * 0.5f, va),
-                     ChannelText(i), a);
+            //
+            // 11.20 item 9 makes the box a real text field, which is XAML and
+            // cannot be scaled about the wheel centre frame by frame with the
+            // rest of the surface. So the two take turns: the field is on
+            // screen at rest, and this drawn box stands in for it through the
+            // cascade, at the same place and the same size.
+            if (!_fieldsLive) ValueBox(ds, FieldCentre(i), ChannelText(i), a);
         }
         ds.Transform = Matrix3x2.Identity;
     }
@@ -1219,8 +1564,17 @@ public sealed class ColorWheel : UserControl
     // on the reference, the one piece of this control the doc gives an explicit
     // colour to, and it sits ON a saturated gradient arc rather than on the
     // page, so it takes its contrast from the arc and not from the paper.
-    private float BoxW => 62f * _ui * TextScale;
-    private float BoxH => 30f * _ui * TextScale;
+    private float BoxW => 62f * _ui * Elem;
+    private float BoxH => 30f * _ui * Elem;
+
+    /// The centre of one channel's value box, in this control's coordinates:
+    /// radially outside the knob, at the knob's own bearing.
+    private Vector2 FieldCentre(int i)
+    {
+        float r = _arcR[_chArc[i]];
+        float va = _chA0[i] + (_chA1[i] - _chA0[i]) * ChannelValue(i);
+        return At(r + _arcW + 11f * _ui * Elem + BoxH * 0.5f, va);
+    }
 
     private void ValueBox(CanvasDrawingSession ds, Vector2 p, string text, float a)
     {
@@ -1249,7 +1603,7 @@ public sealed class ColorWheel : UserControl
         // 10.8: one colour, one puck. The split puck existed to show what a
         // pick would be mixed INTO, and there is nothing to mix into here now.
         // 11.15 item 3 brings it down 20% with everything else.
-        float puckR = 20f * _ui * TextScale;
+        float puckR = 20f * _ui * Elem;
         ds.FillCircle(_puckPt, puckR, Fade(_color, a));
         ds.DrawCircle(_puckPt, puckR, Fade(Services.PageTheme.WithAlpha(
             Services.PageTheme.OnSurface, 215), a), 2.4f);
@@ -1264,16 +1618,24 @@ public sealed class ColorWheel : UserControl
             {
                 using var tl = new CanvasTextLayout(ds, names[i], _labelFmt, 400f, 100f);
                 var lb = tl.LayoutBounds;
+                // 11.20 item 5: "the frame around the COPIC / RGB / HSL labels
+                // shrinks 20%." The frame is the PADDING - the word is type and
+                // item 4 has already taken it down - so the 11.16 ratio (about
+                // double horizontally) is kept and both figures come off 20%.
                 _plateSz[i] = new Vector2(
-                    (float)lb.Width + (float)_labelFmt.FontSize * 1.76f,
-                    (float)lb.Height + (float)_labelFmt.FontSize * 0.92f);
+                    (float)lb.Width + (float)_labelFmt.FontSize * 1.76f * PlateFrame,
+                    (float)lb.Height + (float)_labelFmt.FontSize * 0.92f * PlateFrame);
             }
             _plateFontMeasured = (float)_labelFmt.FontSize;
         }
         for (int i = 0; i < 3; i++)
         {
             var p = _labelPt[i];
-            bool on = (int)_mode == i;
+            // The chip moves the instant the plate is tapped, while the old
+            // face is still gravitating away: 11.20 item 6 sequences the
+            // ANIMATION, and a tap that leaves the highlight behind for 300 ms
+            // reads as a tap that missed.
+            bool on = (int)(_switchTo ?? _mode) == i;
             // 11.16 reverses 11.12 item 1. Giving all three a plate was meant to
             // stop HSL and RGB reading as annotations, but the Concepts capture
             // is explicit that they ARE bare: "no box, no border, no ground",
@@ -1303,7 +1665,7 @@ public sealed class ColorWheel : UserControl
         // 11.12 item 2, superseding 10.4 item 15's shrink: at 25 it "reads as
         // a dark dot". 44, less 11.15 item 3's 20%. 11.3 item 18 and 11.16 both
         // say the same thing about what is behind it: nothing.
-        DrawEyedropper(ds, _dropPt, 44f * _ui * TextScale,
+        DrawEyedropper(ds, _dropPt, 44f * _ui * Elem,
             Fade(_sampling ? Services.PageTheme.Accent : Services.PageTheme.OnSurface, a),
             a);
     }
@@ -1482,18 +1844,17 @@ public sealed class ColorWheel : UserControl
         {
             for (int i = 0; i < 3; i++)
             {
-                float rel = Norm(a - _base - ArcRoll);
-                float half = _arcHalf[i];
-                // Each arc owns its own radius AND its own span now, so a
-                // shared tolerance would let a tap meant for one arc resolve
-                // against another's angular range. The radial gate is the
-                // arc's own thickness plus a thumb's worth.
-                if (Math.Abs(r - _arcR[i]) < _arcW + 13f && Math.Abs(rel) <= half + 0.06f)
-                {
-                    _dragArc = i;
-                    SetChannel(i, (rel + half) / (2 * half));
-                    return;
-                }
+                // Each channel owns a radius AND an angular segment, and after
+                // 11.20 item 7 two channels can share the radius - so the
+                // angular gate is what separates them and it is the channel's
+                // own segment, not a span shared across the face. The radial
+                // gate is the arc's thickness plus a thumb's worth.
+                if (Math.Abs(r - _arcR[_chArc[i]]) >= _arcW + 13f) continue;
+                float t = SegT(i, a);
+                if (t < -0.05f || t > 1.05f) continue;
+                _dragArc = i;
+                SetChannel(i, t);
+                return;
             }
         }
 
@@ -1519,8 +1880,7 @@ public sealed class ColorWheel : UserControl
 
         if (_dragArc >= 0)
         {
-            float half = _arcHalf[_dragArc];
-            SetChannel(_dragArc, (Norm(a - _base - ArcRoll) + half) / (2 * half));
+            SetChannel(_dragArc, SegT(_dragArc, a));
             return;
         }
 
@@ -1867,7 +2227,12 @@ public sealed class ColorWheel : UserControl
     /// hide the picker until then — that is the whole point of the callback.
     public void BeginExit(Action onComplete)
     {
-        if (_phase == Phase.Exiting) return;         // already leaving
+        if (_exitDone != null) return;               // already leaving, for real
+        // A face switch is also an Exiting phase, and a close arriving during
+        // one must not be swallowed by it - the host does not hide the picker
+        // until the callback fires, so a dropped close leaves the overlay up
+        // for good. The switch is abandoned and the exit clock restarts.
+        _switchTo = null;
         if (ReduceMotion)
         {
             CancelAnimation();
@@ -1886,8 +2251,12 @@ public sealed class ColorWheel : UserControl
     /// for when the picker is reopened mid-close.
     public void CancelAnimation()
     {
+        var swap = _switchTo;
         LandTransition();
         _landed = null;      // dropped on the floor: that is the whole point
+        // A face switch caught mid-flight still has to ARRIVE: the user asked
+        // for that face and the host has already been told about it.
+        if (swap is { } face) ApplyMode(face);
     }
 
     private void OnAnimTick(object? sender, object e)
@@ -1909,7 +2278,21 @@ public sealed class ColorWheel : UserControl
         }
 
         bool wasExit = _phase == Phase.Exiting;
+        var swap = _switchTo;
         LandTransition();
+        if (swap is { } face)
+        {
+            // 11.20 item 6. The outgoing face has finished gravitating inward,
+            // so the incoming one may start. LandTransition put _exitDone into
+            // _landed, and for a face switch that is null - a switch is not a
+            // close and must not tell the host to hide the picker.
+            GeometryProbe.Write("FACE-SWITCH",
+                $"stage=close-landed-open-begin from={_mode} to={face} " +
+                $"afterMs={(Stopwatch.GetTimestamp() - _phaseT0) * 1000.0 / Stopwatch.Frequency:F1}");
+            ApplyMode(face);
+            BeginEnter();
+            return;
+        }
         if (wasExit) { _landed?.Invoke(); _landed = null; return; }   // host hides us; no repaint
         _canvas.Invalidate();                                         // land on the exact end state
     }

@@ -130,7 +130,11 @@ public static class ColorPickerService
         _committed = current;
 
         wheel.Recents = _host.GetRecents();
-        wheel.Mode = _host.GetMode();
+        // ResetMode, not Mode: 11.20 item 6 makes the setter play a face switch
+        // - the old face gravitates inward and only then does the new one open
+        // - and there is nothing on screen to animate away when the picker is
+        // being seeded on its way up.
+        wheel.ResetMode(_host.GetMode());
         wheel.Color = current;
         // The colour a mix starts from is whatever the caller was using (K.12).
         wheel.BaseColor = current;
