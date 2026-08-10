@@ -548,6 +548,10 @@ public sealed partial class MainWindow : Window
         foreach (var veto in new FrameworkElement[] { GalleryPanel, NotebookPanel })
             veto.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) => _toolWheel?.Apply());
         _toolWheel.SlotsChanged += t => { _dialTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
+        // Reference 11.22 item 4: right-clicking a sector - and tapping a + cell -
+        // opens the Brushes library AIMED AT THAT SLOT. The dial's own flyout is
+        // untouched behind it (press-and-hold, and the library's "More...").
+        _toolWheel.BrushPickerHook = BrushPickerForSlot;
 
         // ---- the section 2 pen bar, the dial's alternative -----------------
         _penBar = PenBar.Attach(CanvasArea, Surface, new PenBar.Host
@@ -576,6 +580,9 @@ public sealed partial class MainWindow : Window
         foreach (var veto in new FrameworkElement[] { GalleryPanel, NotebookPanel })
             veto.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) => _penBar?.Apply());
         _penBar.OwnedKeysChanged += t => { _dialTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
+        // 11.22 item 4 on the other surface. The bar is a LIST, so its slot is
+        // the preset itself and a chosen brush retypes that pen in place.
+        _penBar.BrushPickerHook = BrushPickerForPen;
         // The rest of the top bar's marking commands become assignable slots.
         // What moved and what deliberately did not is argued in DialCommands.cs.
         // Wrapped: startup is the ONE place an exception costs the whole app -
@@ -5271,7 +5278,74 @@ public sealed partial class MainWindow : Window
 
     private void Brushes_Click(object sender, RoutedEventArgs e) => OpenBrushesWindow();
 
+    /// <summary>Reference 11.22 item 4 on the dial. Right-clicking a sector, or
+    /// tapping one of 11.2 item 11's <c>+</c> cells, opens the Brushes library
+    /// with THAT SECTOR as the target rather than applying to the live tool.
+    ///
+    /// <para>11.24 item 1 is emphatic about what must not be lost here: the
+    /// <c>+</c> cells' only assignment route ran through the dial's flyout, and
+    /// a picker aimed at the active tool would have destroyed it silently. So
+    /// the target carries every one of the flyout's powers - a pen, a tool, an
+    /// empty slot - and <c>More</c> opens the flyout itself for the one thing
+    /// the library has no cells for, the commands.</para>
+    ///
+    /// <para>False means "I could not", and the dial then falls back to the
+    /// flyout, so a right-click is never a dead gesture.</para></summary>
+    private bool BrushPickerForSlot(int slot)
+    {
+        var win = EnsureBrushesWindow();
+        if (win == null || _toolWheel == null) return false;
+        var dial = _toolWheel;
+        win.ShowFor(new BrushesWindow.Target
+        {
+            Label = $"dial slot {slot + 1}",
+            Current = () => dial.SlotPen(slot),
+            Pick = (_, preset) => dial.SetSlotPen(slot, preset),
+            PickTool = (tag, style) =>
+            {
+                if (style is EraserStyle st) { Surface.EraserStyle = st; _library.LastEraserStyle = st; }
+                dial.SetSlotTool(slot, tag);
+            },
+            Clear = () => dial.ClearSlot(slot),
+            More = () => dial.ShowSlotMenu(slot),
+        });
+        return true;
+    }
+
+    /// <summary>11.22 item 4 on the pen row. The bar is a LIST of pens, not a
+    /// ring of slots, so "the slot" is the preset in that cell: choosing a brush
+    /// RETYPES it and keeps its colour, size and pressure curve, which is what
+    /// makes the row a library of the user's own pens rather than a set of
+    /// fourteen fixed engines. No Tools row is offered, because a cell in a pen
+    /// list cannot hold Slice.</summary>
+    private bool BrushPickerForPen(PenPreset pen)
+    {
+        var win = EnsureBrushesWindow();
+        if (win == null) return false;
+        win.ShowFor(new BrushesWindow.Target
+        {
+            Label = string.IsNullOrWhiteSpace(pen.Name) ? "this pen" : $"\u201c{pen.Name}\u201d",
+            Current = () => pen,
+            Pick = (type, _) =>
+            {
+                pen.Pen = type;
+                ApplyPreset(pen);
+                ScheduleSave();
+            },
+        });
+        return true;
+    }
+
     private void OpenBrushesWindow()
+    {
+        var win = EnsureBrushesWindow();
+        win?.Toggle();
+    }
+
+    /// <summary>The library, built on first use. Split out of
+    /// <see cref="OpenBrushesWindow"/> so 11.22 item 4's two right-click hooks
+    /// can reach the same instance without going through a toggle.</summary>
+    private BrushesWindow? EnsureBrushesWindow()
     {
         try
         {
@@ -5292,11 +5366,12 @@ public sealed partial class MainWindow : Window
                 // panel's highlight and its live sample follow them.
                 ToolUiChanged += _brushesWin.Refresh;
             }
-            _brushesWin.Toggle();
+            return _brushesWin;
         }
         catch (Exception ex)
         {
             ShowStatus("The Brushes panel could not open: " + ex.Message);
+            return null;
         }
     }
 

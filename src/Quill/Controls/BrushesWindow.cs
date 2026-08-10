@@ -92,9 +92,68 @@ public sealed class BrushesWindow
         public Action<EraserStyle>? SetEraserStyle { get; init; }
     }
 
+    /// <summary>WHICH SLOT a chosen brush should land in — Reference 11.24
+    /// item 1, and the thing this panel's public surface had no way to say.
+    ///
+    /// <para>Without it the only assignment the library could perform was to
+    /// the LIVE selection, which is why 11.22 item 4 stopped half-built: the
+    /// dial's <c>+</c> cells assign to a slot, and a picker that applied to the
+    /// active tool instead would have silently destroyed their only assignment
+    /// route. Everything here is therefore expressed as "the slot", and the two
+    /// callers mean different things by it — a dial sector holds a preset id, a
+    /// pen-row cell IS a preset — which is why <see cref="Pick"/> reports both
+    /// the type that was chosen and a preset of that type resolved out of the
+    /// library. The sector takes the preset; the row retypes its own pen.</para>
+    ///
+    /// <para>Nothing the dial's own assignment flyout could do is lost by
+    /// pointing right-click here: <see cref="More"/> reaches that flyout, and
+    /// press-and-hold on a sector still opens it directly.</para></summary>
+    public sealed class Target
+    {
+        /// <summary>What the slot is, in words — the banner and the status line
+        /// both say it, so the reader can see the library is aimed somewhere
+        /// other than the pen in their hand.</summary>
+        public required string Label { get; init; }
+
+        /// <summary>A brush was chosen FOR THE SLOT. The <see cref="PenType"/>
+        /// picked, and a preset of that type resolved out of the library — the
+        /// slot's own pen when it already matches, else an existing pen of that
+        /// type, else one just added (so this stays a library rather than a
+        /// mode switch, exactly as <c>ChooseBrush</c> does for the live
+        /// selection).</summary>
+        public required Action<PenType, PenPreset> Pick { get; init; }
+
+        /// <summary>What the slot holds now. The strip then previews THE SLOT
+        /// rather than the active tool, and a brush cell can prefer the slot's
+        /// own pen when its type already matches.</summary>
+        public Func<PenPreset?>? Current { get; init; }
+
+        /// <summary>A tool was chosen for the slot. Null means the slot cannot
+        /// hold one — the pen row is a list of pens — and §4's Tools row is
+        /// then left out rather than offered and quietly ignored.</summary>
+        public Action<string, EraserStyle?>? PickTool { get; init; }
+
+        /// <summary>Empty the slot. Null means the slot cannot be empty.</summary>
+        public Action? Clear { get; init; }
+
+        /// <summary>The caller's own fuller assignment surface — for the dial,
+        /// the flyout that lists pens BY NAME, tools, commands and Empty. Null
+        /// means there is nothing more to reach.</summary>
+        public Action? More { get; init; }
+    }
+
     private readonly Host _h;
     private readonly InkSurface _surface;
     private readonly FloatingWindow _win;
+
+    /// <summary>The slot the library is currently aimed at, or null for the
+    /// ordinary "apply to what I am drawing with" behaviour.</summary>
+    private Target? _target;
+
+    /// <summary>Whether the panel was already open in ordinary mode when a
+    /// target arrived. A library opened AS a picker closes once it has picked;
+    /// one that was already on screen goes back to being the library.</summary>
+    private bool _wasLive;
 
     // Built FRESH on every rebuild, never reused. WinUI allows an element one
     // parent, so a field-level Image added to a second BuildBody's tree throws —
@@ -150,18 +209,54 @@ public sealed class BrushesWindow
         _win.SetTabs(new (string, Func<FrameworkElement>)[] { ("Brushes", BuildBody) });
 
         PageTheme.Changed += () => { if (IsOpen) { _marks.Clear(); Refresh(); } };
+        // Closing the panel by any route — the header X, Hide(), a dismissal —
+        // abandons the aim. A stale target would otherwise reappear the next
+        // time the library opened and quietly assign to a slot nobody named.
+        _win.Closed = () => _target = null;
     }
 
     public bool IsOpen => _win.IsOpen;
     public Windows.Foundation.Rect? Bounds => _win.Bounds;
-    public void Toggle() { if (IsOpen) Hide(); else Show(); }
     public void Hide() => _win.Hide();
+
+    /// <summary>Whether the library is currently aimed at a slot.</summary>
+    public bool IsTargeting => _target != null;
+
+    /// <summary>The chrome button. A library that is aimed somewhere returns to
+    /// being the ordinary library rather than closing, so the toggle cannot
+    /// leave the reader looking at a panel that assigns to an invisible slot.</summary>
+    public void Toggle() { if (IsOpen && _target == null) Hide(); else Show(); }
 
     public void Show()
     {
+        _target = null;
         _win.RefreshContent();
         _win.Show();
         DrawPreview();
+    }
+
+    /// <summary>Reference 11.24 item 1 — <b>open the library aimed at a slot.</b>
+    /// Every cell then assigns to <paramref name="target"/> instead of to the
+    /// live selection, the strip previews what the slot holds, and a banner
+    /// says so. This is what 11.22 item 4's right-click and the dial's
+    /// <c>+</c> cells both call.</summary>
+    public void ShowFor(Target target)
+    {
+        _wasLive = IsOpen && _target == null;
+        _target = target;
+        _win.RefreshContent();
+        _win.Show();
+        DrawPreview();
+    }
+
+    /// <summary>The aim is spent. A library that was opened as a picker closes;
+    /// one that was already on screen drops back to the live selection.</summary>
+    private void EndTarget()
+    {
+        _target = null;
+        if (_wasLive) { _win.RefreshContent(preserveScroll: true); DrawPreview(); }
+        else _win.Hide();
+        _wasLive = false;
     }
 
     /// <summary>Re-reads the selection. Called from MainWindow's ToolUiChanged, so
@@ -203,6 +298,10 @@ public sealed class BrushesWindow
         root.Children.Add(_previewHost);
         root.Children.Add(Hairline());
 
+        // 11.24 item 1: when the library is aimed at a slot it has to SAY so,
+        // directly under the strip it is changing the meaning of.
+        if (_target is { } tgt) root.Children.Add(TargetBanner(tgt));
+
         // 3. My Brushes
         root.Children.Add(Band("My Brushes"));
 
@@ -212,11 +311,16 @@ public sealed class BrushesWindow
         foreach (var t in BrushOrder) basics.Children.Add(BrushCell(t));
         root.Children.Add(Inset(StripScroll.Horizontal(basics)));
 
-        // 5. Tools
-        root.Children.Add(Group("Tools"));
-        var tools = Strip();
-        foreach (var t in ToolCells) tools.Children.Add(ToolCell(t));
-        root.Children.Add(Inset(StripScroll.Horizontal(tools)));
+        // 5. Tools — left out when the slot cannot hold one. The pen row is a
+        // LIST OF PENS, so offering it Slice would be a control that does
+        // nothing, which is worse than a row that is not there.
+        if (_target == null || _target.PickTool != null)
+        {
+            root.Children.Add(Group("Tools"));
+            var tools = Strip();
+            foreach (var t in ToolCells) tools.Children.Add(ToolCell(t));
+            root.Children.Add(Inset(StripScroll.Horizontal(tools)));
+        }
 
         root.Children.Add(Spacer(14));
         root.Children.Add(Hairline());
@@ -227,6 +331,83 @@ public sealed class BrushesWindow
         root.Children.Add(Spacer(18));
 
         return root;
+    }
+
+    /// <summary>The targeting banner (11.24 item 1). It carries the slot's name
+    /// and the ways out: back to the caller's fuller list, empty the slot, or
+    /// abandon the aim. On SurfaceAlt, the same tinted plate §4 gives its bands,
+    /// so it reads as part of the panel rather than as a dialog dropped on it.</summary>
+    private FrameworkElement TargetBanner(Target t)
+    {
+        var stack = new StackPanel { Spacing = 2 };
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"Choosing for {t.Label}",
+            FontSize = T(15),
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = B(Ink),
+            TextWrapping = TextWrapping.Wrap,
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = t.PickTool != null
+                ? "Pick a brush or a tool below and it goes there, not to the pen you are drawing with."
+                : "Pick a brush below and it goes there, not to the pen you are drawing with.",
+            FontSize = T(13),
+            Foreground = B(Muted),
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = T(13) * 1.4,
+        });
+
+        var acts = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        if (t.More != null)
+            acts.Children.Add(Link("More\u2026", "BrushTargetMore",
+                "Tools, commands and named pens — the caller's own full list.",
+                () => { var m = t.More; EndTarget(); m(); }));
+        if (t.Clear != null)
+            acts.Children.Add(Link("Leave empty", "BrushTargetClear",
+                "Empty the slot.",
+                () => { var c = t.Clear; _h.Status($"{t.Label} emptied."); c(); EndTarget(); }));
+        acts.Children.Add(Link("Cancel", "BrushTargetCancel",
+            "Stop choosing for it and go back to the pen you are drawing with.",
+            EndTarget));
+        stack.Children.Add(acts);
+
+        var border = new Border
+        {
+            Background = B(PageTheme.SurfaceAlt),
+            Padding = new Thickness(Pad, 12, Pad, 12),
+            Child = stack,
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(border, "BrushTarget");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(border, $"Choosing for {t.Label}");
+        return border;
+    }
+
+    /// <summary>A text action in the banner. A bare Button so it carries focus
+    /// and an invoke pattern; Outline for the edge and OnSurface for the word,
+    /// because §0 forbids a hardcoded grey.</summary>
+    private FrameworkElement Link(string text, string id, string tip, Action run)
+    {
+        var b = new Button
+        {
+            Content = new TextBlock { Text = text, FontSize = T(13), Foreground = B(Ink) },
+            Background = B(Colors.Transparent),
+            BorderBrush = B(Line),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 3, 10, 4),
+        };
+        b.Click += (_, _) => run();
+        ToolTipService.SetToolTip(b, tip);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(b, id);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, text);
+        return b;
     }
 
     // =======================================================================
@@ -413,12 +594,17 @@ public sealed class BrushesWindow
     private FrameworkElement BrushCell(PenType type)
     {
         var pen = ActivePen();
-        bool on = _h.ToolTag() == "Pen" && pen?.Pen == type;
+        // Aimed at a slot, the rule under a cell means "this is what the SLOT
+        // holds" — the live tool is beside the point and testing ToolTag here
+        // would light the wrong cell.
+        bool on = _target != null ? pen?.Pen == type : _h.ToolTag() == "Pen" && pen?.Pen == type;
         var mark = MarkFor(type, on ? Ink : PageTheme.WithAlpha(Ink, 0xC8));
         var cell = Cell(mark, NameOf(type), on, () => ChooseBrush(type));
-        ToolTipService.SetToolTip(cell, on
-            ? $"{NameOf(type)} — the brush the sample above is drawn with."
-            : $"Draw with the {NameOf(type).ToLowerInvariant()}.");
+        ToolTipService.SetToolTip(cell, _target is { } t
+            ? (on ? $"{NameOf(type)} — what {t.Label} holds now."
+                  : $"Put the {NameOf(type).ToLowerInvariant()} in {t.Label}.")
+            : on ? $"{NameOf(type)} — the brush the sample above is drawn with."
+                 : $"Draw with the {NameOf(type).ToLowerInvariant()}.");
         return cell;
     }
 
@@ -513,6 +699,19 @@ public sealed class BrushesWindow
             _h.Status($"{NameOf(type)} added to your pens.");
         }
 
+        // 11.24 item 1: aimed at a slot, the pick goes to THE SLOT. Both the
+        // type and the resolved preset go out, because a dial sector stores a
+        // preset id while a pen-row cell IS a preset and only wants retyping.
+        if (_target is { } t)
+        {
+            _building = true;
+            try { t.Pick(type, pen); _h.Save(); }
+            finally { _building = false; }
+            _h.Status($"{NameOf(type)} \u2192 {t.Label}.");
+            EndTarget();
+            return;
+        }
+
         _building = true;
         try { _h.ApplyPreset(pen); _h.Save(); }
         finally { _building = false; }
@@ -551,12 +750,23 @@ public sealed class BrushesWindow
     private FrameworkElement ToolCell(ToolDef t)
     {
         var lib = _h.Library();
-        bool on = _h.ToolTag() == t.Tag &&
+        // Aimed at a slot there is no "current" tool cell to light: a slot holds
+        // one id and the panel is not told which of the seven it is.
+        bool on = _target == null && _h.ToolTag() == t.Tag &&
                   (t.Style == null || lib.LastEraserStyle == t.Style.Value);
         var mark = Icons.Mark(t.Glyph, on ? Ink : PageTheme.WithAlpha(Ink, 0xC8),
                               CellMark, stroked: t.Stroked, thickness: 1.9);
         var cell = Cell(mark, t.Label, on, () =>
         {
+            if (_target is { PickTool: { } put } tgt)
+            {
+                _building = true;
+                try { put(t.Tag, t.Style); _h.Save(); }
+                finally { _building = false; }
+                _h.Status($"{t.Label} \u2192 {tgt.Label}.");
+                EndTarget();
+                return;
+            }
             if (t.Style is EraserStyle st)
             {
                 lib.LastEraserStyle = st;
@@ -568,7 +778,7 @@ public sealed class BrushesWindow
             _win.RefreshContent(preserveScroll: true);
             DrawPreview();
         });
-        ToolTipService.SetToolTip(cell, t.Tip);
+        ToolTipService.SetToolTip(cell, _target is { } g ? $"Put {t.Label} in {g.Label}." : t.Tip);
         return cell;
     }
 
@@ -635,10 +845,16 @@ public sealed class BrushesWindow
     // =======================================================================
     // Building blocks
     // =======================================================================
+    /// <summary>The pen the panel is ABOUT: the slot's own pen while the library
+    /// is aimed at one, otherwise the live selection. Every cell's highlight and
+    /// the whole preview strip read this, so aiming the library re-points the
+    /// panel wholesale rather than in a handful of places that could drift.</summary>
     private PenPreset? ActivePen()
     {
+        if (_target?.Current?.Invoke() is { } slot) return slot;
         var id = _h.ActivePreset();
         var lib = _h.Library();
+        if (_target != null) return id == null ? null : lib.Pens.FirstOrDefault(p => p.Id == id);
         return (id == null ? null : lib.Pens.FirstOrDefault(p => p.Id == id)) ?? lib.Pens.FirstOrDefault();
     }
 

@@ -105,6 +105,16 @@ public sealed class PenBar
     /// <summary>The COPIC wheel, wired exactly as the dial's is.</summary>
     public Action<Point, Color, Action<Color>, Action?>? ColourPickerHook { get; set; }
 
+    /// <summary>Reference 11.22 item 4: right-clicking a pen cell opens the
+    /// Brushes library aimed at THAT pen, so a brush can be chosen for it. The
+    /// bar is a LIST rather than a ring of slots, so its "slot" is the preset
+    /// itself and the library retypes it in place.
+    ///
+    /// <para>Returning false falls back to the press-hold behaviour - the pen's
+    /// own colour - which is also what press-and-hold still does, so the colour
+    /// route the bar has always had is not taken away by this.</para></summary>
+    public Func<PenPreset, bool>? BrushPickerHook { get; set; }
+
     /// <summary>The top-bar element keys the bar has taken over, so a tool that
     /// lives here is not also offered on the bar above.</summary>
     public event Action<IReadOnlySet<string>>? OwnedKeysChanged;
@@ -503,7 +513,7 @@ public sealed class PenBar
             Background = new SolidColorBrush(Colors.Transparent),   // hit-testable
             IsTapEnabled = true,
         };
-        Tap(cell, () => Commit(id), () => ShowAssign(cell, id));
+        Tap(cell, () => Commit(id), () => ShowAssign(cell, id), () => PickBrushFor(cell, id));
         return cell;
     }
 
@@ -572,7 +582,7 @@ public sealed class PenBar
     /// <summary>Tap and press-hold on one element. Pointer events rather than a
     /// Button so a press cannot reach InkSurface and start a stroke behind the
     /// bar — the same reason the dial routes everything through its shield.</summary>
-    private static void Tap(UIElement el, Action tap, Action? hold)
+    private static void Tap(UIElement el, Action tap, Action? hold, Action? rightTap = null)
     {
         long down = 0;
         Point at = default;
@@ -597,8 +607,12 @@ public sealed class PenBar
         };
         el.PointerCanceled += (_, _) => armed = false;
         el.PointerCaptureLost += (_, _) => armed = false;
-        if (hold != null && el is FrameworkElement fe)
-            fe.RightTapped += (_, e) => { e.Handled = true; hold(); };
+        // 11.22 item 4 splits the two gestures that used to share one handler:
+        // right-click goes to the Brushes library, press-and-hold keeps what it
+        // always did. A cell that passes no rightTap behaves exactly as before.
+        var secondary = rightTap ?? hold;
+        if (secondary != null && el is FrameworkElement fe)
+            fe.RightTapped += (_, e) => { e.Handled = true; secondary(); };
     }
 
     // ===================================================================
@@ -687,6 +701,20 @@ public sealed class PenBar
     /// the bar's equivalent of the dial's slot-assignment flyout. A LIST cannot
     /// be re-ordered by assignment, so this offers the pen's own colour instead,
     /// which is what the reference's long-press does.</summary>
+    /// <summary>11.22 item 4: the Brushes library, aimed at this cell's pen.
+    /// Falls back to the colour picker when the host has no library, so a
+    /// right-click is never a dead gesture.</summary>
+    private void PickBrushFor(FrameworkElement at, string id)
+    {
+        if (PenOf(id) is { } pen)
+        {
+            bool taken = false;
+            try { taken = BrushPickerHook?.Invoke(pen) == true; } catch { taken = false; }
+            if (taken) return;
+        }
+        ShowAssign(at, id);
+    }
+
     private void ShowAssign(FrameworkElement at, string id)
     {
         if (PenOf(id) is not { } pen) return;
