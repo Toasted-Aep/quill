@@ -706,6 +706,11 @@ public sealed partial class MainWindow : Window
         // The dial is an OBSTACLE - ToolWheel owns its own placement through
         // TopInset - so the Notebooks window is the one that gives way, which is
         // exactly the collision the user reported.
+        // 11.20 item 16: the Objects library previews the live pen, so a change
+        // of pen, colour or size redraws its tiles. Registered here rather than at
+        // the library's own construction because the library is built lazily and
+        // may not exist yet.
+        ToolUiChanged += () => _chromeBars?.RefreshObjects();
         _chromeBars.Layout.Register("notebooks", NotebookPanel, PanelLayout.Anchor.TopLeft, movable: true, order: 10);
         _chromeBars.Layout.Register("penrow", PenRow);
         _chromeBars.Layout.Register("calc", CalcPanel);
