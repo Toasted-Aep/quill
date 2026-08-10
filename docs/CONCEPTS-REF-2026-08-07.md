@@ -1107,3 +1107,61 @@ page. Replace that:
   reference the dial is fully saturated while the top-bar icons are visibly
   faded — that contrast is the whole point of the effect.
 - Restore on close.
+
+### 11.20 Wheel, dial and chrome — 2026-08-10
+
+**Wheel geometry**
+
+1. **Swatch names have too much upper margin** inside their cells — tighten it.
+2. **The two inner rings have a different cell depth from the outermost ring.
+   Equalise them: all rings take the OUTERMOST ring's depth.**
+3. **Then deepen every cell by a further 20% outward**, keeping the inner empty
+   radius exactly where it is. Growth goes outward only.
+4. **Everything that opens when the colour wheel is pressed shrinks 20%**,
+   proportionally — the whole surface, not selected parts.
+5. **The frame around the `COPIC` / `RGB` / `HSL` labels shrinks 20%.**
+
+**Face switching**
+
+6. **Animate switching between COPIC / RGB / HSL.** The outgoing face's elements
+   **gravitate inwards one by one** — the existing closing animation — and only
+   then does the incoming face play its open animation. Sequential, not
+   crossfaded.
+
+**Arc sliders**
+
+7. **RGB: three dials on a SINGLE arc**, ordered **anticlockwise: red, green,
+   blue.**
+8. **HSL: two arcs.** First arc carries the **hue wheel**; the second carries,
+   **anticlockwise, saturation then lightness.**
+9. **The value boxes must be typeable** — a real text field, not a readout.
+
+**Hover targets**
+
+10. **The hover outlines for opacity, size, stability, undo and redo are wrong.**
+    The user: *"even if you press outside of the hover outline but in their arc
+    area it registers, so you just need to fix the hover outline."* The **hit
+    test is correct and must not change** — the drawn outline is what is wrong.
+    Make the outline match the real hit region (the arc sector), rather than
+    shrinking the hit region to match the outline.
+
+**Icons**
+
+11. **A new eyedropper** was supplied at
+    `C:\Users\irony\Downloads\background-removed.svg` — a filled dropper with a
+    detached droplet. **Implement it globally**, at every eyedropper site.
+12. **Design a better colour-picker icon** (distinct from the eyedropper) and
+    **ask the user before implementing it globally.**
+
+**Moves**
+
+13. **Dictation moves to the writing bar.**
+14. **History moves to the Quill icon dropdown**, opening a floating panel in
+    the Settings / Export / Objects family.
+15. **Mouse modes move into the Interaction page and come OFF the top bar
+    permanently.**
+
+**Objects**
+
+16. **Shapes in the objects library are drawn with the current pen style and
+    pen colour**, rather than a fixed preview style.
