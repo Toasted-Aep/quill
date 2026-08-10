@@ -587,16 +587,37 @@ public sealed class PenBar
         long down = 0;
         Point at = default;
         bool armed = false;
+        // Set when THIS gesture has already run the secondary action, so the
+        // RightTapped below cannot run it a second time for the same press.
+        bool secondaryFired = false;
         el.PointerPressed += (s, e) =>
         {
+            var pt = e.GetCurrentPoint((UIElement)s);
             down = Environment.TickCount64;
-            at = e.GetCurrentPoint((UIElement)s).Position;
+            at = pt.Position;
             armed = true;
             e.Handled = true;
+
+            // 11.25: THE RIGHT BUTTON IS READ OFF THE PRESS, not left to
+            // RightTapped. Marking PointerPressed handled - which this must do,
+            // or the press reaches InkSurface and starts a stroke behind the
+            // bar - suppresses the RightTapped WinUI would otherwise derive
+            // from the same sequence, so the handler at the bottom of this
+            // method has never once run for a mouse. Measured: press-and-hold
+            // opened the colour picker, right-click did nothing at all.
+            if (pt.Properties.IsRightButtonPressed && rightTap != null)
+            {
+                armed = false;
+                secondaryFired = true;
+                rightTap();
+            }
         };
         el.PointerReleased += (s, e) =>
         {
             e.Handled = true;
+            bool fired = secondaryFired;
+            secondaryFired = false;
+            if (fired) return;
             if (!armed) return;
             armed = false;
             var p = e.GetCurrentPoint((UIElement)s).Position;
@@ -610,9 +631,18 @@ public sealed class PenBar
         // 11.22 item 4 splits the two gestures that used to share one handler:
         // right-click goes to the Brushes library, press-and-hold keeps what it
         // always did. A cell that passes no rightTap behaves exactly as before.
+        //
+        // This path survives for the input that DOES deliver RightTapped - a pen
+        // barrel button, a touch press-and-hold - which the PointerPressed read
+        // above cannot see. The latch stops both firing for one gesture.
         var secondary = rightTap ?? hold;
         if (secondary != null && el is FrameworkElement fe)
-            fe.RightTapped += (_, e) => { e.Handled = true; secondary(); };
+            fe.RightTapped += (_, e) =>
+            {
+                e.Handled = true;
+                if (secondaryFired) { secondaryFired = false; return; }
+                secondary();
+            };
     }
 
     // ===================================================================

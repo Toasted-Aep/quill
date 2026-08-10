@@ -242,10 +242,22 @@ public sealed class BrushesWindow
     {
         _target = null;
         HookPagePress();
-        _win.RefreshContent();
         _win.Show();
+        Rebuild(preserveScroll: false);
         DrawPreview();
     }
+
+    /// <summary>Rebuild the body, and <b>only ever after the window is up.</b>
+    ///
+    /// <para>This order is not a preference. <see cref="FloatingWindow.Show"/>
+    /// builds a tab only when it has no tree at all
+    /// (<c>_scroller.Content == null</c>), and <c>RefreshContent</c> rebuilds
+    /// only when the window is open — so refreshing a CLOSED window that has
+    /// been opened once before rebuilds nothing at all: the refresh clears the
+    /// built cache and returns, then Show finds a non-null Content and puts the
+    /// stale tree back on screen. Measured as a reopened panel still naming the
+    /// slot it had been aimed at two gestures earlier.</para></summary>
+    private void Rebuild(bool preserveScroll) => _win.RefreshContent(preserveScroll);
 
     /// <summary>Reference 11.24 item 1 — <b>open the library aimed at a slot.</b>
     /// Every cell then assigns to <paramref name="target"/> instead of to the
@@ -270,8 +282,11 @@ public sealed class BrushesWindow
         // that ought to go back to the live selection.
         if (_target == null) _wasLive = open;
         _target = target;
-        _win.RefreshContent(preserveScroll: open);
+        // Show first, THEN rebuild - see Rebuild. Scroll is kept only when the
+        // panel was already up, which is 11.25 item 3's "the existing panel
+        // stays where it is"; a fresh open starts at the top as it always did.
         if (!open) _win.Show();
+        Rebuild(preserveScroll: open);
         DrawPreview();
     }
 
@@ -339,7 +354,7 @@ public sealed class BrushesWindow
     private void EndTarget()
     {
         _target = null;
-        if (_wasLive) { _win.RefreshContent(preserveScroll: true); DrawPreview(); }
+        if (_wasLive) { Rebuild(preserveScroll: true); DrawPreview(); }
         else _win.Hide();
         _wasLive = false;
     }
