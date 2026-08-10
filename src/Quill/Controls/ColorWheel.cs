@@ -113,31 +113,43 @@ public sealed class ColorWheel : UserControl
     // number, not a proportion, so the constant is solved for it at the s a
     // docked dial forces: 21 * 0.9004 * 1.6470 = 31.14 DIP.
     private const float CellScale = 1.6470f;
-    // 11.15 item 1, "COPIC wheel 15% smaller", read as the OUTER extent.
+    // 11.21 RETIRES the outer target. 11.15 item 1 asked for a 15% smaller
+    // outer extent; holding a target radius while item 4 deepened every cell
+    // meant flooring to the last WHOLE cell that fitted, and at the settled
+    // numbers that was 9 rings of 17 - eight columns of the COPIC palette
+    // simply not drawn. The user ruled on the trade:
     //
-    // Written as a radius per unit of s rather than as a factor on the live
-    // geometry, and that distinction is the whole of item 1. The 11.14 render
-    // the user is looking at measured rOut = 731.80 at s = 0.900, so 15% off is
-    // 621.83, i.e. 690.6 units of s. Taking 15% off the CURRENT rOut instead
-    // would be taking it off a radius item 4 has already grown by deepening
-    // every cell, which is a bigger wheel than the one asked for - the two
-    // instructions are independent, exactly as item 3 says of the type.
+    //   "increase radius to facilitate cell depth, do not remove any cell, the
+    //    cells can go out of the screen, thats why rotation is there."
     //
-    // Rings are whole cells, so Layout floors to the last one that fits and
-    // reports the count; see _rings.
-    private const float OuterRef = 690.6f;
+    // So there is no target radius any more. The outer edge is an ACCUMULATION
+    // again - hole, spine, gap, then all MaxRings columns - and running off the
+    // window is expected: 11.21 item 3 clips at the window edge and forbids
+    // shrinking the ring, re-centring it or moving the dial, and item 4 makes
+    // rotation the access mechanism for whatever lands outside.
+    //
+    // No swatch is ever dropped. If a future size instruction and the full
+    // palette ever conflict again, the palette wins and the conflict is
+    // reported rather than resolved by trimming rings.
     // 11.15 item 3: "texts and the other elements shrink 20%", applied
     // INDEPENDENTLY of item 1 - one factor, on everything the wheel draws that
     // is not a swatch. It replaces 11.14's split 0.85 / 0.80, which 11.15
     // supersedes entirely, and it is taken off the 11.13 sizes because that is
     // the render these instructions are measured against.
     private const float TextScale = 0.80f;
-    // 11.17: the inner spine ring is "radially narrower than everything outside
-    // it". Tier 1 and Tier 2 are that spine, so both bands - and the hairline
-    // between them - come off the family cell's depth by this much. At 31.14
-    // that puts the grey ring at 19.3 DIP against a 31.1 DIP family cell, which
-    // is the proportion the capture reads at.
-    private const float SpineScale = 0.62f;
+    // 11.20 item 2, superseding 11.17's "the inner spine ring is radially
+    // narrower": "the two inner rings have a different cell depth from the
+    // outermost ring. Equalise them: all rings take the OUTERMOST ring's
+    // depth." The two inner rings ARE Tier 1 and Tier 2 - the only two bands
+    // in the wheel that were not one _band deep (17 and 21 reference units at
+    // 0.62, so 19.3 DIP against the family cell's 31.1). They now take _band
+    // exactly, and this constant survives only for the 5-unit hairline gaps
+    // between them, which are separators rather than cells and do not
+    // participate in "cell depth".
+    //
+    // 11.21 restates this as settled ("cell depth is equalised to the outermost
+    // ring and then deepened"), so it is not a fork - it is the ruling.
+    private const float SpineGapScale = 1.0f;
     // 11.17: "then a band of bare background" between the spine and the family
     // fans - "a real margin, not an artefact". The 5-unit reference gap is not
     // that; it is a hairline. Nine tenths of a family cell is, and it is the
@@ -332,9 +344,11 @@ public sealed class ColorWheel : UserControl
     private float _rOutBase, _band;     // Tier 3+ (outer family columns)
     private float _rIn, _rOut;          // grabbable annulus [inner tier, outer edge]
     private float _rLabel, _rRecent, _chipR, _rPuck;
-    // 11.15 item 1's consequence, stated rather than implied: with the hole
-    // pinned, the outer radius pulled in and every cell 15% deeper, only this
-    // many of the 17 possible column rings fit inside the new outer edge.
+    // 11.21 item 1: ALWAYS MaxRings. This was 11.15 item 1's fit calculation -
+    // how many of the 17 column rings still fitted inside a 15%-reduced outer
+    // edge - and the answer, 9, is what the user overruled. It is now simply
+    // the palette's own depth, kept as a field because the geometry caches and
+    // the hit test both index by it.
     private int _rings = MaxRings;
     private Vector2 _probeC = new(float.NaN, float.NaN);   // 10.2 item 8, see Layout
     // Chrome scale. The hub shrinks with the window (the ring is fitted to the
@@ -603,21 +617,21 @@ public sealed class ColorWheel : UserControl
         _r1In = 285f * s;
         float u = s * CellScale;               // one reference unit, in DIP
         _band = 21f * u;                       // Tier 3+ columns - 11.15 item 4
-        // 11.17. The two inner tiers ARE the spine ring, and the spine is
-        // narrower than the fans; the reference's own 17 / 5 / 21 proportions
-        // are kept, simply taken at a smaller unit.
-        float su = u * SpineScale;
-        _r1Out = _r1In + 17f * su;             // Tier 1 inner accent arc
+        // 11.20 item 2 / 11.21: every ring takes the OUTERMOST ring's depth, so
+        // Tier 1 and Tier 2 are one _band each rather than the reference's 17
+        // and 21 units at 0.62. Only the hairline BETWEEN them is still a
+        // reference proportion - it separates two cells, it is not one.
+        float su = u * SpineGapScale;
+        _r1Out = _r1In + _band;                // Tier 1 inner accent arc
         _r2In = _r1Out + 5f * su;
-        _r2Out = _r2In + 21f * su;             // Tier 2 grey ring
+        _r2Out = _r2In + _band;                // Tier 2 grey ring
         _rOutBase = _r2Out + _band * SpineGap; // 11.17's band of bare background
         _rIn = _r1In;
-        // 11.15 item 1. The outer edge is a target, not an accumulation: fit as
-        // many WHOLE cells inside it as will go and stop. A tenth of a cell
-        // hanging past the edge is not "15% smaller", and a cell cut off
-        // mid-swatch is not a swatch.
-        _rings = (int)MathF.Floor((OuterRef * s - _rOutBase) / MathF.Max(_band, 1f));
-        _rings = Math.Clamp(_rings, 1, MaxRings);
+        // 11.21 items 1-3. Every ring the palette has, drawn - the outer edge
+        // is whatever that comes to, not a target to floor against. The clamp
+        // is gone with the floor: _rings IS MaxRings, and the field survives
+        // only because the hit test and the geometry caches index by it.
+        _rings = MaxRings;
         _rOut = _rOutBase + _rings * _band;
         // The reference sets its SVG code text to 7 units in a 21-unit band, a
         // third of the band. Segoe UI through Win2D at that size is a smear and
@@ -1030,9 +1044,13 @@ public sealed class ColorWheel : UserControl
             // shrinking into itself.
             var grow = TierTransform(p);
             var rotate = Matrix3x2.CreateRotation(a0, _c) * grow;
-            // 11.15 item 1: only the rings that fit inside the new outer edge.
-            // The deep columns keep their inks in the palette - nothing here
-            // reorders or drops data - they simply run out of wheel.
+            // 11.21 item 1: every ring this column HAS. _rings is MaxRings, so
+            // the Min only ever picks the column's own depth - it is kept
+            // because a column shorter than the deepest one still has to stop
+            // at its own last ink, and because the caches are sized by _rings.
+            // Nothing is dropped: no swatch in the palette goes undrawn, and if
+            // a future size instruction cannot be met with all of them on
+            // screen, the palette wins and the conflict gets reported.
             int depth = Math.Min(stack.Length, _rings);
             for (int ring = 0; ring < depth; ring++)
             {
@@ -1580,6 +1598,19 @@ public sealed class ColorWheel : UserControl
         // build a glide instead of each one landing dead.
         _vel = Math.Clamp(_vel * 0.6f + step * 26f, -14f, 14f);
         if (Math.Abs(_vel) > StopVel) { _spinTs = Stopwatch.GetTimestamp(); _spin.Start(); }
+        // 11.21 item 4 turns rotation from a convenience into the ACCESS
+        // MECHANISM: at 17 rings the outer columns run off the window, and a
+        // swatch that cannot be spun into view is a swatch that is lost. That
+        // makes "the wheel spins with the mouse wheel" an acceptance test
+        // rather than a feature, and it has been asked for three times
+        // (10.4 item 17, 11.3 item 24, 11.21 item 4) without ever being
+        // confirmed on screen - because there is nothing outside the process
+        // that can see a float in a Win2D draw pass. It says so here, in the
+        // same channel WHEEL-CENTRE uses, so the confirmation is a measurement
+        // and not an opinion about a screenshot.
+        GeometryProbe.Write("WHEEL-ROT",
+            $"rot={_rot:F4} deg={_rot / Deg:F2} step={step:F4} " +
+            $"horiz={(props.IsHorizontalMouseWheel ? 1 : 0)} vel={_vel:F2}");
         _canvas.Invalidate();
     }
 
