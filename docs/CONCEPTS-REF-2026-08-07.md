@@ -1243,3 +1243,53 @@ strength, as does the page, the ink and the dial.
    the true per-pen width from the real points, and a pen at 22.2 measured
    78.32 DIP of width — 3.5×. A preview strip sized without asking that question
    will be blown out by exactly the same pens.
+
+### 11.23 Decisions, 2026-08-10
+
+**Colour-picker icon: candidate B, the palette.** A tilted oval with a thumb
+hole near the right rim and four wells arcing along the far edge. Implement it
+globally at every colour-picker site.
+
+One measured caveat that must be addressed rather than shipped as-is: at 18 DIP
+the palette's wells close to **0.04–0.13 coverage** (0 = fully open) against the
+wheel candidate's 0.26–0.39, so it degrades toward a solid blob at the smallest
+size. **Keep the palette design; open the wells enough to survive 18 DIP** —
+larger wells, fewer of them, or a thinner rim, whichever preserves the read.
+Verify by rasterising and measuring each well's coverage, not by eye.
+
+**Brushes preview: the sweep adapts to the pen.** The sample stroke's amplitude
+and padding are computed from the pen's **true** maximum width rather than from
+constants, so every brush fits the strip and always shows a stroke shape. The
+accepted cost is that the preview no longer conveys absolute size — a 5 px and a
+50 px pen will read similarly. No caption or scale label.
+
+**Both `BrushesWindow.cs` items are routed together**, since they share the file.
+
+### 11.24 The Brushes library — targeting and preview sizing
+
+1. **`BrushesWindow` needs a targeting entry point.** Its public surface is
+   `Attach / Show / Hide / Toggle / IsOpen / Bounds / Refresh`, with no way to
+   say *which* slot a chosen brush should land in. Add one, so that
+   §11.22 item 4 — right-clicking a tool on the pen row or a dial sector opens
+   the library aimed at **that slot** — can be completed.
+
+   This matters beyond right-click: the dial's `+` cells use the same assignment
+   path, and replacing `ShowAssign` with a picker that applies to the *active*
+   tool instead of the target slot would silently lose it. That is why the
+   previous agent stopped rather than doing the ToolWheel half alone.
+
+2. **Fix the blank previews at the cause.** `SampleStroke` lays out a fixed
+   sweep — `pad = 34`, amplitude `0.22 x 205 = 45.1` — while the stroke's width
+   is the pen's real one, and pressure peaks at 1.0 mid-sweep, so the widest
+   point *is* `MaxStrokeWidth`. `SegmentWidth` gives `PenType.Brush` a factor of
+   `0.12 + 3.2 x sens x pr^2` — 3.32x at sens 1. The band the sample occupies is
+   `2 x 45.1 + width`, so it floods the 205 DIP strip once width passes ~115,
+   i.e. a Brush above about size 35. Past that the "stroke" is a solid slab edge
+   to edge, which on a light or low-opacity pen is indistinguishable from an
+   empty strip.
+
+   Compute the sweep's geometry from `InkSurface.MaxStrokeWidth()` — the dial's
+   preview circle already does exactly this — rather than from constants.
+   **Do not clamp the pen.** This is the same class of fault as §11.1 item 2,
+   where a radius floor barely consulted the pen while the renderer added stroke
+   width outside the clamp; clamping there would have hidden a real defect.
