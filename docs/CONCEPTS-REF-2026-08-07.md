@@ -1165,3 +1165,40 @@ page. Replace that:
 
 16. **Shapes in the objects library are drawn with the current pen style and
     pen colour**, rather than a fixed preview style.
+
+### 11.21 The wheel grows instead of dropping colours — 2026-08-10
+
+The user ruled on the 9-rings-of-17 trade, and the answer **supersedes §11.15
+item 1**, which pulled the outer extent in 15%:
+
+> *"increase radius to facilitate cell depth, do not remove any cell, the cells
+> can go out of the screen, thats why rotation is there."*
+
+So:
+
+1. **No swatch is ever dropped.** All 17 rings render. A wheel that shows only
+   part of the palette is not acceptable, and trimming rings to fit is not a
+   permitted way to satisfy any size instruction.
+2. **The outer radius grows to whatever the full palette needs** at the
+   equalised, +15% cell depth — roughly `hole + 17 x depth`. §11.15 item 1's
+   15% reduction of the outer extent **no longer applies**; the geometry is
+   driven by the palette, not by a target radius.
+3. **Running off-screen is expected and fine.** Clip at the window edge, exactly
+   as every earlier revision required — never shrink the ring, never re-centre
+   it, never move the dial.
+4. **Rotation is the access mechanism**, which makes it load-bearing rather than
+   a convenience: off-screen swatches are reachable only by spinning the wheel.
+
+   **Mouse-wheel scrolling must rotate the COPIC wheel**, along with horizontal
+   / side scroll. This has now been asked three times (§10.4 item 17, §11.3 item
+   24) and implemented but never visually confirmed — **confirm it on screen
+   this time**, and confirm it reaches the outermost ring's furthest swatch.
+
+Everything else from §11.15 stands unchanged: the hole stays pinned at its
+current radius, cell depth is equalised to the outermost ring and then deepened
+15%, type and the other elements stay at 0.80x, and the label frames stay at
+their reduced size.
+
+**Dimming (§11.19) is settled as built:** the two icon clusters and any open
+floating panel dim; the breadcrumb row (title, undo/redo, history) stays at full
+strength, as does the page, the ink and the dial.
