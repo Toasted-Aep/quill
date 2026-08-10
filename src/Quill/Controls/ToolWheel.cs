@@ -159,6 +159,20 @@ public sealed class ToolWheel
     // 9.1: the readouts and marks were about 1.5x the reference. The RING
     // geometry above is unchanged - that part was right - but this cluster comes
     // down by the same ~0.72 the Bar palette does.
+    // 11.20 item 10. The user: "even if you press outside of the hover outline
+    // but in their arc area it registers, so you just need to fix the hover
+    // outline." The five inner controls' hit regions are bounded by these four
+    // numbers and by DiscR and DotR, and NOTHING else. They used to live as
+    // literals inside Aim while the plate was a rounded rectangle sized by eye,
+    // which is exactly how a hit region and its highlight drift apart: the size
+    // plate covered 46% of what it claimed and the two column plates painted
+    // 977 DIP2 of ring that belongs to a tool cell. Aim and HoverGeometry read
+    // these same constants now, so the outline IS the hit region by
+    // construction rather than by a second, independent measurement.
+    private const double SplitY = Row1Y / 2;       // -12.79  size above, columns below
+    private const double SplitX = DiscR * 0.18;    //  10.23  the dead column down the middle
+    private const double SatHalf = SatHit / 2;     //  14.50  half the undo/redo square
+
     private const double SetBox = 14;              // the three property glyphs
     private const double ValueSize = 9;            // 12 x 0.72
     private const double ReadoutSize = 10;         // 13 x 0.72
@@ -319,7 +333,8 @@ public sealed class ToolWheel
     // 11.2 item 13: ONE plate, moved to whichever of the five inner controls is
     // under the pointer. One element rather than five because only one can be
     // hovered at a time, and five would each need their own theme sync.
-    private readonly Microsoft.UI.Xaml.Shapes.Rectangle _hoverPlate = new();
+    // 11.20 item 10: it is a PATH now, not a rectangle - see HoverGeometry.
+    private readonly Path _hoverPlate = new();
     private readonly Path[] _rimArc = new Path[Slots];
     private readonly Ellipse _dot = new();
     private readonly Canvas _sizeGlyph = new(), _smoothGlyph = new(), _opacGlyph = new();
@@ -332,7 +347,6 @@ public sealed class ToolWheel
     private Point _centre;
     private int _hoverSlot = -1;
     private int _active = -1;          // the popped sector, cached for the hit test
-    private double _sizeRowW = 40;     // measured in LayoutSizeRow, read by PlaceHover
     private int _rose = -2;            // which sector the rise animation last played for
     // Held in a FIELD on purpose: an unrooted Storyboard can be collected while
     // it is still running, at which point it simply stops and Completed never
@@ -839,39 +853,127 @@ public sealed class ToolWheel
     /// <summary>11.2 item 13: "hover indicators on opacity, size, stability,
     /// undo and redo." A soft plate behind whichever of the five the pointer is
     /// over. The colour dot keeps its own accent ring, which it already had and
-    /// which reads better on a filled circle than a plate behind it would.</summary>
+    /// which reads better on a filled circle than a plate behind it would.
+    ///
+    /// <para>11.20 item 10: the plate is now the HIT REGION, drawn exactly.
+    /// Rebuilt each paint rather than cached - WinUI's one-parent rule covers
+    /// Geometry, and a shared instance throws mid-Refresh (see PopGeometry).
+    /// Twenty segments cost nothing next to that risk.</para></summary>
     private void PlaceHover(Color ink)
     {
-        double w, h, cx, cy;
-        switch (_hoverZone)
+        if (HoverGeometry(_hoverZone) is not { } geo)
         {
+            _hoverPlate.Visibility = Visibility.Collapsed;
+            return;
+        }
+        _hoverPlate.Data = geo;
+        _hoverPlate.Fill = new SolidColorBrush(PageTheme.WithAlpha(ink, 26));
+        _hoverPlate.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>11.20 item 10: the exact region Aim resolves to
+    /// <paramref name="z"/>, as a closed path in wheel-canvas coordinates.
+    ///
+    /// <para>Read it beside Aim; the two walk the same boundaries. The disc's
+    /// three property regions are all bounded by the disc edge, by the colour
+    /// dot they have to flow around, and by SplitY / SplitX; the two below the
+    /// midline are also notched by the undo / redo square that overlaps them,
+    /// because Aim tests those squares FIRST and they therefore take that
+    /// ground. Every arc here spans less than 180 degrees, so IsLargeArc is
+    /// false throughout - which is checked, not assumed, in
+    /// obj/agent-patches/hovergeom.py, where each path is rasterised at 0.125
+    /// DIP and compared against Aim's own predicate cell by cell.</para></summary>
+    private static Geometry? HoverGeometry(Zone z)
+    {
+        // Where the size split crosses the disc edge and the colour dot.
+        double xd = ChordX(DiscR, SplitY);              // 55.383
+        double xt = ChordX(DotR, SplitY);               // 14.200
+
+        switch (z)
+        {
+            // The cap above the split, with the colour dot bitten out of it.
             case Zone.Size:
-                w = _sizeRowW + 16; h = SetBox + 12;
-                cx = Half; cy = Half + Row1Y;
-                break;
+            {
+                var f = ZoneStart(-xd, SplitY);
+                ZoneLine(f, -xt, SplitY);
+                ZoneArc(f, xt, SplitY, DotR, SweepDirection.Clockwise);
+                ZoneLine(f, xd, SplitY);
+                ZoneArc(f, -xd, SplitY, DiscR, SweepDirection.Counterclockwise);
+                return ZoneShut(f);
+            }
+
+            // Everything below the split and outboard of the dead column: down
+            // the dot, out around the undo / redo square, then home along the
+            // disc edge. Opacity is Smooth mirrored, which flips every sweep.
             case Zone.Smooth:
             case Zone.Opacity:
-                w = 52; h = Row3Y + SetBox / 2 + 22;
-                cx = Half + (_hoverZone == Zone.Smooth ? -ColX : ColX);
-                cy = Half + (Row3Y - SetBox / 2) / 2 + 2;
-                break;
+            {
+                bool left = z == Zone.Smooth;
+                double s = left ? -1 : 1;
+                var away = left ? SweepDirection.Counterclockwise : SweepDirection.Clockwise;
+                var home = left ? SweepDirection.Clockwise : SweepDirection.Counterclockwise;
+                double yDot = ChordY(DotR, SplitX);     // 16.140  dot meets the column
+                double bx = SatX + SatHalf;             // 30.415  square's outer edge
+                double by0 = SatY - SatHalf;            // 24.151  square's top
+                double by1 = SatY + SatHalf;            // 53.151  square's bottom
+                double yBx = ChordY(DiscR, bx);         // 48.018  disc crosses that edge
+                double xBy = ChordX(DiscR, by1);        // 20.143  disc crosses the bottom
+                double yCol = ChordY(DiscR, SplitX);    // 55.912  disc crosses the column
+
+                var f = ZoneStart(s * xd, SplitY);
+                ZoneLine(f, s * xt, SplitY);
+                ZoneArc(f, s * SplitX, yDot, DotR, away);
+                ZoneLine(f, s * SplitX, by0);
+                ZoneLine(f, s * bx, by0);
+                ZoneLine(f, s * bx, yBx);
+                ZoneArc(f, s * xBy, by1, DiscR, away);
+                ZoneLine(f, s * SplitX, by1);
+                ZoneLine(f, s * SplitX, yCol);
+                ZoneArc(f, s * xd, SplitY, DiscR, home);
+                return ZoneShut(f);
+            }
+
+            // Aim's square, to the DIP. Its outer bottom corner reaches 4.4 DIP
+            // past the disc edge, and that is drawn rather than clipped: those
+            // 24 DIP2 do undo when pressed, and a highlight that stopped at the
+            // rim would be the same defect this item exists to remove.
             case Zone.Undo:
             case Zone.Redo:
-                w = h = SatHit;
-                cx = Half + (_hoverZone == Zone.Undo ? -SatX : SatX);
-                cy = Half + SatY;
-                break;
-            default:
-                _hoverPlate.Visibility = Visibility.Collapsed;
-                return;
+                return new RectangleGeometry
+                {
+                    Rect = new Rect(Half + (z == Zone.Undo ? -SatX : SatX) - SatHalf,
+                                    Half + SatY - SatHalf, SatHit, SatHit)
+                };
         }
-        _hoverPlate.Width = w;
-        _hoverPlate.Height = h;
-        _hoverPlate.RadiusX = _hoverPlate.RadiusY = Math.Min(10, h / 2);
-        _hoverPlate.Fill = new SolidColorBrush(PageTheme.WithAlpha(ink, 26));
-        Canvas.SetLeft(_hoverPlate, cx - w / 2);
-        Canvas.SetTop(_hoverPlate, cy - h / 2);
-        _hoverPlate.Visibility = Visibility.Visible;
+        return null;
+    }
+
+    /// <summary>Half-chord of a circle of radius <paramref name="r"/> centred on
+    /// the wheel, at height <paramref name="y"/>. Clamped, so a line that misses
+    /// the circle degenerates to a tangent instead of throwing.</summary>
+    private static double ChordX(double r, double y) => Math.Sqrt(Math.Max(r * r - y * y, 0));
+    private static double ChordY(double r, double x) => Math.Sqrt(Math.Max(r * r - x * x, 0));
+
+    private static PathFigure ZoneStart(double dx, double dy) =>
+        new() { StartPoint = new Point(Half + dx, Half + dy), IsClosed = true, IsFilled = true };
+
+    private static void ZoneLine(PathFigure f, double dx, double dy) =>
+        f.Segments.Add(new LineSegment { Point = new Point(Half + dx, Half + dy) });
+
+    private static void ZoneArc(PathFigure f, double dx, double dy, double r, SweepDirection d) =>
+        f.Segments.Add(new ArcSegment
+        {
+            Point = new Point(Half + dx, Half + dy),
+            Size = new Size(r, r),
+            SweepDirection = d,
+            IsLargeArc = false,
+        });
+
+    private static Geometry ZoneShut(PathFigure f)
+    {
+        var g = new PathGeometry();
+        g.Figures.Add(f);
+        return g;
     }
 
     private void Button(Canvas host, string icon, bool mirror, bool live, Color fg)
@@ -949,7 +1051,6 @@ public sealed class ToolWheel
         _sizeText.Measure(new Size(200, 40));
         double tw = _sizeText.DesiredSize.Width;
         double total = SetBox + 5 + tw;
-        _sizeRowW = total;                     // 11.2 item 13's hover plate
         double x = Half - total / 2;
         Canvas.SetLeft(_sizeGlyph, x);
         Canvas.SetTop(_sizeGlyph, Half + Row1Y - SetBox / 2);
@@ -1172,7 +1273,6 @@ public sealed class ToolWheel
 
         // 11.2 item 13's hover plate, under everything the disc carries so the
         // glyph and its value read on top of it rather than through it.
-        _hoverPlate.RadiusX = _hoverPlate.RadiusY = 8;
         _hoverPlate.IsHitTestVisible = false;
         _hoverPlate.Visibility = Visibility.Collapsed;
         _wheel.Children.Add(_hoverPlate);
@@ -1421,18 +1521,18 @@ public sealed class ToolWheel
         // 10.2 item 5. Tested BEFORE the §1.4 property regions, or the undo
         // button would resolve to Zone.Smooth by x alone and pressing it would
         // open the smoothness card instead of undoing anything.
-        if (Math.Abs(dy - SatY) <= SatHit / 2)
+        if (Math.Abs(dy - SatY) <= SatHalf)
         {
-            if (Math.Abs(dx + SatX) <= SatHit / 2) return (Zone.Undo, -1);
-            if (Math.Abs(dx - SatX) <= SatHit / 2) return (Zone.Redo, -1);
+            if (Math.Abs(dx + SatX) <= SatHalf) return (Zone.Undo, -1);
+            if (Math.Abs(dx - SatX) <= SatHalf) return (Zone.Redo, -1);
         }
         if (r < DiscR)
         {
             // §1.4's own layout, read back as hit regions: the size pair across
             // the top, then smoothness left and opacity right of the dot.
-            if (dy < Row1Y / 2) return (Zone.Size, -1);
-            if (dx < -DiscR * 0.18) return (Zone.Smooth, -1);
-            if (dx > DiscR * 0.18) return (Zone.Opacity, -1);
+            if (dy < SplitY) return (Zone.Size, -1);
+            if (dx < -SplitX) return (Zone.Smooth, -1);
+            if (dx > SplitX) return (Zone.Opacity, -1);
             return (Zone.Disc, -1);
         }
 
