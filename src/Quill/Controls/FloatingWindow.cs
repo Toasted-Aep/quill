@@ -57,6 +57,24 @@ public sealed class FloatingWindow
     private static double TopBand =>
         ChromeBars.Metrics.RowTop + ChromeBars.Metrics.IconPitch + 8;
 
+    /// <summary>The page host's top-left in the POPUP's coordinate space.
+    ///
+    /// <para>`_popup` carries a XamlRoot, so its offsets are measured from the
+    /// window's origin, while every limit below is derived from `_host` - the
+    /// page host, which starts under the top bar. Without this the two spaces
+    /// differ by the bar's height: the top anchor lands inside the bar instead
+    /// of below it (so the panel covers the top-right cluster), and the bottom
+    /// limit is short by the same amount (so the panel cannot be dragged clear).
+    /// Both symptoms, one cause.</para></summary>
+    private Point HostOrigin
+    {
+        get
+        {
+            try { return _host.TransformToVisual(null).TransformPoint(new Point(0, 0)); }
+            catch { return new Point(0, 0); }
+        }
+    }
+
     private readonly Panel _host;
     // A POPUP, not an in-tree overlay: a popup is composited into the XamlRoot's
     // own popup layer, so it is guaranteed to float above the Win2D canvas, the
@@ -137,8 +155,17 @@ public sealed class FloatingWindow
         // ---- header: close (upper-left), drag bar (top middle), info (upper-right)
         var header = new Grid { Padding = new Thickness(8, 6, 8, 0) };
 
+        // The close target fills the header's top-left CORNER rather than
+        // floating as a small square inside the padding: negative margins undo
+        // the header's 8,6 inset for this child only, and Stretch takes the
+        // full header height. The glyph stays where it was - only the region
+        // that responds grew.
         var close = IconButton(CloseGeometry, "Close");
         close.HorizontalAlignment = HorizontalAlignment.Left;
+        close.VerticalAlignment = VerticalAlignment.Stretch;
+        close.Margin = new Thickness(-8, -6, 0, 0);
+        close.Padding = new Thickness(8, 6, 6, 0);
+        close.MinWidth = HeaderH + 8;
         close.Click += (_, _) => Hide();
         header.Children.Add(close);
 
@@ -154,7 +181,11 @@ public sealed class FloatingWindow
             Width = 132,
             Height = HeaderH - 4,
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
+            // Flush to the TOP of the panel, not the middle of the header. The
+            // negative top margin cancels the header's 6 DIP inset for this
+            // child alone, so the pill reads as part of the window's edge.
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, -6, 0, 0),
             Background = new SolidColorBrush(Colors.Transparent),
         };
         ToolTipService.SetToolTip(grab, "Drag to move");
@@ -164,7 +195,10 @@ public sealed class FloatingWindow
             Height = 5,
             CornerRadius = new CornerRadius(2.5),
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
+            // sits just inside the top edge; the grab area around it stays tall
+            // so a pen or finger still has a real target
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 7, 0, 0),
             Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 0x66)),
         };
         _dragPill = bar;
@@ -535,10 +569,11 @@ public sealed class FloatingWindow
         _panel.Width = Math.Min(_panel.Width, maxW);
         _panel.Height = Math.Min(_panel.Height, maxH);
 
-        _popup.HorizontalOffset = OpenOn == Side.Left
+        var org = HostOrigin;
+        _popup.HorizontalOffset = org.X + (OpenOn == Side.Left
             ? EdgeGap
-            : Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap);
-        _popup.VerticalOffset = TopBand;
+            : Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap));
+        _popup.VerticalOffset = org.Y + TopBand;
         _placed = true;
         Constrain();
     }
@@ -607,10 +642,13 @@ public sealed class FloatingWindow
         if (_panel.Width > maxW) _panel.Width = maxW;
         if (_panel.Height > maxH) _panel.Height = maxH;
 
+        var org = HostOrigin;
         double left = Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap);
-        _popup.HorizontalOffset = Math.Clamp(_popup.HorizontalOffset, EdgeGap, left);
+        _popup.HorizontalOffset = Math.Clamp(_popup.HorizontalOffset,
+                                             org.X + EdgeGap, org.X + left);
         double top = Math.Max(TopBand, hostH - _panel.Height - EdgeGap);
-        _popup.VerticalOffset = Math.Clamp(_popup.VerticalOffset, TopBand, top);
+        _popup.VerticalOffset = Math.Clamp(_popup.VerticalOffset,
+                                           org.Y + TopBand, org.Y + top);
     }
 
     private static SolidColorBrush GripBrush() => new(PageTheme.WithAlpha(PageTheme.OnSurface, 0x8C));
