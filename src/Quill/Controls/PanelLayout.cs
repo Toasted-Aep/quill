@@ -115,6 +115,14 @@ public sealed class PanelLayout
         Invalidate();
     }
 
+    /// <summary>The element registered under <paramref name="id"/>, or null if
+    /// nothing was registered under that name or it was registered as a bare
+    /// rectangle. 11.19 needs it: the wheel dims the corner chrome, and the two
+    /// clusters belong to ChromeBars, which hands them here and nowhere else.
+    /// A read-only lookup rather than a second registry.</summary>
+    public FrameworkElement? Element(string id) =>
+        _entries.FirstOrDefault(e => e.Id == id)?.El;
+
     /// <summary>Registers an OBSTACLE that is not an element of the host — a
     /// window living in the XamlRoot's popup layer, which is where the Objects
     /// library and the export pane are composited. A popup's child cannot be

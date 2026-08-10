@@ -74,6 +74,25 @@ public static class ColorPickerService
     /// solver re-runs instead of waiting for an unrelated invalidation.</summary>
     public static event Action? ObstacleChanged;
 
+    /// <summary>11.19. True while the wheel is up, in place of the grey scrim
+    /// the wheel used to paint over the page. The scrim dimmed everything
+    /// equally; the user wants the PAGE, the ink and the radial dial left at
+    /// full strength and only the corner chrome faded, because that contrast is
+    /// the whole effect. The picker only declares the state - who fades, and by
+    /// how much, is the host's business, exactly as <see cref="Obstructing"/>
+    /// leaves the routing to the layout solver.</summary>
+    public static bool Dimming { get; private set; }
+
+    /// <summary>Raised when <see cref="Dimming"/> changes.</summary>
+    public static event Action<bool>? DimChanged;
+
+    private static void SetDimming(bool on)
+    {
+        if (Dimming == on) return;
+        Dimming = on;
+        DimChanged?.Invoke(on);
+    }
+
     private static void SetObstructing(bool on)
     {
         if (Obstructing == on) return;
@@ -134,6 +153,7 @@ public static class ColorPickerService
         overlay.Visibility = Visibility.Visible;
         IsOpen = true;
         SetObstructing(centreOnPoint);
+        SetDimming(true);
         wheel.BeginEnter();   // the reference's staggered gravity drop
     }
 
@@ -156,6 +176,10 @@ public static class ColorPickerService
         if (!IsOpen) return;
         IsOpen = false;
         SetObstructing(false);
+        // Restored on close, and on THIS path specifically: Close() runs the
+        // exit animation first and only lands here when it has finished, so the
+        // chrome comes back as the ring leaves rather than a beat before it.
+        SetDimming(false);
         if (_overlay != null) _overlay.Visibility = Visibility.Collapsed;
         _host?.PushRecent(_committed);
         var closed = _onClosed;
