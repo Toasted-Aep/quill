@@ -103,6 +103,23 @@
                                 <MenuFlyoutItem Text="Brushes…" Click="Brushes_Click">
                                     <MenuFlyoutItem.Icon><PathIcon x:Name="BrushesMenuIcon"/></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
+                                <!-- CONCEPTS-REF 11.5 item 34 / 11.20 item 14:
+                                     HISTORY MOVES INTO THIS DROPDOWN and opens a
+                                     floating panel docked to the RIGHT of the
+                                     screen, in the Settings / Export / Objects
+                                     family. It was BtnHistory on the top bar,
+                                     carrying a 240 DIP flyout; section 5's top
+                                     bar carries no tools at all. -->
+                                <MenuFlyoutItem x:Name="HistoryMenuItem" Text="History…" Click="History_Click">
+                                    <MenuFlyoutItem.Icon><PathIcon x:Name="HistoryMenuIcon"/></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <!-- CONCEPTS-REF 11.4 item 26: RECORDING MOVES TO
+                                     THE QUILL DROPDOWN and the microphone options
+                                     come off the top bar entirely. Dictation went
+                                     the other way, to the writing bar. -->
+                                <ToggleMenuFlyoutItem x:Name="RecordMenuItem" Text="Audio recording" Click="RecordMenu_Toggle">
+                                    <ToggleMenuFlyoutItem.Icon><PathIcon x:Name="RecordMenuIcon"/></ToggleMenuFlyoutItem.Icon>
+                                </ToggleMenuFlyoutItem>
                                 <MenuFlyoutItem Text="Keyboard shortcuts" Click="ShortcutsMenu_Click">
                                     <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE765;"/></MenuFlyoutItem.Icon>
                                 </MenuFlyoutItem>
@@ -201,21 +218,13 @@
                         </Button.Flyout>
                     </Button>
 
-                    <DropDownButton x:Name="MouseModeBtn" ToolTipService.ToolTip="Mouse mode — how the mouse behaves while the pen tool is active">
-                        <TextBlock x:Name="MouseModeGlyph" Text="&#x2196;" FontSize="14" VerticalAlignment="Center"/>
-                        <DropDownButton.Flyout>
-                            <MenuFlyout>
-                                <RadioMenuFlyoutItem x:Name="MouseAuto" Tag="Auto" GroupName="MouseMode" IsChecked="True"
-                                                     Text="Auto — click to select or edit, drag empty space to select" Click="MouseMode_Click"/>
-                                <RadioMenuFlyoutItem x:Name="MouseGrab" Tag="Grab" GroupName="MouseMode"
-                                                     Text="Grab — drag to pan the page" Click="MouseMode_Click"/>
-                                <RadioMenuFlyoutItem x:Name="MouseSelect" Tag="Select" GroupName="MouseMode"
-                                                     Text="Select — drag a box to select strokes" Click="MouseMode_Click"/>
-                                <RadioMenuFlyoutItem x:Name="MouseMove" Tag="Move" GroupName="MouseMode"
-                                                     Text="Move — drag images and shapes; drag a handle to resize" Click="MouseMode_Click"/>
-                            </MenuFlyout>
-                        </DropDownButton.Flyout>
-                    </DropDownButton>
+                    <!-- CONCEPTS-REF 11.6 item 38 / 11.20 item 15: MOUSE MODES
+                         MOVED INTO THE INTERACTION SETTINGS PAGE, as circles like
+                         every other option group there, and come off the top bar
+                         PERMANENTLY. The button that used to sit here is gone -
+                         not hidden behind HiddenTools, removed - so there is one
+                         place to change the mouse's behaviour and it is the one
+                         the reference shows. -->
 
                     <AppBarSeparator/>
 
@@ -225,45 +234,19 @@
                     <Button x:Name="BtnRedo" Click="Redo_Click" ToolTipService.ToolTip="Redo (Ctrl+Y)">
                         <PathIcon x:Name="IconRedo"/>
                     </Button>
-                    <Button x:Name="BtnHistory" ToolTipService.ToolTip="Edit history &amp; replay">
-                        <FontIcon Glyph="&#xE81C;" FontSize="14"/>
-                        <Button.Flyout>
-                            <Flyout x:Name="HistoryFlyout" Opening="HistoryFlyout_Opening">
-                                <StackPanel Width="240">
-                                    <Grid Margin="0,0,0,8">
-                                        <TextBlock x:Uid="EditHistoryHeader" Text="Edit history" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                                        <ToggleButton x:Name="BtnReplay" Click="Replay_Click" HorizontalAlignment="Right"
-                                                      Width="34" Height="34" Padding="0"
-                                                      Background="Transparent" BorderThickness="0"
-                                                      ToolTipService.ToolTip="Replay this page stroke by stroke">
-                                            <FontIcon Glyph="&#xE768;" FontSize="14"/>
-                                        </ToggleButton>
-                                    </Grid>
-                                    <ListView x:Name="HistoryList" MaxHeight="320" SelectionMode="None"/>
-                                </StackPanel>
-                            </Flyout>
-                        </Button.Flyout>
-                    </Button>
+                    <!-- CONCEPTS-REF 11.5 item 34: history left the top bar for
+                         the Quill dropdown, and its 240 DIP flyout became the
+                         right-docked floating panel in Controls/HistoryWindow.cs.
+                         The replay toggle went with it; BtnReplay lives on as a
+                         code-built control inside that window. -->
 
                     <AppBarSeparator/>
 
-                    <DropDownButton x:Name="VoiceBtn" ToolTipService.ToolTip="Voice — audio recording &amp; dictation">
-                        <FontIcon Glyph="&#xE720;" FontSize="14"/>
-                        <DropDownButton.Flyout>
-                            <Flyout>
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <ToggleButton x:Name="BtnAudioRecording" Click="BtnAudioRecording_Click" ToolTipService.ToolTip="Toggle audio recording panel">
-                        <FontIcon Glyph="&#xE720;" FontSize="14"/>
-                    </ToggleButton>
-                    <ToggleButton x:Name="BtnDictate" Click="Dictate_Click"
-                                  ToolTipService.ToolTip="Dictate — speech becomes text in the focused text box">
-                        <!-- original mic-with-caret silhouette -->
-                        <PathIcon Data="M8 1.2 A2.3 2.3 0 0 1 10.3 3.5 V7.2 A2.3 2.3 0 0 1 5.7 7.2 V3.5 A2.3 2.3 0 0 1 8 1.2 Z M3.8 7.2 H5 A3 3 0 0 0 11 7.2 H12.2 A4.2 4.2 0 0 1 8.6 11.3 V13 H10.4 V14.2 H5.6 V13 H7.4 V11.3 A4.2 4.2 0 0 1 3.8 7.2 Z M13 12 H16 V13 H13 Z"/>
-                    </ToggleButton>
-                                </StackPanel>
-                            </Flyout>
-                        </DropDownButton.Flyout>
-                    </DropDownButton>
+                    <!-- CONCEPTS-REF 11.4 item 26 / 11.20 item 13: THE MICROPHONE
+                         OPTIONS ARE OFF THE TOP BAR ENTIRELY. Dictation moved to
+                         the writing bar (the text format bar below), recording
+                         moved to the Quill dropdown. The Voice dropdown that used
+                         to carry both is removed rather than hidden. -->
                     <!-- AllowFocusOnInteraction=False everywhere so opening this menu
                          doesn't destroy the text selection the AI is about to use (#9-batch3) -->
                     <Button x:Name="BtnAi" AllowFocusOnInteraction="False"
@@ -565,6 +548,20 @@
                     <Button Click="AlignJustify_Click" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Justify">
                         <FontIcon Glyph="&#xE8E1;" FontSize="14"/>
                     </Button>
+
+                    <AppBarSeparator/>
+
+                    <!-- CONCEPTS-REF 11.4 item 26 / 11.20 item 13: DICTATION LIVES
+                         ON THE WRITING BAR. It is a text-entry affordance - speech
+                         lands in the focused text box - so it belongs beside the
+                         other things that put characters on the page, not on a top
+                         bar section 5 is emptying. AllowFocusOnInteraction stays
+                         False so pressing it does not steal the caret it types
+                         into. The mark is set from Icons.Microphone in code. -->
+                    <ToggleButton x:Name="BtnDictate" Click="Dictate_Click" AllowFocusOnInteraction="False"
+                                  ToolTipService.ToolTip="Dictate — speech becomes text in the focused text box">
+                        <PathIcon x:Name="IconDictate"/>
+                    </ToggleButton>
 
                     <AppBarSeparator/>
 

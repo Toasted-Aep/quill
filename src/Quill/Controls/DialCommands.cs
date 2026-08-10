@@ -24,7 +24,9 @@ namespace Quill.Controls;
 /// <item><b>Insert shape</b> — a marking command, and its whole menu comes with
 /// it rather than being redeclared.</item>
 /// <item><b>Edit history</b> — scoped to the ink on this page (and it carries
-/// stroke-by-stroke replay), so it reads as part of the drawing surface.</item>
+/// stroke-by-stroke replay), so it reads as part of the drawing surface. Since
+/// 11.5 item 34 the slot OPENS THE RIGHT-DOCKED HISTORY PANEL rather than the
+/// top bar's flyout, which no longer exists.</item>
 /// <item><b>Mouse mode</b> — already a dial command; it only gained its
 /// top-bar hand-back key here.</item>
 /// </list>
@@ -49,7 +51,14 @@ public static class DialCommands
         /// <summary>The existing top-bar menus, handed over whole — the dial
         /// opens them on itself rather than on the button they came from.</summary>
         public required Func<FlyoutBase?> ShapeMenu { get; init; }
-        public required Func<FlyoutBase?> HistoryMenu { get; init; }
+        /// <summary>CONCEPTS-REF 11.5 item 34 / 11.20 item 14: history is no
+        /// longer a flyout the dial can borrow from a top-bar button, because
+        /// that button is gone. It is a floating panel docked to the right of the
+        /// screen, so the dial RUNS a command instead of opening a menu - and
+        /// reports whether the panel is up, so the cell reads as active while it
+        /// is, exactly like Comments.</summary>
+        public required Action OpenHistory { get; init; }
+        public required Func<bool> HistoryActive { get; init; }
         /// <summary>Reference 9.7: dictation and audio recording stop being
         /// top-bar buttons and become SELECTABLE TOOLS, assignable to a dial
         /// sector or a pen-row cell like any other. Both are toggles, so each
@@ -105,8 +114,12 @@ public static class DialCommands
             Id = "History",
             Label = Loc.T("Wheel.Cmd.History"),
             Icon = Icons.History,
-            TopBarKey = "BtnHistory",
-            Flyout = h.HistoryMenu,
+            // Deliberately NO TopBarKey. The hand-back exists so a command placed
+            // in a dial slot stops being offered twice; BtnHistory no longer
+            // exists to hand anything back to, and naming a dead key would have
+            // the visibility filter looking for a control that is not there.
+            IsActive = h.HistoryActive,
+            Run = h.OpenHistory,
         },
     };
 }

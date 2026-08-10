@@ -224,8 +224,15 @@ public sealed partial class MainWindow : Window
         Surface.ActiveTextChanged += box => { UpdateFormatBarVisibility(); SyncSizeComboFromSelection(box); };
         Surface.ContextMenuRequested += ShowCanvasContextMenu;
         Surface.CommentActivated += ShowCommentFlyout;
-        Surface.ReplayEnded += () => BtnReplay.IsChecked = false;
+        // Replay's toggle moved into the History panel with the rest of the
+        // history UI, so the end of a replay refreshes that panel rather than
+        // unchecking a top-bar button that no longer exists.
+        Surface.ReplayEnded += () => _historyWin?.Refresh();
         Surface.UndoManager.Changed += UpdateUndoButtons;
+        // The History panel is a live REPORT of this stack, not a snapshot taken
+        // when a flyout opened - which is what the top-bar version was. It only
+        // costs anything while the panel is up.
+        Surface.UndoManager.Changed += () => _historyWin?.Refresh();
         Surface.ViewChanged += OnViewChanged;
         Surface.RulerAngleChanged += OnRulerAngleChanged;
         Surface.StrokeTapped += stroke => SeekAudioToStroke(stroke);
@@ -359,8 +366,10 @@ public sealed partial class MainWindow : Window
         this.SizeChanged += (_, _) => UpdateScreenMetrics();
 
         // liquid pop for every flyout pane — history, search, page settings… (#50)
+        // HistoryFlyout and MouseModeBtn.Flyout are gone: history is a floating
+        // panel now and mouse modes are circles in Settings > Interaction.
         foreach (var fb in new FlyoutBase?[]
-                 { HistoryFlyout, SearchBtn.Flyout, PageSettingsBtn.Flyout, ZoomBtn.Flyout, RulerBtn.Flyout, MouseModeBtn.Flyout })
+                 { SearchBtn.Flyout, PageSettingsBtn.Flyout, ZoomBtn.Flyout, RulerBtn.Flyout })
         {
             if (fb is Flyout fl)
                 fl.Opened += (_, _) => { if (fl.Content is FrameworkElement root) PopIn(root, 0.9, 280); };
@@ -499,6 +508,15 @@ public sealed partial class MainWindow : Window
         // The Brushes item in the app menu takes the app's own pen mark rather
         // than a Segoe glyph, like everything else Icons owns.
         try { BrushesMenuIcon.Data = Icons.Geo(Icons.Pen); } catch { }
+        // The two entries the app menu gained when history and recording came off
+        // the top bar (11.4 item 26, 11.5 item 34). Both marks are authored vector
+        // geometry from Icons - PathIcon FILLS its Data and cannot stroke, and both
+        // of these are filled outlines, so they survive it.
+        try { HistoryMenuIcon.Data = Icons.Geo(Icons.History); } catch { }
+        try { RecordMenuIcon.Data = Icons.Geo(Icons.Record); } catch { }
+        // Dictation's mark on the writing bar, from the same source as the dial's
+        // Dictate command so the two can never drift.
+        try { IconDictate.Data = Icons.Geo(Icons.Microphone); } catch { }
         // Which tool palette is on screen. Configured BEFORE either surface is
         // attached, so the first Apply() on each already knows the answer and
         // neither one flashes up before being told it is not the current one.
@@ -624,7 +642,11 @@ public sealed partial class MainWindow : Window
             OpenComments = () => _chromeBars?.ToggleComments(),
             CommentsActive = () => _chromeBars?.CommentsOpen == true || Surface.CommentMode,
             ShapeMenu = () => ShapeBtn.Flyout,
-            HistoryMenu = () => BtnHistory.Flyout,
+            // 11.5 item 34: the dial's History cell opens the RIGHT-DOCKED
+            // floating panel, because the flyout it used to borrow from the top
+            // bar no longer exists. One command, one surface.
+            OpenHistory = OpenHistoryWindow,
+            HistoryActive = () => _historyWin?.IsOpen == true,
             // Reference 9.7: dictation and recording become selectable tools.
             // Both drive the EXISTING toggle buttons and their existing handlers
             // rather than a second copy of the logic, so the dial, the pen bar
@@ -637,6 +659,14 @@ public sealed partial class MainWindow : Window
             DictationActive = () => BtnDictate.IsChecked == true,
             ToggleRecording = () =>
             {
+                // Recording needs its panel up to be operable at all, so the dial's
+                // cell brings it up with the same call the Quill dropdown makes
+                // rather than starting a recording behind a hidden panel.
+                if (!RecordMenuItem.IsChecked)
+                {
+                    RecordMenuItem.IsChecked = true;
+                    RecordMenu_Toggle(this, new RoutedEventArgs());
+                }
                 AudioRecordBtn.IsChecked = !(AudioRecordBtn.IsChecked == true);
                 AudioRecord_Click(this, new RoutedEventArgs());
             },
@@ -6223,27 +6253,21 @@ public sealed partial class MainWindow : Window
         box.Focus(FocusState.Programmatic);
     }
 
-    private void MouseMode_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement fe && fe.Tag is string tag)
-            SetMouseMode(Enum.Parse<MouseMode>(tag));
-    }
-
+    /// <summary>CONCEPTS-REF 11.6 item 38 / 11.20 item 15 - mouse modes moved
+    /// into <b>Settings &gt; Interaction</b>, drawn as circles like every other
+    /// option group there, and came OFF the top bar permanently.
+    ///
+    /// <para>The dropdown that used to call this is gone, and with it the four
+    /// radio items and the arrow glyph it kept in step. What is left is the state
+    /// change itself, which the settings circles and the dial's mouse-mode cell
+    /// both call - so there is exactly one path into it and the panel can never
+    /// disagree with the surface about which mode is live.</para></summary>
     private void SetMouseMode(MouseMode mode)
     {
         Surface.MouseMode = mode;
-        MouseAuto.IsChecked = mode == MouseMode.Auto;
-        MouseGrab.IsChecked = mode == MouseMode.Grab;
-        MouseSelect.IsChecked = mode == MouseMode.Select;
-        MouseMove.IsChecked = mode == MouseMode.Move;
-        MouseModeGlyph.Text = mode switch
-        {
-            MouseMode.Grab => "✋",
-            MouseMode.Select => "⬚",
-            MouseMode.Move => "✥",
-            _ => "↖"
-        };
-        ToolTipService.SetToolTip(MouseModeBtn, "Mouse mode: " + mode);
+        // The settings panel reads MouseMode() back on every rebuild, so a change
+        // made from the dial shows up there without a second notification.
+        _settingsWin?.Refresh();
         ShowStatus(mode switch
         {
             MouseMode.Grab => "Mouse: grab — drag to pan the page.",
@@ -6316,27 +6340,58 @@ public sealed partial class MainWindow : Window
         BtnRedo.IsEnabled = Surface.UndoManager.CanRedo;
     }
 
-    private void HistoryFlyout_Opening(object? sender, object e)
+    // ---- CONCEPTS-REF 11.5 item 34 / 11.20 item 14 ----------------------
+    // HISTORY MOVED INTO THE QUILL DROPDOWN, opening a floating panel docked to
+    // the RIGHT of the screen in the Settings / Export / Objects family. What was
+    // a 240 DIP flyout hung off BtnHistory is now Controls/HistoryWindow.cs, and
+    // the replay toggle went with it.
+    private HistoryWindow? _historyWin;
+
+    private void History_Click(object sender, RoutedEventArgs e) => OpenHistoryWindow();
+
+    private void OpenHistoryWindow()
     {
-        var items = Surface.UndoManager.History;
-        HistoryList.ItemsSource = items.Count > 0 ? items : new[] { "(no edits on this page yet)" };
+        var win = EnsureHistoryWindow();
+        win?.Toggle();
     }
 
-    private void Replay_Click(object sender, RoutedEventArgs e)
+    /// <summary>Built on first use, exactly like the Brushes and Objects
+    /// libraries. Every delegate points at the SAME call the top bar's flyout
+    /// made, so the panel cannot report or drive anything the old surface did
+    /// not.</summary>
+    private HistoryWindow? EnsureHistoryWindow()
     {
-        if (BtnReplay.IsChecked == true)
+        try
         {
-            if (_curPage == null || _curPage.Strokes.Count == 0)
+            if (_historyWin == null)
             {
-                BtnReplay.IsChecked = false;
-                ShowStatus("Nothing to replay on this page yet.");
-                return;
+                _historyWin = HistoryWindow.Attach(CanvasArea, new HistoryWindow.Host
+                {
+                    Entries = () => Surface.UndoManager.History,
+                    StrokeCount = () => _curPage?.Strokes.Count ?? 0,
+                    Replaying = () => Surface.IsReplaying,
+                    SetReplaying = on =>
+                    {
+                        if (on) Surface.StartReplay();
+                        else Surface.StopReplay();
+                    },
+                    Undo = () => Surface.Undo(),
+                    Redo = () => Surface.Redo(),
+                    CanUndo = () => Surface.UndoManager.CanUndo,
+                    CanRedo = () => Surface.UndoManager.CanRedo,
+                    Status = ShowStatus,
+                });
+                // K.21: it lives in the popup layer, so it joins the solver as a
+                // VIRTUAL obstacle reporting its own rectangle - the bare canvas
+                // panes move out from under it and it is never moved itself.
+                try { _chromeBars?.Layout.RegisterRect("history", () => _historyWin?.Bounds); } catch { }
             }
-            Surface.StartReplay();
+            return _historyWin;
         }
-        else
+        catch (Exception ex)
         {
-            Surface.StopReplay();
+            ShowStatus("The History panel could not open: " + ex.Message);
+            return null;
         }
     }
 
@@ -8684,10 +8739,17 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
     // Two independent filters: the user's own show/hide choices, and context
     // (pen-only buttons are pointless while the text or lasso tool is active).
     // Element names only; the checkbox labels live in Strings as "Tool.<name>".
+    // MouseModeBtn, BtnHistory and VoiceBtn are NOT missing from this list by
+    // accident. All three left the top bar for good (11.4 item 26, 11.5 item 34,
+    // 11.6 item 38): mouse modes are circles in Settings > Interaction, history is
+    // a floating panel opened from the Quill dropdown, dictation is on the writing
+    // bar and recording is in the Quill dropdown. A show/hide checkbox for a
+    // control that no longer exists is exactly the "toolbar button-hiding behaves
+    // oddly" of 11.4 item 30.
     private static readonly string[] OptionalTools =
     {
-        "ToolSpace", "TouchDrawToggle", "ToolComment", "ShapeBtn", "MouseModeBtn",
-        "BtnHistory", "VoiceBtn", "BtnAi", "ZoomBtn", "PageSettingsBtn", "ExportBtn",
+        "ToolSpace", "TouchDrawToggle", "ToolComment", "ShapeBtn",
+        "BtnAi", "ZoomBtn", "PageSettingsBtn", "ExportBtn",
     };
 
     private void ApplyToolbarVisibility()
@@ -8719,9 +8781,6 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             Set(TouchDrawToggle, "TouchDrawToggle", pen);
             Set(ToolComment, "ToolComment");
             Set(ShapeBtn, "ShapeBtn", pen);
-            Set(MouseModeBtn, "MouseModeBtn", pen);
-            Set(BtnHistory, "BtnHistory");
-            Set(VoiceBtn, "VoiceBtn");
             Set(BtnAi, "BtnAi");
             Set(ZoomBtn, "ZoomBtn");
             Set(PageSettingsBtn, "PageSettingsBtn");
@@ -10918,11 +10977,15 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         }
     }
 
-    private void BtnAudioRecording_Click(object sender, RoutedEventArgs e)
+    /// <summary>CONCEPTS-REF 11.4 item 26 - <b>recording moved to the Quill
+    /// dropdown</b> and the microphone options came off the top bar entirely.
+    /// This is the old BtnAudioRecording handler, reading its state from the menu
+    /// item instead of a toolbar toggle; the panel it shows is unchanged.</summary>
+    private void RecordMenu_Toggle(object sender, RoutedEventArgs e)
     {
         // no slide: the panel is draggable, and a translate animation would
         // snap it back off wherever the user parked it
-        if (BtnAudioRecording.IsChecked == true) FadeIn(AudioFloatingPanel, 160);
+        if (RecordMenuItem.IsChecked) FadeIn(AudioFloatingPanel, 160);
         else FadeOut(AudioFloatingPanel, 130);
     }
 
