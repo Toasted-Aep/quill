@@ -682,6 +682,100 @@ public sealed partial class MainWindow : Window
                 ? new Rect(0, 0, CanvasArea.ActualWidth, CanvasArea.ActualHeight)
                 : (Rect?)null);
         ColorPickerService.ObstacleChanged += () => _chromeBars?.Layout.Invalidate();
+        // 11.19: while the wheel is up the corner chrome fades and everything
+        // else - page, ink, dial - stays exactly as it was.
+        ColorPickerService.DimChanged += DimChromeForPicker;
+    }
+
+    // ── 11.19: dimming, in place of the wheel's scrim ──────────────────────
+    //
+    // The wheel used to paint a grey rectangle over the whole window. That dims
+    // the page and the ink and the dial along with the chrome, and the user's
+    // reference shows the opposite: a fully saturated dial against visibly
+    // faded top-bar icons. So nothing is painted, and the chrome's own opacity
+    // comes down instead.
+    //
+    // Reached through PanelLayout rather than through ChromeBars: the two
+    // clusters and every canvas pane are registered there by name already, so
+    // this needs no reference to - and makes no change in - the files that own
+    // them. The floating windows are composited into XamlRoot's popup layer,
+    // which is not in the host's visual tree at all, so they are reached
+    // through the framework's own list of open popups.
+    //
+    // Explicitly NOT dimmed: "dial", "penbar" and "penrow". The dial staying
+    // fully opaque is the entire point of the effect, and the pen row is the
+    // other control you pick a colour FOR.
+    private const double PickerDimOpacity = 0.32;
+    private static readonly string[] DimExempt = { "dial", "penbar", "penrow", "copic" };
+    private readonly Dictionary<UIElement, double> _dimmed = new();
+
+    private void DimChromeForPicker(bool on)
+    {
+        try
+        {
+            if (on)
+            {
+                if (_dimmed.Count > 0) return;      // already down; do not stack
+                foreach (var (id, el) in DimTargets())
+                {
+                    // The element's own opacity is remembered, not assumed to be
+                    // 1: a cluster can already be part-faded by whatever owns it,
+                    // and restoring everything to 1 would BRIGHTEN it on close.
+                    double was = el.Opacity;
+                    _dimmed[el] = was;
+                    el.Opacity = was * PickerDimOpacity;
+                    GeometryProbe.Write("DIM-DOWN",
+                        $"id={id} was={was:F3} now={el.Opacity:F3}");
+                }
+            }
+            else
+            {
+                foreach (var kv in _dimmed)
+                {
+                    double from = kv.Key.Opacity;
+                    kv.Key.Opacity = kv.Value;
+                    GeometryProbe.Write("DIM-UP",
+                        $"from={from:F3} to={kv.Key.Opacity:F3} " +
+                        $"exact={(Math.Abs(kv.Key.Opacity - kv.Value) < 1e-9 ? 1 : 0)}");
+                }
+                _dimmed.Clear();
+            }
+        }
+        catch { }
+    }
+
+    private IEnumerable<(string Id, UIElement El)> DimTargets()
+    {
+        if (_chromeBars?.Layout is { } layout)
+            foreach (var id in new[] { "chrome-left", "chrome-right", "notebooks", "calc",
+                                       "layers", "precision", "comments" })
+            {
+                if (Array.IndexOf(DimExempt, id) >= 0) continue;
+                if (layout.Element(id) is { Visibility: Visibility.Visible } el)
+                    yield return (id, el);
+            }
+
+        // Settings, Objects, Export and Brushes are FloatingWindow, which hosts
+        // its content in a Popup. A popup's child is not under RootGrid, so the
+        // only handle on it from out here is the framework's own registry.
+        //
+        // Guarded, because that registry is not only ours: the framework parks
+        // popups of its own there, and a measurement with the wheel CLOSED
+        // found one already open with nothing of it on screen. "Any open
+        // floating panel" means a panel the user can see, so a popup has to be
+        // visible and have been laid out before it counts.
+        if (Content?.XamlRoot is { } xr)
+            foreach (var pop in Microsoft.UI.Xaml.Media.VisualTreeHelper.GetOpenPopupsForXamlRoot(xr))
+            {
+                if (pop.Child is not FrameworkElement child) continue;
+                if (child.Visibility != Visibility.Visible) continue;
+                if (child.ActualWidth < 1 || child.ActualHeight < 1) continue;
+                // A tooltip is not a floating panel. It is also a child of the
+                // cluster already being faded, so fading it again would take it
+                // to 0.10 while the button under it sat at 0.32.
+                if (child is ToolTip || child.GetType().Name == "ToolTip") continue;
+                yield return ("popup:" + child.GetType().Name, child);
+            }
     }
 
     private void LogStartupFault(string what, Exception? ex)

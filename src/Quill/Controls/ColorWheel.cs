@@ -107,14 +107,61 @@ public sealed class ColorWheel : UserControl
     // long flat sliver, which is what "too narrow" and 11.3 item 20's "closer
     // to square" are both describing. 1.85 puts that cell at 27 DIP and the
     // innermost column ring within a third of square.
-    private const float CellScale = 1.85f;
-    // How much annulus the hub's own chrome needs between that caller and
-    // Tier 1: the recents row and the mode-plate arc. 10.8 removed the mix row
-    // that used to sit between them, so this comes down with it - and because
-    // the hole is HubClearance + HubRoom, a smaller hub is also what lets the
-    // ring close in on the dial it is meant to be a ring around (1.8 asks for
-    // an inner radius of at least 1.25 R; this lands well clear of that).
-    private const float HubRoom = 82f;
+    //
+    // 11.15 item 4 puts this at +15% over the 27.08 DIP the user approved in
+    // 11.12, reversing 11.14 item 3's retraction. The cell depth is an absolute
+    // number, not a proportion, so the constant is solved for it at the s a
+    // docked dial forces: 21 * 0.9004 * 1.6470 = 31.14 DIP.
+    private const float CellScale = 1.6470f;
+    // 11.15 item 1, "COPIC wheel 15% smaller", read as the OUTER extent.
+    //
+    // Written as a radius per unit of s rather than as a factor on the live
+    // geometry, and that distinction is the whole of item 1. The 11.14 render
+    // the user is looking at measured rOut = 731.80 at s = 0.900, so 15% off is
+    // 621.83, i.e. 690.6 units of s. Taking 15% off the CURRENT rOut instead
+    // would be taking it off a radius item 4 has already grown by deepening
+    // every cell, which is a bigger wheel than the one asked for - the two
+    // instructions are independent, exactly as item 3 says of the type.
+    //
+    // Rings are whole cells, so Layout floors to the last one that fits and
+    // reports the count; see _rings.
+    private const float OuterRef = 690.6f;
+    // 11.15 item 3: "texts and the other elements shrink 20%", applied
+    // INDEPENDENTLY of item 1 - one factor, on everything the wheel draws that
+    // is not a swatch. It replaces 11.14's split 0.85 / 0.80, which 11.15
+    // supersedes entirely, and it is taken off the 11.13 sizes because that is
+    // the render these instructions are measured against.
+    private const float TextScale = 0.80f;
+    // 11.17: the inner spine ring is "radially narrower than everything outside
+    // it". Tier 1 and Tier 2 are that spine, so both bands - and the hairline
+    // between them - come off the family cell's depth by this much. At 31.14
+    // that puts the grey ring at 19.3 DIP against a 31.1 DIP family cell, which
+    // is the proportion the capture reads at.
+    private const float SpineScale = 0.62f;
+    // 11.17: "then a band of bare background" between the spine and the family
+    // fans - "a real margin, not an artefact". The 5-unit reference gap is not
+    // that; it is a hairline. Nine tenths of a family cell is, and it is the
+    // one band in the wheel whose only job is to be empty.
+    private const float SpineGap = 0.90f;
+    // 11.17: "families are separated by visible gaps" of background, while
+    // cells TOUCH within a family. Taken off the trailing edge of each family's
+    // last column, so the leading edge - where 11.18's cornered code sits - is
+    // never the side that moves.
+    private const float FamGap = 1.7f * Deg;
+    // How much annulus the hub's own chrome needs between the caller and
+    // Tier 1: the recents row, the current-colour puck and the mode-plate arc.
+    //
+    // 11.13 item 1, "the empty centre gets bigger": this IS the hole, since the
+    // hole is HubClearance + HubRoom, and 82 -> 140 takes it from 198.6 to
+    // 256.6 DIP. 10.8 had brought it DOWN to 82 to stop the mode plates landing
+    // on the dial's popped sector - that fix is not what is being reversed
+    // here, and it still holds, because "lo" below still starts the chrome
+    // outside the caller rather than at a fraction of the hole. What is being
+    // reversed is 11.12's rule that the hole may not grow, and it is safe to
+    // reverse only because item 2 grows the OUTER edge in the same breath: s
+    // rises from 0.697 to 0.900, so every band past the hole widens by 29% at
+    // the same time and the ring is not squeezed from one side.
+    private const float HubRoom = 140f;
     // Abutting tiles share an edge, and two antialiased edges over the same
     // pixel leave a faint line of background showing through. Each tile is
     // therefore drawn a hair past the side it shares with its successor, which
@@ -138,18 +185,26 @@ public sealed class ColorWheel : UserControl
     // while a transition is in flight, so an idle picker costs nothing.
     private readonly DispatcherTimer _anim = new() { Interval = TimeSpan.FromMilliseconds(16) };
 
+    // 11.14 item 4 puts the code in the cell's upper-left CORNER, so the box
+    // is anchored rather than centred. "Upper" is the only self-consistent
+    // reading of the word on a ring: DrawCode turns the glyph tops toward the
+    // wheel's centre, so up-the-page for a reader is inward-along-the-radius.
     private readonly CanvasTextFormat _codeFmt = new()
     {
         FontSize = 11,
         FontFamily = "Segoe UI",
-        HorizontalAlignment = CanvasHorizontalAlignment.Center,
-        VerticalAlignment = CanvasVerticalAlignment.Center,
+        HorizontalAlignment = CanvasHorizontalAlignment.Left,
+        VerticalAlignment = CanvasVerticalAlignment.Top,
         WordWrapping = CanvasWordWrapping.NoWrap
     };
     private readonly CanvasTextFormat _labelFmt = new()
     {
         FontSize = 15,
         FontFamily = "Segoe UI",
+        // 11.14 item 5. Smaller AND heavier at once is the point: the plate is
+        // losing most of its frame, so the word itself has to carry the weight
+        // the border used to.
+        FontWeight = Microsoft.UI.Text.FontWeights.Bold,
         HorizontalAlignment = CanvasHorizontalAlignment.Center,
         VerticalAlignment = CanvasVerticalAlignment.Center,
         WordWrapping = CanvasWordWrapping.NoWrap
@@ -276,7 +331,11 @@ public sealed class ColorWheel : UserControl
     private float _r2In, _r2Out;        // Tier 2 (grey ring)
     private float _rOutBase, _band;     // Tier 3+ (outer family columns)
     private float _rIn, _rOut;          // grabbable annulus [inner tier, outer edge]
-    private float _rLabel, _rRecent, _chipR;
+    private float _rLabel, _rRecent, _chipR, _rPuck;
+    // 11.15 item 1's consequence, stated rather than implied: with the hole
+    // pinned, the outer radius pulled in and every cell 15% deeper, only this
+    // many of the 17 possible column rings fit inside the new outer edge.
+    private int _rings = MaxRings;
     private Vector2 _probeC = new(float.NaN, float.NaN);   // 10.2 item 8, see Layout
     // Chrome scale. The hub shrinks with the window (the ring is fitted to the
     // viewport), and the mode plates / eyedropper / bubbles are authored at a
@@ -287,7 +346,25 @@ public sealed class ColorWheel : UserControl
                                         // viewport centre — everything that has
                                         // to stay on screen hangs off this
     private readonly float[] _arcR = new float[3];
-    private const float ArcHalf = 0.72f;   // half-span of an HSL/RGB arc, radians
+    // 11.15 item 6: each channel arc gets "its own radius and its own angular
+    // span". One shared half-span is what made the three read as one dial with
+    // three needles; three spans make them three sliders. They also narrow as
+    // they go out, which is what keeps the outermost arc's leading end from
+    // reaching up under the top chrome bar at the radius the fan now needs.
+    private readonly float[] _arcHalf = new float[3];
+    // Half the thickness of a channel arc, and the knob's radius - "slightly
+    // wider than the arc" (item 6), so the knob reads as riding ON the track
+    // rather than as a bead threaded through it.
+    private float _arcW, _arcKnob;
+    // Shared by the draw pass and the hit test, so a tap cannot resolve against
+    // the unrolled position of an arc that is drawn rolled.
+    private const float ArcRoll = 0.18f;
+    // The measured size of each face's word, so 11.16's chip can be snug on it
+    // ("horizontal padding roughly double the vertical") instead of a fixed box
+    // with a different margin round every word. Re-measured only when the type
+    // size changes, not per frame.
+    private readonly Vector2[] _plateSz = new Vector2[3];
+    private float _plateFontMeasured = -1f;
     private readonly Vector2[] _labelPt = new Vector2[3];
     private Vector2 _dropPt, _puckPt;
     private readonly List<(Vector2 Pt, Color Col)> _chipPts = new();
@@ -301,6 +378,10 @@ public sealed class ColorWheel : UserControl
     // Cached tile geometry: one 10° cell per outer ring band (reused across all
     // 36 columns by rotation), plus one cell each for the two inner tiers.
     private readonly CanvasGeometry?[] _outerGeo = new CanvasGeometry?[MaxRings];
+    // 11.17: a family's LAST column is short by FamGap and carries no weld, so
+    // the gap it opens is background rather than a hairline the next family's
+    // weld paints over. Two variants per ring, not one.
+    private readonly CanvasGeometry?[] _outerGeoEnd = new CanvasGeometry?[MaxRings];
     // 9.4.1. The selection outline is NOT the cell geometry. Cell tiles are
     // WELDED - grown half a pixel outward and clockwise - so neighbouring fills
     // leave no seam between swatches. A centred stroke on a welded tile lands
@@ -326,6 +407,11 @@ public sealed class ColorWheel : UserControl
     // [-90+10i, -80+10i]°; entry 0 of a column is its innermost ink.
     private static readonly CopicSwatch[][] OuterColumns = BuildOuterColumns();
     private static readonly int MaxRings = OuterColumns.Max(c => c.Length);
+    // 11.17: "cells touch edge to edge within a family; families are separated
+    // by visible gaps". The palette already groups the 36 columns into its 11
+    // sectors, so the boundary is data, not a guess - this simply records which
+    // column is the last of its sector.
+    private static readonly bool[] ColEndsFamily = BuildFamilyEnds();
 
     // Inner arcs: each cell carries its own [A0, A1] because the group dividers
     // push later cells along. Widths are uniform within a tier (Tier?Width), so
@@ -377,6 +463,15 @@ public sealed class ColorWheel : UserControl
             foreach (var slice in sector.Slices)
                 cols.Add(slice.Colors);   // already -90°→270° in reference order
         return cols.ToArray();
+    }
+
+    private static bool[] BuildFamilyEnds()
+    {
+        var ends = new List<bool>(36);
+        foreach (var sector in CopicPalette.Sectors)
+            for (int i = 0; i < sector.Slices.Length; i++)
+                ends.Add(i == sector.Slices.Length - 1);
+        return ends.ToArray();
     }
 
     private static (Cell[] Cells, float Width) BuildInnerCells(
@@ -441,6 +536,7 @@ public sealed class ColorWheel : UserControl
     private void DisposeGeometry()
     {
         for (int i = 0; i < _outerGeo.Length; i++) { _outerGeo[i]?.Dispose(); _outerGeo[i] = null; }
+        for (int i = 0; i < _outerGeoEnd.Length; i++) { _outerGeoEnd[i]?.Dispose(); _outerGeoEnd[i] = null; }
         for (int i = 0; i < _outerSelGeo.Length; i++) { _outerSelGeo[i]?.Dispose(); _outerSelGeo[i] = null; }
         _tier1Geo?.Dispose(); _tier1Geo = null;
         _tier2Geo?.Dispose(); _tier2Geo = null;
@@ -506,20 +602,33 @@ public sealed class ColorWheel : UserControl
         // inside it moves at all.
         _r1In = 285f * s;
         float u = s * CellScale;               // one reference unit, in DIP
-        _r1Out = _r1In + 17f * u;              // Tier 1 inner accent arc
-        _r2In = _r1Out + 5f * u;
-        _r2Out = _r2In + 21f * u;              // Tier 2 grey ring
-        _rOutBase = _r2Out + 5f * u;
-        _band = 21f * u;                       // Tier 3+ columns
+        _band = 21f * u;                       // Tier 3+ columns - 11.15 item 4
+        // 11.17. The two inner tiers ARE the spine ring, and the spine is
+        // narrower than the fans; the reference's own 17 / 5 / 21 proportions
+        // are kept, simply taken at a smaller unit.
+        float su = u * SpineScale;
+        _r1Out = _r1In + 17f * su;             // Tier 1 inner accent arc
+        _r2In = _r1Out + 5f * su;
+        _r2Out = _r2In + 21f * su;             // Tier 2 grey ring
+        _rOutBase = _r2Out + _band * SpineGap; // 11.17's band of bare background
         _rIn = _r1In;
-        _rOut = _rOutBase + MaxRings * _band;
+        // 11.15 item 1. The outer edge is a target, not an accumulation: fit as
+        // many WHOLE cells inside it as will go and stop. A tenth of a cell
+        // hanging past the edge is not "15% smaller", and a cell cut off
+        // mid-swatch is not a swatch.
+        _rings = (int)MathF.Floor((OuterRef * s - _rOutBase) / MathF.Max(_band, 1f));
+        _rings = Math.Clamp(_rings, 1, MaxRings);
+        _rOut = _rOutBase + _rings * _band;
         // The reference sets its SVG code text to 7 units in a 21-unit band, a
         // third of the band. Segoe UI through Win2D at that size is a smear and
         // the band has room for far more: half the band still leaves ~3.5 DIP of
         // padding above and below the line box, and the narrowest cell in the
         // whole wheel (Tier 2, ~7.3° at r≈317, so ~40 DIP of arc) still swallows
         // the longest grey code at that size.
-        _codeFmt.FontSize = Math.Clamp(_band * 0.5f, 7f, 14f);
+        // 11.15 item 3: 20% off, and off the 11.13 size - which was the 14 DIP
+        // ceiling, since a 35 DIP band had long since run past it. Item 1 is a
+        // geometry scale and does not compound into this.
+        _codeFmt.FontSize = Math.Clamp(_band * 0.5f, 7f, 14f) * TextScale;
 
         // The chrome lives in the hub, so it is sized off the HOLE rather than
         // the window: it can never collide with Tier 1 whatever the shape.
@@ -540,29 +649,73 @@ public sealed class ColorWheel : UserControl
         // 180 pinned _ui at its 0.60 floor in every real case, which is how
         // COPIC / HSL / RGB ended up at 6.6 DIP of type. The divisor is now the
         // annulus the hub actually gets, so the floor stops being the answer.
-        _ui = Math.Clamp(band / 100f, 0.80f, 1.45f);
+        // 11.13. The chrome's arc radius grows with the hole, but its ITEMS
+        // must not grow with it: at 11.12's sizes and this hole a mode plate is
+        // 128 DIP wide and five of them do not fit abreast in the quadrant a
+        // corner-docked dial leaves on screen. The ceiling holds them near the
+        // size the user approved while the ring grows past them. Raising it
+        // again means moving the cluster off one arc, not just more clamp.
+        //
+        // 11.14 asks whether item 5 has bought the ceiling out. Measured: it
+        // has bought out the reason, and not the ceiling. band is 140 here, so
+        // uncapped _ui would be 1.40; a 68-wide plate at 1.40 is 95 DIP against
+        // a 113 DIP gap, so the FIT objection is gone. But raising the cap puts
+        // the plate type at 15.3 x 1.40 = 21.4 DIP against the 19.8 on screen
+        // now - BIGGER, which is the opposite of what item 5 asked for. The cap
+        // is what makes item 5's 15% visible at all (19.8 -> 16.8), so it
+        // stays, now on its own merits rather than for want of room.
+        _ui = Math.Clamp(band / 100f, 0.80f, 1.10f);
         // 11.12 item 1: "the face labels are far too small." 11 -> 18.
-        _labelFmt.FontSize = 18f * _ui;
-        _bubbleFmt.FontSize = 15f * _ui;
+        // 11.15 item 3 takes 20% back off that, against a bold face.
+        _labelFmt.FontSize = 18f * TextScale * _ui;
+        _bubbleFmt.FontSize = 15f * TextScale * _ui;
         // 11.12: the plates are 42 DIP tall now against 26, so they reach
         // inward to where the recents row used to sit and the first chip landed
         // ON the HSL plate. The row moves in; the two bands no longer meet.
-        _rRecent = lo + band * 0.15f;
-        // 11.12 item 4: the recents dots scale with everything else.
-        _chipR = Math.Clamp(band * 0.075f, 7f, 14f);
+        // 11.13 re-spaces all three bands across the wider annulus.
+        _rRecent = lo + band * 0.13f;
+        // 11.12 item 4: the recents dots scale with everything else - and 11.15
+        // item 3 names them among the "other elements" that come down 20%.
+        _chipR = Math.Clamp(band * 0.075f, 7f, 14f) * TextScale;
         // 10.8 took the mix row out from between these two, so the mode plates
         // move in to where it was rather than leaving a gap the size of a
         // control that no longer exists.
-        _rLabel = lo + band * 0.62f;
+        // 11.15 item 5. The number is set by the plate's CORNER, not its
+        // centre: the chip is axis-aligned and rides a radial arc, so its
+        // circumscribed radius is what has to clear the hole. At 0.72 that
+        // corner reached 257.37 against a 256.62 hole and clipped the first row
+        // of Tier 1. 0.66 puts it at 248.97 - 7.65 DIP of margin outward, 52.45
+        // inward to the dial.
+        _rLabel = lo + band * 0.66f;
+        // 11.13: the puck comes OFF the plate arc. Five items abreast no longer
+        // fit the visible quadrant, and the annulus the bigger hole opened up is
+        // exactly where a sixth band can go - so the puck takes its own radius
+        // between the recents row and the plates, at the leading end.
+        _rPuck = lo + band * 0.36f;
         // 9.4.3: the HSL and RGB faces used to be fitted to the VIEWPORT
         // (0.42 / 0.58 / 0.74 of half the window), which put them far inside the
         // COPIC face - switching mode collapsed the control toward the middle
         // and the three arcs read as a different, smaller instrument. They now
         // take the COPIC face's own bands: Tier 1, Tier 2 and the first column
         // ring. One control, one radius, whichever face is up.
-        _arcR[0] = (_r1In + _r1Out) * 0.5f;
-        _arcR[1] = (_r2In + _r2Out) * 0.5f;
-        _arcR[2] = _rOutBase + _band * 0.5f;
+        // 11.15 item 6. The three arcs used to sit on Tier 1, Tier 2 and the
+        // first column ring, which after 11.17 narrowed the spine are 20 DIP
+        // apart - closer than one arc is thick, let alone an arc plus a knob
+        // plus a value box. They take their own ladder now, pitched so that a
+        // box hung outside one arc still clears the next arc's inner edge by
+        // more than its own height. Nothing is measured off the tiers, so the
+        // HSL and RGB faces no longer inherit the COPIC face's band structure.
+        _arcW = 9f * _ui * TextScale;
+        _arcKnob = _arcW + 4.5f * _ui * TextScale;
+        float pitch = _arcW * 2f + 72f * _ui * TextScale;
+        for (int i = 0; i < 3; i++)
+        {
+            _arcR[i] = _r1In + 40f * _ui * TextScale + i * pitch;
+            // Narrowing outward: at a fixed half-span the outer arc's leading
+            // end swings up into the top chrome bar, and it is the SPAN item 6
+            // gives each arc of its own, so shortening it is not a compromise.
+            _arcHalf[i] = 0.86f - 0.13f * i;
+        }
 
         // Which way the hub's chrome faces. Centred in the viewport that is the
         // direction of the thing that opened the picker; centred ON that thing
@@ -584,7 +737,15 @@ public sealed class ColorWheel : UserControl
                 var t = TransformToVisual((UIElement?)XamlRoot?.Content ?? this);
                 GeometryProbe.Point("WHEEL-CENTRE", t.TransformPoint(new Point(_c.X, _c.Y)),
                     $"local={_c.X:F2},{_c.Y:F2} anchor={_hint.X:F2},{_hint.Y:F2} " +
-                    $"onAnchor={(CenterOnAnchor ? 1 : 0)} hub={HubClearance:F2} scale={s:F3} hole={_r1In:F2} viewport={w:F0}x{h:F0}");
+                    $"onAnchor={(CenterOnAnchor ? 1 : 0)} hub={HubClearance:F2} scale={s:F3} hole={_r1In:F2} viewport={w:F0}x{h:F0} " +
+                    $"band={_band:F2} rOut={_rOut:F2} ui={_ui:F3} code={_codeFmt.FontSize:F2} " +
+                    $"lo={lo:F2} hubBand={band:F2} rRecent={_rRecent:F2} chipR={_chipR:F2} " +
+                    $"rPuck={_rPuck:F2} rLabel={_rLabel:F2} rings={_rings}/{MaxRings} " +
+                    $"r1Out={_r1Out:F2} r2In={_r2In:F2} r2Out={_r2Out:F2} rOutBase={_rOutBase:F2} " +
+                    $"spine={(_r2Out - _r2In):F2} gapBand={(_rOutBase - _r2Out):F2} " +
+                    $"label={_labelFmt.FontSize:F2} bubble={_bubbleFmt.FontSize:F2} " +
+                    $"arcR={_arcR[0]:F1},{_arcR[1]:F1},{_arcR[2]:F1} arcW={_arcW:F2} " +
+                    $"drop={44f * _ui * TextScale:F1} puck={20f * _ui * TextScale:F1}");
             }
             catch { }
         }
@@ -597,14 +758,22 @@ public sealed class ColorWheel : UserControl
         // Trailing the fan rather than leading it: spread out to item 15's
         // spacing, a cluster that STARTS with the puck reaches up past the
         // dial and puts it under the top chrome bar.
-        // 11.12: the plates are 92 DIP wide now against 58, so the fan opens
-        // from 0.46 rad between them to 0.62 or they overlap each other at the
-        // radius a docked dial leaves for the hub.
-        _puckPt = At(_rLabel, _base + 1.72f);
-        _labelPt[0] = At(_rLabel, _base - 0.76f);
-        _labelPt[1] = At(_rLabel, _base - 0.14f);
-        _labelPt[2] = At(_rLabel, _base + 0.48f);
-        _dropPt = At(_rLabel, _base + 1.10f);
+        // 11.13. Four items on the arc, not five, at 0.52 rad - which is a
+        // 113 DIP gap at this radius against a 101 DIP plate. The whole fan is
+        // then rolled 0.18 rad clockwise: at the bigger radius the leading plate
+        // was reaching up into the top chrome bar, and rolling the cluster is
+        // the one correction that costs nothing, since the far end still lands
+        // well inside the window.
+        const float Step = 0.52f, Roll = 0.18f;
+        _labelPt[0] = At(_rLabel, _base + Roll - Step * 1.5f);
+        _labelPt[1] = At(_rLabel, _base + Roll - Step * 0.5f);
+        _labelPt[2] = At(_rLabel, _base + Roll + Step * 0.5f);
+        _dropPt = At(_rLabel, _base + Roll + Step * 1.5f);
+        // TRAILING the fan, not tucked under its first plate. A plate is an
+        // axis-aligned rect 101 DIP wide, so its inner CORNER reaches about
+        // 32 DIP closer to the centre than its midpoint does - enough to
+        // swallow a puck that only cleared the midpoint's radius.
+        _puckPt = At(_rPuck, _base + Roll + Step * 2.4f);
 
         _chipPts.Clear();
         int n = Math.Min(12, Recents.Count);
@@ -710,16 +879,18 @@ public sealed class ColorWheel : UserControl
     // round every swatch, and it put the painted tile a pixel inside the band
     // the hit-test answers for, so the two stopped describing the same shape.
     // Cached and re-used for all 36 columns.
-    private CanvasGeometry OuterCell(ICanvasResourceCreator rc, int ring)
+    private CanvasGeometry OuterCell(ICanvasResourceCreator rc, int ring, bool endsFamily)
     {
-        if (_outerGeo[ring] is { } cached) return cached;
+        var slot = endsFamily ? _outerGeoEnd : _outerGeo;
+        if (slot[ring] is { } cached) return cached;
         float r0 = _rOutBase + ring * _band;
         // Welded outward and clockwise: rings are drawn inner-to-outer and
         // columns in increasing angle, so the overlap is always covered by the
-        // neighbour drawn next.
-        var geo = ArcTile(rc, r0, r0 + _band + Weld, 0f, ColStep + Weld / MathF.Max(r0, 1f));
-        _outerGeo[ring] = geo;
-        return geo;
+        // neighbour drawn next. A family's last column is the one place where
+        // there IS no next neighbour to cover it - 11.17 wants background
+        // showing there - so that variant is short by FamGap and unwelded.
+        float span = endsFamily ? ColStep - FamGap : ColStep + Weld / MathF.Max(r0, 1f);
+        return slot[ring] = ArcTile(rc, r0, r0 + _band + Weld, 0f, span);
     }
 
     // The two inner tiers are isolated bands, so they are welded only along the
@@ -742,13 +913,17 @@ public sealed class ColorWheel : UserControl
     // stroke cannot reach a neighbour's territory (9.4.1).
     private const float SelInset = SelStroke * 0.5f + 0.25f;
 
+    // Not cached per family-end variant: the outline is inset on every side
+    // anyway, so the widest it can be is the narrow cell's own painted extent
+    // less the inset, and one shape that never reaches past a short cell is
+    // preferable to two that each only fit one of them.
     private CanvasGeometry OuterSel(ICanvasResourceCreator rc, int ring)
     {
         if (_outerSelGeo[ring] is { } cached) return cached;
         float r0 = _rOutBase + ring * _band;
         float da = SelInset / MathF.Max(r0, 1f);
         return _outerSelGeo[ring] =
-            ArcTile(rc, r0 + SelInset, r0 + _band - SelInset, da, ColStep - da);
+            ArcTile(rc, r0 + SelInset, r0 + _band - SelInset, da, ColStep - FamGap - da);
     }
 
     private CanvasGeometry Tier1Sel(ICanvasResourceCreator rc)
@@ -786,15 +961,18 @@ public sealed class ColorWheel : UserControl
         // that animates, but here they share a canvas).
         float p1 = TierProgress(Tier1OpenDelay, Tier1CloseDelay);
 
-        // The reference presents this face as a MODAL — ColorPickerModal wraps
-        // the very same wheel in a dimmed backdrop and centres it — and that
-        // backdrop is most of what makes it read as its own surface rather than
-        // something growing out of whatever was tapped. It is drawn here, inside
-        // the same Win2D pass, so it fades in on Tier 1's clock with everything
-        // else. It lifts while the eyedropper is armed: that tool has to see the
-        // page it is about to sample.
-        if (!_sampling && p1 > 0.002f)
-            ds.FillRectangle(0, 0, w, h, Fade(Color.FromArgb(132, 8, 9, 12), p1));
+        // 11.19 takes the scrim away. It used to be drawn here, full-window, and
+        // it was doing two jobs: separating the wheel from the page, and dimming
+        // the chrome. The user wants only the second, and wants it done to the
+        // chrome itself - "the page, its ink, and the radial dial stay at full
+        // opacity", and in the reference the dial is fully saturated against
+        // faded top-bar icons, which a scrim over everything cannot produce.
+        // ColorPickerService.Dimming now carries that, so nothing is painted
+        // over the page at all.
+        //
+        // The consequence lands here: every mark this control makes outside the
+        // ring used to be authored against a fixed dark backdrop, so all of it
+        // now comes from PageTheme instead (section 0 - never a hardcoded grey).
 
         if (_mode == ColorWheelMode.Copic) DrawRing(sender, ds, w, h);
         else DrawArcs(ds, p1);
@@ -841,27 +1019,34 @@ public sealed class ColorWheel : UserControl
             if (stack.Length == 0) continue;
             float p = TierProgress(ColOpenDelay[col], ColCloseDelay[col]);
             if (p <= 0.002f) continue;              // not arrived yet / already gone
+            bool endsFam = ColEndsFamily[col];
+            float span = endsFam ? ColStep - FamGap : ColStep;
             float a0 = Norm(OuterStart + col * ColStep + _rot);
-            float midA = a0 + ColStep * 0.5f;
-            if (!WedgeVisible(a0, a0 + ColStep, _rOutBase, p, view)) continue;
+            float midA = a0 + span * 0.5f;
+            if (!WedgeVisible(a0, a0 + span, _rOutBase, p, view)) continue;
 
             // The column's own gravity drop: scaled about the WHEEL centre, so
             // the ring implodes/explodes as one body rather than each column
             // shrinking into itself.
             var grow = TierTransform(p);
             var rotate = Matrix3x2.CreateRotation(a0, _c) * grow;
-            for (int ring = 0; ring < stack.Length; ring++)
+            // 11.15 item 1: only the rings that fit inside the new outer edge.
+            // The deep columns keep their inks in the palette - nothing here
+            // reorders or drops data - they simply run out of wheel.
+            int depth = Math.Min(stack.Length, _rings);
+            for (int ring = 0; ring < depth; ring++)
             {
                 var sw = stack[ring];
                 var col32 = Color.FromArgb(255, sw.R, sw.G, sw.B);
                 ds.Transform = rotate;
-                ds.FillGeometry(OuterCell(rc, ring), Fade(col32, p));
+                ds.FillGeometry(OuterCell(rc, ring, endsFam), Fade(col32, p));
                 if (sw.Code == near.Code)
                     _sel = (OuterSel(rc, ring), rotate,
-                            IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), p);
+                            LabelInk(col32), p);
                 ds.Transform = grow;
 
-                if (labels) DrawCode(ds, sw.Code, _rOutBase + (ring + 0.5f) * _band, midA, col32, p);
+                if (labels) DrawCode(ds, sw.Code, _rOutBase + (ring + 0.5f) * _band, midA,
+                                     _band, span, col32, p);
                 ds.Transform = Matrix3x2.Identity;
             }
         }
@@ -895,32 +1080,49 @@ public sealed class ColorWheel : UserControl
             ds.Transform = tile;
             ds.FillGeometry(geo, Fade(col32, p));
             if (cell.Sw.Code == near.Code)
-                _sel = (sel, tile, IsDark(col32) ? Colors.White : Color.FromArgb(255, 20, 20, 20), p);
+                _sel = (sel, tile, LabelInk(col32), p);
             ds.Transform = grow;
 
-            if (labels) DrawCode(ds, cell.Sw.Code, rMid, mid, col32, p);
+            if (labels) DrawCode(ds, cell.Sw.Code, rMid, mid,
+                                 (rMid - rIn) * 2f, cell.A1 - cell.A0, col32, p);
             ds.Transform = Matrix3x2.Identity;
         }
     }
 
-    // The marker code, centred in its tile and oriented RADIALLY: the text is
-    // rotated by (θ − 90°) about the label's own centre, which points the top of
-    // the glyphs at the wheel's centre. Because the ring turns as a rigid body,
-    // every code then holds the same orientation relative to the wheel through a
-    // spin — the reason for the fixed offset rather than a cos-based flip, which
-    // reads upright at rest but inverts discontinuously mid-rotation.
+    // The marker code, oriented RADIALLY: the text is rotated by (θ − 90°)
+    // about the label's own centre, which points the top of the glyphs at the
+    // wheel's centre. Because the ring turns as a rigid body, every code then
+    // holds the same orientation relative to the wheel through a spin — the
+    // reason for the fixed offset rather than a cos-based flip, which reads
+    // upright at rest but inverts discontinuously mid-rotation.
     // (Sign verified against the renderer: +90° would face the tops outward.)
-    private void DrawCode(CanvasDrawingSession ds, string code, float r, float midA, Color bg, float a)
+    //
+    // 11.14 item 4 moves it off the centre of the tile and into the tile's
+    // UPPER-LEFT corner. In the rotated frame that rotation establishes, local
+    // −Y is radially inward and local −X is the trailing side of the arc, so
+    // the corner is (inner edge, trailing edge) - which is why the caller has
+    // to hand over the cell's radial depth and angular span; neither is
+    // derivable here, the tiers and the columns having different both.
+    private void DrawCode(CanvasDrawingSession ds, string code, float r, float midA,
+                          float depth, float span, Color bg, float a)
     {
         var p = At(r, midA);
         var keep = ds.Transform;
         ds.Transform = Matrix3x2.CreateRotation(midA - MathF.PI / 2f, p) * keep;
-        // The box only positions the (centred, unwrapped) line, but it has to
-        // be at least as tall as the line or Win2D clips the descenders.
+        // The box only positions the (unwrapped) line, but it has to be at
+        // least as tall as the line or Win2D clips the descenders.
         double boxH = Math.Max(16.0, _codeFmt.FontSize * 1.7);
+        // Arc taken at the cell's INNER edge, where the label now sits: a cell
+        // is a wedge, so its arc there is shorter than at the mid-radius the
+        // old centred box measured from, and using the wider figure would hang
+        // the first glyph outside the tile.
+        float inner = r - depth * 0.5f;
+        float halfArc = span * MathF.Max(inner, 1f) * 0.5f;
+        const float Pad = 2.5f;
         ds.DrawText(code,
-            new Rect(p.X - _band * 1.7, p.Y - boxH * 0.5, _band * 3.4, boxH),
-            Fade(IsDark(bg) ? Color.FromArgb(240, 255, 255, 255) : Color.FromArgb(230, 24, 24, 24), a),
+            new Rect(p.X - halfArc + Pad, p.Y - depth * 0.5 + Pad,
+                     Math.Max(4.0, halfArc * 2f - Pad * 2f), boxH),
+            Fade(LabelInk(bg), a),
             _codeFmt);
         ds.Transform = keep;
     }
@@ -933,37 +1135,82 @@ public sealed class ColorWheel : UserControl
         ds.Transform = TierTransform(a);
         for (int i = 0; i < 3; i++)
         {
-            float r = _arcR[i];
-            float a0 = _base - ArcHalf, a1 = _base + ArcHalf;
-            const int steps = 220;
+            float r = _arcR[i], half = _arcHalf[i];
+            // The same 0.18 rad clockwise roll the plate fan takes, and for the
+            // same reason: _base points at the middle of the window, so on a
+            // corner-docked dial an arc centred on it puts its leading end - and
+            // the value box hung outside that end - up under the top chrome bar.
+            // Measured at 0.86 half-span: the zero end sat at y = 59 DIP with
+            // its box at y = 34. Rolled, it sits at 109.
+            float a0 = _base + ArcRoll - half, a1 = _base + ArcRoll + half;
+            // "One thick arc with round caps, a gradient along its length."
+            //
+            // Stamped as overlapping discs rather than stroked with a gradient
+            // brush, and that is not an optimisation - it is the only way this
+            // repaints. WinUI caches GradientStop mutations, so a brush whose
+            // stops are rewritten as the colour changes paints correctly once
+            // and then freezes; swapping in a new brush every frame for three
+            // arcs is three allocations a frame for a control that is dragged.
+            // A disc per step is immune to both, and the caps come out round
+            // for free because the end steps ARE discs.
+            //
+            // Thickness is now CONSTANT. The old 2.6 -> 7.0 taper read as a
+            // comet and made "slightly wider than the arc" undefinable, since
+            // the arc was a different width at every point along it.
+            //
+            // The track goes down first, a hair proud of the gradient all the
+            // way round. Without the scrim 11.19 removed, lightness ends in
+            // white and saturation ends in grey ON WHITE PAPER, and half of
+            // each arc was simply not there. This is the slider's track, not a
+            // border on the arc - it is behind it, and it is what the arc is
+            // drawn ON - so 11.16's "no frame" still holds.
+            const int steps = 260;
+            var track = Services.PageTheme.WithAlpha(Services.PageTheme.OnSurface, 46);
             for (int k = 0; k <= steps; k++)
             {
                 float t = k / (float)steps;
-                var p = At(r, a0 + (a1 - a0) * t);
-                // Overlapping dots make a smooth, tapered stroke for free —
-                // far cheaper than one gradient-filled geometry per segment.
-                ds.FillCircle(p, 2.6f + 4.4f * t, Fade(ChannelColor(i, t), a));
+                ds.FillCircle(At(r, a0 + (a1 - a0) * t), _arcW + 1.4f, Fade(track, a));
+            }
+            for (int k = 0; k <= steps; k++)
+            {
+                float t = k / (float)steps;
+                ds.FillCircle(At(r, a0 + (a1 - a0) * t), _arcW, Fade(ChannelColor(i, t), a));
             }
 
             float v = ChannelValue(i);
-            var knob = At(r, a0 + (a1 - a0) * v);
-            ds.FillCircle(knob, 16f * _ui, Fade(ChannelColor(i, v), a));
-            ds.DrawCircle(knob, 16f * _ui, Fade(Color.FromArgb(255, 255, 255, 255), a), 3f);
-            ds.DrawCircle(knob, 16f * _ui, Fade(Color.FromArgb(70, 0, 0, 0), a), 0.9f);
+            float va = a0 + (a1 - a0) * v;
+            var knob = At(r, va);
+            // The knob carries the CURRENT COLOUR, not the channel's colour at
+            // this position - item 6 is explicit, and it is also what makes the
+            // three knobs agree with each other and with the puck.
+            ds.FillCircle(knob, _arcKnob, Fade(_color, a));
+            ds.DrawCircle(knob, _arcKnob, Fade(Color.FromArgb(255, 255, 255, 255), a), 2.6f);
+            ds.DrawCircle(knob, _arcKnob, Fade(Color.FromArgb(70, 0, 0, 0), a), 0.9f);
 
-            var bubble = At(r - 52f * _ui, a0 + (a1 - a0) * v);
-            Bubble(ds, bubble, ChannelText(i), a);
+            // "A value box beside the knob, OUTSIDE the arc" - so radially out,
+            // past the knob, at the knob's own bearing. Inside is where it used
+            // to be, and inside is where the next arc in is.
+            ValueBox(ds, At(r + _arcW + 11f * _ui * TextScale + BoxH * 0.5f, va),
+                     ChannelText(i), a);
         }
         ds.Transform = Matrix3x2.Identity;
     }
 
-    // 11.12 item 4: the numeric chips on the HSL and RGB faces scale too.
-    private void Bubble(CanvasDrawingSession ds, Vector2 p, string text, float a)
+    // 11.15 item 6: "a white rounded rect with a hairline border and dark
+    // text". Left white rather than themed on purpose - it is a readout badge
+    // on the reference, the one piece of this control the doc gives an explicit
+    // colour to, and it sits ON a saturated gradient arc rather than on the
+    // page, so it takes its contrast from the arc and not from the paper.
+    private float BoxW => 62f * _ui * TextScale;
+    private float BoxH => 30f * _ui * TextScale;
+
+    private void ValueBox(CanvasDrawingSession ds, Vector2 p, string text, float a)
     {
-        var rect = new Rect(p.X - 38 * _ui, p.Y - 21 * _ui, 76 * _ui, 42 * _ui);
-        ds.FillRoundedRectangle(rect, 7, 7, Fade(Color.FromArgb(232, 18, 18, 18), a));
-        ds.DrawRoundedRectangle(rect, 7, 7, Fade(Color.FromArgb(60, 255, 255, 255), a), 1f);
-        ds.DrawText(text, rect, Fade(Color.FromArgb(255, 245, 245, 242), a), _bubbleFmt);
+        var rect = new Rect(p.X - BoxW * 0.5, p.Y - BoxH * 0.5, BoxW, BoxH);
+        float rad = BoxH * 0.28f;
+        ds.FillRoundedRectangle(rect, rad, rad, Fade(Color.FromArgb(245, 253, 253, 252), a));
+        ds.DrawRoundedRectangle(rect, rad, rad, Fade(Color.FromArgb(70, 22, 23, 26), a), 1f);
+        ds.DrawText(text, rect, Fade(Color.FromArgb(255, 24, 24, 26), a), _bubbleFmt);
     }
 
     private void DrawRecents(CanvasDrawingSession ds, float a)
@@ -971,7 +1218,8 @@ public sealed class ColorWheel : UserControl
         foreach (var (p, col) in _chipPts)
         {
             ds.FillCircle(p, _chipR, Fade(col, a));
-            ds.DrawCircle(p, _chipR, Fade(Color.FromArgb(150, 140, 140, 140), a), 1.2f);
+            ds.DrawCircle(p, _chipR, Fade(Services.PageTheme.WithAlpha(
+                Services.PageTheme.OnSurface, 150), a), 1.2f);
         }
     }
 
@@ -982,38 +1230,63 @@ public sealed class ColorWheel : UserControl
     {
         // 10.8: one colour, one puck. The split puck existed to show what a
         // pick would be mixed INTO, and there is nothing to mix into here now.
-        ds.FillCircle(_puckPt, 20f * _ui, Fade(_color, a));
-        ds.DrawCircle(_puckPt, 20f * _ui, Fade(Color.FromArgb(215, 236, 234, 228), a), 2.4f);
+        // 11.15 item 3 brings it down 20% with everything else.
+        float puckR = 20f * _ui * TextScale;
+        ds.FillCircle(_puckPt, puckR, Fade(_color, a));
+        ds.DrawCircle(_puckPt, puckR, Fade(Services.PageTheme.WithAlpha(
+            Services.PageTheme.OnSurface, 215), a), 2.4f);
 
         string[] names = { "COPIC", "HSL", "RGB" };
+        // 11.16 wants the chip snug on the word - "horizontal padding roughly
+        // double the vertical" - which a fixed box cannot be for three words of
+        // different lengths. Measured once per type size, not per frame.
+        if (Math.Abs(_plateFontMeasured - (float)_labelFmt.FontSize) > 0.01f)
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                using var tl = new CanvasTextLayout(ds, names[i], _labelFmt, 400f, 100f);
+                var lb = tl.LayoutBounds;
+                _plateSz[i] = new Vector2(
+                    (float)lb.Width + (float)_labelFmt.FontSize * 1.76f,
+                    (float)lb.Height + (float)_labelFmt.FontSize * 0.92f);
+            }
+            _plateFontMeasured = (float)_labelFmt.FontSize;
+        }
         for (int i = 0; i < 3; i++)
         {
             var p = _labelPt[i];
             bool on = (int)_mode == i;
-            // 11.12 item 1. Two things were wrong at once: the plate was sized
-            // for 11 DIP type, and only the SELECTED face had a plate at all -
-            // HSL and RGB were bare grey words floating on the scrim, which is
-            // why they read as annotations rather than as the two other faces
-            // of the same control. All three carry a plate now; selection is
-            // the difference between a FILLED one and an outlined one.
-            var rect = new Rect(p.X - 46 * _ui, p.Y - 21 * _ui, 92 * _ui, 42 * _ui);
+            // 11.16 reverses 11.12 item 1. Giving all three a plate was meant to
+            // stop HSL and RGB reading as annotations, but the Concepts capture
+            // is explicit that they ARE bare: "no box, no border, no ground",
+            // muted grey, at the SAME type size, and it is the chip alone that
+            // says which face is up. An outlined box on the two inactive faces
+            // is a third state the control does not have.
+            var sz = _plateSz[i];
+            var rect = new Rect(p.X - sz.X * 0.5, p.Y - sz.Y * 0.5, sz.X, sz.Y);
             if (on)
             {
-                ds.FillRoundedRectangle(rect, 8, 8, Fade(Color.FromArgb(235, 236, 234, 228), a));
-                ds.DrawText(names[i], rect, Fade(Color.FromArgb(255, 20, 20, 19), a), _labelFmt);
+                // Themed rather than the capture's literal #ECEAE4: 11.19 took
+                // the dark scrim this was authored against away, so a fixed
+                // light chip would vanish into a light page. Surface is the
+                // section 0 derivation of "a neutral plate over this paper",
+                // and it keeps the capture's RELATION - filled ground, ink at
+                // full contrast - on every page the theme can produce.
+                ds.FillRoundedRectangle(rect, 6, 6, Fade(Services.PageTheme.WithAlpha(
+                    Services.PageTheme.Surface, 242), a));
+                ds.DrawText(names[i], rect, Fade(Services.PageTheme.OnSurface, a), _labelFmt);
             }
             else
             {
-                ds.FillRoundedRectangle(rect, 8, 8, Fade(Color.FromArgb(70, 22, 23, 26), a));
-                ds.DrawRoundedRectangle(rect, 8, 8, Fade(Color.FromArgb(120, 236, 234, 228), a), 1.4f);
-                ds.DrawText(names[i], rect, Fade(Color.FromArgb(232, 236, 234, 228), a), _labelFmt);
+                ds.DrawText(names[i], rect, Fade(Services.PageTheme.OnSurfaceMuted, a), _labelFmt);
             }
         }
 
         // 11.12 item 2, superseding 10.4 item 15's shrink: at 25 it "reads as
-        // a dark dot". 44, and 11.3 item 18 takes the plate behind it away.
-        DrawEyedropper(ds, _dropPt, 44f * _ui,
-            Fade(_sampling ? Color.FromArgb(255, 217, 119, 87) : Color.FromArgb(235, 236, 234, 228), a),
+        // a dark dot". 44, less 11.15 item 3's 20%. 11.3 item 18 and 11.16 both
+        // say the same thing about what is behind it: nothing.
+        DrawEyedropper(ds, _dropPt, 44f * _ui * TextScale,
+            Fade(_sampling ? Services.PageTheme.Accent : Services.PageTheme.OnSurface, a),
             a);
     }
 
@@ -1039,11 +1312,13 @@ public sealed class ColorWheel : UserControl
             b.AddLine(L(8.2f, 20.4f));
             b.EndFigure(CanvasFigureLoop.Closed);
             using var geo = CanvasGeometry.CreatePath(b);
+            // 11.16: "no frame, no border, no background plate, no chip. Just
+            // the mark." The hairline that used to run round this silhouette
+            // was there to lift a pale pipette off the scrim; 11.19 removed the
+            // scrim, and the fill is now PageTheme.OnSurface, which is the ink
+            // the page itself contrasts with. So the outline is not merely
+            // unnecessary, it is the border the doc says is not there.
             ds.FillGeometry(geo, col);
-            // A hairline of the SCRIM's own dark, not a frame: 11.3 item 18
-            // takes the plate away, and without something separating the mark
-            // from the grey behind it a pale pipette dissolves into the scrim.
-            ds.DrawGeometry(geo, Fade(Color.FromArgb(150, 16, 17, 20), a), 1.2f);
         }
 
         // The bulb, squared off across the shaft rather than a thin lozenge.
@@ -1052,7 +1327,6 @@ public sealed class ColorWheel : UserControl
         var keep = ds.Transform;
         ds.Transform = Matrix3x2.CreateRotation(-MathF.PI / 4f, bulbC) * keep;
         ds.FillRoundedRectangle(bulb, 3.6f * k, 3.6f * k, col);
-        ds.DrawRoundedRectangle(bulb, 3.6f * k, 3.6f * k, Fade(Color.FromArgb(150, 16, 17, 20), a), 1.2f);
         ds.Transform = keep;
     }
 
@@ -1146,7 +1420,14 @@ public sealed class ColorWheel : UserControl
         }
         for (int i = 0; i < 3; i++)
         {
-            if (Math.Abs(p.X - _labelPt[i].X) < 48 * _ui && Math.Abs(p.Y - _labelPt[i].Y) < 23 * _ui)
+            // The target is the chip the draw pass measured, plus a little, so
+            // it shrinks with the plate exactly as the plate shrinks - at the
+            // 0.52 rad arc step, a target left at the old 48 x 23 would reach
+            // into its neighbour and steal the tap. Floored so that a press
+            // arriving before the first draw pass still lands.
+            float hx = MathF.Max(_plateSz[i].X, 44f) * 0.5f + 5f;
+            float hy = MathF.Max(_plateSz[i].Y, 26f) * 0.5f + 5f;
+            if (Math.Abs(p.X - _labelPt[i].X) < hx && Math.Abs(p.Y - _labelPt[i].Y) < hy)
             {
                 Mode = (ColorWheelMode)i;
                 return;
@@ -1183,11 +1464,16 @@ public sealed class ColorWheel : UserControl
         {
             for (int i = 0; i < 3; i++)
             {
-                float rel = Norm(a - _base);
-                if (Math.Abs(r - _arcR[i]) < 22f && Math.Abs(rel) <= ArcHalf + 0.06f)
+                float rel = Norm(a - _base - ArcRoll);
+                float half = _arcHalf[i];
+                // Each arc owns its own radius AND its own span now, so a
+                // shared tolerance would let a tap meant for one arc resolve
+                // against another's angular range. The radial gate is the
+                // arc's own thickness plus a thumb's worth.
+                if (Math.Abs(r - _arcR[i]) < _arcW + 13f && Math.Abs(rel) <= half + 0.06f)
                 {
                     _dragArc = i;
-                    SetChannel(i, (rel + ArcHalf) / (2 * ArcHalf));
+                    SetChannel(i, (rel + half) / (2 * half));
                     return;
                 }
             }
@@ -1215,7 +1501,8 @@ public sealed class ColorWheel : UserControl
 
         if (_dragArc >= 0)
         {
-            SetChannel(_dragArc, (Norm(a - _base) + ArcHalf) / (2 * ArcHalf));
+            float half = _arcHalf[_dragArc];
+            SetChannel(_dragArc, (Norm(a - _base - ArcRoll) + half) / (2 * half));
             return;
         }
 
@@ -1336,12 +1623,19 @@ public sealed class ColorWheel : UserControl
         if (r < _rOutBase) return null;                                 // the gap before the columns
 
         int ring = (int)MathF.Floor((r - _rOutBase) / _band);
-        if (ring < 0 || ring >= MaxRings) return null;
+        // _rings, not MaxRings: r > _rOut was already refused above, but the
+        // painted set is what the pointer is aiming at and the two have to
+        // describe the same shape (9.4.1's rule, applied to depth).
+        if (ring < 0 || ring >= _rings) return null;
         // Fold the angle into [0, 360) measured from the -90° start, then
         // one division lands the 10° column.
         double deg = a / Deg + 90.0;
         deg = ((deg % 360) + 360) % 360;
         int col = (int)Math.Floor(deg / 10.0) % OuterColumns.Length;
+        // 11.17's gap is background, and background is not a swatch: a tap that
+        // lands between two families answers null rather than handing over the
+        // ink whose column it merely points at.
+        if (ColEndsFamily[col] && (deg - col * 10.0) * Deg > ColStep - FamGap) return null;
         var stack = OuterColumns[col];
         return ring < stack.Length ? stack[ring] : null;
     }
@@ -1607,6 +1901,25 @@ public sealed class ColorWheel : UserControl
     // Colour maths
     // =======================================================================
     private static bool IsDark(Color c) => (c.R * 299 + c.G * 587 + c.B * 114) / 1000 < 128;
+
+    // 11.16: "colour flips for contrast ... derived from the swatch's
+    // luminance, not from a hand-maintained list". A list would be wrong the
+    // day the missing Copic codes land, so this picks whichever of the two inks
+    // has the better WCAG contrast ratio against the swatch, using PageTheme's
+    // own gamma-correct luminance rather than a second definition of the word.
+    private static readonly Color LabelLight = Color.FromArgb(240, 255, 255, 255);
+    private static readonly Color LabelDark = Color.FromArgb(236, 22, 22, 22);
+    private static readonly double LabelLightY = Services.PageTheme.Luminance(LabelLight);
+    private static readonly double LabelDarkY = Services.PageTheme.Luminance(LabelDark);
+
+    private static Color LabelInk(Color bg)
+    {
+        double y = Services.PageTheme.Luminance(bg);
+        return Ratio(y, LabelLightY) >= Ratio(y, LabelDarkY) ? LabelLight : LabelDark;
+    }
+
+    private static double Ratio(double a, double b) =>
+        (Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05);
 
     /// Multiplies a colour's own alpha by the tier's opacity. Cells are
     /// disjoint, so per-colour alpha gives the same result as a layer at a
