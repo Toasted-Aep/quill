@@ -3453,9 +3453,20 @@ public sealed partial class MainWindow : Window
             ColorSpectrumShape = ColorSpectrumShape.Box,
             Color = initial
         };
+        // 11.23: the palette mark identifies a colour picker wherever one opens.
+        // Not the eyedropper - that samples a colour off the page and has its
+        // own mark; this one is the picker itself.
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        head.Children.Add(Icons.Mark(Icons.Palette, PageTheme.OnSurface, 22));
+        head.Children.Add(new TextBlock
+        {
+            Text = title,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+        });
         var dlg = new ContentDialog
         {
-            Title = title,
+            Title = head,
             Content = picker,
             PrimaryButtonText = "OK",
             CloseButtonText = "Cancel",
