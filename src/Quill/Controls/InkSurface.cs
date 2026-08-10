@@ -4648,8 +4648,47 @@ public sealed class InkSurface : UserControl
                 _canvas.Invalidate();                            // keep animating
             }
         }
+        // 11.20 item 16: the shape takes the STYLE of the pen that placed it, not
+        // a flat line at its nominal size. Helpers/PenStyle evaluates the stroke
+        // renderer's own per-pen treatment at neutral pressure - the same
+        // arithmetic solved at a point, because a shape has no pressure samples
+        // and no direction to take a nib angle from.
+        //
+        // Images and tables are exempt: a photograph has no ink of its own, and a
+        // table's rules are structure rather than a mark - a highlighter would
+        // render one unreadable.
+        bool inked = s.Kind is not (ShapeKind.Image or ShapeKind.Table);
         var color = ColorUtil.Parse(s.Color);
         float w = Math.Max(1f, s.Size);
+        // The faint offset passes the grainy pens lay beside their core. Held
+        // until the core has been drawn, because that is the order the stroke
+        // renderer lays them in; the wash's single WIDE pass goes underneath and
+        // is drawn immediately.
+        List<ShapeElement>? overGrain = null;
+        if (inked)
+        {
+            float op = Math.Clamp(s.Opacity <= 0f ? 1f : s.Opacity, 0.02f, 1f);
+            color.A = (byte)Math.Clamp(PenStyle.Alpha(s.Pen) * op, 1, 255);
+            w = PenStyle.Width(s.Pen, Math.Max(1f, s.Size));
+            foreach (var g in PenStyle.Grain(s.Pen))
+            {
+                // Each pass re-enters this method as a MONOLINE clone: monoline's
+                // alpha is opaque and PenStyle.Width(Monoline, x) == x, so the
+                // pass's own opacity carries the grain's faintness and its size
+                // lands exactly on the width factor. Standard-to-monoline means
+                // the clone has no grain of its own and cannot recurse twice.
+                var pass = new ShapeElement
+                {
+                    Kind = s.Kind, X = s.X + g.Dx, Y = s.Y + g.Dy, W = s.W, H = s.H,
+                    Color = s.Color, Rotation = s.Rotation,
+                    Size = Math.Max(0.6f, w * g.WidthK),
+                    Pen = PenType.Monoline,
+                    Opacity = (g.Alpha / 255f) * op,
+                };
+                if (PenStyle.GrainUnderneath(s.Pen)) DrawShape(ds, pass);
+                else (overGrain ??= new List<ShapeElement>()).Add(pass);
+            }
+        }
         switch (s.Kind)
         {
             case ShapeKind.Line:
@@ -4800,6 +4839,11 @@ public sealed class InkSurface : UserControl
                 break;
             }
         }
+        // The pencil's and the crayon's grain, laid over the core exactly as the
+        // stroke renderer lays it. Inside the rotate/settle transform, so a
+        // rotated shape's grain rotates with it.
+        if (overGrain != null)
+            foreach (var pass in overGrain) DrawShape(ds, pass);
         if (rot || settling) ds.Transform = prevT;   // settle pulse also bends the transform
     }
 
@@ -5036,11 +5080,17 @@ public sealed class InkSurface : UserControl
             case ShapeKind.AxesXY: w = 280; h = 210; break;
             case ShapeKind.AxesXYZ: w = 240; h = 240; break;
         }
+        // CONCEPTS-REF 11.20 item 16 - a placed shape is drawn WITH THE ACTIVE
+        // PEN: its colour and size, as before, and now its STYLE and OPACITY too,
+        // so putting a shape down looks like the user drew it with whatever pen
+        // is in their hand.
         var s = new ShapeElement
         {
             Kind = kind,
             Color = ColorUtil.ToHex(PenColor),
-            Size = Math.Max(2f, PenSize * 0.9f)
+            Size = Math.Max(2f, PenSize * 0.9f),
+            Pen = Pen,
+            Opacity = PenOpacity,
         };
         if (kind is ShapeKind.Line or ShapeKind.Arrow)
         {

@@ -1,5 +1,6 @@
 using Quill.Helpers;
 using Quill.Models;
+using Quill.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -49,6 +50,12 @@ public sealed class ObjectsWindow
         /// same call, so the two can never place different geometry.</summary>
         public required Action<ShapeKind, bool> InsertShape { get; init; }
         public required Action<string> Status { get; init; }
+        /// <summary>CONCEPTS-REF 11.20 item 16 - the pen that is in the user's
+        /// hand right now. The preview tiles are drawn WITH IT, so a tile shows
+        /// what the tap is actually going to put on the page rather than a fixed
+        /// hairline. Null-tolerant: a host that predates this hook gets the old
+        /// flat outline instead of a crash.</summary>
+        public Func<PenPreset?>? ActivePen { get; init; }
     }
 
     // =====================================================================
@@ -276,7 +283,7 @@ public sealed class ObjectsWindow
     /// it, and a tap that places it.</summary>
     private FrameworkElement ObjectTile(Obj o)
     {
-        var art = Preview(o);
+        var art = Preview(o, _h.ActivePen?.Invoke());
         var cell = new Grid
         {
             Width = Tile,
@@ -391,9 +398,20 @@ public sealed class ObjectsWindow
     /// <summary>The object's own outline, GENERATED FROM ITS DEFINITION rather
     /// than drawn by hand — so a preview can never show something the insert
     /// does not place.</summary>
-    private static FrameworkElement? Preview(Obj o)
+    private static FrameworkElement? Preview(Obj o, PenPreset? pen)
     {
-        var ink = new SolidColorBrush(ChromeUi.Ink);
+        // 11.20 item 16: "shapes in the objects library are drawn with the current
+        // pen style and pen colour, rather than a fixed preview style". The colour
+        // is the pen's own; the WEIGHT, the ALPHA and the CAPS come from
+        // Helpers/PenStyle, the same helper the shape renderer uses - so a
+        // highlighter tile is a fat translucent band, a pencil tile is a thin soft
+        // one, and both look like what the tap is about to place.
+        //
+        // The tile is a 40 DIP box and a pen may be 40 px wide, so the stroke is
+        // scaled into the box rather than shown at page scale: the RATIOS between
+        // the pens survive, which is what makes the row readable, while no tile can
+        // swallow its own geometry.
+        var (ink, weight, dashed) = PreviewInk(pen);
         const double s = 40, c = s / 2, r = 17;
 
         Shape shape;
@@ -403,7 +421,7 @@ public sealed class ObjectsWindow
                 shape = new Line { X1 = 3, Y1 = s - 5, X2 = s - 3, Y2 = 5 };
                 break;
             case ShapeKind.Arrow:
-                return Vector("M3 34 L33 8 M33 8 L24 9.5 M33 8 L31.5 17", s, stroked: true);
+                return Vector("M3 34 L33 8 M33 8 L24 9.5 M33 8 L31.5 17", s, ink, weight);
             case ShapeKind.Rect:
                 shape = o.Regular
                     ? new Rectangle { Width = 30, Height = 30 }
@@ -439,17 +457,19 @@ public sealed class ObjectsWindow
                 shape = Poly(Star(c, r, r * 0.45));
                 break;
             case ShapeKind.AxesXY:
-                return Vector("M6 34 L6 5 M6 34 L35 34 M6 5 L4 9 M6 5 L8 9 M35 34 L31 32 M35 34 L31 36", s, stroked: true);
+                return Vector("M6 34 L6 5 M6 34 L35 34 M6 5 L4 9 M6 5 L8 9 M35 34 L31 32 M35 34 L31 36", s, ink, weight);
             case ShapeKind.AxesXYZ:
-                return Vector("M8 32 L8 5 M8 32 L35 32 M8 32 L2 38", s, stroked: true);
+                return Vector("M8 32 L8 5 M8 32 L35 32 M8 32 L2 38", s, ink, weight);
             default:
                 shape = new Rectangle { Width = 30, Height = 22 };
                 break;
         }
 
         shape.Stroke = ink;
-        shape.StrokeThickness = 1.7;
+        shape.StrokeThickness = weight;
         shape.StrokeLineJoin = PenLineJoin.Round;
+        shape.StrokeStartLineCap = dashed ? PenLineCap.Flat : PenLineCap.Round;
+        shape.StrokeEndLineCap = shape.StrokeStartLineCap;
         shape.HorizontalAlignment = HorizontalAlignment.Center;
         shape.VerticalAlignment = VerticalAlignment.Center;
         return shape;
@@ -485,6 +505,34 @@ public sealed class ObjectsWindow
         }
     }
 
-    private static FrameworkElement? Vector(string data, double size, bool stroked) =>
-        stroked ? Icons.Stroked(data, ChromeUi.Ink, size, 1.7) : Icons.Filled(data, ChromeUi.Ink, size);
+    private static FrameworkElement? Vector(string data, double size, Brush ink, double weight)
+    {
+        var p = Icons.Stroked(data, ChromeUi.Ink, size, weight);
+        if (p != null) p.Stroke = ink;
+        return p;
+    }
+
+    /// <summary>The pen's ink for a 40 DIP preview tile: its colour at its own
+    /// alpha, the weight its style would draw a shape at scaled into the tile, and
+    /// whether its ends are cut square.
+    ///
+    /// <para>The scale is the ONE liberty taken. A pen may be 40 px wide, which at
+    /// page scale would fill the tile entirely; dividing by a fixed factor and
+    /// clamping keeps every pen distinguishable from every other while no tile
+    /// swallows its own geometry. Everything else - hue, alpha, the relative
+    /// weights, the flat caps - is the pen's own.</para></summary>
+    private static (Brush Ink, double Weight, bool Flat) PreviewInk(PenPreset? pen)
+    {
+        if (pen == null) return (new SolidColorBrush(ChromeUi.Ink), 1.7, false);
+
+        var c = ColorUtil.Parse(pen.Color);
+        float op = pen.Opacity <= 0f ? 1f : Math.Clamp(pen.Opacity, 0.02f, 1f);
+        c.A = (byte)Math.Clamp(PenStyle.Alpha(pen.Pen) * op, 26, 255);
+
+        // The pen's real shape weight, brought into the tile's 40 DIP box.
+        double w = PenStyle.Width(pen.Pen, Math.Max(1f, pen.Size)) / 2.6;
+        w = Math.Clamp(w, 1.0, 7.0);
+
+        return (new SolidColorBrush(c), w, PenStyle.FlatCaps(pen.Pen));
+    }
 }

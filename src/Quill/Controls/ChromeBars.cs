@@ -566,6 +566,13 @@ public sealed class ChromeBars
 
     private ObjectsWindow? _objects;
 
+    /// <summary>CONCEPTS-REF 11.20 item 16. The Objects library's tiles are drawn
+    /// with the LIVE pen, so they have to be rebuilt when the pen changes - a
+    /// preview showing the pen the user put down two gestures ago is the "fixed
+    /// preview style" the item is about. Costs nothing while the library is
+    /// closed, and nothing at all in a session that never opens it.</summary>
+    public void RefreshObjects() => _objects?.Refresh();
+
     private ObjectsWindow ObjectsLibrary
     {
         get
@@ -577,6 +584,10 @@ public sealed class ChromeBars
                 Save = () => _h.PageOps().Save(),
                 InsertShape = _h.InsertShape,
                 Status = s => _h.PageOps().Status(s),
+                // 11.20 item 16: the library's preview tiles are drawn with the
+                // live pen. PageOps already carries it for the Stylus tab, so the
+                // two surfaces read one answer rather than two.
+                ActivePen = () => _h.PageOps().ActivePen?.Invoke(),
             });
             // K.21 covers the Objects library too. It lives in the popup layer
             // rather than the canvas Grid, so it joins as a VIRTUAL obstacle that

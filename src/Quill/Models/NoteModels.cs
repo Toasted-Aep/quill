@@ -122,6 +122,15 @@ public class ShapeElement
     public double H { get; set; }
     public string Color { get; set; } = "#141413";
     public float Size { get; set; } = 3f;
+    // CONCEPTS-REF 11.20 item 16: which pen drew it. A shape already carried the
+    // pen's COLOUR and SIZE but not its STYLE, so a highlighter placed a hairline
+    // and a crayon placed a clean technical line. APPENDED, and Standard is the
+    // zero value, so every shape in a library.json written before this loads
+    // looking exactly as it did.
+    public PenType Pen { get; set; } = PenType.Standard;
+    // Ink opacity, 0-1, as a stroke carries it - the pen's opacity at the moment
+    // the shape was placed. Defaults to 1 for the same reason.
+    public float Opacity { get; set; } = 1f;
     public string? ImagePath { get; set; }
     // For equation images: the LaTeX source it was rendered from, so the
     // equation can be reopened and edited instead of retyped (#27-batch2).
