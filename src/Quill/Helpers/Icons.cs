@@ -419,6 +419,34 @@ public static class Icons
         "M8.2 3.4 A1.0 1.0 0 0 0 7.2 4.4 V19.6 A1.0 1.0 0 0 0 8.2 20.6 H15.8 " +
         "A1.0 1.0 0 0 0 16.8 19.6 V4.4 A1.0 1.0 0 0 0 15.8 3.4 Z " +
         "M7.2 8.6 H16.8 V9.8 H7.2 Z M7.2 14.2 H16.8 V15.4 H7.2 Z";
+    /// <summary>THE COLOUR PICKER (Reference 11.20 item 12, chosen in 11.23 as
+    /// "candidate B, the palette"). A tilted oval with a thumb hole near the
+    /// right rim and wells arcing along the far edge. <b>Distinct from the
+    /// eyedropper</b>, which is a different tool and a different mark: the
+    /// dropper SAMPLES a colour off the page, this one OPENS the picker.
+    ///
+    /// <para>A FILLED OUTLINE, because <c>PathIcon</c> fills its Data and cannot
+    /// stroke, and the top bar draws its marks through PathIcon. The holes are
+    /// inner subpaths and punch through under the default even-odd rule.</para>
+    ///
+    /// <para><b>The wells are the size they are because they were measured.</b>
+    /// 11.23 records the design at four wells of radius 1.42 on a 10.6 x 7.9
+    /// oval and rules that it "degrades toward a solid blob at the smallest
+    /// size" - and rasterising says why: at 18 DIP such a well covers THREE
+    /// pixels, so it is open at its centre and still invisible. Three wells of
+    /// 1.9 on an 11.5 x 8.1 oval carry six clear pixels each, and the thumb is
+    /// 2.7 rather than 2.45 so that one hole still reads as a thumb when the
+    /// others have shrunk to specks. Four wells cannot do both at once: at
+    /// radius 2.0 they merge into one slot, and at 1.55 they are back to two
+    /// pixels. The generator and every measurement are in
+    /// obj/agent-patches/pickericon.py.</para></summary>
+    public const string Palette =
+        "M1.19 15.93 A11.50 8.10 -20 1 1 22.81 8.07 A11.50 8.10 -20 1 1 1.19 15.93 Z " +
+        "M13.90 14.40 A2.70 2.70 0 1 0 19.30 14.40 A2.70 2.70 0 1 0 13.90 14.40 Z " +
+        "M3.88 12.61 A1.90 1.90 0 1 0 7.68 12.61 A1.90 1.90 0 1 0 3.88 12.61 Z M7.04 8.45 " +
+        "A1.90 1.90 0 1 0 10.84 8.45 A1.90 1.90 0 1 0 7.04 8.45 Z M12.80 7.32 A1.90 1.90 0 1 0 16.60 7.32 " +
+        "A1.90 1.90 0 1 0 12.80 7.32 Z";
+
     // ---- factories -------------------------------------------------------
 
     /// <summary>Parses path mini-language into a Geometry. XamlReader is the only
