@@ -1202,3 +1202,44 @@ their reduced size.
 **Dimming (§11.19) is settled as built:** the two icon clusters and any open
 floating panel dim; the breadcrumb row (title, undo/redo, history) stays at full
 strength, as does the page, the ink and the dial.
+
+### 11.22 Dial inner circle, panel dismissal, brush picking — 2026-08-10
+
+1. **The inner circle's division is wrong. Replace it with four equal quadrants**,
+   angles measured with **0° at the right horizon (3 o'clock)**:
+
+   | from | to | control |
+   |---|---|---|
+   | 135° | 45° | **Size** (top) |
+   | 45° | 315° | **Opacity** (right) |
+   | 315° | 270° | **Redo** |
+   | 270° | 225° | **Undo** |
+   | 225° | 135° | **Stability** (left) |
+
+   So size, opacity and stability take one quadrant each, and the bottom
+   quadrant is halved between redo (leading) and undo (trailing). Undo and redo
+   therefore stay **inside** the circle per §11.2 item 10, but as bottom-quadrant
+   halves rather than free-floating buttons.
+
+2. **Icons for opacity, size and stability grow 20%.**
+
+3. **Clicking outside the opacity / size / stability panel closes it.** Today it
+   stays open. A press anywhere beyond the panel's own bounds dismisses it, and
+   that press must still reach whatever is underneath — do not swallow it on a
+   full-screen scrim, which is the pattern §11.19 just removed elsewhere.
+
+4. **Right-clicking a tool — on the pen row or on a dial sector — opens the
+   Brushes library** with that slot as the target, so a pen can be chosen for it.
+   This is the assignment path the dial's `+` cells need too.
+
+5. **Some Brushes-library previews render nothing.** The user's own diagnosis,
+   and it is almost certainly right: *"probably because of a size bug where the
+   pen has too large a size to register a meaningful stroke to preview."*
+
+   Treat that as the same class of fault as §11.1 item 2 — the square preview
+   that turned out to be a radius floor which barely consulted the pen while the
+   renderer added stroke width *outside* the clamp. **Find the real cause; do not
+   clamp the preview to hide it.** `InkSurface.MaxStrokeWidth()` already computes
+   the true per-pen width from the real points, and a pen at 22.2 measured
+   78.32 DIP of width — 3.5×. A preview strip sized without asking that question
+   will be blown out by exactly the same pens.
