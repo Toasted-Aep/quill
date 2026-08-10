@@ -279,39 +279,108 @@ public sealed class BrushesWindow
                                  (float)CheckSq, (float)CheckSq, b);
     }
 
-    /// <summary>The sample: one sweep across the strip with a pressure swell, at
-    /// the pen's REAL size and colour. Drawn at the real size on purpose — a
-    /// preview that silently fattened the mark would be the one thing this strip
-    /// exists not to do.</summary>
+    /// <summary>The sample: one sweep across the strip with a pressure swell.
+    ///
+    /// <para><b>Reference 11.24 item 2 — the sweep adapts to the pen.</b> This
+    /// used to lay out a FIXED sweep: <c>pad = 34</c> and an amplitude of
+    /// <c>0.22 × 205 = 45.1</c>, while the stroke's width was the pen's real one
+    /// and pressure peaked at 1.0 mid-sweep, so the widest point WAS
+    /// <see cref="InkSurface.MaxStrokeWidth"/>. The band the sample occupies is
+    /// <c>2 × amp + width</c>, and a Brush takes a factor of
+    /// <c>0.12 + 3.2 × sens × pr²</c> — 3.32× at sens 1 — so past about size 35
+    /// the band exceeded the 205 DIP strip, the "stroke" became a slab from edge
+    /// to edge, and on a pale or low-opacity pen that is indistinguishable from
+    /// an empty strip. That is what the user reported as blank previews.</para>
+    ///
+    /// <para>So the geometry is computed FROM the width rather than from
+    /// constants, in the dial's order (11.1 item 2): lay a probe out, ask the
+    /// renderer how wide it will really be drawn, and only then choose the
+    /// amplitude, the padding and — when even a hairline sweep would not fit —
+    /// the drawn size. The pen itself is never touched; only this one throwaway
+    /// sample is scaled, exactly as <c>OnPreviewDraw</c> scales the dial's hoop.
+    /// The accepted cost, stated in 11.23, is that the strip no longer conveys
+    /// ABSOLUTE size: a 5 DIP and a 50 DIP pen read similarly. There is no
+    /// caption and no scale label; what the strip conveys is the pen's SHAPE —
+    /// its taper, its nib contrast, its grain, its colour and its opacity.</para></summary>
     private PenStroke? SampleStroke(float w, float h)
     {
         var pen = ActivePen();
         if (pen == null) return null;
 
-        var s = new PenStroke
+        PenStroke Lay(float size, float pad, float amp)
         {
-            Pen = pen.Pen,
-            Color = pen.Color,
-            Size = pen.Size,
-            Sens = pen.Sens,
-            Opacity = pen.Opacity >= 0.999f ? (float?)null : pen.Opacity,
-            PressureCurve = pen.PressureCurve,
-        };
-
-        // An S-sweep: two gentle lobes, which is enough for a chisel nib to show
-        // its angle and for a tapering nib to show both ends of its taper.
-        float pad = 34, cy = h / 2, amp = h * 0.22f;
-        const int N = 160;
-        for (int i = 0; i <= N; i++)
-        {
-            float t = i / (float)N;
-            float x = pad + t * (w - pad * 2);
-            float y = cy + (float)Math.Sin(t * Math.PI * 2) * amp;
-            // 0.06 at both ends, full in the middle: a taper the eye can read.
-            float p = 0.06f + 0.94f * (float)Math.Sin(t * Math.PI);
-            s.Points.Add(new StrokePoint(x, y, p));
+            var st = new PenStroke
+            {
+                Pen = pen.Pen,
+                Color = pen.Color,
+                Size = size,
+                Sens = pen.Sens,
+                Opacity = pen.Opacity >= 0.999f ? (float?)null : pen.Opacity,
+                PressureCurve = pen.PressureCurve,
+            };
+            // An S-sweep: two gentle lobes, which is enough for a chisel nib to
+            // show its angle and for a tapering nib to show both ends of its taper.
+            float cy = h / 2;
+            const int N = 160;
+            for (int i = 0; i <= N; i++)
+            {
+                float t = i / (float)N;
+                float x = pad + t * (w - pad * 2);
+                float y = cy + (float)Math.Sin(t * Math.PI * 2) * amp;
+                // 0.06 at both ends, full in the middle: a taper the eye can read.
+                float p = 0.06f + 0.94f * (float)Math.Sin(t * Math.PI);
+                st.Points.Add(new StrokePoint(x, y, p));
+            }
+            return st;
         }
-        return s;
+
+        // Edge: the clear strip the mark must never touch, so a fat pen still
+        // reads as a stroke ON a checkerboard rather than as a fill OF one.
+        const float Edge = 5f;
+        // The widest the mark may be DRAWN. The rest of the band is the sweep,
+        // and a sweep with no room left is a straight bar - the very thing the
+        // fixed layout produced - so the mark keeps under half the band.
+        float band = Math.Max(24f, h - Edge * 2);
+        float capW = band * 0.42f;
+
+        // Pass 1: the probe exists only to be measured. Its own geometry barely
+        // matters - SegmentWidth reads pressure and DIRECTION, and both are the
+        // same shape in the final lay-out.
+        float size = pen.Size;
+        var probe = Lay(size, 34f, h * 0.22f);
+        float width = Math.Max(0.5f, _surface.MaxStrokeWidth(probe));
+        if (width > capW) { size *= capW / width; width = capW; }
+
+        // Pass 2: amplitude and padding are what is LEFT once the width is
+        // known. Amplitude never exceeds the old 0.22 h lobe, so a fine pen
+        // draws exactly the sweep it always did; padding opens up for a fat one
+        // so the taper at each end is not clipped by the strip's own edges.
+        float amp = Math.Min(h * 0.22f, Math.Max(0f, (band - width) / 2f));
+        float pad = Math.Clamp(width / 2f + Edge, 18f, w * 0.30f);
+        var stroke = Lay(size, pad, amp);
+
+        // A chisel or broad-edge nib takes its width from DIRECTION, so moving
+        // the amplitude moves the width too. One correction pass settles it -
+        // measuring the thing that will actually be drawn rather than the probe.
+        float real = Math.Max(0.5f, _surface.MaxStrokeWidth(stroke));
+        if (real > capW)
+        {
+            stroke.Size = size * (capW / real);
+            width = capW;
+            amp = Math.Min(h * 0.22f, Math.Max(0f, (band - width) / 2f));
+            pad = Math.Clamp(width / 2f + Edge, 18f, w * 0.30f);
+            var relaid = Lay(stroke.Size, pad, amp);
+            stroke = relaid;
+            real = Math.Max(0.5f, _surface.MaxStrokeWidth(stroke));
+        }
+
+        if (GeometryProbe.On)
+            GeometryProbe.Write("BRUSHPREVIEW",
+                $"pen={pen.Pen} penSize={pen.Size:F2} drawnSize={stroke.Size:F2} " +
+                $"width={real:F2} cap={capW:F2} amp={amp:F2} pad={pad:F2} " +
+                $"band={2 * amp + real:F2} strip={h:F0}x{w:F0}");
+
+        return stroke;
     }
 
     // =======================================================================
