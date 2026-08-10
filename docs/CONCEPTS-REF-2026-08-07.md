@@ -1293,3 +1293,44 @@ accepted cost is that the preview no longer conveys absolute size — a 5 px and
    **Do not clamp the pen.** This is the same class of fault as §11.1 item 2,
    where a radius floor barely consulted the pen while the renderer added stroke
    width outside the clamp; clamping there would have hidden a real defect.
+
+### 11.25 Right-click assignment — the settled behaviour, 2026-08-10
+
+Resolves the fork left open in §11.24. The user's ruling:
+
+> *"right clicking opens up brushes library where there are also tools and you
+> can select which item to assign there, the panel should close when the page is
+> clicked unlike the other floating panels. when right clicking another tool do
+> not open up another brushes pannel just use the one already opened and switch
+> to the tool currently selected on the second right clicked cell."*
+
+1. **One panel, brushes and tools together.** Right-clicking a tool — on the pen
+   row or on a dial sector — opens the Brushes library, and that library offers
+   **both brushes and tools** so either can be assigned from the one surface.
+   The `Target.PickTool` hook already exists for this; it must now always be
+   supplied for slot targeting rather than omitted.
+
+2. **It closes when the page is clicked.** This is a deliberate exception to
+   every other floating panel, which persist. Use the same dismissal the
+   §11.22 item 3 settings card uses: a handled-events-too handler that **never
+   sets `Handled`**, so the dismissing press still reaches the page and draws.
+   **No scrim** — §11.19 removed exactly that pattern and the user does not want
+   page-covering overlays.
+
+3. **Right-clicking a second tool retargets the OPEN panel.** It must not open a
+   second one, and must not close and reopen. The existing panel stays where it
+   is and simply re-aims at the newly right-clicked cell — banner text, the
+   highlighted cell and the preview strip all switch to the new slot.
+
+   `ShowFor(Target)` should therefore be idempotent with respect to the window:
+   if it is already open, swap the target in place and refresh; only create or
+   show the window when it is closed.
+
+**Retype in place is confirmed** (§11.24 fork 2, as built): choosing a brush for
+a pen-row cell changes that cell's pen **type** while keeping its colour, size
+and pressure curve. A tuned 22.2 calligraphy stays 22.2 and keeps its colour; it
+just becomes a brush.
+
+**The palette mark is held back** (§11.23). `Icons.Palette` remains defined and
+measured but has **no call site** — the user asked for it not to be used until
+they decide where a picker mark belongs. Do not wire it anywhere.
