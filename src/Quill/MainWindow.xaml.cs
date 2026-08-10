@@ -6270,9 +6270,10 @@ public sealed partial class MainWindow : Window
     private void SetMouseMode(MouseMode mode)
     {
         Surface.MouseMode = mode;
-        // The settings panel reads MouseMode() back on every rebuild, so a change
-        // made from the dial shows up there without a second notification.
-        _settingsWin?.Refresh();
+        // The settings circles are the mode's home now, so they follow a change
+        // made from the dial. TouchMouseMode rebuilds ONLY that section -
+        // Refresh() rebuilds the whole tab, which is 11.1 item 1's 5/5 defect.
+        _settingsWin?.TouchMouseMode();
         ShowStatus(mode switch
         {
             MouseMode.Grab => "Mouse: grab — drag to pan the page.",

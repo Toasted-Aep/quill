@@ -303,6 +303,19 @@ public sealed class SettingsWindow
     /// §10.5 item 20 asks for. A section that is currently collapsed is simply
     /// emptied, so it costs nothing now and is correct when it is next opened.
     /// Nothing here touches the scroller, so the reader does not move at all.</summary>
+    /// <summary>Re-draw ONLY the section the mouse-mode circles live in.
+    ///
+    /// <para>CONCEPTS-REF 11.1 item 1 - the user's 5/5 defect - is a panel that
+    /// rebuilds wholesale on every change. <see cref="Refresh"/> is exactly that
+    /// rebuild (it is for a theme move, where the whole palette really has
+    /// changed), so the mouse-mode circles must NOT go through it just because
+    /// the mode can now be set from the dial as well as from here. This is the
+    /// surgical path, and it is a no-op while the panel is closed.</para></summary>
+    public void TouchMouseMode()
+    {
+        if (IsOpen) Touch("Keyboard & Mouse");
+    }
+
     private void Touch(params string[] titles)
     {
         foreach (var t in titles)
@@ -1564,9 +1577,12 @@ public sealed class SettingsWindow
                 bool on = string.Equals(mm, mode.Tag, StringComparison.Ordinal);
                 var cell = Circle(UnitD, mode.Label, on, () =>
                 {
+                    // No Touch here: SetMouseMode is MainWindow's, and it calls
+                    // TouchMouseMode for EVERY caller - this panel, the dial's
+                    // mouse-mode cell, and the tool-change path. Repeating it
+                    // would rebuild the section twice on one tap.
                     _h.SetMouseMode!(mode.Tag);
                     _h.Save();
-                    Touch("Keyboard & Mouse");
                 }, inner: Icons.Mark(mode.Glyph, on ? Ink : Muted, 34,
                                      stroked: mode.Stroked, thickness: 1.7));
                 ToolTipService.SetToolTip(cell, mode.Tip);
