@@ -268,15 +268,55 @@ public sealed class ObjectsWindow
         scroller.Height = Band;
         scroller.CornerRadius = new CornerRadius(10);
 
+        // 11.20 item 16 follow-on. The tiles are drawn in the PEN's colour now,
+        // so the band they sit on cannot be a fixed wash any more: a near-black
+        // pen on this panel's near-black plate is an invisible preview - the same
+        // failure the item is complaining about, reached from the other side.
+        //
+        // THE BAND MOVES, THE INK DOES NOT. The pen's colour is the thing the
+        // user asked to see, so it is never lifted or tinted to make it legible;
+        // the decoration behind it gives way instead. First choice is the page's
+        // own ground, which makes the tile a true preview of what the shape will
+        // look like where it is going. When the pen would vanish against that,
+        // the band flips to the far end of the scale and the pen still reads at
+        // its exact colour. Section 4 does the same job with a checkerboard.
         box.Children.Add(new Border
         {
             CornerRadius = new CornerRadius(10),
-            // a wash of the ink rather than a fixed grey at two alphas: the last
-            // two-state colour pick in this window
-            Background = new SolidColorBrush(ChromeUi.Wash(0x18)),
+            Background = new SolidColorBrush(BandFor(_h.ActivePen?.Invoke())),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(ChromeUi.Hairline),
             Child = scroller,
         });
         return box;
+    }
+
+    /// <summary>The ground the preview tiles sit on: the page's own, unless the
+    /// pen would disappear against it.
+    ///
+    /// <para>WCAG's own ratio, at a deliberately low bar. This is not text - it
+    /// is a 2 DIP outline whose job is to be recognisable as a rectangle, and a
+    /// 3:1 bar would flip the band on a mid-grey pen that reads perfectly well.
+    /// 1.7:1 is the point at which a hairline stops being findable, measured
+    /// against the near-black-on-near-black case that prompted it.</para></summary>
+    private static Color BandFor(PenPreset? pen)
+    {
+        var ground = PageTheme.Ground;
+        if (pen == null) return ground;
+        var ink = ColorUtil.Parse(pen.Color);
+        if (Contrast(ink, ground) >= 1.7) return ground;
+        // Flip to the far end, keeping a hair of the page's own hue so the band
+        // still belongs to this page rather than being a slab of white.
+        return PageTheme.Luminance(ink) < 0.5
+            ? Color.FromArgb(0xFF, 0xF4, 0xF3, 0xF0)
+            : Color.FromArgb(0xFF, 0x1A, 0x1A, 0x1C);
+    }
+
+    private static double Contrast(Color a, Color b)
+    {
+        double la = PageTheme.Luminance(a), lb = PageTheme.Luminance(b);
+        double hi = Math.Max(la, lb), lo = Math.Min(la, lb);
+        return (hi + 0.05) / (lo + 0.05);
     }
 
     /// <summary>One object: its own geometry drawn at tile size, its name under
