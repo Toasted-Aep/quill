@@ -250,6 +250,19 @@ public sealed class ToolWheel
     /// over, so a tool that lives in the dial is not also offered on the bar.</summary>
     public event Action<IReadOnlySet<string>>? SlotsChanged;
 
+    /// <summary>Reference 11.22 item 4: right-clicking a sector, and tapping an
+    /// empty + cell, hand the slot to the Brushes library rather than to the
+    /// flyout. The host owns that library, so it owns this; returning false
+    /// falls back to <c>ShowAssign</c>, which is also what happens when the
+    /// library cannot be opened at all.
+    ///
+    /// <para>PRESS-AND-HOLD IS DELIBERATELY NOT ROUTED HERE. The flyout is the
+    /// only surface that can put a COMMAND or a named pen in a slot, or empty
+    /// it, and 11.24 item 1 is explicit that the + cells' assignment route must
+    /// survive this change - so the flyout keeps an entry point of its own, and
+    /// <see cref="ShowSlotMenu"/> gives the library a way back to it.</para></summary>
+    public Func<int, bool>? BrushPickerHook { get; set; }
+
     private const string KindPen = "pen:", KindTool = "tool:", KindCmd = "cmd:";
     private static readonly string[] ToolKinds = { "Eraser", "Select", "Text", "FreeSpace", "Fill" };
     private static readonly string[] BuiltInCmds = { "Undo", "Redo", "MouseMode" };
@@ -484,7 +497,7 @@ public sealed class ToolWheel
         {
             var (z, idx) = Aim(e.GetPosition(_host));
             if (z != Zone.Sector) return;
-            ShowAssign(idx);
+            PickForSlot(idx);
             e.Handled = true;
         };
         _assign.Tick += (_, _) =>
@@ -1555,7 +1568,7 @@ public sealed class ToolWheel
         _hoverSlot = z == Zone.Sector ? idx : -1;
         _hoverZone = z;
 
-        if (z == Zone.Sector && pt.Properties.IsRightButtonPressed) { Refresh(); ShowAssign(idx); e.Handled = true; return; }
+        if (z == Zone.Sector && pt.Properties.IsRightButtonPressed) { Refresh(); PickForSlot(idx); e.Handled = true; return; }
         if (z == Zone.Sector) { _assignSlot = idx; _assign.Stop(); _assign.Start(); }
 
         var prop = PropOf(z);
@@ -1658,7 +1671,9 @@ public sealed class ToolWheel
         if (slot < 0 || slot >= Slots) return;
         string id = ResolveSlots()[slot];
         // 11.2 item 11: tapping an empty cell offers the tool list.
-        if (id.Length == 0) { ClearHover(); ShowAssign(slot); return; }
+        // 11.2 item 11 + 11.22 item 4: the + cell offers the Brushes library
+        // aimed at itself, and falls back to the flyout when there is none.
+        if (id.Length == 0) { ClearHover(); PickForSlot(slot); return; }
         if (!Available(id)) { Refresh(); return; }
         // A value card belongs to the tool that was live when it opened, so
         // changing tool closes it rather than silently re-pointing it.
@@ -2042,8 +2057,45 @@ public sealed class ToolWheel
         menu.ShowAt(_shield, ShieldAt());
     }
 
-    /// <summary>The slot-assignment flyout: press-hold or right-click a sector.
-    /// This is how the user chooses which eight tools occupy the dial.</summary>
+    /// <summary>11.22 item 4's entry: the Brushes library, aimed at this slot.
+    /// Falls through to the flyout when the host has no library to offer, so a
+    /// sector is never left with no way to be assigned.</summary>
+    private void PickForSlot(int slot)
+    {
+        if (slot < 0 || slot >= Slots) return;
+        bool taken = false;
+        try { taken = BrushPickerHook?.Invoke(slot) == true; } catch { taken = false; }
+        if (!taken) ShowAssign(slot);
+    }
+
+    /// <summary>The full assignment flyout, for the Brushes library's "More..."
+    /// - pens by name, tools, commands and Empty. This is the guarantee that
+    /// pointing right-click at the library costs the + cells nothing.</summary>
+    public void ShowSlotMenu(int slot) { if (slot >= 0 && slot < Slots) ShowAssign(slot); }
+
+    /// <summary>What a slot holds, when it holds a pen. The library previews the
+    /// SLOT rather than the live tool while it is aimed at one.</summary>
+    public PenPreset? SlotPen(int slot) =>
+        slot >= 0 && slot < Slots ? PenOf(ResolveSlots()[slot]) : null;
+
+    /// <summary>Put a pen in a slot (11.24 item 1's targeted assignment).</summary>
+    public void SetSlotPen(int slot, PenPreset pen)
+    {
+        if (slot >= 0 && slot < Slots) AssignSlot(slot, KindPen + pen.Id);
+    }
+
+    /// <summary>Put a tool in a slot.</summary>
+    public void SetSlotTool(int slot, string tag)
+    {
+        if (slot >= 0 && slot < Slots) AssignSlot(slot, KindTool + tag);
+    }
+
+    /// <summary>Empty a slot.</summary>
+    public void ClearSlot(int slot) { if (slot >= 0 && slot < Slots) AssignSlot(slot, ""); }
+
+    /// <summary>The slot-assignment flyout: press-hold a sector, or "More..." in
+    /// the Brushes library. This is how the user chooses which tools occupy the
+    /// dial, and it is the only surface that can put a COMMAND in one.</summary>
     private void ShowAssign(int slot)
     {
         _assignSlot = -1;
