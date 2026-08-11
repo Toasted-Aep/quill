@@ -1551,3 +1551,56 @@ in `Accent`. On a white page no background is visible behind it; an earlier
 capture on a grey ground showed a light rounded plate. Build the plate from
 `PageTheme.Panel` so it disappears on paper and separates on a coloured ground —
 that satisfies both captures.
+
+### 12.9 The editor's real interaction model — supersedes 12.8
+
+**§12.8 got this wrong and must not be built.** It said dragging a vanishing
+point rotates the horizon. It does not. The user, on a further capture:
+
+> *"make vanishing point snap to the horizon, exactly replicate the photo, it
+> has a centre circle to rotate around horizon."*
+
+Three separate handles, three separate jobs:
+
+1. **Vanishing points slide ALONG the horizon.** They are **constrained to the
+   line** — a point can never leave it. Dragging one moves it left and right
+   along the horizon and does not change the horizon's angle. This is the
+   "snap to the horizon" the user is asking for.
+2. **The centre circle rotates the horizon.** The pale blue cone-of-vision
+   circle carries a **red arc** on its rim — visible in the capture on the
+   circle's right side, spanning roughly ±30° about the horizontal, drawn in the
+   same red as the handles. That arc is the **rotation grip**: dragging it turns
+   the horizon about the centre point. It is the only way to change the angle.
+3. **The centre crosshair moves the whole grid.** Faint, at the circle's centre,
+   independent of the horizon's angle.
+
+So the tilt seen in the earlier mid-drag capture came from the **rotation grip**,
+not from dragging a point — which is why a point appeared filled while the
+horizon was already off level.
+
+Everything else in §12.8 stands: idle points are unfilled red rings and the
+dragged one is a filled red dot; a pale blue dashed line marks the level horizon
+while the red one is tilted; the tilt angle shows in the top-bar readout; the
+cone circle is pale blue rather than red; the crosshair is drawn much fainter
+than the handles; the dial fades throughout; and `Editing Grid.` / `Done` sits
+top-centre with the plate built from `PageTheme.Panel`.
+
+The user's instruction on fidelity was emphatic — *"make it exactly like the
+photo. EXACTLY."* Match the capture rather than approximating it: handle sizes,
+the arc's extent and position on the rim, the circle's radius relative to the
+page, and the weight and colour of every line.
+
+### 12.10 The triangle grid, and an angle for it and isometric
+
+1. **A triangle grid is missing — add it** to `Grid Type` alongside the others,
+   with its own editor page built to §12.1.
+2. **Both the triangle grid and the isometric grid gain an angle control** —
+   a numeric row per §12.2 (bold label, typeable value box in degrees, full-width
+   slider) that sets the angle of the grid's diagonals.
+
+   Isometric's true value is 30°, and the triangle grid's equilateral case is
+   60°; both should default to those and allow the user off them. Changing the
+   angle must re-render the live preview like every other control.
+
+Both keep `Orientation` under §12.3's rule, since rotating either does change
+its form.
