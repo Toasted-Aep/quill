@@ -1962,17 +1962,33 @@ public sealed partial class MainWindow : Window
     ///
     /// <para>ThemeSource "Page": the ACTIVE PAGE's effective ground - the fixed
     /// colour of its paper for Blueprint / Brown / Darkprint, its own background
-    /// otherwise. With no page open (gallery, startup) there is no page to derive
-    /// from, so it falls through.</para>
+    /// otherwise. With no page open (gallery, startup) it uses the LAST page's
+    /// ground, so the gallery stays continuous with the page you came from.
+    /// Falling through to the Manual branch there was wrong: Theme defaults to
+    /// "Dark", so a Page-mode user who never opened Settings got a dark gallery
+    /// and a dark startup flash from a choice they never made.</para>
     ///
     /// <para>ThemeSource "Manual": the ground the user pinned, expressed as the
     /// colour the root actually paints under that choice - including OLED black,
     /// so pinning Dark with OLED on gives the chrome the true black ground it is
     /// really sitting on rather than a near-black one it is not.</para></summary>
+    /// <summary>The last page's ground, remembered so the gallery can keep
+    /// deriving after the page closes. Null until a page has been opened once.</summary>
+    private Color? _lastPageGround;
+
     private Color ResolveGround()
     {
-        if (_library.ThemeSource == "Page" && _curPage != null)
-            return PaperGround(_curPage);
+        if (_library.ThemeSource == "Page")
+        {
+            if (_curPage != null)
+            {
+                var g = PaperGround(_curPage);
+                _lastPageGround = g;
+                return g;
+            }
+            // gallery / startup: the page we came from, if there was one
+            if (_lastPageGround is { } last) return last;
+        }
         bool dark = _library.Theme == "System" ? SystemPrefersDark() : _library.Theme == "Dark";
         return dark
             ? (_library.OledBlack ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 0x0F, 0x0E, 0x10))
