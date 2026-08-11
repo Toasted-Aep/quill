@@ -173,9 +173,15 @@ internal static class GridArt
                 for (float y = 0; y <= h; y += step) ds.DrawLine(0, y, w, y, ink, lw);
                 break;
 
+            // 12.10: the angle control drives the diagonals. Isometric's true
+            // value is 30 and the equilateral triangle case is 60, and each
+            // reduces to the classic families at its default - isometric to
+            // 30/90/150, the triangle grid to 0/60/120.
             case GridKind.Isometric:
+            case GridKind.Triangle:
                 {
-                    float a = (float)s.Angle + (portrait ? 90f : 0f);
+                    float a = (float)s.Angle + (s.Kind == GridKind.Triangle ? -60f : 0f)
+                              + (portrait ? 90f : 0f);
                     float perp = step * 0.8660254f;
                     Family(ds, w, h, a, perp, ink, lw);
                     Family(ds, w, h, a + 60f, perp, ink, lw);
@@ -224,6 +230,9 @@ internal static class GridArt
         float sx = w / fw, sy = h / fh;
 
         float horizon = (float)shape.HorizonF * fh * sy;
+        // Presets are all level (12.4 describes positions, never a tilt), so the
+        // preview and the thumbnails draw the level case. The stored tilt lives
+        // on the page and is the canvas renderer's business.
         var pts = new List<Vector2>();
         for (int i = 0; i < shape.VpXF.Length; i++)
             pts.Add(new Vector2((float)shape.VpXF[i] * fw * sx, horizon));
@@ -235,18 +244,22 @@ internal static class GridArt
 
         // The true families each configuration leaves: a 1-point keeps both axes,
         // a 2-point keeps the verticals, a 3-point keeps nothing straight.
+        // 12.5: "very fine and low-contrast - a wash of blue-grey guides, never
+        // heavy black lines". Two vanishing points whose rays are nearly parallel
+        // crowd a 300 DIP strip, so the true families and the fan both sit well
+        // under the horizon and only the horizon reads as a line.
         float step = MathF.Max(10f, h / 9f);
         if (pts.Count == 1)
         {
-            for (float y = 0; y <= h; y += step) ds.DrawLine(0, y, w, y, Fade(ink, 0.5), rayW);
-            for (float x = 0; x <= w; x += step) ds.DrawLine(x, 0, x, h, Fade(ink, 0.5), rayW);
+            for (float y = 0; y <= h; y += step) ds.DrawLine(0, y, w, y, Fade(ink, 0.34), rayW);
+            for (float x = 0; x <= w; x += step) ds.DrawLine(x, 0, x, h, Fade(ink, 0.34), rayW);
         }
         else if (pts.Count == 2)
         {
-            for (float x = 0; x <= w; x += step) ds.DrawLine(x, 0, x, h, Fade(ink, 0.5), rayW);
+            for (float x = 0; x <= w; x += step) ds.DrawLine(x, 0, x, h, Fade(ink, 0.34), rayW);
         }
 
-        foreach (var vp in pts) Fan(ds, vp, w, h, rays, Fade(ink, 0.85), rayW);
+        foreach (var vp in pts) Fan(ds, vp, w, h, rays, Fade(ink, 0.55), rayW);
 
         // The horizon last and a shade stronger, so it reads through the fan.
         if (horizon >= -1 && horizon <= h + 1)

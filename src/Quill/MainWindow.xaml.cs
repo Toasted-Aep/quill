@@ -6831,6 +6831,14 @@ public sealed partial class MainWindow : Window
     {
         if (_curPage is not { } p) return;
 
+        // A preset PLACES the points; nothing else may. Read what the page was on
+        // BEFORE the spec overwrites it: committing the density or the line weight
+        // must not silently drag a hand-placed vanishing point back onto the
+        // preset's geometry, and 12.6's Edit Points commits on its way out.
+        bool presetMoved = s.IsPerspective && s.Preset != "Custom" &&
+                           !string.Equals(p.GridPreset, s.Preset, StringComparison.Ordinal);
+        bool countMoved = s.IsPerspective && (p.Perspective?.Vps.Count ?? 0) != s.VpCount;
+
         p.GridPreset = s.Preset == "Custom" ? null : s.Preset;
         p.GridSpacing = Math.Max(2, s.Spacing);
         p.GridDivisions = s.Divisions <= 1 ? 0 : Math.Clamp(s.Divisions, 2, 64);
@@ -6848,7 +6856,8 @@ public sealed partial class MainWindow : Window
             p.Grid = GridType.None;
             p.Perspective ??= new PerspectiveDef();
             p.Perspective.RayCount = Math.Clamp(s.Density, 4, 96);
-            PlacePerspectiveShape(p.Perspective, s);
+            if (presetMoved || countMoved || p.Perspective.Vps.Count == 0)
+                PlacePerspectiveShape(p.Perspective, s);
         }
         else
         {
@@ -6948,7 +6957,13 @@ public sealed partial class MainWindow : Window
             Page = () => _curPage,
             Changed = () => Surface.Refresh(),
             Save = ScheduleSave,
+            // 12.8's tilt readout borrows two cells of the top bar. Reached
+            // through PanelLayout, which already registers them by id, so the
+            // files that OWN the chrome are not touched by this feature.
+            Chrome = id => _chromeBars?.Layout.Element(id),
+            SyncChrome = () => _chromeBars?.SyncReadouts(),
         });
+        _gridEditor.Closed = () => _settingsWin?.Show();
         _gridEditor.Begin();
     }
 

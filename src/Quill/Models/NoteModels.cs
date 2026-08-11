@@ -812,6 +812,13 @@ public class PerspectiveDef
     public List<CanvasPoint> Vps { get; set; } = new();
     // Rays cast per vanishing point for the guide fan. Higher = denser.
     public int RayCount { get; set; } = 24;
+    // CONCEPTS-REF 12.9: the horizon's tilt in degrees. Stored rather than
+    // derived from the points, because the relationship runs the other way -
+    // the points are CONSTRAINED to this line and slide along it, and only the
+    // rotation grip on the cone circle's rim changes the angle. 0 = level, so
+    // every page written before 12.9 reads back exactly as it drew.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double HorizonAngle { get; set; }
 }
 
 // ===========================================================================

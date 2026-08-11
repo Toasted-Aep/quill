@@ -3571,22 +3571,16 @@ public sealed class InkSurface : UserControl
                     for (float y = startY; y < br.Y; y += spacing)
                         ds.DrawLine(new Vector2(tl.X, y), new Vector2(br.X, y), gridColor, lw);
                 break;
+            // CONCEPTS-REF 12.10: the angle control sets the diagonals. Each
+            // kind reduces to its classic families at its own default -
+            // isometric at 30 gives 30/90/150, the triangle grid at 60 gives
+            // 0/60/120 - and the user may take either off it.
             case GridType.Isometric:
-                // centered-rectangular lattice (m*0.866s, n*0.5s), (m+n) even: the
-                // three nearest-neighbour line families sit at 30/90/150 deg with a
-                // uniform perpendicular spacing of 0.866s, so cells are true rhombi
-                {
-                    float a = 30f + (portrait ? 90f : 0f);
-                    DrawLineFamily(ds, tl, br, a, spacing * 0.8660254f, gridColor, lw);
-                    DrawLineFamily(ds, tl, br, a + 60f, spacing * 0.8660254f, gridColor, lw);
-                    DrawLineFamily(ds, tl, br, a + 120f, spacing * 0.8660254f, gridColor, lw);
-                }
-                break;
             case GridType.Triangle:
-                // equilateral tiling with side s: families at 0/60/120, each with
-                // perpendicular spacing equal to the triangle height 0.866s
                 {
-                    float a = portrait ? 90f : 0f;
+                    float baseA = (float)(_page.GridAngle > 0 ? _page.GridAngle : 30);
+                    float a = baseA + (_page.Grid == GridType.Triangle ? -60f : 0f)
+                              + (portrait ? 90f : 0f);
                     DrawLineFamily(ds, tl, br, a, spacing * 0.8660254f, gridColor, lw);
                     DrawLineFamily(ds, tl, br, a + 60f, spacing * 0.8660254f, gridColor, lw);
                     DrawLineFamily(ds, tl, br, a + 120f, spacing * 0.8660254f, gridColor, lw);
@@ -3653,10 +3647,26 @@ public sealed class InkSurface : UserControl
         float spacing = (float)Math.Max(8, _page!.GridSpacing);
         int vpCount = Math.Min(def.Vps.Count, 3);
 
-        // horizon for 1- and 2-point; a 3-point set has nothing straight left
-        if (vpCount < 3 && (float)def.HorizonY >= tl.Y && (float)def.HorizonY <= br.Y)
-            ds.DrawLine(new Vector2(tl.X, (float)def.HorizonY), new Vector2(br.X, (float)def.HorizonY),
-                        col, lw * 1.6f);
+        // CONCEPTS-REF 12.8: the horizon TILTS. It is not a fixed horizontal -
+        // it is the LINE THROUGH the two on-horizon points, so dragging either
+        // one rotates it and the whole grid re-solves under the new geometry.
+        // 12.9: the angle is STORED, not derived. The points are constrained to
+        // this line and slide along it; only the rotation grip on the cone
+        // circle's rim turns it.
+        float tiltDeg = (float)def.HorizonAngle;
+
+        // The horizon, drawn through the points rather than at a stored height.
+        // A 3-point set has nothing straight left, so it keeps none.
+        if (vpCount < 3)
+        {
+            var a = vpCount >= 2
+                ? new Vector2((float)def.Vps[0].X, (float)def.Vps[0].Y)
+                : new Vector2(tl.X, (float)def.HorizonY);
+            float slope = MathF.Tan(tiltDeg * MathF.PI / 180f);
+            var p0 = new Vector2(tl.X, a.Y + (tl.X - a.X) * slope);
+            var p1 = new Vector2(br.X, a.Y + (br.X - a.X) * slope);
+            ds.DrawLine(p0, p1, col, lw * 1.6f);
+        }
 
         if (vpCount == 1)
         {
@@ -3666,7 +3676,9 @@ public sealed class InkSurface : UserControl
         }
         else if (vpCount == 2)
         {
-            DrawLineFamily(ds, tl, br, 90f, spacing, col, lw);   // verticals stay true
+            // The verticals stay perpendicular to the horizon, so they turn with
+            // it - that IS the grid re-solving under the tilt.
+            DrawLineFamily(ds, tl, br, 90f + tiltDeg, spacing, col, lw);
         }
 
         int rays = Math.Clamp(def.RayCount, 4, 96);
