@@ -1604,3 +1604,41 @@ page, and the weight and colour of every line.
 
 Both keep `Orientation` under §12.3's rule, since rotating either does change
 its form.
+
+### 12.11 The angle control changes the CELL SHAPE, not the grid's rotation
+
+§12.10's angle control was built as a rigid rotation of the whole grid. That is
+wrong. The user:
+
+> *"angle does not work correctly it rotates whole grid not the grid parts
+> individually."*
+
+**A rigid rotation is what `Orientation` already does.** An angle control that
+also rotates the whole grid is a duplicate of a control further down the same
+page — that redundancy is the tell that the implementation is wrong.
+
+**What the angle actually parameterises: the inclination of the DIAGONAL line
+families, measured from horizontal, with the grid's straight family left where
+it is.** Changing it changes the shape of every cell.
+
+- **Isometric** — a vertical family plus two diagonal families at **+θ** and
+  **−θ** from horizontal. At θ = 30° the cells are true isometric rhombi.
+  Lowering θ makes them flatter and wider; raising it makes them taller and
+  narrower. **The verticals never move.**
+- **Triangle** — a horizontal family plus two diagonal families at **+θ** and
+  **−θ**. At θ = 60° the triangles are equilateral. Off 60° they become
+  isosceles — narrower and taller, or squatter and wider. **The horizontals
+  never move.**
+
+Two checks that distinguish a correct implementation from a rotated one:
+
+1. **The straight family must not move at all** as the angle changes. If the
+   verticals in isometric, or the horizontals in triangle, tilt with the slider,
+   the whole grid is being rotated.
+2. **The cell shape must change.** Sweep the angle and the rhombi/triangles
+   should visibly stretch and squash. Under a rigid rotation every cell keeps
+   its shape and only the whole field spins — which is exactly what the user is
+   seeing.
+
+`Orientation` continues to do the rigid 90° flip, unchanged and independent of
+this control.
