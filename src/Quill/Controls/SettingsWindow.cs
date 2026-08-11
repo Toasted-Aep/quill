@@ -816,10 +816,18 @@ public sealed class SettingsWindow
 
         // 12.10's angle row, between spacing and the rest: it is the second
         // thing that decides what an isometric or a triangle grid IS.
+        //
+        // 12.11: the caption says which family STAYS PUT, because the control
+        // reads as a duplicate of Orientation further down this same page until
+        // you know that. It is the difference the user reported missing.
         if ((parts & GridPart.Angle) != 0)
             body.Children.Add(NumRow("Angle",
-                "The angle of the grid's diagonals.",
-                5, 85, 1,
+                kind == GridKind.Triangle
+                    ? "Set the slope of the diagonals. The horizontal lines stay where they " +
+                      "are, so this changes the shape of each triangle. 60\u00b0 is equilateral."
+                    : "Set the slope of the diagonals. The vertical lines stay where they " +
+                      "are, so this changes the shape of each cell. 30\u00b0 is true isometric.",
+                GridLattice.MinAngle, GridLattice.MaxAngle, 1,
                 () => spec.Angle, v => spec.Angle = v,
                 v => $"{v:0.#}\u00b0",
                 t => ParseLeadingNumber(t)));
