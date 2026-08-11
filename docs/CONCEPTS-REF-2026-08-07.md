@@ -1366,3 +1366,148 @@ where there is no last page.
 Still open, deliberately untouched: `Library.Theme` defaulting to `"Dark"` is
 what makes the defaults collide into `#0F0E10` in the first place. Changing it
 would alter first-run appearance for genuinely new users, so it was left alone.
+
+---
+
+## 12. The grid editor — transcribed 2026-08-10
+
+Ten reference captures of Concepts' grid editor. This supersedes §10.7 and
+§11.7 item 50, which described the same pane in less detail. **Agents cannot see
+the images; this is the only source.**
+
+### 12.1 The page shell
+
+Every grid type opens the same page inside the Settings floating window, under
+`Grid Type`:
+
+1. The window's own header stays — close **X**, `Workspace` / `Interaction`
+   tabs, **(i)** — unchanged.
+2. Directly beneath it, a **live preview strip**: full panel width, ~300 DIP
+   tall, on a band a shade darker than the page, **rendering the grid exactly as
+   configured**. It updates as any control below changes.
+3. A **`< Back` button** floating over the preview's lower-left. Copy this style
+   exactly:
+   - a **white pill** — fully rounded ends, corner radius = half its height;
+   - height ~46 DIP, width fits the label plus generous padding (~34 DIP each
+     side);
+   - inset ~20 DIP from the panel's left edge;
+   - vertically **straddling the preview strip's bottom edge**, roughly half in
+     and half out — it is not inside the strip and not below it;
+   - label `< Back` in near-black, ~17 DIP regular;
+   - a soft drop shadow; no border.
+4. Then the grid's name as a **34 DIP bold heading** — `Isometric Grid`,
+   `Graph Paper`, `2-Point`, `3-Point`.
+5. Then the sections in §12.3, in the order listed there, ending with
+   `Confine to artboard`.
+
+### 12.2 Controls
+
+**Preset circles.** ~86 DIP, thin `Outline` ring, containing a **miniature line
+drawing of that preset's own grid** — not a generic glyph. Selected carries a
+2 DIP `OnSurface` ring and a bold caption; unselected is muted. Captions sit
+beneath, ~13 DIP, and wrap to two lines where needed (`1/2 Wide Below`,
+`3/4 Ultrawide Below`). The row scrolls horizontally.
+
+**Numeric rows.** A bold label, an optional grey caption line, a **right-aligned
+typeable value box** (white rounded field, hairline border — `100 mm`, `1 pts`,
+`10`, `30`, `20%`), and beneath them a **full-width slider**: 2 DIP `OnSurface`
+track, white round knob with a hairline. The box is editable directly; the
+slider is never the only way in.
+
+**Colour.** Caption *"Automatic color adapts to your background color. Custom
+colors are independent of the background color."*, then two circles —
+`Automatic` (unfilled) and `Custom` (filled with the chosen colour).
+
+**Orientation.** Two circles, `Landscape` and `Portrait`, drawn as a rounded
+rect ruled horizontally and one ruled vertically.
+
+**Confine to artboard.** A square **checkbox**, not a toggle, labelled
+*"Only show the grid lines inside the artboard."*
+
+### 12.3 Which sections each grid gets
+
+**`Orientation` appears only where rotating the grid actually changes it.** A
+square or dot grid is unchanged by a 90° turn, so it must not carry the control
+at all — the user was explicit: *"if rotation does not change the form, do not
+have it in page."*
+
+| grid | preset | spacing | divisions | vanishing | density | line weight | colour | opacity | orientation | confine |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Dot | – | ✓ | – | – | – | ✓ | ✓ | ✓ | **no** | ✓ |
+| Lined | ✓ | ✓ | – | – | – | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Graph | ✓ | ✓ | ✓ | – | – | ✓ | ✓ | ✓ | **no** | ✓ |
+| Isometric | ✓ | ✓ | – | – | – | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 1-Point | ✓ | – | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 2-Point | ✓ | – | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 3-Point | ✓ | – | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+`Divisions` caption: *"Set the number of divisions between main lines. Set value
+to 1 to only show the main lines."*
+`Spacing` caption: *"Set the spacing of your grid. The units are determined by
+the document units."*
+`Density` caption: *"Set the number of vanishing lines per point."*
+
+### 12.4 The baked-in presets
+
+Exactly these, plus a trailing **`Custom`** in every row:
+
+- **Lined** — `Narrow`, `Medium`, `Wide`
+- **Graph Paper** — `Square Grid`, `10 / 100`, `16 / 64`
+- **2-Point** — `2 Point`, `1/2 Narrow`, `1/4 Narrow`, `Side Narrow`,
+  `1/2 Wide`, `1/4 Wide`, `Side Wide`, `1/2 Wide Below`, `Side Ultrawide`
+- **3-Point** — `3 Point`, `3/4 Narrow`, `1/2 Narrow`, `3/4 Wide`, `1/4 Wide`,
+  `Side Wide Below`, `1/4 Wide Below`, `3/4 Ultrawide Below`, `3/4 Ultrawide`
+- **Isometric** — `Isometric`
+- **1-Point** — `1 Point`
+
+The perspective preset names describe **where the vanishing points sit**:
+`Narrow` / `Wide` / `Ultrawide` is how far apart they are, `1/2` / `1/4` / `3/4`
+is where the horizon crosses the frame, `Side` puts a point off the edge, and
+`Below` drops the third point beneath the horizon rather than above. Each
+preset's circle shows a small cube or fan drawn under that configuration —
+which is why the thumbnails differ from one another and cannot be one shared
+glyph.
+
+### 12.5 Perspective grids must match Concepts
+
+**Move 1-Point, 2-Point and 3-Point into the `Grid Type` section** alongside the
+other grids, and render them as Concepts does: a horizon line, vanishing points
+on it, and a **fan of fine lines radiating from each point**, dense near the
+point and spreading outward, plus the horizontal/vertical family each
+configuration implies. The reference draws them very fine and low-contrast —
+they read as a wash of blue-grey guides, never as heavy black lines.
+
+### 12.6 `Edit Points` and the vanishing-point editor
+
+**Only the perspective grids get this.** In the page, under a `Vanishing Points`
+heading:
+
+- an **`Edit Points`** button — label in `Accent`, bold, ~17 DIP. One capture
+  shows it plain on the panel ground and an earlier one shows it on a filled
+  `SurfaceAlt` rounded rect; **build the plain form** and treat the filled one
+  as its pressed/hover state.
+- beneath it, the caption *"You can edit the vanishing points with a tap & hold
+  on canvas or by activating the grid layer."*
+
+**Pressing it dismisses the panel and enters an on-canvas editing mode:**
+
+- A floating label at the **top centre** of the canvas reading
+  **`Editing Grid.`** in near-black with **`Done`** beside it in `Accent`, on a
+  light rounded background.
+- The **horizon line turns red**, spanning the full width.
+- Each **vanishing point becomes a red ring** — an unfilled circle ~16 DIP,
+  sitting on the horizon, draggable.
+- A large thin **circle through the centre** marks the cone of vision, drawn in
+  the grid's own colour rather than red.
+- A small **crosshair** at the grid's centre point, draggable to move the whole
+  grid.
+- The pointer takes a **four-way move cursor** over a draggable handle.
+- The radial dial **fades** while editing, exactly as it does for the colour
+  wheel (§11.19) — the page and the grid stay at full strength.
+- `Done` exits and returns to the page.
+
+### 12.7 Observed but not requested
+
+When a grid layer is active the reference shows a bottom-centre bar —
+`+ Item Picker`, a lock and `Include`, and `All`. **Not part of this work**;
+recorded only so it is not mistaken for something missing.
