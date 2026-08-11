@@ -5,6 +5,7 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Shapes;
@@ -102,12 +103,33 @@ public sealed class SettingsWindow
         /// <summary>Reinstall the keyboard layout after this panel changes the
         /// preset, the overrides or the master switch.</summary>
         public Action? ApplyKeyPreset { get; init; }
+
+        // ---- 12: the grid editor -------------------------------------------
+        /// <summary>Push a whole <see cref="GridSpec"/> at the page. ONE call
+        /// rather than eight setters, because a 12.4 preset moves several fields
+        /// at once and eight round trips would be eight canvas invalidations for
+        /// one tap.</summary>
+        public Action<GridSpec>? ApplyGrid { get; init; }
+
+        /// <summary>12.5 moves 1-Point / 2-Point / 3-Point into the Grid Type
+        /// row. The count (0 = none) is all this panel knows; MainWindow owns the
+        /// CANVAS coordinates the points are placed at, because only it knows
+        /// where the view and the artboard are.</summary>
+        public Action<int>? SetPerspective { get; init; }
+
+        /// <summary>12.6: dismiss the panel and enter the on-canvas
+        /// vanishing-point editor. Null = the button does not appear.</summary>
+        public Action? EditPoints { get; init; }
     }
 
     // =======================================================================
     // Geometry, straight off CONCEPTS-REF-2026-08-07 §3 / §9
     // =======================================================================
     private const double SwatchD = 69;    // background + grid circles (§3.1)
+    private const double PresetD = 86;    // §12.2's preset circles
+    private const double PreviewH = 300;  // §12.1's live preview strip
+    private const double BackH = 46;      // §12.1's Back pill
+    private const double TitleSize = 34;  // §12.1 item 4's page heading
     private const double UnitD = 80;      // unit + Wheel|Bar circles (§3.1, §9.8)
     // 3.1: circles "28 DIP apart". The caption's Width is d + 2*CapPad but its
     // margin is -CapPad either side, so the two cancel and a cell measures
@@ -160,6 +182,13 @@ public sealed class SettingsWindow
     private readonly Host _h;
     private readonly FloatingWindow _win;
 
+    /// <summary>The panel this window was attached to. Kept only for its
+    /// XamlRoot: §12.1's preview strip and §12.2's thumbnails are
+    /// CanvasImageSources and go soft when they are rasterised at 96 DPI on a
+    /// 125% display, and the strip is built before it has been arranged, so it
+    /// has no XamlRoot of its own to ask.</summary>
+    private readonly Panel? _root;
+
     /// <summary>Which sections the user has open. Held here and not in the tree
     /// so a theme change (which rebuilds every element) does not slam every
     /// section shut.</summary>
@@ -208,11 +237,48 @@ public sealed class SettingsWindow
     /// second, which is a confirmation without a modal dialog.</summary>
     private bool _restoreArmed;
 
+    // =======================================================================
+    // §12 - the grid editor page
+    // =======================================================================
+    /// <summary>Non-null while the Workspace tab is showing a grid's EDITOR PAGE
+    /// instead of its sections (§12.1). Navigation, not a repaint: going in and
+    /// coming back are the only two things that legitimately rebuild this tab.</summary>
+    private GridKind? _gridPage;
+
+    /// <summary>The spec the open page is editing. One instance, mutated in
+    /// place by every control on the page and handed straight to the preview -
+    /// which is what makes a slider drag cost one image redraw rather than the
+    /// wholesale rebuild §11.1 item 1 calls a 5/5 defect.</summary>
+    private GridSpec? _spec;
+
+    /// <summary>The preview strip's surface and the element that sizes it. The
+    /// strip is repainted by assigning a new CanvasImageSource to the Image;
+    /// nothing above it in the tree is touched, so the reader does not move and
+    /// no control is rebuilt.</summary>
+    private Image? _previewImg;
+    private Border? _previewHost;
+
+    /// <summary>Re-bind hooks for the page's controls: a §12.4 preset moves the
+    /// spacing and the divisions at once, and the boxes and sliders that show
+    /// them have to follow WITHOUT being rebuilt. Each control registers how to
+    /// repaint itself from the spec.</summary>
+    private readonly List<Action> _gridBind = new();
+
+    /// <summary>Guards the value box / slider round trip: setting the box's Text
+    /// from the slider must not be read back as a fresh edit.</summary>
+    private bool _gridSyncing;
+
+    /// <summary>The window's default scroller inset, restored when the grid page
+    /// closes. The page itself runs at zero so §12.1's preview strip can be the
+    /// full panel width.</summary>
+    private static readonly Thickness ContentInset = new(14, 10, 10, 14);
+
     public static SettingsWindow Attach(Panel host, Host h) => new(host, h);
 
     private SettingsWindow(Panel host, Host h)
     {
         _h = h;
+        _root = host;
         // Wide enough for the legacy panel the Interaction tab still hosts (it
         // builds itself at 480 DIP), and tall like the reference.
         _win = FloatingWindow.Attach(host, 516, 724);
@@ -377,6 +443,9 @@ public sealed class SettingsWindow
     private FrameworkElement BuildWorkspace()
     {
         _page = "Workspace";
+        // §12.1: a grid's page REPLACES the tab's content. The window's own
+        // header - close, tabs, (i) - sits above this and is untouched.
+        if (_gridPage is GridKind open) return BuildGridPage(open);
         var stack = new StackPanel();
         stack.Children.Add(Section("Canvas", true, BuildCanvas));
         stack.Children.Add(Section("Artboard", false, BuildArtboard));
@@ -412,11 +481,14 @@ public sealed class SettingsWindow
         box.Children.Add(Caption("You can quickly toggle the grid in the Precision or Layers menus."));
         box.Children.Add(BuildGridRow());
 
-        var editor = BuildGridEditor();
-        editor.Visibility = Visibility.Collapsed;
-        editGrid.Click += (_, _) => editor.Visibility =
-            editor.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
-        box.Children.Add(editor);
+        // §12.1: Edit Grid opens the EDITOR PAGE for whichever grid the page is
+        // on. It used to reveal an inline block of three sliders; §12 replaces
+        // that entirely, so there is nothing left here to toggle.
+        editGrid.Click += (_, _) =>
+        {
+            if (GridSpec.KindOf(_h.Page()) is GridKind k) OpenGridPage(k);
+            else _h.Status("Pick a grid first — there is nothing to edit on a page with no grid.");
+        };
 
         return box;
     }
@@ -524,14 +596,18 @@ public sealed class SettingsWindow
         return cell;
     }
 
-    private static readonly (GridType Kind, string Label)[] GridKinds =
+    /// <summary>The Grid Type row (§3.1), with §12.5's three perspective kinds
+    /// folded in beside the lattices. <c>null</c> is No Grid.
+    ///
+    /// <para>The perspective kinds are NOT GridType members and must never
+    /// become any: that enum serialises as its integer and the model comment is
+    /// explicit that perspective is an overlay on <c>NotePage.Perspective</c>.
+    /// §12.5 asks for them in this ROW, which is a UI question, not a storage
+    /// one.</para></summary>
+    private static readonly GridKind?[] GridRowKinds =
     {
-        (GridType.None, "No Grid"),
-        (GridType.Dotted, "Dot Grid"),
-        (GridType.Square, "Graph Paper"),
-        (GridType.Lines, "Lined Paper"),
-        (GridType.Isometric, "Isometric"),
-        (GridType.Triangle, "Triangle"),
+        null, GridKind.Dot, GridKind.Graph, GridKind.Lined, GridKind.Isometric,
+        GridKind.OnePoint, GridKind.TwoPoint, GridKind.ThreePoint,
     };
 
     private FrameworkElement BuildGridRow()
@@ -539,85 +615,863 @@ public sealed class SettingsWindow
         var strip = Strip();
         var page = _h.Page();
         var ground = PaperTextures.Ground(page);
-        var ink = ColorUtil.IsDark(ground)
-            ? Color.FromArgb(0xA0, 0xFF, 0xFF, 0xFF)
-            : Color.FromArgb(0x8C, 0x00, 0x00, 0x00);
+        var current = GridSpec.KindOf(page);
+        float dpi = Dpi();
 
-        foreach (var (kind, label) in GridKinds)
+        foreach (var entry in GridRowKinds)
         {
-            var k = kind;
-            bool selected = page != null && page.Grid == k;
-            Brush fill = Cached($"g:{k}:{ColorUtil.ToHex(ground)}:{ColorUtil.ToHex(ink)}",
-                                () => PreviewBrush(PaperTextures.GridPreview(k, ground, ink, (float)SwatchD))) ?? B(ground);
-            strip.Children.Add(Circle(SwatchD, label, selected, () => { _h.SetGrid(k); Touch("Canvas"); }, fill: fill));
+            var k = entry;
+            bool selected = current == k;
+            string label = k is GridKind gk ? GridPresets.RowLabel(gk) : "No Grid";
+
+            Brush fill;
+            if (k is GridKind kind)
+            {
+                // Each circle shows its OWN grid, drawn under a default spec for
+                // that kind - which is what makes the three perspective circles
+                // read as a horizon with fans rather than as one shared glyph.
+                var thumb = new GridSpec { Kind = kind };
+                GridPresets.Apply(thumb, GridPresets.Names(kind).FirstOrDefault() ?? "Custom");
+                fill = Cached($"gk:{kind}:{ColorUtil.ToHex(ground)}",
+                              () => PreviewBrush(GridArt.Thumb(thumb, ground, (float)SwatchD, dpi)))
+                       ?? B(ground);
+            }
+            else fill = B(ground);
+
+            strip.Children.Add(Circle(SwatchD, label, selected, () =>
+            {
+                // §9.5's idiom, already the law elsewhere in this panel: the first
+                // press APPLIES, a press on the one already selected EDITS.
+                if (selected && k is GridKind already) { OpenGridPage(already); return; }
+                SelectGridKind(k);
+                Touch("Canvas");
+            }, fill: fill));
         }
         return HRow(strip);
     }
 
-    private FrameworkElement BuildGridEditor()
+    /// <summary>One-of selection across the whole row. A perspective kind and a
+    /// lattice CAN coexist in the model, and the Precision menu still offers that
+    /// - but §12.5 puts them in one row of circles, and a row of circles that
+    /// lights up two at once is not a choice.</summary>
+    private void SelectGridKind(GridKind? kind)
     {
-        var page = _h.Page();
-        var box = new StackPanel { Spacing = 4, Margin = new Thickness(0, 14, 0, 0) };
-
-        box.Children.Add(Label("Grid spacing"));
-        var spacing = new Slider
+        if (kind is GridKind k && k is GridKind.OnePoint or GridKind.TwoPoint or GridKind.ThreePoint)
         {
-            Minimum = 16,
-            Maximum = 96,
-            StepFrequency = 4,
-            Value = Math.Clamp(page?.GridSpacing ?? 32, 16, 96),
-            IsEnabled = page != null,
+            _h.SetGrid(GridType.None);
+            _h.SetPerspective?.Invoke(k == GridKind.OnePoint ? 1 : k == GridKind.TwoPoint ? 2 : 3);
+            return;
+        }
+        _h.SetPerspective?.Invoke(0);
+        _h.SetGrid(kind switch
+        {
+            GridKind.Dot => GridType.Dotted,
+            GridKind.Lined => GridType.Lines,
+            GridKind.Graph => GridType.Square,
+            GridKind.Isometric => GridType.Isometric,
+            _ => GridType.None,
+        });
+    }
+
+    // =======================================================================
+    // §12 - THE GRID EDITOR PAGE
+    //
+    // §12.1's shell: the window header (which this class does not own) stays,
+    // then a live preview strip, then a Back pill straddling its lower edge,
+    // then the grid's name at 34 DIP bold, then §12.3's sections.
+    //
+    // Only two things in this region rebuild the tab: going IN and coming BACK.
+    // Every control below the strip mutates ONE GridSpec and repaints ONE image
+    // - §11.1 item 1's 5/5 defect is a panel that rebuilds wholesale on every
+    // change, and a preview that follows a slider drag is exactly the shape of
+    // change that would reintroduce it.
+    // =======================================================================
+
+    /// <summary>§12.1/§12.2's paper-white controls: the Back pill and the value
+    /// boxes. These are the only two things on this surface that do NOT come
+    /// from PageTheme - the reference specifies them as white with near-black
+    /// text and the user asked for the pill to be copied exactly. Flagged as a
+    /// fork: on a near-black panel they are a deliberate, bright contrast.</summary>
+    private static readonly Color FieldFill = Colors.White;
+    private static readonly Color FieldInk = Color.FromArgb(0xFF, 0x14, 0x14, 0x14);
+
+    private void OpenGridPage(GridKind kind)
+    {
+        _gridPage = kind;
+        _spec = GridSpec.FromPage(_h.Page(), kind);
+        // The strip is full-bleed, so the window's own scroller inset comes off
+        // for the duration and goes back on the way out.
+        try { _win.ContentPadding = new Thickness(0); } catch { }
+        _win.RefreshContent();      // a NAVIGATION: the top is the right place to land
+    }
+
+    private void CloseGridPage()
+    {
+        _gridPage = null;
+        _spec = null;
+        _previewImg = null;
+        _previewHost = null;
+        _gridBind.Clear();
+        try { _win.ContentPadding = ContentInset; } catch { }
+        _win.RefreshContent();
+    }
+
+    private FrameworkElement BuildGridPage(GridKind kind)
+    {
+        // Every element on this page is created HERE. WinUI enforces one parent
+        // per element, so nothing may be held on a field across a rebuild.
+        _gridBind.Clear();
+        var spec = _spec ??= GridSpec.FromPage(_h.Page(), kind);
+        spec.Kind = kind;
+        var parts = GridPresets.Parts(kind);
+
+        var root = new Grid
+        {
+            Background = B(PanelFill),
+            RequestedTheme = PageTheme.IsDark ? ElementTheme.Dark : ElementTheme.Light,
         };
-        spacing.ValueChanged += (_, e) => _h.SetGridSpacing(e.NewValue);
-        box.Children.Add(spacing);
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(PreviewH) });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        // ---- grid opacity (UI-SPEC-V3 §C) --------------------------------
-        if (_h.SetGridOpacity != null)
+        // ---- 1. the live preview strip (§12.1 item 2) --------------------
+        var host = new Border { Height = PreviewH, Background = B(BandColour()) };
+        var img = new Image
         {
-            var pct = (int)Math.Round(Math.Clamp(page?.GridOpacity ?? 1, 0, 1) * 100);
-            var opacityLabel = Label($"Grid opacity — {pct}%");
-            box.Children.Add(opacityLabel);
-            var op = new Slider
-            {
-                Minimum = 0,
-                Maximum = 100,
-                StepFrequency = 5,
-                Value = pct,
-                IsEnabled = page != null,
-            };
-            op.ValueChanged += (_, e) =>
-            {
-                opacityLabel.Text = $"Grid opacity — {(int)Math.Round(e.NewValue)}%";
-                _h.SetGridOpacity!(e.NewValue / 100.0);
-            };
-            box.Children.Add(op);
+            Stretch = Stretch.Fill,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+        };
+        host.Child = img;
+        _previewHost = host;
+        _previewImg = img;
+        host.SizeChanged += (_, _) => RedrawPreview();
+        Grid.SetRow(host, 0);
+        root.Children.Add(host);
+
+        // ---- 2. the page body (§12.1 items 4-5) --------------------------
+        // Top margin clears the Back pill's overhang: it hangs half of its
+        // height below the strip and the heading starts under that.
+        var body = new StackPanel { Margin = new Thickness(20, BackH / 2 + 18, 20, 30) };
+
+        body.Children.Add(new TextBlock
+        {
+            Text = GridPresets.Title(kind),
+            FontSize = T(TitleSize),
+            FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+            Foreground = B(Ink),
+            Margin = new Thickness(0, 0, 0, 4),
+        });
+
+        // §12.3's order, read across the table: preset, spacing, divisions,
+        // vanishing, density, line weight, colour, opacity, orientation,
+        // confine. A part this kind does not carry is ABSENT, never disabled.
+        if ((parts & GridPart.Preset) != 0)
+        {
+            body.Children.Add(SubHead("Presets"));
+            body.Children.Add(BuildPresetRow(spec));
         }
 
-        box.Children.Add(Label("Grid colour"));
-        var colours = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 2, 0, 0) };
-        var auto = new Button { Content = "Auto", FontSize = T(13), Height = 30, Padding = new Thickness(12, 0, 12, 0) };
-        auto.Click += (_, _) => _h.SetGridColor(null);
-        colours.Children.Add(auto);
-        foreach (var hex in new[] { "#8C8C8C", "#5B8DEF", "#4CAF7D", "#E2A93B", "#D96D6D" })
+        var unit = ActiveUnit();
+        double upi = _h.Page()?.UnitsPerInch > 0 ? _h.Page()!.UnitsPerInch : 96;
+
+        if ((parts & GridPart.Spacing) != 0)
+            body.Children.Add(NumRow("Spacing",
+                "Set the spacing of your grid. The units are determined by the document units.",
+                4, 400, 1,
+                () => spec.Spacing, v => spec.Spacing = v,
+                v => $"{FromWorld(v, unit, upi):0.#} {PageSizes.Abbrev(unit)}",
+                t => ParseLeadingNumber(t) is double d ? ToWorld(d, unit, upi) : null));
+
+        if ((parts & GridPart.Divisions) != 0)
+            body.Children.Add(NumRow("Divisions",
+                "Set the number of divisions between main lines. Set value to 1 to only show the main lines.",
+                1, 32, 1,
+                () => spec.Divisions, v => spec.Divisions = (int)Math.Round(v),
+                v => ((int)Math.Round(v)).ToString("0"),
+                t => ParseLeadingNumber(t)));
+
+        if ((parts & GridPart.Vanishing) != 0)
+            body.Children.Add(BuildVanishingBlock());
+
+        if ((parts & GridPart.Density) != 0)
+            body.Children.Add(NumRow("Density",
+                "Set the number of vanishing lines per point.",
+                4, 96, 1,
+                () => spec.Density, v => spec.Density = (int)Math.Round(v),
+                v => ((int)Math.Round(v)).ToString("0"),
+                t => ParseLeadingNumber(t)));
+
+        if ((parts & GridPart.Weight) != 0)
+            body.Children.Add(NumRow("Line Weight", null,
+                0.25, 8, 0.25,
+                () => spec.Weight, v => spec.Weight = v,
+                v => $"{v:0.##} pts",
+                t => ParseLeadingNumber(t)));
+
+        if ((parts & GridPart.Colour) != 0)
+            body.Children.Add(BuildGridColourBlock(spec));
+
+        if ((parts & GridPart.Opacity) != 0)
+            body.Children.Add(NumRow("Opacity", null,
+                0, 100, 1,
+                () => spec.Opacity * 100, v => spec.Opacity = v / 100.0,
+                v => $"{(int)Math.Round(v)}%",
+                t => ParseLeadingNumber(t)));
+
+        // §12.3, stated by the user in words: "if rotation does not change the
+        // form, do not have it in page." A square grid and a dot grid are the
+        // same grid after a 90 degree turn, so this block is not built for them
+        // at all - it is not built and disabled, it is not there.
+        if ((parts & GridPart.Orientation) != 0)
+            body.Children.Add(BuildOrientationBlock(spec));
+
+        if ((parts & GridPart.Confine) != 0)
+            body.Children.Add(BuildConfineRow(spec));
+
+        Grid.SetRow(body, 1);
+        root.Children.Add(body);
+
+        // ---- 3. the Back pill, LAST ---------------------------------------
+        // Added last so it paints over the body it hangs into: a Grid draws its
+        // children in the order they were added, whatever row they sit in.
+        var back = BuildBackPill();
+        Grid.SetRow(back, 0);
+        root.Children.Add(back);
+
+        RedrawPreview();
+        return root;
+    }
+
+    /// <summary>§12.1 item 3, copied exactly: a white pill with fully rounded
+    /// ends (radius = half its height), ~46 DIP tall, inset 20 DIP from the
+    /// panel's left edge, straddling the preview strip's bottom edge half in and
+    /// half out, "&lt; Back" in near-black ~17 DIP, a soft shadow, no border.</summary>
+    private FrameworkElement BuildBackPill()
+    {
+        var label = new StackPanel
         {
-            var h = hex;
-            var dot = new Ellipse
-            {
-                Width = 26,
-                Height = 26,
-                Fill = B(ColorUtil.Parse(h)),
-                Stroke = B(Line),
-                StrokeThickness = 1,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            var hit = new Grid { Background = B(Colors.Transparent), Width = 30, Height = 30 };
-            hit.Children.Add(dot);
-            hit.Tapped += (_, _) => _h.SetGridColor(h);
-            colours.Children.Add(hit);
+            Orientation = Orientation.Horizontal,
+            Spacing = 7,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var chev = Icons.Mark(ChevronLeftGeometry, FieldInk, 15, stroked: true, thickness: 1.9);
+        chev.VerticalAlignment = VerticalAlignment.Center;
+        label.Children.Add(chev);
+        label.Children.Add(new TextBlock
+        {
+            Text = "Back",
+            FontSize = T(17),
+            Foreground = B(FieldInk),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
+        var pill = new Button
+        {
+            Content = label,
+            Height = BackH,
+            MinWidth = 0,
+            Padding = new Thickness(34, 0, 34, 0),
+            CornerRadius = new CornerRadius(BackH / 2),
+            Background = B(FieldFill),
+            BorderThickness = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            // Half in, half out: the pill's centre line IS the strip's edge.
+            Margin = new Thickness(20, 0, 0, -BackH / 2),
+        };
+        // The stock Button repaints its own Background in the pointer-over and
+        // pressed states, and those brushes come from the element theme - which
+        // on a dark panel would turn this pill grey the moment it is hovered.
+        pill.Resources["ButtonBackground"] = B(FieldFill);
+        pill.Resources["ButtonBackgroundPointerOver"] = B(Mix(FieldFill, FieldInk, 0.07));
+        pill.Resources["ButtonBackgroundPressed"] = B(Mix(FieldFill, FieldInk, 0.14));
+        pill.Resources["ButtonBorderBrush"] = B(Colors.Transparent);
+        pill.Resources["ButtonBorderBrushPointerOver"] = B(Colors.Transparent);
+        pill.Resources["ButtonBorderBrushPressed"] = B(Colors.Transparent);
+
+        try
+        {
+            pill.Shadow = new ThemeShadow();
+            pill.Translation = new System.Numerics.Vector3(0, 0, 20);
         }
-        box.Children.Add(colours);
+        catch { }
+
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(pill, "Back");
+        pill.Click += (_, _) => CloseGridPage();
+        return pill;
+    }
+
+    /// <summary>§12.1: "a band a shade darker than the page". On a near-black
+    /// page there is no room below, so the honest reading of the same
+    /// instruction is a shade OFF the page rather than a shade under it.</summary>
+    private Color BandColour()
+    {
+        var ground = PaperTextures.Ground(_h.Page());
+        return ColorUtil.IsDark(ground) ? Mix(ground, Colors.White, 0.07)
+                                        : Mix(ground, Colors.Black, 0.07);
+    }
+
+    /// <summary>Repaints the preview strip and NOTHING ELSE. No element is
+    /// created, no section is rebuilt and the scroller is never touched - which
+    /// is what lets this run on every frame of a slider drag.</summary>
+    private void RedrawPreview()
+    {
+        if (_previewImg == null || _spec == null) return;
+        try
+        {
+            float w = (float)(_previewHost?.ActualWidth ?? 0);
+            if (w < 64) w = 480;
+            var band = BandColour();
+            if (_previewHost != null) _previewHost.Background = B(band);
+            _previewImg.Source = GridArt.Strip(_spec, band, w, (float)PreviewH, Dpi());
+        }
+        catch
+        {
+            // A device-lost or a zero-sized arrange is not worth a broken panel;
+            // the strip simply stays as it was until the next redraw.
+        }
+    }
+
+    /// <summary>Pushes the whole spec at the page and repaints the strip. One
+    /// host call per change rather than one per field, so a preset that moves
+    /// four numbers still costs the canvas a single invalidation.</summary>
+    private void CommitGrid()
+    {
+        if (_spec == null) return;
+        try { _h.ApplyGrid?.Invoke(_spec); } catch { }
+        RedrawPreview();
+    }
+
+    /// <summary>Re-reads every control on the page from the spec, in place. This
+    /// is the surgical alternative to a rebuild: a §12.4 preset moves the
+    /// spacing and the divisions at once and the boxes and sliders that show
+    /// them have to follow without a single element being constructed.</summary>
+    private void SyncGridControls()
+    {
+        if (_gridSyncing) return;
+        _gridSyncing = true;
+        try { foreach (var a in _gridBind) { try { a(); } catch { } } }
+        finally { _gridSyncing = false; }
+    }
+
+    private float Dpi()
+    {
+        try
+        {
+            var xr = _previewHost?.XamlRoot ?? _root?.XamlRoot;
+            if (xr != null) return (float)(96 * xr.RasterizationScale);
+        }
+        catch { }
+        return 96f;
+    }
+
+    // ---- §12.2's preset circles ------------------------------------------
+    /// <summary>~86 DIP circles, each containing a miniature of THAT PRESET's own
+    /// grid (§12.2) - drawn under its own configuration, which is why the
+    /// perspective thumbnails differ from one another and why one shared glyph
+    /// would not do (§12.4).</summary>
+    private FrameworkElement BuildPresetRow(GridSpec spec)
+    {
+        var strip = Strip();
+        var band = BandColour();
+        string bandKey = ColorUtil.ToHex(band);
+        float dpi = Dpi();
+
+        foreach (var name in GridPresets.Names(spec.Kind))
+        {
+            string n = name;
+            bool isCustom = n == "Custom";
+
+            Brush FillFor()
+            {
+                var thumb = spec.Clone();
+                GridPresets.Apply(thumb, n);      // "Custom" leaves the spec alone
+                thumb.Confine = false;            // the ring is the frame already
+                var made = PreviewBrush(GridArt.Thumb(thumb, band, (float)PresetD, dpi));
+                return made ?? B(band);
+            }
+
+            // Everything but Custom is a fixed picture and is cached; Custom IS
+            // the live configuration, so it is re-rendered whenever a control
+            // moves rather than cached into staleness.
+            Brush fill = isCustom
+                ? FillFor()
+                : Cached($"pp:{spec.Kind}:{n}:{bandKey}", FillFor) ?? B(band);
+
+            Action<bool, Brush?>? paint = null;
+            strip.Children.Add(Circle(PresetD, n, spec.Preset == n,
+                () => ApplyPreset(n), fill: fill,
+                bind: p => paint = p));
+
+            if (paint is { } repaint)
+                _gridBind.Add(() => repaint(_spec?.Preset == n, isCustom ? FillFor() : null));
+        }
+        return HRow(strip);
+    }
+
+    private void ApplyPreset(string name)
+    {
+        if (_spec == null) return;
+        GridPresets.Apply(_spec, name);
+        SyncGridControls();
+        CommitGrid();
+    }
+
+    // ---- §12.2's numeric rows --------------------------------------------
+    /// <summary>A bold label, an optional grey caption, a RIGHT-ALIGNED TYPEABLE
+    /// value box, and a full-width slider beneath (§12.2). The box is editable
+    /// directly: the slider is never the only way in.</summary>
+    private FrameworkElement NumRow(string label, string? caption,
+                                    double min, double max, double step,
+                                    Func<double> get, Action<double> set,
+                                    Func<double, string> fmt, Func<string, double?> parse)
+    {
+        var box = new StackPanel { Margin = new Thickness(0, 20, 0, 0) };
+
+        var head = new Grid();
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        head.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontSize = T(SubHeadSize),
+            FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+            Foreground = B(Ink),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var field = ValueBox(label);
+        Grid.SetColumn(field, 1);
+        head.Children.Add(field);
+        box.Children.Add(head);
+
+        if (caption != null)
+        {
+            var cap = Caption(caption);
+            cap.Margin = new Thickness(0, 6, 0, 2);
+            box.Children.Add(cap);
+        }
+
+        double Snap(double v)
+        {
+            v = Math.Clamp(v, min, max);
+            return step > 0 ? Math.Clamp(Math.Round(v / step) * step, min, max) : v;
+        }
+
+        Bar bar = null!;
+        void Push(double raw, bool fromBox)
+        {
+            double v = Snap(raw);
+            set(v);
+            // A control moved off a preset is exactly what §12.4's trailing
+            // "Custom" means, so the row follows the reader rather than lying.
+            if (_spec != null) _spec.Preset = "Custom";
+            if (fromBox) bar.Set(v);
+            field.Text = fmt(v);
+            SyncGridControls();
+            CommitGrid();
+        }
+
+        bar = TrackBar(min, max, step, Snap(get()), v => Push(v, false), label);
+        box.Children.Add(bar.Root);
+
+        field.Text = fmt(get());
+
+        void CommitBox()
+        {
+            if (_gridSyncing) return;
+            if (parse(field.Text) is double v) Push(v, true);
+            else { field.Text = fmt(get()); bar.Set(get()); }
+        }
+        field.LostFocus += (_, _) => CommitBox();
+        field.KeyDown += (_, e) =>
+        {
+            if (e.Key != Windows.System.VirtualKey.Enter) return;
+            CommitBox();
+            e.Handled = true;
+        };
+
+        _gridBind.Add(() => { field.Text = fmt(get()); bar.Set(get()); });
         return box;
     }
+
+    /// <summary>§12.2's value box: a white rounded field with a hairline border.
+    /// The stock TextBox repaints its own background in the pointer-over and
+    /// focused states from the element theme, so the states are pinned through
+    /// the control's own resource dictionary rather than by setting Background
+    /// and hoping - a local value loses to a visual-state setter.</summary>
+    private TextBox ValueBox(string name)
+    {
+        var tb = new TextBox
+        {
+            MinWidth = 104,
+            Height = 36,
+            FontSize = T(BodySize),
+            CornerRadius = new CornerRadius(10),
+            BorderThickness = new Thickness(1),
+            TextAlignment = TextAlignment.Right,
+            Padding = new Thickness(12, 0, 12, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        var fill = B(FieldFill);
+        var ink = B(FieldInk);
+        var hair = B(Color.FromArgb(0x3D, 0x00, 0x00, 0x00));
+        foreach (var k in new[] { "TextControlBackground", "TextControlBackgroundPointerOver",
+                                  "TextControlBackgroundFocused", "TextControlBackgroundDisabled" })
+            tb.Resources[k] = fill;
+        foreach (var k in new[] { "TextControlForeground", "TextControlForegroundPointerOver",
+                                  "TextControlForegroundFocused", "TextControlForegroundDisabled" })
+            tb.Resources[k] = ink;
+        foreach (var k in new[] { "TextControlBorderBrush", "TextControlBorderBrushPointerOver",
+                                  "TextControlBorderBrushFocused", "TextControlBorderBrushDisabled" })
+            tb.Resources[k] = hair;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(tb, name);
+        return tb;
+    }
+
+    /// <summary>§12.2's slider: a 2 DIP OnSurface track with a white round knob
+    /// and a hairline. Authored rather than a restyled stock Slider - the track
+    /// thickness, the knob fill and the knob's border are all template parts,
+    /// and reaching them means replacing the template anyway.</summary>
+    private sealed class Bar
+    {
+        public required FrameworkElement Root;
+        /// <summary>Moves the knob WITHOUT raising the change callback, so the
+        /// re-bind pass cannot feed a value back into the control that produced
+        /// it.</summary>
+        public required Action<double> Set;
+    }
+
+    private Bar TrackBar(double min, double max, double step, double value,
+                         Action<double> changed, string name)
+    {
+        const double KnobD = 21;
+        double v = value;
+
+        var host = new Grid
+        {
+            Height = 34,
+            Margin = new Thickness(0, 10, 0, 0),
+            Background = B(Colors.Transparent),
+            IsTabStop = true,
+            UseSystemFocusVisuals = true,
+        };
+        var track = new Border
+        {
+            Height = 2,
+            CornerRadius = new CornerRadius(1),
+            Background = B(Ink),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(KnobD / 2, 0, KnobD / 2, 0),
+        };
+        var knob = new Border
+        {
+            Width = KnobD,
+            Height = KnobD,
+            CornerRadius = new CornerRadius(KnobD / 2),
+            Background = B(FieldFill),
+            BorderThickness = new Thickness(1),
+            BorderBrush = B(Color.FromArgb(0x4A, 0x00, 0x00, 0x00)),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var slide = new TranslateTransform();
+        knob.RenderTransform = slide;
+        host.Children.Add(track);
+        host.Children.Add(knob);
+
+        double Travel() => Math.Max(1, host.ActualWidth - KnobD);
+        void Place() => slide.X = (max > min ? (v - min) / (max - min) : 0) * Travel();
+
+        void SetSilently(double nv)
+        {
+            v = Math.Clamp(nv, min, max);
+            Place();
+        }
+
+        void Report(double nv)
+        {
+            double snapped = step > 0 ? Math.Clamp(Math.Round(nv / step) * step, min, max)
+                                      : Math.Clamp(nv, min, max);
+            if (Math.Abs(snapped - v) < 1e-9) return;
+            v = snapped;
+            Place();
+            try { changed(v); } catch { }
+        }
+
+        void FromX(double x) => Report(min + (max - min) * Math.Clamp((x - KnobD / 2) / Travel(), 0, 1));
+
+        // Dragging is tracked by the CAPTURE, not by the button state: a pen or
+        // a finger reports no left button, and a mouse that leaves the control
+        // mid-drag must keep steering it.
+        bool dragging = false;
+        host.SizeChanged += (_, _) => Place();
+        host.PointerPressed += (_, e) =>
+        {
+            dragging = host.CapturePointer(e.Pointer);
+            host.Focus(FocusState.Pointer);
+            FromX(e.GetCurrentPoint(host).Position.X);
+            e.Handled = true;
+        };
+        host.PointerMoved += (_, e) =>
+        {
+            if (!dragging) return;
+            FromX(e.GetCurrentPoint(host).Position.X);
+        };
+        void Release(PointerRoutedEventArgs e)
+        {
+            dragging = false;
+            try { host.ReleasePointerCapture(e.Pointer); } catch { }
+        }
+        host.PointerReleased += (_, e) => Release(e);
+        host.PointerCanceled += (_, e) => Release(e);
+        host.PointerCaptureLost += (_, _) => dragging = false;
+        host.KeyDown += (_, e) =>
+        {
+            double d = step > 0 ? step : (max - min) / 100;
+            switch (e.Key)
+            {
+                case Windows.System.VirtualKey.Left:
+                case Windows.System.VirtualKey.Down: Report(v - d); e.Handled = true; break;
+                case Windows.System.VirtualKey.Right:
+                case Windows.System.VirtualKey.Up: Report(v + d); e.Handled = true; break;
+                case Windows.System.VirtualKey.Home: Report(min); e.Handled = true; break;
+                case Windows.System.VirtualKey.End: Report(max); e.Handled = true; break;
+            }
+        };
+
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(host, name);
+        host.Loaded += (_, _) => Place();
+        Place();
+        return new Bar { Root = host, Set = SetSilently };
+    }
+
+    // ---- §12.2's colour, orientation and confine blocks -------------------
+    private FrameworkElement BuildGridColourBlock(GridSpec spec)
+    {
+        var box = new StackPanel { Margin = new Thickness(0, 22, 0, 0) };
+        box.Children.Add(SubHead("Color"));
+        box.Children.Add(Caption(
+            "Automatic color adapts to your background color. Custom colors are independent of the background color."));
+
+        var strip = Strip();
+        var band = BandColour();
+
+        Action<bool, Brush?>? paintAuto = null;
+        Action<bool, Brush?>? paintCustom = null;
+
+        strip.Children.Add(Circle(PresetD, "Automatic", string.IsNullOrEmpty(spec.Colour), () =>
+        {
+            spec.Colour = null;
+            SyncGridControls();
+            CommitGrid();
+        }, bind: p => paintAuto = p));
+
+        FrameworkElement custom = null!;
+        Brush CustomFill() => B(string.IsNullOrEmpty(spec.Colour)
+            ? PageTheme.WithAlpha(GridArt.InkFor(spec, band), 255)
+            : ColorUtil.Parse(spec.Colour!));
+
+        custom = Circle(PresetD, "Custom", !string.IsNullOrEmpty(spec.Colour), () =>
+        {
+            // Guarded exactly as the paper row's custom cell is: the anchor lives
+            // in a Popup, which is a sibling of the root rather than a
+            // descendant, and an exception out of a Click handler is caught by
+            // nothing above it.
+            try
+            {
+                var seed = string.IsNullOrEmpty(spec.Colour)
+                    ? PageTheme.WithAlpha(GridArt.InkFor(spec, band), 255)
+                    : ColorUtil.Parse(spec.Colour!);
+                _h.PickColor(custom, seed, c =>
+                {
+                    spec.Colour = ColorUtil.ToHex(c);
+                    SyncGridControls();
+                    CommitGrid();
+                });
+            }
+            catch { _h.Status("The colour picker could not be opened here."); }
+        }, fill: CustomFill(), bind: p => paintCustom = p);
+        strip.Children.Add(custom);
+
+        _gridBind.Add(() =>
+        {
+            paintAuto?.Invoke(string.IsNullOrEmpty(spec.Colour), null);
+            paintCustom?.Invoke(!string.IsNullOrEmpty(spec.Colour), CustomFill());
+        });
+
+        box.Children.Add(HRow(strip));
+        return box;
+    }
+
+    /// <summary>§12.2's Orientation circles - a rounded rect ruled horizontally
+    /// and one ruled vertically. Built ONLY for the kinds §12.3 gives it to.</summary>
+    private FrameworkElement BuildOrientationBlock(GridSpec spec)
+    {
+        var box = new StackPanel { Margin = new Thickness(0, 22, 0, 0) };
+        box.Children.Add(SubHead("Orientation"));
+
+        var strip = Strip();
+        Action<bool, Brush?>? paintL = null;
+        Action<bool, Brush?>? paintP = null;
+
+        strip.Children.Add(Circle(PresetD, "Landscape", !spec.Portrait, () =>
+        {
+            spec.Portrait = false;
+            SyncGridControls();
+            CommitGrid();
+        }, inner: Icons.Mark(LandscapeGeometry, Ink, 46, stroked: true, thickness: 1.5),
+           bind: p => paintL = p));
+
+        strip.Children.Add(Circle(PresetD, "Portrait", spec.Portrait, () =>
+        {
+            spec.Portrait = true;
+            SyncGridControls();
+            CommitGrid();
+        }, inner: Icons.Mark(PortraitGeometry, Ink, 46, stroked: true, thickness: 1.5),
+           bind: p => paintP = p));
+
+        _gridBind.Add(() =>
+        {
+            paintL?.Invoke(!spec.Portrait, null);
+            paintP?.Invoke(spec.Portrait, null);
+        });
+
+        box.Children.Add(HRow(strip));
+        return box;
+    }
+
+    /// <summary>§12.2: a square CHECKBOX, not a toggle. The stock control is the
+    /// right one - it is square, it is keyboard-reachable and it carries the
+    /// toggle pattern that a hand-drawn box would have to reimplement.</summary>
+    private FrameworkElement BuildConfineRow(GridSpec spec)
+    {
+        var cb = new CheckBox
+        {
+            IsChecked = spec.Confine,
+            MinWidth = 0,
+            Margin = new Thickness(0, 24, 0, 0),
+            Content = new TextBlock
+            {
+                Text = "Only show the grid lines inside the artboard.",
+                FontSize = T(BodySize),
+                Foreground = B(Ink),
+                TextWrapping = TextWrapping.Wrap,
+            },
+        };
+        void Flip()
+        {
+            spec.Confine = cb.IsChecked == true;
+            CommitGrid();
+        }
+        cb.Checked += (_, _) => Flip();
+        cb.Unchecked += (_, _) => Flip();
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(cb, "Confine to artboard");
+        _gridBind.Add(() => cb.IsChecked = spec.Confine);
+        return cb;
+    }
+
+    /// <summary>§12.6: the Vanishing Points block. The label is in Accent, bold,
+    /// ~17 DIP, plain on the panel ground; the filled SurfaceAlt form the earlier
+    /// capture shows is built here as its hover/pressed state.</summary>
+    private FrameworkElement BuildVanishingBlock()
+    {
+        var box = new StackPanel { Margin = new Thickness(0, 22, 0, 0) };
+        box.Children.Add(SubHead("Vanishing Points"));
+
+        var btn = new Button
+        {
+            Content = new TextBlock
+            {
+                Text = "Edit Points",
+                FontSize = T(17),
+                FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+                Foreground = B(Accent),
+            },
+            Padding = new Thickness(14, 8, 14, 8),
+            Margin = new Thickness(-14, 8, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            CornerRadius = new CornerRadius(12),
+            BorderThickness = new Thickness(0),
+            Background = B(Colors.Transparent),
+            IsEnabled = _h.EditPoints != null,
+        };
+        btn.Resources["ButtonBackground"] = B(Colors.Transparent);
+        btn.Resources["ButtonBackgroundPointerOver"] = B(PanelAlt);
+        btn.Resources["ButtonBackgroundPressed"] = B(PanelAlt);
+        btn.Resources["ButtonBorderBrush"] = B(Colors.Transparent);
+        btn.Resources["ButtonBorderBrushPointerOver"] = B(Colors.Transparent);
+        btn.Resources["ButtonBorderBrushPressed"] = B(Colors.Transparent);
+        btn.Click += (_, _) =>
+        {
+            // §12.6: pressing it DISMISSES the panel and enters the on-canvas
+            // editor. The panel is put away first so the mode it opens is not
+            // hidden behind the window that asked for it.
+            CommitGrid();
+            Hide();
+            try { _h.EditPoints?.Invoke(); } catch { }
+        };
+        box.Children.Add(btn);
+
+        box.Children.Add(Caption(
+            "You can edit the vanishing points with a tap & hold on canvas or by activating the grid layer."));
+        return box;
+    }
+
+    // ---- small maths ------------------------------------------------------
+    /// <summary>The inverse of <see cref="FromWorld"/>: a typed measurement in
+    /// the document's units back into world units.</summary>
+    private static double ToWorld(double v, PageSizeUnit u, double upi)
+    {
+        double perInch = upi > 0 ? upi : 96.0;
+        return u switch
+        {
+            PageSizeUnit.Pixels => v,
+            PageSizeUnit.Points => v / 72.0 * perInch,
+            PageSizeUnit.Inches => v * perInch,
+            PageSizeUnit.Feet => v * 12.0 * perInch,
+            PageSizeUnit.Yards => v * 36.0 * perInch,
+            PageSizeUnit.Miles => v * 63360.0 * perInch,
+            PageSizeUnit.Millimeters => v / 25.4 * perInch,
+            PageSizeUnit.Centimeters => v / 2.54 * perInch,
+            PageSizeUnit.Meters => v / 0.0254 * perInch,
+            PageSizeUnit.Kilometers => v / 0.0000254 * perInch,
+            _ => v,
+        };
+    }
+
+    /// <summary>Reads the number a value box was typed with, ignoring whatever
+    /// unit was left on the end - "100 mm", "100mm" and "100" are one answer.</summary>
+    private static double? ParseLeadingNumber(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        int i = 0;
+        var s = text.Trim();
+        while (i < s.Length && (char.IsDigit(s[i]) || s[i] == '.' || s[i] == ',' ||
+                                (i == 0 && (s[i] == '-' || s[i] == '+')))) i++;
+        var head = s[..i].Replace(',', '.');
+        return double.TryParse(head, System.Globalization.NumberStyles.Float,
+                               System.Globalization.CultureInfo.InvariantCulture, out double v)
+            ? v : null;
+    }
+
+    // ---- authored marks for §12.2's Orientation circles (24 grid) ---------
+    /// A rounded rect wider than it is tall, ruled horizontally.
+    private const string LandscapeGeometry =
+        "M4.5 5 H19.5 A2.5 2.5 0 0 1 22 7.5 V16.5 A2.5 2.5 0 0 1 19.5 19 H4.5 A2.5 2.5 0 0 1 2 16.5 V7.5 A2.5 2.5 0 0 1 4.5 5 Z " +
+        "M5.5 9 H18.5 " +
+        "M5.5 12 H18.5 " +
+        "M5.5 15 H18.5";
+
+    /// The same rect stood on end, ruled vertically.
+    private const string PortraitGeometry =
+        "M7.5 2 H16.5 A2.5 2.5 0 0 1 19 4.5 V19.5 A2.5 2.5 0 0 1 16.5 22 H7.5 A2.5 2.5 0 0 1 5 19.5 V4.5 A2.5 2.5 0 0 1 7.5 2 Z " +
+        "M9 5.5 V18.5 " +
+        "M12 5.5 V18.5 " +
+        "M15 5.5 V18.5";
+
+    /// The Back pill's chevron.
+    private const string ChevronLeftGeometry = "M15.5 4 L8 12 L15.5 20";
 
     // ---- Artboard --------------------------------------------------------
     private UIElement BuildArtboard()
@@ -2053,8 +2907,14 @@ public sealed class SettingsWindow
     /// confirms the option circles are UNFILLED — the ring is the whole mark —
     /// so <paramref name="fill"/> is supplied only by the rows whose subject IS a
     /// colour or a texture: the page backgrounds, the grids and the theme.</para></summary>
+    /// <param name="bind">Hands the caller a delegate that repaints this
+    /// circle's SELECTION (and, optionally, its fill) in place. §12's preset,
+    /// colour and orientation rows change which circle is lit on every tap, and
+    /// rebuilding a row to move a ring is the wholesale rebuild §11.1 item 1
+    /// forbids.</param>
     private FrameworkElement Circle(double d, string caption, bool selected, Action tap,
-                                    Brush? fill = null, UIElement? inner = null, bool enabled = true)
+                                    Brush? fill = null, UIElement? inner = null, bool enabled = true,
+                                    Action<Action<bool, Brush?>>? bind = null)
     {
         var ring = new Ellipse
         {
@@ -2089,6 +2949,18 @@ public sealed class SettingsWindow
         };
         cell.Children.Add(disc);
         cell.Children.Add(text);
+
+        // Brush-level writes only, never a mutation of a live brush: WinUI
+        // caches those and the change would not take.
+        bind?.Invoke((on, newFill) =>
+        {
+            ring.Stroke = B(on ? Ink : Line);
+            ring.StrokeThickness = on ? 2 : 1;
+            if (newFill != null) ring.Fill = newFill;
+            text.Foreground = B(on ? Ink : Muted);
+            text.FontWeight = on ? Microsoft.UI.Text.FontWeights.Bold
+                                 : Microsoft.UI.Text.FontWeights.Normal;
+        });
 
         // A bare Button, not a Tapped handler. These circles are the panel's
         // primary controls and as StackPanels they had no keyboard focus, no

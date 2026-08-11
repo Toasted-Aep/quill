@@ -790,9 +790,14 @@ public sealed partial class MainWindow : Window
     {
         if (_chromeBars?.Layout is { } layout)
             foreach (var id in new[] { "chrome-left", "chrome-right", "notebooks", "calc",
-                                       "layers", "precision", "comments" })
+                                       "layers", "precision", "comments", "dial" })
             {
-                if (Array.IndexOf(DimExempt, id) >= 0) continue;
+                // 11.19 exempts the dial: a fully saturated dial against faded
+                // chrome IS the colour-wheel effect. 12.6's capture shows the
+                // opposite while the grid's points are being edited, so the
+                // exemption is lifted for that mode and only that mode.
+                if (id == "dial" && !ColorPickerService.DimIncludesDial) continue;
+                if (id != "dial" && Array.IndexOf(DimExempt, id) >= 0) continue;
                 if (layout.Element(id) is { Visibility: Visibility.Visible } el)
                     yield return (id, el);
             }
@@ -5459,6 +5464,10 @@ public sealed partial class MainWindow : Window
             SetGridSpacing = v => { if (_curPage != null) { _curPage.GridSpacing = v; Surface.Refresh(); ScheduleSave(); } },
             SetGridColor = c => { if (_curPage != null) { _curPage.GridColor = c; Surface.Refresh(); ScheduleSave(); } },
             SetGridOpacity = v => { if (_curPage != null) { _curPage.GridOpacity = Math.Clamp(v, 0, 1); Surface.Refresh(); ScheduleSave(); } },
+            // ---- CONCEPTS-REF 12: the grid editor page -----------------------
+            ApplyGrid = ApplyGridSpec,
+            SetPerspective = SetPerspectiveCount,
+            EditPoints = BeginGridPointEdit,
             ApplyKeyPreset = ApplyKeyPreset,
             SetPageSize = (preset, w, h, unit) =>
             {
@@ -6807,6 +6816,140 @@ public sealed partial class MainWindow : Window
         PlacePerspectivePoints(_curPage.Perspective, _curPage.Perspective.Vps.Count);
         Surface.Refresh();
         ScheduleSave();
+    }
+
+    // =======================================================================
+    // CONCEPTS-REF 12 - the grid editor page's host side
+    // =======================================================================
+    /// <summary>Writes a whole <see cref="GridSpec"/> onto the page. ONE call,
+    /// one canvas invalidation and one scheduled save, however many fields a
+    /// 12.4 preset moved.
+    ///
+    /// <para>The new fields are all zero-means-unset, so a value that IS the
+    /// default is stored as zero and the page's JSON does not grow.</para></summary>
+    private void ApplyGridSpec(GridSpec s)
+    {
+        if (_curPage is not { } p) return;
+
+        p.GridPreset = s.Preset == "Custom" ? null : s.Preset;
+        p.GridSpacing = Math.Max(2, s.Spacing);
+        p.GridDivisions = s.Divisions <= 1 ? 0 : Math.Clamp(s.Divisions, 2, 64);
+        p.GridWeight = Math.Abs(s.Weight - 1) < 1e-6 ? 0 : Math.Clamp(s.Weight, 0.25, 8);
+        p.GridOpacity = Math.Clamp(s.Opacity, 0, 1);
+        p.GridColor = s.Colour;
+        p.GridAngle = s.Angle;
+        p.GridPortrait = s.Portrait;
+        p.GridConfine = s.Confine;
+
+        if (s.IsPerspective)
+        {
+            // 12.5 puts the perspective kinds in the same one-of row as the
+            // lattices, so choosing one clears the other.
+            p.Grid = GridType.None;
+            p.Perspective ??= new PerspectiveDef();
+            p.Perspective.RayCount = Math.Clamp(s.Density, 4, 96);
+            PlacePerspectiveShape(p.Perspective, s);
+        }
+        else
+        {
+            p.Grid = s.AsGridType;
+            p.Perspective = null;
+        }
+
+        _syncingUi = true;
+        GridRadios.SelectedIndex = Math.Max(0, Array.IndexOf(GridKindMap, p.Grid));
+        PerspectiveCombo.SelectedIndex = Math.Clamp(p.Perspective?.Vps.Count ?? 0, 0, 3);
+        PerspectiveRecentreBtn.Visibility = p.Perspective == null ? Visibility.Collapsed : Visibility.Visible;
+        _syncingUi = false;
+
+        _gridEditor?.Sync();
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    /// <summary>12.5: turn a perspective grid of N points on, or off with 0.</summary>
+    private void SetPerspectiveCount(int n)
+    {
+        if (_curPage is not { } p) return;
+        if (n <= 0) p.Perspective = null;
+        else
+        {
+            p.Perspective ??= new PerspectiveDef();
+            PlacePerspectivePoints(p.Perspective, n);
+        }
+        _syncingUi = true;
+        PerspectiveCombo.SelectedIndex = Math.Clamp(n, 0, 3);
+        PerspectiveRecentreBtn.Visibility = p.Perspective == null ? Visibility.Collapsed : Visibility.Visible;
+        _syncingUi = false;
+        _gridEditor?.Sync();
+        Surface.Refresh();
+        ScheduleSave();
+    }
+
+    /// <summary>Resolves a 12.4 preset's FRAME FRACTIONS into the canvas
+    /// coordinates the model actually stores.
+    ///
+    /// <para>The frame is the artboard when the page has one and the visible view
+    /// when it does not - which is the only reading under which "1/2" and "Side"
+    /// mean anything on an unbounded canvas.</para></summary>
+    private void PlacePerspectiveShape(PerspectiveDef def, GridSpec s)
+    {
+        var shape = s.Shape();
+        if (shape == null || shape.VpXF.Length == 0) { PlacePerspectivePoints(def, s.VpCount); return; }
+
+        double fx, fy, fw, fh;
+        if (_curPage != null && PageSizes.TryResolve(_curPage, out double aw, out double ah) &&
+            aw > 0 && ah > 0)
+        {
+            fx = 0; fy = 0; fw = aw; fh = ah;
+        }
+        else
+        {
+            float z = Math.Max(0.01f, Surface.ViewZoom);
+            var off = Surface.ViewOffset;
+            fx = -off.X / z; fy = -off.Y / z;
+            fw = Math.Max(64, Surface.ActualWidth) / z;
+            fh = Math.Max(64, Surface.ActualHeight) / z;
+        }
+
+        // Portrait measures the SAME fractions against a portrait frame, which is
+        // why a perspective grid carries the control at all and a square one does
+        // not: the points genuinely land somewhere else.
+        if (s.Portrait)
+        {
+            double cx = fx + fw / 2, cy = fy + fh / 2;
+            (fw, fh) = (fh, fw);
+            fx = cx - fw / 2; fy = cy - fh / 2;
+        }
+
+        def.HorizonY = fy + shape.HorizonF * fh;
+        def.Vps.Clear();
+        foreach (double xf in shape.VpXF)
+            def.Vps.Add(new CanvasPoint(fx + xf * fw, def.HorizonY));
+        if (shape.ThirdYF is double t && def.Vps.Count == 3)
+            def.Vps[2] = new CanvasPoint(fx + 0.5 * fw, fy + t * fh);
+    }
+
+    // ---- 12.6: the on-canvas vanishing-point editor -----------------------
+    private GridPointEditor? _gridEditor;
+
+    /// <summary>12.6. Pressing Edit Points dismisses the panel (the panel does
+    /// that itself before calling) and enters an on-canvas editing mode.</summary>
+    private void BeginGridPointEdit()
+    {
+        if (_curPage?.Perspective == null || _curPage.Perspective.Vps.Count == 0)
+        {
+            ShowStatus("This page has no vanishing points to edit.");
+            return;
+        }
+        _gridEditor ??= GridPointEditor.Attach(CanvasArea, new GridPointEditor.Host
+        {
+            Surface = Surface,
+            Page = () => _curPage,
+            Changed = () => Surface.Refresh(),
+            Save = ScheduleSave,
+        });
+        _gridEditor.Begin();
     }
 
     // Sensible starting geometry from the current view: horizon through the view
