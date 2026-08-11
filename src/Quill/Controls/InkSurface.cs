@@ -3510,39 +3510,81 @@ public sealed class InkSurface : UserControl
             gridColor = Color.FromArgb((byte)Math.Round(gridColor.A * gridOpacity),
                                        gridColor.R, gridColor.G, gridColor.B);
         if (gridColor.A == 0) return;
-        float lw = 1f / ViewZoom;
+        // CONCEPTS-REF 12.2's "1 pts" box. Divided by the zoom so the weight is a
+        // SCREEN weight: a 1 pt guide stays a hairline at 800%, which is what a
+        // construction line is for.
+        float lw = (float)Math.Clamp(_page.GridWeight > 0 ? _page.GridWeight : 1, 0.25, 8) / ViewZoom;
+
+        // 12.2: "Only show the grid lines inside the artboard." Nothing to
+        // confine on an infinite page, so the flag is simply inert there.
+        var confine = _page.GridConfine && PageSizes.TryResolve(_page, out double aw, out double ah)
+                      && aw > 0 && ah > 0
+            ? new Rect(0, 0, aw, ah)
+            : (Rect?)null;
+        if (confine is Rect box)
+        {
+            tl = new Vector2(MathF.Max(tl.X, (float)box.X), MathF.Max(tl.Y, (float)box.Y));
+            br = new Vector2(MathF.Min(br.X, (float)box.Right), MathF.Min(br.Y, (float)box.Bottom));
+            if (br.X <= tl.X || br.Y <= tl.Y) return;
+            startX = MathF.Floor(tl.X / spacing) * spacing;
+            startY = MathF.Floor(tl.Y / spacing) * spacing;
+        }
+
+        // 12.2's Orientation circles. Read ONLY by the kinds 12.3 gives the
+        // control to - a square grid and a dot grid are unchanged by a 90 degree
+        // turn, so the flag can never reach them.
+        bool portrait = _page.GridPortrait &&
+                        _page.Grid is GridType.Lines or GridType.Isometric or GridType.Triangle;
+
+        // 12.3's Divisions: minor lines between the main ones, in a fainter ink
+        // so the main lines still read as the main lines.
+        int div = Math.Clamp(_page.GridDivisions > 0 ? _page.GridDivisions : 1, 1, 64);
+        var minorColor = Color.FromArgb((byte)Math.Round(gridColor.A * 0.45),
+                                        gridColor.R, gridColor.G, gridColor.B);
+        float minorStep = spacing / div;
 
         switch (_page.Grid)
         {
             case GridType.Dotted:
                 for (float y = startY; y < br.Y; y += spacing)
                     for (float x = startX; x < br.X; x += spacing)
-                        ds.FillCircle(new Vector2(x, y), 1.4f, gridColor);
+                        ds.FillCircle(new Vector2(x, y), MathF.Max(1.0f, lw * 1.4f * ViewZoom) / ViewZoom, gridColor);
                 break;
             case GridType.Square:
+                if (div > 1 && minorStep * ViewZoom > 3f)
+                {
+                    for (float x = startX; x < br.X; x += minorStep)
+                        ds.DrawLine(new Vector2(x, tl.Y), new Vector2(x, br.Y), minorColor, lw * 0.75f);
+                    for (float y = startY; y < br.Y; y += minorStep)
+                        ds.DrawLine(new Vector2(tl.X, y), new Vector2(br.X, y), minorColor, lw * 0.75f);
+                }
                 for (float x = startX; x < br.X; x += spacing)
                     ds.DrawLine(new Vector2(x, tl.Y), new Vector2(x, br.Y), gridColor, lw);
                 for (float y = startY; y < br.Y; y += spacing)
                     ds.DrawLine(new Vector2(tl.X, y), new Vector2(br.X, y), gridColor, lw);
                 break;
             case GridType.Lines:
-                for (float y = startY; y < br.Y; y += spacing)
-                    ds.DrawLine(new Vector2(tl.X, y), new Vector2(br.X, y), gridColor, lw);
+                if (portrait)
+                    for (float x = startX; x < br.X; x += spacing)
+                        ds.DrawLine(new Vector2(x, tl.Y), new Vector2(x, br.Y), gridColor, lw);
+                else
+                    for (float y = startY; y < br.Y; y += spacing)
+                        ds.DrawLine(new Vector2(tl.X, y), new Vector2(br.X, y), gridColor, lw);
                 break;
+            // CONCEPTS-REF 12.10: the angle control sets the diagonals. Each
+            // kind reduces to its classic families at its own default -
+            // isometric at 30 gives 30/90/150, the triangle grid at 60 gives
+            // 0/60/120 - and the user may take either off it.
             case GridType.Isometric:
-                // centered-rectangular lattice (m*0.866s, n*0.5s), (m+n) even: the
-                // three nearest-neighbour line families sit at 30/90/150 deg with a
-                // uniform perpendicular spacing of 0.866s, so cells are true rhombi
-                DrawLineFamily(ds, tl, br, 30f, spacing * 0.8660254f, gridColor, lw);
-                DrawLineFamily(ds, tl, br, 90f, spacing * 0.8660254f, gridColor, lw);
-                DrawLineFamily(ds, tl, br, 150f, spacing * 0.8660254f, gridColor, lw);
-                break;
             case GridType.Triangle:
-                // equilateral tiling with side s: families at 0/60/120, each with
-                // perpendicular spacing equal to the triangle height 0.866s
-                DrawLineFamily(ds, tl, br, 0f, spacing * 0.8660254f, gridColor, lw);
-                DrawLineFamily(ds, tl, br, 60f, spacing * 0.8660254f, gridColor, lw);
-                DrawLineFamily(ds, tl, br, 120f, spacing * 0.8660254f, gridColor, lw);
+                {
+                    float baseA = (float)(_page.GridAngle > 0 ? _page.GridAngle : 30);
+                    float a = baseA + (_page.Grid == GridType.Triangle ? -60f : 0f)
+                              + (portrait ? 90f : 0f);
+                    DrawLineFamily(ds, tl, br, a, spacing * 0.8660254f, gridColor, lw);
+                    DrawLineFamily(ds, tl, br, a + 60f, spacing * 0.8660254f, gridColor, lw);
+                    DrawLineFamily(ds, tl, br, a + 120f, spacing * 0.8660254f, gridColor, lw);
+                }
                 break;
         }
     }
@@ -3584,17 +3626,47 @@ public sealed class InkSurface : UserControl
 
         var tl = ToWorld(new Vector2(0, 0));
         var br = ToWorld(new Vector2((float)ActualWidth, (float)ActualHeight));
-        var col = ColorUtil.IsDark(bg)
-            ? Color.FromArgb(56, 255, 255, 255)
-            : Color.FromArgb(40, 0, 0, 0);
-        float lw = 1f / ViewZoom;
+        // CONCEPTS-REF 12.5: the guides must read as a fine, low-contrast wash of
+        // BLUE-GREY, never as heavy black lines. The bias is applied to the
+        // contrast ink rather than to a named slate, so a brown page's guides
+        // stay a cool brown instead of every page getting the same grey.
+        bool darkBg = ColorUtil.IsDark(bg);
+        var col = darkBg
+            ? Color.FromArgb(56, 226, 241, 255)
+            : Color.FromArgb(40, 0, 16, 38);
+        if (!string.IsNullOrEmpty(_page!.GridColor))
+        {
+            try { var c = ColorUtil.Parse(_page.GridColor!); col = Color.FromArgb(col.A, c.R, c.G, c.B); }
+            catch { }
+        }
+        double pOpacity = Math.Clamp(_page.GridOpacity, 0, 1);
+        if (pOpacity < 1)
+            col = Color.FromArgb((byte)Math.Round(col.A * pOpacity), col.R, col.G, col.B);
+        if (col.A == 0) return;
+        float lw = (float)Math.Clamp(_page.GridWeight > 0 ? _page.GridWeight : 1, 0.25, 8) / ViewZoom;
         float spacing = (float)Math.Max(8, _page!.GridSpacing);
         int vpCount = Math.Min(def.Vps.Count, 3);
 
-        // horizon for 1- and 2-point; a 3-point set has nothing straight left
-        if (vpCount < 3 && (float)def.HorizonY >= tl.Y && (float)def.HorizonY <= br.Y)
-            ds.DrawLine(new Vector2(tl.X, (float)def.HorizonY), new Vector2(br.X, (float)def.HorizonY),
-                        col, lw * 1.6f);
+        // CONCEPTS-REF 12.8: the horizon TILTS. It is not a fixed horizontal -
+        // it is the LINE THROUGH the two on-horizon points, so dragging either
+        // one rotates it and the whole grid re-solves under the new geometry.
+        // 12.9: the angle is STORED, not derived. The points are constrained to
+        // this line and slide along it; only the rotation grip on the cone
+        // circle's rim turns it.
+        float tiltDeg = (float)def.HorizonAngle;
+
+        // The horizon, drawn through the points rather than at a stored height.
+        // A 3-point set has nothing straight left, so it keeps none.
+        if (vpCount < 3)
+        {
+            var a = vpCount >= 2
+                ? new Vector2((float)def.Vps[0].X, (float)def.Vps[0].Y)
+                : new Vector2(tl.X, (float)def.HorizonY);
+            float slope = MathF.Tan(tiltDeg * MathF.PI / 180f);
+            var p0 = new Vector2(tl.X, a.Y + (tl.X - a.X) * slope);
+            var p1 = new Vector2(br.X, a.Y + (br.X - a.X) * slope);
+            ds.DrawLine(p0, p1, col, lw * 1.6f);
+        }
 
         if (vpCount == 1)
         {
@@ -3604,7 +3676,9 @@ public sealed class InkSurface : UserControl
         }
         else if (vpCount == 2)
         {
-            DrawLineFamily(ds, tl, br, 90f, spacing, col, lw);   // verticals stay true
+            // The verticals stay perpendicular to the horizon, so they turn with
+            // it - that IS the grid re-solving under the tilt.
+            DrawLineFamily(ds, tl, br, 90f + tiltDeg, spacing, col, lw);
         }
 
         int rays = Math.Clamp(def.RayCount, 4, 96);

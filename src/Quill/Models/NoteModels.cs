@@ -289,6 +289,30 @@ public class NotePage
     // Isometric / Triangle grids only: axis tilt in degrees off horizontal.
     // 30 is the isometric standard and is ignored by every other grid kind.
     public double GridAngle { get; set; } = 30;
+    // ---- CONCEPTS-REF 12: the grid editor's own settings ------------------
+    // Every one of these is WhenWritingDefault AND zero-means-unset (zero is not
+    // a legal value for any of them), so a page written before 12 existed costs
+    // exactly the bytes it did before, needs no migration, and reads back as
+    // precisely the grid it has always drawn.
+    //
+    // 12.4's preset name. Kept rather than derived, because "Custom" is a real
+    // state - it is what the row says once a slider has moved off a preset.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public string? GridPreset { get; set; }
+    // 12.3: minor divisions between main lines. 1 (or unset) = main lines only.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int GridDivisions { get; set; }
+    // 12.2's "1 pts" box: gridline stroke width. Unset = 1.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double GridWeight { get; set; }
+    // 12.2's Orientation circles. false = Landscape. Read only by the kinds
+    // whose page carries the control at all - a square or a dot grid is
+    // unchanged by a 90 degree turn, so it never sets this.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool GridPortrait { get; set; }
+    // 12.2: "Only show the grid lines inside the artboard."
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool GridConfine { get; set; }
     // Perspective overlay (§7.4): coexists with any GridType, so it is NOT a
     // GridType member. null = no perspective guides (default). Persisted only
     // once a perspective grid is actually placed; carried in PageMetaJson.
@@ -788,6 +812,13 @@ public class PerspectiveDef
     public List<CanvasPoint> Vps { get; set; } = new();
     // Rays cast per vanishing point for the guide fan. Higher = denser.
     public int RayCount { get; set; } = 24;
+    // CONCEPTS-REF 12.9: the horizon's tilt in degrees. Stored rather than
+    // derived from the points, because the relationship runs the other way -
+    // the points are CONSTRAINED to this line and slide along it, and only the
+    // rotation grip on the cone circle's rim changes the angle. 0 = level, so
+    // every page written before 12.9 reads back exactly as it drew.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double HorizonAngle { get; set; }
 }
 
 // ===========================================================================
