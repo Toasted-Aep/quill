@@ -13,7 +13,7 @@ namespace Quill.Services;
 /// and <see cref="GridSpec.Resolve"/> maps it back onto the two model fields
 /// that actually persist.</para>
 /// </summary>
-public enum GridKind { Dot, Lined, Graph, Isometric, OnePoint, TwoPoint, ThreePoint }
+public enum GridKind { Dot, Lined, Graph, Isometric, Triangle, OnePoint, TwoPoint, ThreePoint }
 
 /// <summary>Which controls a kind's page carries (§12.3). The rule the user
 /// stated in words — <i>"if rotation does not change the form, do not have it in
@@ -34,6 +34,9 @@ public enum GridPart
     Opacity = 1 << 7,
     Orientation = 1 << 8,
     Confine = 1 << 9,
+    /// <summary>12.10: the angle of the diagonals, for the isometric and
+    /// triangle grids only.</summary>
+    Angle = 1 << 10,
 }
 
 /// <summary>Where a perspective preset puts its points, in FRAME FRACTIONS —
@@ -99,8 +102,14 @@ public sealed class GridSpec
         GridKind.Lined => GridType.Lines,
         GridKind.Graph => GridType.Square,
         GridKind.Isometric => GridType.Isometric,
+        GridKind.Triangle => GridType.Triangle,
         _ => GridType.None,
     };
+
+    /// <summary>12.10's defaults: isometric's true value is 30 degrees and the
+    /// equilateral triangle case is 60. Both are offered as the default and the
+    /// user may go off them.</summary>
+    public static double DefaultAngle(GridKind k) => k == GridKind.Triangle ? 60 : 30;
 
     /// <summary>Reads a page into a spec. A page written before §12 existed has
     /// zeroes in the new fields, and zero is never a legal value for any of them,
@@ -115,7 +124,7 @@ public sealed class GridSpec
         s.Weight = p.GridWeight > 0 ? p.GridWeight : 1;
         s.Opacity = Math.Clamp(p.GridOpacity, 0, 1);
         s.Colour = p.GridColor;
-        s.Angle = p.GridAngle;
+        s.Angle = p.GridAngle > 0 ? p.GridAngle : DefaultAngle(kind);
         s.Portrait = p.GridPortrait;
         s.Confine = p.GridConfine;
         s.Density = p.Perspective?.RayCount is int r && r > 0 ? r : 24;
@@ -138,6 +147,7 @@ public sealed class GridSpec
             GridType.Lines => GridKind.Lined,
             GridType.Square => GridKind.Graph,
             GridType.Isometric => GridKind.Isometric,
+            GridType.Triangle => GridKind.Triangle,
             _ => null,
         };
     }
@@ -182,6 +192,7 @@ public static class GridPresets
         GridKind.Lined => new[] { "Narrow", "Medium", "Wide", "Custom" },
         GridKind.Graph => new[] { "Square Grid", "10 / 100", "16 / 64", "Custom" },
         GridKind.Isometric => new[] { "Isometric", "Custom" },
+        GridKind.Triangle => new[] { "Triangle", "Custom" },
         GridKind.OnePoint => new[] { "1 Point", "Custom" },
         GridKind.TwoPoint => new[]
         {
@@ -210,9 +221,11 @@ public static class GridPresets
         GridKind.Graph =>
             GridPart.Preset | GridPart.Spacing | GridPart.Divisions | GridPart.Weight |
             GridPart.Colour | GridPart.Opacity | GridPart.Confine,
-        GridKind.Isometric =>
-            GridPart.Preset | GridPart.Spacing | GridPart.Weight | GridPart.Colour |
-            GridPart.Opacity | GridPart.Orientation | GridPart.Confine,
+        // 12.10: isometric and the triangle grid both gain an Angle row, and
+        // both keep Orientation - a 90 degree turn genuinely changes each.
+        GridKind.Isometric or GridKind.Triangle =>
+            GridPart.Preset | GridPart.Spacing | GridPart.Angle | GridPart.Weight |
+            GridPart.Colour | GridPart.Opacity | GridPart.Orientation | GridPart.Confine,
         _ =>
             GridPart.Preset | GridPart.Vanishing | GridPart.Density | GridPart.Weight |
             GridPart.Colour | GridPart.Opacity | GridPart.Orientation | GridPart.Confine,
@@ -227,6 +240,7 @@ public static class GridPresets
         GridKind.Lined => "Lined Paper",
         GridKind.Graph => "Graph Paper",
         GridKind.Isometric => "Isometric Grid",
+        GridKind.Triangle => "Triangle Grid",
         GridKind.OnePoint => "1-Point",
         GridKind.TwoPoint => "2-Point",
         _ => "3-Point",
@@ -239,6 +253,7 @@ public static class GridPresets
         GridKind.Lined => "Lined Paper",
         GridKind.Graph => "Graph Paper",
         GridKind.Isometric => "Isometric",
+        GridKind.Triangle => "Triangle",
         GridKind.OnePoint => "1-Point",
         GridKind.TwoPoint => "2-Point",
         _ => "3-Point",
@@ -269,6 +284,9 @@ public static class GridPresets
                 break;
             case GridKind.Isometric:
                 if (preset == "Isometric") { s.Spacing = 32; s.Angle = 30; }
+                break;
+            case GridKind.Triangle:
+                if (preset == "Triangle") { s.Spacing = 32; s.Angle = 60; }
                 break;
         }
     }

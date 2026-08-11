@@ -607,6 +607,8 @@ public sealed class SettingsWindow
     private static readonly GridKind?[] GridRowKinds =
     {
         null, GridKind.Dot, GridKind.Graph, GridKind.Lined, GridKind.Isometric,
+        // 12.10: the triangle grid was missing from the row entirely.
+        GridKind.Triangle,
         GridKind.OnePoint, GridKind.TwoPoint, GridKind.ThreePoint,
     };
 
@@ -618,10 +620,16 @@ public sealed class SettingsWindow
         var current = GridSpec.KindOf(page);
         float dpi = Dpi();
 
+        // The row repaints its own selection rather than asking the section to
+        // rebuild. A rebuild would be correct-looking and WRONG: this strip
+        // scrolls horizontally (§12.5 added three more circles to it), and
+        // rebuilding it throws the reader back to No Grid every time they pick
+        // something - the same defect as §11.1 item 1, one axis over.
+        var paints = new List<(GridKind? Kind, Action<bool, Brush?> Paint)>();
+
         foreach (var entry in GridRowKinds)
         {
             var k = entry;
-            bool selected = current == k;
             string label = k is GridKind gk ? GridPresets.RowLabel(gk) : "No Grid";
 
             Brush fill;
@@ -638,14 +646,18 @@ public sealed class SettingsWindow
             }
             else fill = B(ground);
 
-            strip.Children.Add(Circle(SwatchD, label, selected, () =>
+            Action<bool, Brush?>? paint = null;
+            strip.Children.Add(Circle(SwatchD, label, current == k, () =>
             {
                 // §9.5's idiom, already the law elsewhere in this panel: the first
                 // press APPLIES, a press on the one already selected EDITS.
-                if (selected && k is GridKind already) { OpenGridPage(already); return; }
+                if (current == k && k is GridKind already) { OpenGridPage(already); return; }
                 SelectGridKind(k);
-                Touch("Canvas");
-            }, fill: fill));
+                current = k;
+                foreach (var (kind2, repaint) in paints) repaint(kind2 == current, null);
+            }, fill: fill, bind: p => paint = p));
+
+            if (paint is { } got) paints.Add((k, got));
         }
         return HRow(strip);
     }
@@ -663,12 +675,24 @@ public sealed class SettingsWindow
             return;
         }
         _h.SetPerspective?.Invoke(0);
+        // 12.10: picking one of the two angled grids seeds ITS default angle -
+        // 30 for isometric, 60 for the equilateral triangle case - rather than
+        // carrying the other one's over.
+        if (kind is GridKind.Isometric or GridKind.Triangle && _h.ApplyGrid != null)
+        {
+            var seed = GridSpec.FromPage(_h.Page(), kind.Value);
+            seed.Angle = GridSpec.DefaultAngle(kind.Value);
+            seed.Preset = "Custom";
+            _h.ApplyGrid(seed);
+            return;
+        }
         _h.SetGrid(kind switch
         {
             GridKind.Dot => GridType.Dotted,
             GridKind.Lined => GridType.Lines,
             GridKind.Graph => GridType.Square,
             GridKind.Isometric => GridType.Isometric,
+            GridKind.Triangle => GridType.Triangle,
             _ => GridType.None,
         });
     }
@@ -788,6 +812,16 @@ public sealed class SettingsWindow
                 1, 32, 1,
                 () => spec.Divisions, v => spec.Divisions = (int)Math.Round(v),
                 v => ((int)Math.Round(v)).ToString("0"),
+                t => ParseLeadingNumber(t)));
+
+        // 12.10's angle row, between spacing and the rest: it is the second
+        // thing that decides what an isometric or a triangle grid IS.
+        if ((parts & GridPart.Angle) != 0)
+            body.Children.Add(NumRow("Angle",
+                "The angle of the grid's diagonals.",
+                5, 85, 1,
+                () => spec.Angle, v => spec.Angle = v,
+                v => $"{v:0.#}\u00b0",
                 t => ParseLeadingNumber(t)));
 
         if ((parts & GridPart.Vanishing) != 0)
