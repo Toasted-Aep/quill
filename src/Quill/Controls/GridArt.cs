@@ -173,43 +173,37 @@ internal static class GridArt
                 for (float y = 0; y <= h; y += step) ds.DrawLine(0, y, w, y, ink, lw);
                 break;
 
-            // 12.10: the angle control drives the diagonals. Isometric's true
-            // value is 30 and the equilateral triangle case is 60, and each
-            // reduces to the classic families at its default - isometric to
-            // 30/90/150, the triangle grid to 0/60/120.
+            // 12.11: the angle is the inclination of the DIAGONALS, and the
+            // straight family - isometric's verticals, the triangle grid's
+            // horizontals - does not move with it. So sweeping the slider
+            // restretches every cell instead of turning the field; the rigid
+            // turn is Orientation's job and stays independent of this. The
+            // arithmetic is GridLattice's so this strip and the canvas cannot
+            // promise each other different grids.
             case GridKind.Isometric:
             case GridKind.Triangle:
                 {
-                    float a = (float)s.Angle + (s.Kind == GridKind.Triangle ? -60f : 0f)
-                              + (portrait ? 90f : 0f);
-                    float perp = step * 0.8660254f;
-                    Family(ds, w, h, a, perp, ink, lw);
-                    Family(ds, w, h, a + 60f, perp, ink, lw);
-                    Family(ds, w, h, a + 120f, perp, ink, lw);
+                    // The generic guard above sizes the STRAIGHT family; at the
+                    // ends of the angle range the diagonals are several times
+                    // finer than that, so the frame is re-counted against
+                    // whichever family actually gets densest.
+                    float fine = (float)GridLattice.FinestPerp(s.Kind, s.Angle, step);
+                    while (fine >= 0.01f && w / fine * (h / fine) > 6000) { step *= 2; fine *= 2; }
+
+                    var tl = Vector2.Zero;
+                    var br = new Vector2(w, h);
+                    foreach (var fam in GridLattice.Families(s.Kind, s.Angle, step, portrait))
+                    {
+                        // An 86 DIP thumbnail can be handed a family finer than
+                        // its own pixels; below this it is a grey wash either
+                        // way, and the loop is what has to be protected.
+                        var f = fam.Perp < 1.5f ? fam with { Perp = 1.5f } : fam;
+                        foreach (var ln in GridLattice.Lines(f, tl, br))
+                            ds.DrawLine(ln.A, ln.B, ink, lw);
+                    }
                 }
                 break;
         }
-    }
-
-    /// <summary>One parallel family across the frame, generated from the frame's
-    /// own corners so the count is right at any angle.</summary>
-    private static void Family(CanvasDrawingSession ds, float w, float h, float angleDeg,
-                               float perp, Color ink, float lw)
-    {
-        if (perp < 1.5f) perp = 1.5f;
-        float a = angleDeg * MathF.PI / 180f;
-        var dir = new Vector2(MathF.Cos(a), MathF.Sin(a));
-        var nrm = new Vector2(-dir.Y, dir.X);
-
-        Span<Vector2> c = stackalloc Vector2[4] { new(0, 0), new(w, 0), new(w, h), new(0, h) };
-        float kMin = float.MaxValue, kMax = float.MinValue, tMin = float.MaxValue, tMax = float.MinValue;
-        foreach (var p in c)
-        {
-            float k = Vector2.Dot(p, nrm); kMin = MathF.Min(kMin, k); kMax = MathF.Max(kMax, k);
-            float t = Vector2.Dot(p, dir); tMin = MathF.Min(tMin, t); tMax = MathF.Max(tMax, t);
-        }
-        for (float k = MathF.Floor(kMin / perp) * perp; k <= kMax; k += perp)
-            ds.DrawLine(nrm * k + dir * tMin, nrm * k + dir * tMax, ink, lw);
     }
 
     // ---- perspective -----------------------------------------------------
