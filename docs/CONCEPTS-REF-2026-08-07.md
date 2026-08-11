@@ -1334,3 +1334,35 @@ just becomes a brush.
 **The palette mark is held back** (§11.23). `Icons.Palette` remains defined and
 measured but has **no call site** — the user asked for it not to be used until
 they decide where a picker mark belongs. Do not wire it anywhere.
+
+### 11.26 Two theme findings, 2026-08-10
+
+**There was no `PageTheme` bug.** A reported `ground=#0F0E10 isDark=1` on an
+ivory page was investigated in full, and **all five §7 rows pass on unmodified
+main**. The measurement came from a scratch library, not from the app, and no
+code needed changing.
+
+**Harness trap — any agent seeding a scratch `library.json` MUST set
+`ThemeSource: "Page"` explicitly.** The model defaults are
+`ThemeSource = "Manual"` (`Models/NoteModels.cs:397`), `Theme = "Dark"`
+(`:389`) and `OledBlack = false`, and those three together derive exactly
+`#0F0E10` — while `DefaultBackground` defaults to ivory `#FAF9F5` (`:382`). An
+unseeded library therefore renders a **light page with correctly-derived dark
+chrome**, which looks precisely like a broken derivation and is not. This cost
+one full investigation; do not let it cost another.
+
+The hypothesis that `ResolveGround` was returning the manual/OLED ground while a
+page was open is **wrong** — `MainWindow.xaml.cs:1974` takes the page branch
+whenever `ThemeSource == "Page"` and a page is open, verified in every run.
+
+**Gallery fallback, changed.** With `ThemeSource "Page"` and no page open
+(startup, gallery) the ground used to fall through to the Manual branch, whose
+`Theme` defaults to `"Dark"` — so a Page-mode user who never opened Settings got
+a dark gallery and a dark startup flash from a setting they never chose. It now
+uses the **last page's ground**, keeping the gallery continuous with the page
+you came from. The Manual branch remains the fallback for a genuine first run,
+where there is no last page.
+
+Still open, deliberately untouched: `Library.Theme` defaulting to `"Dark"` is
+what makes the defaults collide into `#0F0E10` in the first place. Changing it
+would alter first-run appearance for genuinely new users, so it was left alone.
