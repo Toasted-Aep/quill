@@ -86,11 +86,41 @@ public static class ColorPickerService
     /// <summary>Raised when <see cref="Dimming"/> changes.</summary>
     public static event Action<bool>? DimChanged;
 
+    /// <summary>CONCEPTS-REF 12.6: the grid's vanishing-point editor wants the
+    /// SAME fade the colour wheel gets. Declared here rather than reimplemented,
+    /// so there is one dimming state, one event and one host handler - and the
+    /// files that own the chrome are not touched by either caller.</summary>
+    public static void SetExternalDimming(bool on)
+    {
+        if (_extDim == on) return;
+        _extDim = on;
+        DimIncludesDial = on;
+        PushDim();
+    }
+
+    /// <summary>12.6 shows the radial dial FADED while the grid's points are
+    /// being edited; 11.19 keeps it at FULL strength under the colour wheel.
+    /// Those are the user's words about two different modes, so the host is told
+    /// which mode it is in rather than the two being silently reconciled.</summary>
+    public static bool DimIncludesDial { get; private set; }
+
+    // Two independent sources, one state: the wheel and 12.6's editor. Kept
+    // apart so closing one cannot undim while the other is still up.
+    private static bool _wheelDim, _extDim;
+
     private static void SetDimming(bool on)
     {
-        if (Dimming == on) return;
-        Dimming = on;
-        DimChanged?.Invoke(on);
+        if (_wheelDim == on) return;
+        _wheelDim = on;
+        PushDim();
+    }
+
+    private static void PushDim()
+    {
+        bool want = _wheelDim || _extDim;
+        if (Dimming == want) return;
+        Dimming = want;
+        DimChanged?.Invoke(want);
     }
 
     private static void SetObstructing(bool on)
