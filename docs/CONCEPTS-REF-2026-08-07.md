@@ -1511,3 +1511,43 @@ heading:
 When a grid layer is active the reference shows a bottom-centre bar —
 `+ Item Picker`, a lock and `Include`, and `All`. **Not part of this work**;
 recorded only so it is not mistaken for something missing.
+
+### 12.8 The vanishing-point editor, corrected from a live capture
+
+A capture taken **mid-drag** supersedes §12.6 where they differ. It shows the
+editor in its active state, which the earlier stills did not.
+
+**The horizon tilts. It is not a fixed horizontal.** Dragging a vanishing point
+**rotates the horizon**, and the whole grid re-solves under the new geometry —
+the fans from every point re-render live during the drag, not on release. This
+is the biggest correction: §12.6 implied points slide along a level horizon, and
+they do not.
+
+**A blue dashed reference line marks the level horizon.** While the red horizon
+is tilted away from level, a **horizontal dashed line in pale blue** stays at
+the untilted position, spanning the full width, so the amount of tilt is
+readable at a glance. It is a reference only — not draggable. Presumably it
+appears only while the horizon is off level; if it is always shown, say so.
+
+**Handle states differ.** An idle vanishing point is an **unfilled red ring**.
+The one being dragged is a **filled red dot** of the same size. That is the only
+difference between them — no halo, no size change.
+
+**The tilt angle appears in the top bar.** During editing the readout shows the
+horizon's angle — the capture reads `2°`. The zoom percentage is not shown
+beside it in that state.
+
+**The centre crosshair is faint**, drawn much lighter than the red handles, and
+sits at the grid's centre independent of the horizon.
+
+**The cone-of-vision circle is pale blue**, not red, and passes through the
+centre region — it is drawn in the grid's own colour family rather than the
+handle colour, so it reads as part of the grid rather than as a control.
+
+**The dial is faded** throughout, confirming §12.6.
+
+**`Editing Grid. Done`** sits top-centre: `Editing Grid.` in near-black, `Done`
+in `Accent`. On a white page no background is visible behind it; an earlier
+capture on a grey ground showed a light rounded plate. Build the plate from
+`PageTheme.Panel` so it disappears on paper and separates on a coloured ground —
+that satisfies both captures.
