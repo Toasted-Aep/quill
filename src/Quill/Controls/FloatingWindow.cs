@@ -44,6 +44,34 @@ public sealed class FloatingWindow
     private const double Radius = TopRadius;
     private const double HeaderH = 40;
     private const double MinW = 320, MinH = 260;
+    /// <summary>The plate's own border. Named because §14.3's corner geometry is
+    /// measured from the panel's INNER edge, which is this far in.</summary>
+    private const double PanelBorder = 1.5;
+    /// <summary>The header's inset. Named for the same reason: the corner targets
+    /// undo it for themselves and must undo exactly it.</summary>
+    private const double HeadPadX = 8, HeadPadY = 6;
+
+    /// <summary>§14.3, the corner targets.
+    ///
+    /// <para>The inner corner's radius is the outer radius less the border - an
+    /// inset rounded rect keeps the arc's CENTRE and spends the inset on the
+    /// radius - so the curve the targets have to stay inside is this.</para></summary>
+    private const double InnerRadius = Radius - PanelBorder;
+
+    /// <summary>How far in from the panel's inner edge an axis-aligned target has
+    /// to begin to stay inside that curve: the arc's 45 degree point,
+    /// <c>r - r/sqrt2</c>. A rectangle anchored there and running inward touches
+    /// the arc at that one corner and is inside it everywhere else, so it is the
+    /// LARGEST rectangle that fits - which is what "fills its corner exactly and
+    /// stops there" comes to once the target cannot itself be curved. WinUI's
+    /// <c>UIElement.Clip</c> takes a <c>RectangleGeometry</c> and nothing else,
+    /// and a composition clip does not participate in XAML hit testing, so a
+    /// rounded target is not on offer here.</summary>
+    private static readonly double CornerInset = InnerRadius * (1 - 1 / Math.Sqrt(2));
+
+    /// <summary>A corner target's side: the panel's inner edge to the header's
+    /// inner boundary, less what the curve costs at the near end.</summary>
+    private static readonly double CornerSide = HeaderH - CornerInset;
 
     /// <summary>§11.6 item 42: "must leave a margin at the page edge".</summary>
     private const double EdgeGap = 14;
@@ -142,7 +170,7 @@ public sealed class FloatingWindow
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Top,
             CornerRadius = new CornerRadius(Radius),
-            BorderThickness = new Thickness(1.5),
+            BorderThickness = new Thickness(PanelBorder),
         };
         Bind(_panel, Border.BorderBrushProperty, "GlassEdgeBrush", theme: false);
 
@@ -153,24 +181,29 @@ public sealed class FloatingWindow
         _panel.Child = shell;
 
         // ---- header: close (upper-left), drag bar (top middle), info (upper-right)
-        var header = new Grid { Padding = new Thickness(8, 6, 8, 0) };
+        var header = new Grid { Padding = new Thickness(HeadPadX, HeadPadY, HeadPadX, 0) };
 
-        // The close target fills the header's top-left CORNER rather than
-        // floating as a small square inside the padding: negative margins undo
-        // the header's 8,6 inset for this child only, and Stretch takes the
-        // full header height. The glyph stays where it was - only the region
-        // that responds grew.
-        var close = IconButton(CloseGeometry, "Close");
-        close.HorizontalAlignment = HorizontalAlignment.Left;
-        close.VerticalAlignment = VerticalAlignment.Stretch;
-        close.Margin = new Thickness(-8, -6, 0, 0);
-        close.Padding = new Thickness(8, 6, 6, 0);
-        close.MinWidth = HeaderH + 8;
+        // 14.3. Each target fills ITS OWN CORNER OF THE PANEL - panel inner edge
+        // to the header's inner boundary - and stops there.
+        //
+        // The regression this replaces: the close button was given margins of
+        // exactly the header's padding so it would "cover the whole corner". That
+        // put its top-left ON the panel's inner edge, at a point the ROUNDED
+        // CORNER has already cut away, so the square target hung out past the
+        // curve and a press on the page just outside the corner landed on Close
+        // instead. The info button had the opposite fault - inset by the padding
+        // and vertically centred, so it filled nothing and sat off its corner.
+        //
+        // Both are now anchored on the corner arc's 45 degree point (CornerInset)
+        // and run to the header's boundary, and the glyphs are pinned where they
+        // already were so only the regions that respond have moved.
+        var close = CornerButton(CloseGeometry, "Close", right: false,
+                                 glyph: new Thickness(17 - CornerInset, 8 - CornerInset, 0, 0));
         close.Click += (_, _) => Hide();
         header.Children.Add(close);
 
-        var info = IconButton(InfoGeometry, "About these settings");
-        info.HorizontalAlignment = HorizontalAlignment.Right;
+        var info = CornerButton(InfoGeometry, "About these settings", right: true,
+                                glyph: new Thickness(HeaderH - 30, 15 - CornerInset, 0, 0));
         info.Click += (_, _) => InfoRequested?.Invoke();
         header.Children.Add(info);
 
@@ -799,6 +832,38 @@ public sealed class FloatingWindow
             Content = p,
         };
         ToolTipService.SetToolTip(b, tip);
+        return b;
+    }
+
+    /// <summary>§14.3's corner target: an <see cref="IconButton"/> resized and
+    /// placed to fill one top corner of the panel without crossing its rounded
+    /// edge.
+    ///
+    /// <para>The margins undo the header's padding and then step back in by
+    /// <see cref="CornerInset"/>, so the button's outer corner lands on the arc
+    /// rather than beyond it. <paramref name="glyph"/> pins the mark at the exact
+    /// offset it had before this - the region that responds is the only thing
+    /// 14.3 asks to change - which is why the content is aligned top-left rather
+    /// than centred in the new, larger box.</para>
+    ///
+    /// <para>The button keeps <see cref="IconButton"/>'s TRANSPARENT background
+    /// rather than a null one: a null Background is invisible to hit testing, and
+    /// a corner target that is not hit-testable is the same defect from the other
+    /// side.</para></summary>
+    private static Button CornerButton(string geometry, string tip, bool right, Thickness glyph)
+    {
+        var b = IconButton(geometry, tip);
+        b.Width = b.Height = CornerSide;
+        b.MinWidth = b.MinHeight = 0;
+        b.Padding = new Thickness(0);
+        b.HorizontalAlignment = right ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+        b.VerticalAlignment = VerticalAlignment.Top;
+        b.HorizontalContentAlignment = HorizontalAlignment.Left;
+        b.VerticalContentAlignment = VerticalAlignment.Top;
+        b.Margin = right
+            ? new Thickness(0, CornerInset - HeadPadY, CornerInset - HeadPadX, 0)
+            : new Thickness(CornerInset - HeadPadX, CornerInset - HeadPadY, 0, 0);
+        if (b.Content is FrameworkElement mark) mark.Margin = glyph;
         return b;
     }
 
