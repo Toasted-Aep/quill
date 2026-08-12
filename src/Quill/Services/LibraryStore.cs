@@ -536,6 +536,7 @@ public static class LibraryStore
         "Theme", "ThemeSource", "Language", "DefaultFont", "DefaultFontSize", "PenDock",
         "NotebookPanelW", "NotebookPanelH", "StartFullscreen", "StartOnGallery",
         "AccentColor", "TouchMode", "Liquidness", "RecentColors", "CustomColors",
+        "Palettes", "ColorUses",
         "LastEraserMode", "LastEraserStyle", "EraserSize", "GlowMode",
         "AccentFollow", "KeyPreset", "OledBlack", "AutosaveSeconds",
         "PenRepair", "PenRepairDots", "PenRepairBridge", "MotionBlur",
