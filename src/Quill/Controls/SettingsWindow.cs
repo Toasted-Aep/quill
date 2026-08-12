@@ -718,14 +718,15 @@ public sealed class SettingsWindow
     /// <para><b>Re-examined against the reference and against a live dark page,
     /// and kept.</b> The objection was that a Blueprint or Brown Paper page
     /// tints every other surface, so white would read as foreign. It does not,
-    /// because THIS WINDOW IS NOT TINTED: <see cref="PageTheme.Panel"/> is
-    /// documented as near-neutral - <i>flat #F7F7F7 or #141414 regardless of the
-    /// page's hue</i> - which is also why <see cref="PanelAlt"/> above steps off
-    /// the panel instead of using SurfaceAlt. Measured on a Blueprint page
-    /// (ground #2F81C3): the panel body samples #141414 at every point, and the
-    /// only blue anywhere on the page is the preview strip and the preset
-    /// thumbnails, which are pictures OF the page and are meant to carry it.
-    /// There is no ground hue here for a white field to clash with.</para>
+    /// because THIS WINDOW IS NOT TINTED: <see cref="PageTheme.Panel"/> rides a
+    /// luminance ramp with <b>neutral chroma throughout</b> - it tracks how light
+    /// the ground is and never what colour it is - which is also why
+    /// <see cref="PanelAlt"/> above steps off the panel instead of using
+    /// SurfaceAlt. Measured on a live Blueprint page (ground #2F81C3): the panel
+    /// body samples <b>#3D3D3D at every point, chroma 0</b>, while the preset
+    /// thumbnails sample #2B77B4 and the canvas #2F81C3. The only blue anywhere
+    /// is in the pictures OF the page, which are meant to carry it. There is no
+    /// ground hue on this surface for a white field to clash with.</para>
     ///
     /// <para>The reference is also literal about it. §12.1 item 3 says <i>"a
     /// white pill"</i> with the label <i>"in near-black"</i>, and §12.2 says
