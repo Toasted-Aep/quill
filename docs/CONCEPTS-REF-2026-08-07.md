@@ -1702,3 +1702,44 @@ light end than "slightly gray" might imply, because luminance is compressed
 there. `Heavyweight` lands at `#D1D1D1`, which is grey rather than off-white. If
 that reads as too much, the fix is to blend the ramp part-way back toward the
 old constants rather than to change its shape.
+
+### 13.1 The dark end, corrected — 2026-08-12
+
+The user, having seen §13's first ramp:
+
+> *"make the app theme totally black (oled black) if very close to black (like
+> in darkprint) and very dark grey otherwise."*
+
+The first ramp put Darkprint at `#1C1C1C` — near-black but not black — and put
+Blueprint and Brown Paper at `#3D3D3D`, a *medium* dark grey rather than a very
+dark one. The dark branch is now two cases:
+
+```
+ground luminance <= 0.05   ->  #000000, true black
+otherwise (dark side)      ->  L* 10 + 16 x min(1, Y / 0.5)   -> a L* 10..26 band
+```
+
+**The step at 0.05 is the rule, not a rough edge.** A ground that is very nearly
+black gets a panel that *is* black, rather than easing toward it — that is what
+was asked for, so Darkprint and a pinned OLED black both land on `#000000`.
+
+The **light branch is untouched**; §13 built it to the previous instruction and
+the user did not revisit it.
+
+| ground | Y | panel | contrast |
+|---|---|---|---|
+| Pure white | 1.000 | `#F6F6F6` | 17.0:1 |
+| Lightweight | 0.947 | `#E9E9E9` | 15.2:1 |
+| Rippled | 0.872 | `#D6D6D6` | 12.7:1 |
+| Heavyweight | 0.778 | `#D1D1D1` | 12.1:1 |
+| Mid grey | 0.216 | `#2A2A2A` | 12.8:1 |
+| Blueprint | 0.199 | `#292929` | 13.0:1 |
+| Brown Paper | 0.206 | `#292929` | 13.0:1 |
+| **Darkprint** | 0.024 | **`#000000`** | 18.8:1 |
+| **OLED black** | 0.000 | **`#000000`** | 18.8:1 |
+
+Minimum contrast is now **12.1:1**, up from 9.3:1 — tightening the dark band
+moved every dark panel further from its white text rather than closer.
+
+**This supersedes §13's table and, with it, §7's `Panel` column.** Do not
+restore `#141414` for the dark cases to make the original acceptance table pass.
