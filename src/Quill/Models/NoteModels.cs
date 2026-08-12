@@ -272,6 +272,17 @@ public class NotePage
     public double ViewX { get; set; }
     public double ViewY { get; set; }
     public double ViewZoom { get; set; } = 1;
+    // CONCEPTS-REF 14.5: the REFERENCE FRAME the perspective presets are
+    // quartered against - the viewport as it was on this page's FIRST FRAME, in
+    // world coordinates. A property of the PAGE, captured once and never
+    // recomputed: derived live it would be read after the user had panned and
+    // zoomed, and every vanishing point would slide with the view.
+    //
+    // null means "not captured yet", which is every page written before 14.5 as
+    // well as a page that has not yet been drawn. InkSurface fills it on the
+    // first frame it paints the page on; see NotePage.RefFrame's own remarks.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public ViewFrame? RefFrame { get; set; }
     public string Background { get; set; } = "#FFFFFF";
     // Paper texture id (§7.3): null = smooth (today's behaviour). v1 ids are
     // "grain"/"canvas"/"coldpress"/"laid"; drawn between Clear(bg) and the grid,
@@ -802,6 +813,31 @@ public struct CanvasPoint
     public double Y { get; set; }
     public CanvasPoint() { }
     public CanvasPoint(double x, double y) { X = x; Y = y; }
+}
+
+/// <summary>
+/// CONCEPTS-REF 14.5's reference frame: a rectangle of WORLD space, the viewport
+/// as it stood the first time a page was drawn.
+///
+/// <para>Deliberately screen-dependent. 14.5 is explicit that "the same preset on
+/// a laptop and on a large monitor produces points at different canvas
+/// coordinates, because a quarter of one frame is not a quarter of the other" -
+/// so this is captured once per page, on the machine the page was created on,
+/// and then travels with the page.</para>
+/// </summary>
+public class ViewFrame
+{
+    public double X { get; set; }
+    public double Y { get; set; }
+    public double W { get; set; }
+    public double H { get; set; }
+
+    public ViewFrame() { }
+    public ViewFrame(double x, double y, double w, double h) { X = x; Y = y; W = w; H = h; }
+
+    /// <summary>A frame is only usable if it has area; a zero one is a capture
+    /// that happened before the surface had been laid out.</summary>
+    public bool IsUsable => W > 1 && H > 1;
 }
 
 public class PerspectiveDef
