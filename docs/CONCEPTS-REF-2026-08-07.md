@@ -1743,3 +1743,48 @@ moved every dark panel further from its white text rather than closer.
 
 **This supersedes §13's table and, with it, §7's `Panel` column.** Do not
 restore `#141414` for the dark cases to make the original acceptance table pass.
+
+### 13.2 Lighter at the light end, and panels carry the ground's hue — 2026-08-12
+
+> *"for app theme: make light gray more lighter, and add creme and other various
+> other colours like those."*
+
+Two changes, and the second **reverses §6's rule that panels are neutral.**
+
+**Lighter.** The light branch spanned L\* 84–97, which put Heavyweight on
+`#D1D1D1` — grey rather than off-white. It now spans **L\* 90–97** across the top
+half of the luminance range. The papers stay distinguishable from one another
+inside the narrower band.
+
+**Hue.** `Panel` was deliberately neutral, because §6 said panels are flat
+whatever the page's hue, unlike `Surface` which carries it. **That no longer
+holds.** `Panel` now carries a fraction of the ground's a/b:
+
+- `LightPanelChroma = 0.85` — light panels take most of it. That is where cream
+  lives, and where a tint reads at all.
+- `DarkPanelChroma = 0.35` — dark panels take far less, so a dark surface hints
+  at its page instead of becoming a coloured slab.
+- **Pure black keeps zero chroma.** Black asked for is black, not near-black
+  wearing a cast.
+
+| ground | was | now | |
+|---|---|---|---|
+| Pure white | `#F6F6F6` | `#F6F6F6` | unchanged |
+| Lightweight | `#E9E9E9` | **`#F5F4F1`** | warm off-white |
+| Rippled | `#D6D6D6` | **`#F4F1EA`** | cream |
+| Crumpled | `#DEDEDE` | **`#F3F0E8`** | cream |
+| Heavyweight | `#D1D1D1` | **`#F1EDE4`** | cream |
+| Mid grey | `#2A2A2A` | `#2A2A2A` | neutral ground, neutral panel |
+| Blueprint | `#292929` | **`#182A3D`** | dark navy |
+| Brown Paper | `#292929` | **`#372617`** | dark brown |
+| Darkprint | `#000000` | `#000000` | true black |
+| OLED black | `#000000` | `#000000` | true black |
+
+Worst contrast across every ground is **12.8:1**, up from 12.1:1 — the lighter
+light end moved those panels further from their dark text, so legibility
+improved rather than being traded away.
+
+**§6's "panels are flat regardless of the page's hue" is now superseded**, along
+with §7's `Panel` column and §13/§13.1's tables. This is the third deliberate
+divergence from Concepts on this value; do not restore neutrality or the two
+original constants to make an older table pass.
