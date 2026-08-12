@@ -251,6 +251,28 @@ public sealed class SettingsWindow
     /// wholesale rebuild §11.1 item 1 calls a 5/5 defect.</summary>
     private GridSpec? _spec;
 
+    /// <summary>Which page <see cref="_spec"/> was read from.
+    ///
+    /// <para>The grid editor page is a SNAPSHOT: <see cref="GridSpec.FromPage"/>
+    /// copies the page's fields into a bag that every control on the page then
+    /// mutates in place, and <see cref="CommitGrid"/> writes the whole bag back
+    /// through <see cref="Host.ApplyGrid"/> - which targets whatever page is
+    /// CURRENT. So the page it was read from is part of the spec's identity and
+    /// has to be carried with it.</para>
+    ///
+    /// <para>Without this the editor was a live weapon aimed at whatever page
+    /// happened to be up: open it on page A, switch to page B, touch any control,
+    /// and A's ENTIRE spec landed on B - spacing, divisions, weight, opacity,
+    /// colour, angle, orientation, confine, and worst of all the KIND, which sets
+    /// <c>p.Grid</c> and NULLS <c>p.Perspective</c>. A page the user was not even
+    /// editing could lose its vanishing points to a nudge of the opacity slider
+    /// on another page.</para></summary>
+    private Guid? _specPageId;
+
+    /// <summary>Set while a rebuild is already posted, so a run of page turns
+    /// costs one rebuild rather than one each.</summary>
+    private bool _rebuildQueued;
+
     /// <summary>The preview strip's surface and the element that sizes it. The
     /// strip is repainted by assigning a new CanvasImageSource to the Image;
     /// nothing above it in the tree is touched, so the reader does not move and
@@ -805,23 +827,114 @@ public sealed class SettingsWindow
 
     private void OpenGridPage(GridKind kind)
     {
+        BindGridPage(kind);
+        _win.RefreshContent();      // a NAVIGATION: the top is the right place to land
+    }
+
+    /// <summary>Point the editor page at the CURRENT page's grid, without
+    /// touching the tree. Split out of <see cref="OpenGridPage"/> so opening the
+    /// page and following a page switch cannot drift apart: the rebind is the
+    /// whole of what "open" ever did besides the rebuild, and a partial rebind is
+    /// exactly the bug this guards.</summary>
+    private void BindGridPage(GridKind kind)
+    {
         _gridPage = kind;
         _spec = GridSpec.FromPage(_h.Page(), kind);
+        _specPageId = _h.Page()?.Id;
+        // Every element of the page is rebuilt from scratch, so nothing may be
+        // left pointing at the old tree - WinUI enforces one parent per element.
+        _previewImg = null;
+        _previewHost = null;
+        _gridBind.Clear();
         // The strip is full-bleed, so the window's own scroller inset comes off
         // for the duration and goes back on the way out.
         try { _win.ContentPadding = new Thickness(0); } catch { }
-        _win.RefreshContent();      // a NAVIGATION: the top is the right place to land
     }
 
     private void CloseGridPage()
     {
+        DropGridPage();
+        _win.RefreshContent();
+    }
+
+    /// <summary>Forget the open grid page WITHOUT rebuilding. The state half of
+    /// <see cref="CloseGridPage"/>, so a page switch under a CLOSED panel can
+    /// drop a spec that no longer belongs to anything - a closed panel's stale
+    /// spec is exactly as dangerous as an open one's the moment it is shown
+    /// again, and <see cref="Show"/> rebuilds anyway.</summary>
+    private void DropGridPage()
+    {
         _gridPage = null;
         _spec = null;
+        _specPageId = null;
         _previewImg = null;
         _previewHost = null;
         _gridBind.Clear();
         try { _win.ContentPadding = ContentInset; } catch { }
-        _win.RefreshContent();
+    }
+
+    /// <summary>The page under this panel changed. Called by MainWindow from the
+    /// ONE place <c>_curPage</c> is assigned.
+    ///
+    /// <para><b>Why this exists.</b> Every other control in the Workspace tab
+    /// writes through a host delegate that targets the CURRENT page, so a stale
+    /// tab is merely wrong-LOOKING - the ring sits under the paper the previous
+    /// page used, and the next tap still does the right thing to the right page.
+    /// The grid editor is the one surface that edits a snapshot, so a stale one
+    /// writes the OLD page's settings onto the NEW page.</para>
+    ///
+    /// <para><b>The editor FOLLOWS rather than closing.</b> The rest of this
+    /// panel is already live-bound to whatever page is up, so an editor pinned to
+    /// the page you left is the anomaly, not the fix. The rebind is complete
+    /// because it is the SAME path <see cref="OpenGridPage"/> takes - a fresh
+    /// <see cref="GridSpec.FromPage"/> and a full rebuild of the page's controls,
+    /// which is needed regardless: the new page's grid may be a different KIND,
+    /// and 12.3 gives each kind a different set of controls.</para>
+    ///
+    /// <para><b>The one case that cannot follow</b> is a new page with no grid at
+    /// all. There is nothing to edit, so the page closes back to the Workspace
+    /// sections rather than showing an editor for a grid that is not there.</para>
+    ///
+    /// <para><b>The rebuild is POSTED, not run here.</b> A page turn also pushes
+    /// the new ground, and a ground that actually moved makes the WINDOW rebuild
+    /// itself synchronously. Two rebuilds back to back is the 11.1 item 1 defect
+    /// in its subtlest form: the second one reads the scroll offset back out of a
+    /// scroller whose content the first has just replaced and whose restoring
+    /// ChangeView has not landed, so it preserves a zero and the panel jumps to
+    /// the top while looking like it did the right thing. Letting the message
+    /// pump drain first means the offset is settled before it is read. The STATE
+    /// is rebound synchronously, so no write can go astray in the meantime.</para></summary>
+    public void OnPageChanged()
+    {
+        _restoreArmed = false;
+        if (_gridPage != null)
+        {
+            if (GridSpec.KindOf(_h.Page()) is GridKind kind) BindGridPage(kind);
+            else DropGridPage();
+        }
+        if (IsOpen) QueueRebuild();
+    }
+
+    /// <summary>One rebuild after the current message has drained, however many
+    /// times it is asked for.</summary>
+    private void QueueRebuild()
+    {
+        if (_rebuildQueued) return;
+        var q = _root?.DispatcherQueue;
+        if (q == null) return;
+        _rebuildQueued = true;
+        try
+        {
+            q.TryEnqueue(() =>
+            {
+                _rebuildQueued = false;
+                if (!IsOpen) return;
+                // A grid page is a NAVIGATION and lands at the top; the sections
+                // are a repaint and keep the reader where they were.
+                _win.RefreshContent(preserveScroll: _gridPage == null);
+            });
+        }
+        catch { _rebuildQueued = false; }
     }
 
     private FrameworkElement BuildGridPage(GridKind kind)
@@ -829,7 +942,12 @@ public sealed class SettingsWindow
         // Every element on this page is created HERE. WinUI enforces one parent
         // per element, so nothing may be held on a field across a rebuild.
         _gridBind.Clear();
-        var spec = _spec ??= GridSpec.FromPage(_h.Page(), kind);
+        if (_spec == null)
+        {
+            _spec = GridSpec.FromPage(_h.Page(), kind);
+            _specPageId = _h.Page()?.Id;
+        }
+        var spec = _spec;
         spec.Kind = kind;
         var parts = GridPresets.Parts(kind);
 
@@ -1066,6 +1184,18 @@ public sealed class SettingsWindow
     private void CommitGrid()
     {
         if (_spec == null) return;
+        // The spec is a snapshot of ONE page. If the page moved under it, this
+        // call would write that page's settings onto a DIFFERENT one, which is
+        // data loss on a page the user is not even looking at - so it is refused
+        // outright here rather than merely being made unlikely by the
+        // notification OnPageChanged depends on. Belt and braces on purpose: the
+        // notification is one line in an eleven-thousand-line file and this is
+        // the only check that survives it being dropped.
+        if (_h.Page()?.Id != _specPageId)
+        {
+            OnPageChanged();     // rebinds the state now, rebuilds on the pump
+            return;
+        }
         try { _h.ApplyGrid?.Invoke(_spec); } catch { }
         RedrawPreview();
     }
