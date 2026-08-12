@@ -636,6 +636,7 @@
 
             <!-- Floating notebook panel -->
             <Border x:Name="NotebookPanel" HorizontalAlignment="Left" VerticalAlignment="Top"
+                Visibility="Collapsed"
                     Margin="14,14,0,0" Width="300" MaxHeight="940"
                     Background="{ThemeResource CardBrush}"
                     BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5"
