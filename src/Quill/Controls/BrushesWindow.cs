@@ -217,7 +217,15 @@ public sealed class BrushesWindow
             "The strip at the top is the selected brush drawn live by the page's own renderer. " +
             "Basics picks the brush; Tools picks what a drag does instead of marking.");
 
-        _win.SetTabs(new (string, Func<FrameworkElement>)[] { ("Brushes", BuildBody) });
+        // 11.3 item 25: a Colors tab BESIDE Brushes, in this same window. The
+        // tab row appears on its own now that there are two of them -
+        // FloatingWindow hides a one-tab strip, because a lone label would just
+        // repeat the header's title.
+        _win.SetTabs(new (string, Func<FrameworkElement>)[]
+        {
+            ("Brushes", BuildBody),
+            ("Colors", BuildColors),
+        });
 
         PageTheme.Changed += () => { if (IsOpen) { _marks.Clear(); Refresh(); } };
         // Closing the panel by any route — the header X, Hide(), a dismissal —
@@ -1039,6 +1047,408 @@ public sealed class BrushesWindow
     private static FrameworkElement Hairline() => new Border { Height = 1, Background = B(Line) };
 
     private static FrameworkElement Spacer(double h) => new Border { Height = h };
+
+    // =======================================================================
+    // 11.3 item 25 - the COLORS tab
+    //
+    // Current Color and its swatch, the read-only COPIC / HEX / R,G,B / H,S,B
+    // fields each under a gradient underline, My Palettes, and the seven
+    // Dynamic Palettes.
+    // =======================================================================
+
+    private const double SwatchD = 64;      // the Current Color swatch
+    private const double ChipD = 30;        // one cell of a palette strip
+    private const double ChipGap = 6;
+    private const double FieldGap = 14;
+
+    /// <summary>The colour the tab is ABOUT: the active pen's ink. Read live
+    /// rather than cached, so the dial, the pen row and this tab cannot disagree
+    /// about what is selected - the same rule the Brushes tab already follows.</summary>
+    private Color CurrentColor()
+    {
+        try
+        {
+            var pen = ActivePen();
+            if (pen != null) return ColorUtil.Parse(pen.Color);
+        }
+        catch { }
+        return PageTheme.OnSurface;
+    }
+
+    /// <summary>Apply a colour to what the user is drawing with, and record it.
+    /// Routed through the host's own ApplyPreset - the SAME call the dial and the
+    /// pen row use - so nothing here is a second way of setting a colour.</summary>
+    private void ApplyColor(Color c)
+    {
+        var pen = ActivePen();
+        if (pen == null) { _h.Status("Pick a pen first - there is nothing to colour."); return; }
+        string hex = ColorUtil.ToHex(c);
+        pen.Color = hex;
+        var lib = _h.Library();
+        // Recency is an ORDER and frequency is a COUNT: "Most Used" cannot be
+        // read off RecentColors, so the tally is kept alongside it.
+        lib.RecentColors.Remove(hex);
+        lib.RecentColors.Insert(0, hex);
+        if (lib.RecentColors.Count > 16) lib.RecentColors.RemoveAt(16);
+        lib.ColorUses.TryGetValue(hex, out int n);
+        lib.ColorUses[hex] = n + 1;
+        try { _h.ApplyPreset(pen); } catch { }
+        _h.Save();
+        Rebuild(preserveScroll: true);
+    }
+
+    private FrameworkElement BuildColors()
+    {
+        var root = new StackPanel { Background = B(PanelFill) };
+        var c = CurrentColor();
+
+        root.Children.Add(Spacer(14));
+        root.Children.Add(Group("Current Color"));
+        root.Children.Add(BuildCurrentRow(c));
+        root.Children.Add(BuildReadouts(c));
+        root.Children.Add(Hint("You can drag the color preview to any of your custom palettes below."));
+
+        root.Children.Add(Band("My Palettes"));
+        root.Children.Add(BuildMyPalettes());
+        root.Children.Add(Hint("Make palettes of up to 8 colors by dragging colors from anywhere - " +
+                               "even other apps. To mix between colors, just tap-hold-drag the " +
+                               "palette on canvas."));
+
+        root.Children.Add(Band("Dynamic Palettes"));
+        root.Children.Add(BuildDynamicPalettes(c));
+        root.Children.Add(Spacer(24));
+        return root;
+    }
+
+    /// <summary>The swatch. A ring in Outline rather than a shadow, so it reads
+    /// on a panel whose fill now carries the ground's hue (13-13.2) and can sit
+    /// anywhere from cream to dark navy.</summary>
+    private FrameworkElement BuildCurrentRow(Color c)
+    {
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 14,
+            Margin = new Thickness(Pad, 0, Pad, 4),
+        };
+
+        var swatch = new Border
+        {
+            Width = SwatchD,
+            Height = SwatchD,
+            CornerRadius = new CornerRadius(SwatchD / 2),
+            Background = B(c),
+            BorderBrush = B(Line),
+            BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(swatch, "Current color");
+        row.Children.Add(swatch);
+
+        var name = CopicPalette.Nearest(c.R, c.G, c.B);
+        row.Children.Add(new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(name.Family) ? ColorUtil.ToHex(c) : name.Family,
+            FontSize = T(GroupSize),
+            Foreground = B(Ink),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        return row;
+    }
+
+    /// <summary>The four read-only fields. Each is a label, its value, and a
+    /// GRADIENT UNDERLINE running from black to the colour to white through the
+    /// axis that field names - so the underline says what the number means
+    /// rather than being decoration.</summary>
+    private FrameworkElement BuildReadouts(Color c)
+    {
+        var (h, sat, l) = ColorWheel.ToHsl(c);
+        var copic = CopicPalette.Nearest(c.R, c.G, c.B);
+
+        var grid = new Grid { Margin = new Thickness(Pad, 16, Pad, 4) };
+        for (int i = 0; i < 4; i++)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var cells = new (string Label, string Value, Color From, Color To)[]
+        {
+            ("COPIC", copic.Code, Color.FromArgb(255, copic.R, copic.G, copic.B), c),
+            ("HEX", ColorUtil.ToHex(c), Colors.Black, c),
+            ("R/G/B", $"{c.R} {c.G} {c.B}", Color.FromArgb(255, c.R, 0, 0), Color.FromArgb(255, 0, 0, c.B)),
+            ("H/S/B", $"{Math.Round(h)} {Math.Round(sat * 100)} {Math.Round(l * 100)}",
+                      ColorWheel.FromHsl(h, 1, 0.5), c),
+        };
+
+        for (int i = 0; i < cells.Length; i++)
+        {
+            var (label, value, from, to) = cells[i];
+            var box = new StackPanel { Margin = new Thickness(i == 0 ? 0 : FieldGap / 2, 0, FieldGap / 2, 0) };
+            box.Children.Add(new TextBlock
+            {
+                Text = label,
+                FontSize = T(11),
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = B(Muted),
+            });
+            box.Children.Add(new TextBlock
+            {
+                Text = value,
+                FontSize = T(13),
+                Foreground = B(Ink),
+                Margin = new Thickness(0, 2, 0, 5),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            });
+            box.Children.Add(new Border
+            {
+                Height = 3,
+                CornerRadius = new CornerRadius(1.5),
+                // A FRESH brush every build. WinUI caches GradientStop mutations
+                // and will not repaint a brush whose stops were edited in place,
+                // so the underline is replaced rather than adjusted - which is
+                // also why nothing here is held on a field.
+                Background = Underline(from, to),
+            });
+            Grid.SetColumn(box, i);
+            grid.Children.Add(box);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, label + " " + value);
+        }
+        return grid;
+    }
+
+    /// <summary>A left-to-right gradient. Built fresh on every call - see the
+    /// note at its only caller.</summary>
+    private static Brush Underline(Color from, Color to)
+    {
+        var g = new LinearGradientBrush
+        {
+            StartPoint = new Windows.Foundation.Point(0, 0.5),
+            EndPoint = new Windows.Foundation.Point(1, 0.5),
+        };
+        g.GradientStops.Add(new GradientStop { Color = from, Offset = 0 });
+        g.GradientStops.Add(new GradientStop { Color = to, Offset = 1 });
+        return g;
+    }
+
+    private FrameworkElement Hint(string text) => new TextBlock
+    {
+        Text = text,
+        FontSize = T(12),
+        Foreground = B(Muted),
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(Pad, 10, Pad, 16),
+    };
+
+    // ---- My Palettes ------------------------------------------------------
+    private FrameworkElement BuildMyPalettes()
+    {
+        var lib = _h.Library();
+        var box = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+
+        var head = new Grid { Margin = new Thickness(Pad, 0, Pad, 8) };
+        head.Children.Add(new TextBlock
+        {
+            Text = lib.Palettes.Count == 0 ? "No palettes yet." : $"{lib.Palettes.Count} palette(s)",
+            FontSize = T(12),
+            Foreground = B(Muted),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        head.Children.Add(Link("Add", "PaletteAdd",
+            "Start a new palette from the current colour.", AddPalette));
+        box.Children.Add(head);
+
+        foreach (var p in lib.Palettes)
+            box.Children.Add(PaletteRow(p));
+
+        return box;
+    }
+
+    private void AddPalette()
+    {
+        var lib = _h.Library();
+        var p = new ColorPalette { Name = $"My Palette {lib.Palettes.Count + 1}" };
+        p.Add(ColorUtil.ToHex(CurrentColor()));
+        lib.Palettes.Add(p);
+        _h.Save();
+        Rebuild(preserveScroll: true);
+        _h.Status($"\u201c{p.Name}\u201d started with the current colour. Tap a + to add more.");
+    }
+
+    /// <summary>One named strip: eight cells, the filled ones showing a colour
+    /// and the empty ones a <c>+</c> that takes the CURRENT colour. That is the
+    /// keyboard- and pointer-reachable half of the reference's drag-and-drop -
+    /// dragging from another application is a separate transfer-manager problem
+    /// and is deliberately not faked here.</summary>
+    private FrameworkElement PaletteRow(ColorPalette p)
+    {
+        var box = new StackPanel { Margin = new Thickness(Pad, 0, Pad, 16) };
+
+        var head = new Grid();
+        head.Children.Add(new TextBlock
+        {
+            Text = p.Name,
+            FontSize = T(13),
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = B(Ink),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        head.Children.Add(Link("Remove", "PaletteRemove:" + p.Id, $"Delete \u201c{p.Name}\u201d.", () =>
+        {
+            _h.Library().Palettes.Remove(p);
+            _h.Save();
+            Rebuild(preserveScroll: true);
+        }));
+        box.Children.Add(head);
+
+        var strip = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = ChipGap,
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+        for (int i = 0; i < ColorPalette.MaxColors; i++)
+        {
+            if (i < p.Colors.Count)
+            {
+                var col = ColorUtil.Parse(p.Colors[i]);
+                strip.Children.Add(Chip(col, p.Colors[i], () => ApplyColor(col)));
+            }
+            else
+            {
+                strip.Children.Add(PlusChip(() =>
+                {
+                    if (!p.Add(ColorUtil.ToHex(CurrentColor())))
+                    {
+                        _h.Status("That palette already holds eight colours.");
+                        return;
+                    }
+                    _h.Save();
+                    Rebuild(preserveScroll: true);
+                }));
+            }
+        }
+        box.Children.Add(strip);
+        return box;
+    }
+
+    private FrameworkElement Chip(Color c, string name, Action tap)
+    {
+        var dot = new Border
+        {
+            Width = ChipD,
+            Height = ChipD,
+            CornerRadius = new CornerRadius(7),
+            Background = B(c),
+            BorderBrush = B(Line),
+            BorderThickness = new Thickness(1),
+        };
+        return StripScroll.Bare(dot, name, tap);
+    }
+
+    /// <summary>An empty cell. The border is DASHED in the reference; a dashed
+    /// Border is not a thing in WinUI, so the placeholder is a Rectangle with a
+    /// StrokeDashArray inside a Grid with the mark over it.</summary>
+    private FrameworkElement PlusChip(Action tap)
+    {
+        var host = new Grid { Width = ChipD, Height = ChipD };
+        host.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
+        {
+            RadiusX = 7,
+            RadiusY = 7,
+            Stroke = B(Line),
+            StrokeThickness = 1,
+            StrokeDashArray = new DoubleCollection { 3, 3 },
+            // Transparent, never null: a null fill is invisible to hit testing
+            // and the cell would be a hole in the middle of its own button.
+            Fill = B(Colors.Transparent),
+        });
+        var plus = Icons.Mark("M12 6 V18 M6 12 H18", Muted, 14, stroked: true, thickness: 1.6);
+        plus.HorizontalAlignment = HorizontalAlignment.Center;
+        plus.VerticalAlignment = VerticalAlignment.Center;
+        plus.IsHitTestVisible = false;
+        host.Children.Add(plus);
+        return StripScroll.Bare(host, "Add the current colour", tap);
+    }
+
+    // ---- Dynamic Palettes -------------------------------------------------
+    /// <summary>The seven of 11.3 item 25. Five are DERIVED from the current
+    /// colour by rotating or ramping it in HSL; two are read out of the library's
+    /// own history. All seven are computed on every build, because every one of
+    /// them changes the moment the current colour does.</summary>
+    private FrameworkElement BuildDynamicPalettes(Color c)
+    {
+        var lib = _h.Library();
+        var (h, s0, l) = ColorWheel.ToHsl(c);
+
+        Color Rot(double deg) => ColorWheel.FromHsl((h + deg) % 360.0, s0, l);
+
+        var rows = new (string Name, IReadOnlyList<Color> Colors)[]
+        {
+            ("Analogous", new[] { Rot(-60), Rot(-30), c, Rot(30), Rot(60) }),
+            ("Monochromatic", Ramp(h, s0, new[] { 0.15, 0.3, 0.45, 0.6, 0.75, 0.9 })),
+            ("Complementary", new[] { c, Rot(180) }),
+            ("Shades", Ramp(h, s0, new[] { 0.1, 0.22, 0.34, 0.46, 0.58, 0.7 })),
+            ("Triads", new[] { c, Rot(120), Rot(240) }),
+            ("Most Used Colors", MostUsed(lib)),
+            ("Recently Used Colors", lib.RecentColors.Take(8).Select(ColorUtil.Parse).ToList()),
+        };
+
+        var box = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+        foreach (var (name, cols) in rows)
+        {
+            var cell = new StackPanel { Margin = new Thickness(Pad, 0, Pad, 16) };
+            cell.Children.Add(new TextBlock
+            {
+                Text = name,
+                FontSize = T(13),
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = B(Ink),
+            });
+            if (cols.Count == 0)
+            {
+                cell.Children.Add(new TextBlock
+                {
+                    Text = "Nothing here yet.",
+                    FontSize = T(12),
+                    Foreground = B(Muted),
+                    Margin = new Thickness(0, 4, 0, 0),
+                });
+            }
+            else
+            {
+                var strip = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = ChipGap,
+                    Margin = new Thickness(0, 6, 0, 0),
+                };
+                foreach (var col in cols)
+                {
+                    var cc = col;
+                    strip.Children.Add(Chip(cc, ColorUtil.ToHex(cc), () => ApplyColor(cc)));
+                }
+                cell.Children.Add(strip);
+            }
+            box.Children.Add(cell);
+        }
+        return box;
+    }
+
+    private static IReadOnlyList<Color> Ramp(double h, double s, double[] ls)
+    {
+        var list = new List<Color>();
+        foreach (double l in ls) list.Add(ColorWheel.FromHsl(h, s, l));
+        return list;
+    }
+
+    private static IReadOnlyList<Color> MostUsed(Library lib)
+    {
+        var list = new List<Color>();
+        foreach (var kv in lib.ColorUses.OrderByDescending(k => k.Value).Take(8))
+        {
+            try { list.Add(ColorUtil.Parse(kv.Key)); } catch { }
+        }
+        return list;
+    }
 
     private static Color Mix(Color a, Color b, double t) => Color.FromArgb(
         255,
