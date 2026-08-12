@@ -1702,3 +1702,119 @@ light end than "slightly gray" might imply, because luminance is compressed
 there. `Heavyweight` lands at `#D1D1D1`, which is grey rather than off-white. If
 that reads as too much, the fix is to blend the ramp part-way back toward the
 old constants rather than to change its shape.
+
+### 13.1 The dark end, corrected — 2026-08-12
+
+The user, having seen §13's first ramp:
+
+> *"make the app theme totally black (oled black) if very close to black (like
+> in darkprint) and very dark grey otherwise."*
+
+The first ramp put Darkprint at `#1C1C1C` — near-black but not black — and put
+Blueprint and Brown Paper at `#3D3D3D`, a *medium* dark grey rather than a very
+dark one. The dark branch is now two cases:
+
+```
+ground luminance <= 0.05   ->  #000000, true black
+otherwise (dark side)      ->  L* 10 + 16 x min(1, Y / 0.5)   -> a L* 10..26 band
+```
+
+**The step at 0.05 is the rule, not a rough edge.** A ground that is very nearly
+black gets a panel that *is* black, rather than easing toward it — that is what
+was asked for, so Darkprint and a pinned OLED black both land on `#000000`.
+
+The **light branch is untouched**; §13 built it to the previous instruction and
+the user did not revisit it.
+
+| ground | Y | panel | contrast |
+|---|---|---|---|
+| Pure white | 1.000 | `#F6F6F6` | 17.0:1 |
+| Lightweight | 0.947 | `#E9E9E9` | 15.2:1 |
+| Rippled | 0.872 | `#D6D6D6` | 12.7:1 |
+| Heavyweight | 0.778 | `#D1D1D1` | 12.1:1 |
+| Mid grey | 0.216 | `#2A2A2A` | 12.8:1 |
+| Blueprint | 0.199 | `#292929` | 13.0:1 |
+| Brown Paper | 0.206 | `#292929` | 13.0:1 |
+| **Darkprint** | 0.024 | **`#000000`** | 18.8:1 |
+| **OLED black** | 0.000 | **`#000000`** | 18.8:1 |
+
+Minimum contrast is now **12.1:1**, up from 9.3:1 — tightening the dark band
+moved every dark panel further from its white text rather than closer.
+
+**This supersedes §13's table and, with it, §7's `Panel` column.** Do not
+restore `#141414` for the dark cases to make the original acceptance table pass.
+
+### 13.2 Lighter at the light end, and panels carry the ground's hue — 2026-08-12
+
+> *"for app theme: make light gray more lighter, and add creme and other various
+> other colours like those."*
+
+Two changes, and the second **reverses §6's rule that panels are neutral.**
+
+**Lighter.** The light branch spanned L\* 84–97, which put Heavyweight on
+`#D1D1D1` — grey rather than off-white. It now spans **L\* 90–97** across the top
+half of the luminance range. The papers stay distinguishable from one another
+inside the narrower band.
+
+**Hue.** `Panel` was deliberately neutral, because §6 said panels are flat
+whatever the page's hue, unlike `Surface` which carries it. **That no longer
+holds.** `Panel` now carries a fraction of the ground's a/b:
+
+- `LightPanelChroma = 0.85` — light panels take most of it. That is where cream
+  lives, and where a tint reads at all.
+- `DarkPanelChroma = 0.35` — dark panels take far less, so a dark surface hints
+  at its page instead of becoming a coloured slab.
+- **Pure black keeps zero chroma.** Black asked for is black, not near-black
+  wearing a cast.
+
+| ground | was | now | |
+|---|---|---|---|
+| Pure white | `#F6F6F6` | `#F6F6F6` | unchanged |
+| Lightweight | `#E9E9E9` | **`#F5F4F1`** | warm off-white |
+| Rippled | `#D6D6D6` | **`#F4F1EA`** | cream |
+| Crumpled | `#DEDEDE` | **`#F3F0E8`** | cream |
+| Heavyweight | `#D1D1D1` | **`#F1EDE4`** | cream |
+| Mid grey | `#2A2A2A` | `#2A2A2A` | neutral ground, neutral panel |
+| Blueprint | `#292929` | **`#182A3D`** | dark navy |
+| Brown Paper | `#292929` | **`#372617`** | dark brown |
+| Darkprint | `#000000` | `#000000` | true black |
+| OLED black | `#000000` | `#000000` | true black |
+
+Worst contrast across every ground is **12.8:1**, up from 12.1:1 — the lighter
+light end moved those panels further from their dark text, so legibility
+improved rather than being traded away.
+
+**§6's "panels are flat regardless of the page's hue" is now superseded**, along
+with §7's `Panel` column and §13/§13.1's tables. This is the third deliberate
+divergence from Concepts on this value; do not restore neutrality or the two
+original constants to make an older table pass.
+
+### 13.3 Panel margins and edge-to-edge strips — 2026-08-12
+
+> *"reduce page margins by 30%, make circular icons ignore the margins and go
+> straight to the end of the page."*
+
+**Two changes to the settings page's layout.**
+
+1. **The content margin drops by 30%.** Whatever the panel's left/right content
+   inset is today, multiply it by 0.7. Headings, captions, sliders, value boxes
+   and toggles all follow it — they keep aligning with each other.
+
+2. **The horizontally-scrolling circle strips ignore that margin entirely.**
+   Every strip of circles — background swatches, grid types, units, presets,
+   format/precision, orientation, Wheel|Bar — has a **viewport spanning the full
+   panel width**, so a circle scrolls out to the panel's true edge instead of
+   being clipped short at the content inset.
+
+**The part that is easy to get wrong:** bleeding the viewport must not drag the
+first circle to the frame. The strip's **content** keeps a leading inset equal
+to the new content margin, so at rest the first circle still lines up under its
+heading; only the *viewport* is edge-to-edge, so items pass under the panel's
+edge as they scroll rather than vanishing at an invisible inner boundary.
+
+So: headings and the first item stay aligned; the scroll region is wider than
+the text column. Getting this backwards — moving the whole strip left, first
+item included — misaligns every row against its own heading.
+
+The scroll-position indicator rules under each strip should span the strip's
+**content**, not the bled viewport, or they will read as offset.
