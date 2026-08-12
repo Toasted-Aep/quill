@@ -271,7 +271,20 @@ public sealed class SettingsWindow
     /// <summary>The window's default scroller inset, restored when the grid page
     /// closes. The page itself runs at zero so §12.1's preview strip can be the
     /// full panel width.</summary>
-    private static readonly Thickness ContentInset = new(14, 10, 10, 14);
+    /// <summary>§13.3: <i>"reduce page margins by 30%"</i>. Everything that sets
+    /// the text column's left/right inset is a multiple of this, so the heading,
+    /// the caption, the slider and the value box cannot drift apart - they all
+    /// move together or none of them does.</summary>
+    private const double MarginScale = 0.7;
+
+    /// <summary>The window scroller's own inset. Vertical is untouched: §13.3
+    /// asks for the PAGE margins, which is the left and the right.</summary>
+    private static readonly Thickness ContentInset = new(14 * MarginScale, 10, 10 * MarginScale, 14);
+
+    /// <summary>The tab body's own left/right padding, inside the scroller's.
+    /// The two together are the whole distance from the panel's edge to the text,
+    /// which is what §13.3's strips have to reach back across.</summary>
+    private const double BodyPadX = 20 * MarginScale;
 
     public static SettingsWindow Attach(Panel host, Host h) => new(host, h);
 
@@ -283,6 +296,11 @@ public sealed class SettingsWindow
         // builds itself at 480 DIP), and tall like the reference.
         _win = FloatingWindow.Attach(host, 516, 724);
         _win.Title = "Settings";
+        // §13.3's margin. Applied HERE and not only on the way out of the grid
+        // editor page, which is the only place it used to be set - so the panel
+        // ran on FloatingWindow's own default for its whole life and the
+        // reduction never reached the screen.
+        try { _win.ContentPadding = ContentInset; } catch { }
         _win.InfoRequested = () => _h.Status(
             "Workspace is the page: its paper, its grid, its artboard and the units everything is measured in. Interaction is the keyboard, the pen and what a finger does.");
         _win.Closed = () => DockChanged?.Invoke();
@@ -336,6 +354,10 @@ public sealed class SettingsWindow
 
     public void Show()
     {
+        // Re-asserted: the grid editor page runs the scroller's padding at zero
+        // for its full-bleed preview strip, and a panel hidden while that page
+        // was open would come back edge-to-edge everywhere.
+        if (_gridPage == null) { try { _win.ContentPadding = ContentInset; } catch { } }
         SyncGround();
         _win.RefreshContent();
         _win.Show();
@@ -838,7 +860,7 @@ public sealed class SettingsWindow
         // ---- 2. the page body (§12.1 items 4-5) --------------------------
         // Top margin clears the Back pill's overhang: it hangs half of its
         // height below the strip and the heading starts under that.
-        var body = new StackPanel { Margin = new Thickness(20, BackH / 2 + 18, 20, 30) };
+        var body = new StackPanel { Margin = new Thickness(BodyPadX, BackH / 2 + 18, BodyPadX, 30) };
 
         body.Children.Add(new TextBlock
         {
@@ -982,7 +1004,9 @@ public sealed class SettingsWindow
             HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Bottom,
             // Half in, half out: the pill's centre line IS the strip's edge.
-            Margin = new Thickness(20, 0, 0, -BackH / 2),
+            // Inset with the page rather than at §12.1's literal 20: it sits
+            // directly above the heading, and §13.3 moved the heading.
+            Margin = new Thickness(BodyPadX, 0, 0, -BackH / 2),
         };
         // The stock Button repaints its own Background in the pointer-over and
         // pressed states, and those brushes come from the element theme - which
@@ -2845,7 +2869,7 @@ public sealed class SettingsWindow
         var border = new Border
         {
             Background = B(PanelFill),
-            Padding = new Thickness(20, 8, 20, 24),
+            Padding = new Thickness(BodyPadX, 8, BodyPadX, 24),
             Child = content,
         };
         // Stock controls inside (TextBox, Slider, ComboBox, Button) resolve their
@@ -2978,6 +3002,22 @@ public sealed class SettingsWindow
         // place that has them (StripScroll) rather than being re-specified here.
         var sv = StripScroll.Horizontal(content);
 
+        // §13.3: "make circular icons ignore the margins and go straight to the
+        // end of the page". The VIEWPORT bleeds back across the whole inset, so a
+        // circle passes under the panel's edge instead of being clipped short at
+        // an invisible inner boundary - but the CONTENT keeps a leading inset of
+        // the same size, so at rest the first circle still sits under its own
+        // heading. Moving the strip bodily left, first item included, is the way
+        // to get this wrong: every row would then be out of line with its title.
+        //
+        // Measured from the window rather than assumed, because the grid editor
+        // page runs with the scroller's padding at zero (§12.1's full-bleed
+        // preview strip) and the section tabs do not.
+        double bleedL = BodyPadX, bleedR = BodyPadX;
+        try { bleedL += _win.ContentPadding.Left; bleedR += _win.ContentPadding.Right; } catch { }
+        sv.Margin = new Thickness(-bleedL, 0, -bleedR, 0);
+        if (content is FrameworkElement row) row.Margin = new Thickness(bleedL, 0, 0, 0);
+
         var thumb = new Border
         {
             Height = 3,
@@ -3016,6 +3056,9 @@ public sealed class SettingsWindow
 
         if (key is { Length: > 0 }) Remember(sv, key);
 
+        // The rule under the strip is NOT bled: §13.3 wants it spanning the
+        // strip's content, and a rule that ran edge to edge under an inset
+        // heading would read as offset from everything above it.
         var box = new StackPanel();
         box.Children.Add(sv);
         box.Children.Add(track);
