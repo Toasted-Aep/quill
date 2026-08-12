@@ -70,6 +70,17 @@ public static class PageTheme
     private const double LightPanelChroma = 0.85;
     private const double DarkPanelChroma = 0.35;
 
+    /// <summary>The light panel band, in L*.
+    ///
+    /// <para>The user supplied a swatch - a near-white neutral, about #F5F5F5,
+    /// L* 96 - and asked for the light grey to be that colour. The band was
+    /// 90..97, which still left the greyer papers visibly below white. At
+    /// 95..97.5 a typical paper lands on the supplied value, a mid-light ground
+    /// on about #F1F1F1 and pure white on about #F9F9F9 - narrow, but not flat,
+    /// so the papers stay distinguishable from one another.</para></summary>
+    private const double LightPanelFloor = 95.0;
+    private const double LightPanelRange = 2.5;
+
     /// <summary>Raised whenever the ground changes and every surface must repaint.</summary>
     public static event Action? Changed;
 
@@ -141,7 +152,8 @@ public static class PageTheme
             // stay distinguishable from one another inside the narrower band,
             // and the carried chroma is what turns a warm paper's panel cream.
             double t = Math.Clamp((gy - 0.5) / 0.5, 0.0, 1.0);
-            Panel = FromLab(90.0 + 7.0 * t, a * LightPanelChroma, b * LightPanelChroma);
+            Panel = FromLab(LightPanelFloor + LightPanelRange * t,
+                            a * LightPanelChroma, b * LightPanelChroma);
         }
         Probe();
     }
