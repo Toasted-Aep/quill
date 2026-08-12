@@ -64,7 +64,10 @@ public static class PaperGrain
     /// 0.5 relative-luminance line so the whole shell flips to dark chrome (§7).</summary>
     public static (byte R, byte G, byte B) GroundRgb(PaperKind k) => k switch
     {
-        PaperKind.PlainWhite  => (0xFF, 0xFF, 0xFF),
+        // Not a flat #FFFFFF: the user's swatch carries a faint texture, and a
+        // ground at 252 leaves the grain's bright tail somewhere to go instead
+        // of clipping against the ceiling.
+        PaperKind.PlainWhite  => (0xFC, 0xFC, 0xFC),
         // the checkerboard averages to a light neutral, so a transparent page is a LIGHT page
         PaperKind.Transparent => (0xF2, 0xF2, 0xF2),
         PaperKind.Crumpled    => (0xF0, 0xEC, 0xE3),
@@ -97,11 +100,7 @@ public static class PaperGrain
     {
         var bgra = new byte[N * 4];
 
-        if (kind == PaperKind.PlainWhite)
-        {
-            Flat(bgra, gr, gg, gb);
-            return bgra;
-        }
+
         if (kind == PaperKind.Transparent)
         {
             Checkerboard(bgra);
@@ -117,6 +116,7 @@ public static class PaperGrain
 
         switch (kind)
         {
+            case PaperKind.PlainWhite:  PlainWhite(dr, dg, db);  break;
             case PaperKind.Lightweight: Lightweight(dr, dg, db); break;
             case PaperKind.Heavyweight: Heavyweight(dr, dg, db); break;
             case PaperKind.Crumpled:    Crumpled(dr, dg, db);    break;
@@ -177,6 +177,19 @@ public static class PaperGrain
     // =====================================================================
     // Papers
     // =====================================================================
+
+    // The quietest paper here. The user's swatch is not a flat colour - it moves
+    // by two or three levels to make a texture - so Plain White is a near-white
+    // ground carrying the faintest grain of the set: one fine fibre pass and one
+    // slow cloud, at roughly a third of Lightweight's amplitude. Enough to break
+    // the deadness of a solid fill, far too little to read as "paper".
+    private static void PlainWhite(float[] dr, float[] dg, float[] db)
+    {
+        var d = new float[N];
+        Fbm(d, 64, 64, 3, 0.52f, 11.0f, 2801);   // fine fibre
+        Fbm(d, 8, 8, 2, 0.55f, 5.0f, 2803);      // very gentle cloud
+        Spread(d, dr, dg, db);
+    }
 
     // Thin stock. Fine, TIGHT fibre — the highest-frequency grain of the set —
     // plus one slow cloud so the sheet is not uniformly busy. Two scales is the
