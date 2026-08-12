@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices.WindowsRuntime;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Quill.Controls;
 using Quill.Helpers;
 using Quill.Models;
@@ -3637,6 +3637,14 @@ public sealed partial class MainWindow : Window
         SpacingSlider.Value = page.GridSpacing;
         SyncPageSizeUi(page);
         _syncingUi = false;
+
+        // The floating settings panel is built from the page and, on its grid
+        // editor page, EDITS A SNAPSHOT of it. Left alone across a page turn that
+        // snapshot still belongs to the page the user left, and the next control
+        // they touch writes it onto this one. Told here, at the one place
+        // _curPage is assigned, and after the ground has been pushed so the
+        // panel rebuilds under the new page's palette.
+        _settingsWin?.OnPageChanged();
 
         ApplyPenRowVisibility();
         UpdateUndoButtons();

@@ -264,6 +264,32 @@ public class PressureCurve2
     }
 }
 
+/// <summary>11.3 item 25's palette: a name and up to EIGHT colours.
+///
+/// <para>The cap is the reference's own - <i>"Make palettes of up to 8 colors"</i>
+/// - and it is enforced in <see cref="Add"/> rather than at the call sites, so a
+/// ninth colour arriving from a future drag-and-drop route cannot quietly make a
+/// strip that the grid has no cells to draw.</para></summary>
+public class ColorPalette
+{
+    public const int MaxColors = 8;
+
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = "My Palette";
+    /// <summary>"#RRGGBB", in the order the user placed them.</summary>
+    public List<string> Colors { get; set; } = new();
+
+    /// <summary>Appends a colour, ignoring one that would overflow the strip.
+    /// Returns false when it did not fit, so a caller can say so.</summary>
+    public bool Add(string hex)
+    {
+        if (string.IsNullOrWhiteSpace(hex)) return false;
+        if (Colors.Count >= MaxColors) return false;
+        Colors.Add(hex);
+        return true;
+    }
+}
+
 public class NotePage
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -490,6 +516,16 @@ public class Library
     public int ColorPickerMode { get; set; }
     // User-curated custom accent colours shown as an extra swatch row in Settings.
     public List<string> CustomColors { get; set; } = new();
+    // 11.3 item 25's My Palettes: named strips of up to EIGHT colours each.
+    // Empty by default - the reference's "Concepts bright" and "Calm Pastel"
+    // are that user's own saved palettes, not stock content, so shipping them
+    // would be putting words in a new user's mouth.
+    public List<ColorPalette> Palettes { get; set; } = new();
+    // How many times each colour has been APPLIED, keyed by "#RRGGBB". Feeds
+    // 11.3 item 25's "Most Used Colors" dynamic palette, which RecentColors
+    // cannot answer: recency is an order, frequency is a count, and a colour
+    // used forty times last week is not recent and is certainly most used.
+    public Dictionary<string, int> ColorUses { get; set; } = new();
     // Last-selected eraser mode ("Point"/"Object"), restored on launch.
     public string LastEraserMode { get; set; } = "Object";
     // Last-selected eraser style, restored on launch. HardMask = today's eraser.
