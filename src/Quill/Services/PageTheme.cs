@@ -88,8 +88,21 @@ public static class PageTheme
                            : Color.FromArgb(255, 0x14, 0x14, 0x14);
         OnSurfaceMuted = WithAlpha(OnSurface, 140);
         Outline = WithAlpha(OnSurface, 36);
-        Panel = IsDark ? Color.FromArgb(255, 0x14, 0x14, 0x14)
-                       : Color.FromArgb(255, 0xF7, 0xF7, 0xF7);
+        // A RAMP, not a switch. Panel used to be one of two constants, so an
+        // ivory page and a pure white one produced an identical panel and so did
+        // a near-black page and a merely dark one. It now tracks the ground:
+        // white -> L* 97, black -> L* 8, everything between interpolated on
+        // relative luminance. Luminance rather than L* because that is the axis
+        // IsDark is decided on, so the panel's shade and the text's colour can
+        // never disagree about which side of the middle a page sits.
+        //
+        // The clamps are a legibility floor, not taste: they hold the panel away
+        // from the text that will sit on it, which is at its worst exactly at
+        // the middle where IsDark flips. Neutral chroma throughout - section 6
+        // says panels are flat whatever the page's hue, unlike Surface.
+        double panelL = 8.0 + 89.0 * Luminance(g);
+        panelL = IsDark ? Math.Min(panelL, 34.0) : Math.Max(panelL, 84.0);
+        Panel = FromLab(panelL, 0, 0);
         Probe();
     }
 

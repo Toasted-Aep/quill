@@ -1642,3 +1642,63 @@ Two checks that distinguish a correct implementation from a rotated one:
 
 `Orientation` continues to do the rigid 90° flip, unchanged and independent of
 this control.
+
+---
+
+## 13. `Panel` rides a ramp, not a switch — 2026-08-12
+
+**Supersedes the `Panel` column of §7 and the `Panel` line in §6.** Everything
+else in both sections stands unchanged.
+
+The user: *"make app theme slightly gray if page isn't totally white (or an in
+between colour between white and black) if closer to white and dark gray if
+closer to black."*
+
+`Panel` was `IsDark ? #141414 : #F7F7F7` — a hard step, so an ivory page and a
+pure white page produced an identical panel, and a near-black page and a merely
+dark one did too. It now interpolates continuously:
+
+```
+panelL* = 8 + 89 x relativeLuminance(ground)
+clamped to <= 34 when IsDark, >= 84 when not
+chroma zero
+```
+
+**Luminance rather than L\***, because luminance is the axis `IsDark` is decided
+on — so the panel's shade and the text's colour can never disagree about which
+side of the middle a page is on. **Chroma stays zero** because §6 is explicit
+that panels are flat regardless of the page's hue, unlike `Surface` which
+carries it.
+
+**The clamps are a legibility floor, not taste.** Contrast against the text that
+sits on the panel is worst exactly at the middle, where `IsDark` flips; the
+clamps hold the panel away from it.
+
+Measured across every ground:
+
+| ground | Y | dark | panel was | panel now | contrast |
+|---|---|---|---|---|---|
+| Pure white | 1.000 | no | `#F7F7F7` | `#F6F6F6` | 17.0:1 |
+| Lightweight | 0.947 | no | `#F7F7F7` | `#E9E9E9` | 15.2:1 |
+| Rippled | 0.872 | no | `#F7F7F7` | `#D6D6D6` | 12.7:1 |
+| Heavyweight | 0.778 | no | `#F7F7F7` | `#D1D1D1` | 12.1:1 |
+| Mid grey | 0.216 | yes | `#141414` | `#404040` | 9.3:1 |
+| Blueprint | 0.199 | yes | `#141414` | `#3D3D3D` | 9.7:1 |
+| Brown Paper | 0.206 | yes | `#141414` | `#3E3E3E` | 9.6:1 |
+| Darkprint | 0.024 | yes | `#141414` | `#1C1C1C` | 15.2:1 |
+| OLED black | 0.000 | yes | `#141414` | `#181818` | 15.9:1 |
+
+Minimum contrast across the whole range is **9.3:1**, comfortably past WCAG AA's
+4.5:1 — so no ground produces an illegible panel.
+
+**§7's acceptance table now expects these values, not `#F7F7F7` / `#141414`.**
+This is a deliberate divergence from Concepts at the user's instruction; do not
+"restore" the two constants to make the old table pass. The rest of §7 — which
+grounds are dark, the text colours, the hued `Surface` discs — is untouched and
+still binding.
+
+Open question the user has not yet seen on screen: the ramp is steeper at the
+light end than "slightly gray" might imply, because luminance is compressed
+there. `Heavyweight` lands at `#D1D1D1`, which is grey rather than off-white. If
+that reads as too much, the fix is to blend the ramp part-way back toward the
+old constants rather than to change its shape.
