@@ -67,7 +67,16 @@ public sealed class FloatingWindow
     /// <c>UIElement.Clip</c> takes a <c>RectangleGeometry</c> and nothing else,
     /// and a composition clip does not participate in XAML hit testing, so a
     /// rounded target is not on offer here.</summary>
-    private static readonly double CornerInset = InnerRadius * (1 - 1 / Math.Sqrt(2));
+    private static readonly double CornerInset =
+        InnerRadius * (1 - 1 / Math.Sqrt(2)) + CornerGuard;
+
+    /// <summary>Slack on top of the exact 45 degree point, because LAYOUT
+    /// ROUNDING gets the last word: it snaps the arranged rect to the display's
+    /// pixel grid, and it snapped the first build of this OUTWARD - a measured
+    /// corner at 5.5 against an arithmetic 5.747, which put a third of a DIP of
+    /// target back outside the arc. Half a DIP absorbs a snap in either
+    /// direction at any scale factor this app is run at.</summary>
+    private const double CornerGuard = 0.5;
 
     /// <summary>A corner target's side: the panel's inner edge to the header's
     /// inner boundary, less what the curve costs at the near end.</summary>
