@@ -1818,3 +1818,88 @@ item included — misaligns every row against its own heading.
 
 The scroll-position indicator rules under each strip should span the strip's
 **content**, not the bled viewport, or they will read as offset.
+
+---
+
+## 14. Dial readouts, corner hitboxes, and where vanishing points belong — 2026-08-13
+
+### 14.1 The inner disc's readouts sit wrong
+
+Comparing Quill's dial against the Concepts capture, the three readouts are laid
+out differently and must match the reference:
+
+- **The size row moves UP.** `≡ 19.2 mm` sits nearer the top of the inner disc
+  than Quill places it, further from the colour dot.
+- **The opacity and stability values are OFFSET, not centred under their
+  glyphs.** Quill puts each percentage directly beneath its mark. The reference
+  pulls both **inward toward the centre and downward**: the stability value sits
+  down-and-right of its waveform glyph, the opacity value down-and-left of its
+  half-disc glyph, both closer to the disc's lower edge than to their marks.
+
+So the disc reads as: size row high, the two glyphs on the horizontal midline
+level with the colour dot, and the two values low and drawn in toward the
+centre — not as two vertical glyph-over-value pairs.
+
+### 14.2 Custom colour goes first
+
+**`Custom colour` moves to the FRONT of the page-background swatch row.**
+Carried from §11.7 item 49, still not done.
+
+### 14.3 The close and help hitboxes overshoot their corner
+
+The Settings close **X** and the help/info button have hit regions that are
+**offset and extend outside the panel**, past its rounded corner and onto the
+page behind.
+
+This is a regression from the fix that made the close button "cover the whole
+corner": it was given negative margins to escape the header's padding, and those
+margins pushed the target beyond the panel's own bounds rather than filling to
+its edge.
+
+**The rule: each target fills its corner of the panel exactly — from the panel's
+inner edge to the header's inner boundary — and stops there.** Nothing may
+protrude past the panel's rounded corner. Verify by hit-testing just outside the
+corner and confirming the press reaches the page, not the button.
+
+### 14.4 No square grid under 1-Point
+
+**Remove the square/lattice family from the 1-Point perspective grid.** A
+one-point grid is a fan from a single vanishing point plus the horizon; the
+square grid overlaid on it is wrong and is not in the reference.
+
+### 14.5 Where vanishing points belong — quartering the reference frame
+
+The current 2-Point puts its left vanishing point at the **far left edge of the
+page**. That is wrong. The reference places the points by **quartering a
+reference frame**:
+
+- **quarter 1** — the first vanishing point
+- **quarter 2** — the centre (the midpoint of the frame)
+- **quarter 3** — the second vanishing point
+
+and the same logic extends to 3-Point's arrangement.
+
+**The reference frame is the viewport as it was on the page's FIRST frame** —
+the view that opens immediately after the page is created, at whatever size and
+zoom that screen gave it. So the frame is a property of the page, captured once,
+and **differs between screens**: the same preset on a laptop and on a large
+monitor produces points at different canvas coordinates, because a quarter of
+one frame is not a quarter of the other.
+
+Two consequences that must be handled deliberately:
+
+1. **The frame has to be stored on the page** at creation. It cannot be derived
+   later from the current viewport, because the user will have panned and zoomed
+   by then — reading it live would move the vanishing points every time the view
+   changed.
+2. **Existing pages have no stored frame.** Give them one on first load, derived
+   from their current view, and say in the report how that was done — a page
+   whose grid silently jumps on upgrade is worse than one that never had it.
+
+The named presets (`Narrow`, `Wide`, `Ultrawide`, the fractions, `Side`,
+`Below`) then position relative to that quartering rather than to the window
+edge, which is what makes `Side` mean "off the frame" instead of "at the edge of
+whatever is currently on screen".
+
+**The user's instruction on fidelity is emphatic and repeated: 1-Point, 2-Point
+and 3-Point, with every variant, must look exactly like the captures.**
