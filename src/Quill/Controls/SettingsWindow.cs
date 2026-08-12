@@ -575,9 +575,13 @@ public sealed class SettingsWindow
         return box;
     }
 
-    /// <summary>The nine reference backgrounds in §3.1's order, then Custom
-    /// Color — which the reference row does not carry but Quill does, so it goes
-    /// LAST rather than displacing the first reference swatch.</summary>
+    /// <summary>§14.2: <b>Custom Color goes FIRST</b>, then the nine reference
+    /// backgrounds in §3.1's order.
+    ///
+    /// <para>This reverses the earlier reading (carried from §11.7 item 49, which
+    /// asked for the same move and did not land), where Custom went LAST so it
+    /// would not displace a reference swatch. The user has asked twice for it at
+    /// the front of the row, so the reference order now starts one place in.</para></summary>
     private FrameworkElement BuildPaperRow()
     {
         var strip = Strip();
@@ -585,8 +589,8 @@ public sealed class SettingsWindow
         var lib = _h.Library();
         string? paper = page?.Paper;
 
-        var ordered = PaperTextures.Options.Where(o => !o.CustomColor)
-                                           .Concat(PaperTextures.Options.Where(o => o.CustomColor));
+        var ordered = PaperTextures.Options.Where(o => o.CustomColor)
+                                           .Concat(PaperTextures.Options.Where(o => !o.CustomColor));
 
         foreach (var opt in ordered)
         {

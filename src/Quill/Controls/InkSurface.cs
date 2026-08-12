@@ -43,6 +43,9 @@ public sealed class InkSurface : UserControl
     public TimeSpan? AudioPlayheadPosition { get; set; }
     public long? RecordingStartTicks { get; set; }
     public event Action? ViewChanged;
+    /// <summary>Raised the one time a page's CONCEPTS-REF 14.5 reference frame is
+    /// captured, so the host can get it persisted. Fires at most once per page.</summary>
+    public event Action? RefFrameCaptured;
     public event Action<double>? RulerAngleChanged; // raised when 2-finger tilt changes the ruler
 
     // ---- tool state -------------------------------------------------------
@@ -3085,8 +3088,36 @@ public sealed class InkSurface : UserControl
     // viewport, then blitted each frame. Rebuilt when content changes, zoom
     // drifts, or the view pans outside the cached area.
     // =======================================================================
+    /// <summary>
+    /// CONCEPTS-REF 14.5. Captures this page's REFERENCE FRAME - the viewport as
+    /// it stands on the page's FIRST FRAME - if it has not got one yet.
+    ///
+    /// <para>Called from the paint handler because "the first frame" is exactly
+    /// what that is, and because it is the first moment the surface is certain to
+    /// have been laid out: <c>LoadPage</c> can run before the control has a size
+    /// (app start, or a page switch made while the window is being restored), and
+    /// a frame captured at zero size would be worse than none.</para>
+    ///
+    /// <para>Runs once per page and then costs a null test per paint. It writes
+    /// to the page, so it raises <see cref="RefFrameCaptured"/> and the host
+    /// schedules a save - a frame that is not persisted would be derived again
+    /// from a different view next time the page is opened, which is the drifting
+    /// grid 14.5 asks to be designed out.</para>
+    /// </summary>
+    public bool EnsureRefFrame()
+    {
+        if (_page == null || _page.RefFrame is { IsUsable: true }) return false;
+        double w = ActualWidth, h = ActualHeight;
+        if (w < 10 || h < 10) return false;
+        float z = MathF.Max(0.01f, ViewZoom);
+        _page.RefFrame = new ViewFrame(-ViewOffset.X / z, -ViewOffset.Y / z, w / z, h / z);
+        RefFrameCaptured?.Invoke();
+        return true;
+    }
+
     private void OnRegionsInvalidated(CanvasVirtualControl sender, CanvasRegionsInvalidatedEventArgs args)
     {
+        EnsureRefFrame();
         float blur = CurrentBlurRadius();
         foreach (var region in args.InvalidatedRegions)
         {
@@ -3667,13 +3698,12 @@ public sealed class InkSurface : UserControl
             ds.DrawLine(p0, p1, col, lw * 1.6f);
         }
 
-        if (vpCount == 1)
-        {
-            // 1-point keeps both true axes as gridded families
-            DrawLineFamily(ds, tl, br, 90f, spacing, col, lw);
-            DrawLineFamily(ds, tl, br, 0f, spacing, col, lw);
-        }
-        else if (vpCount == 2)
+        // 14.4: a 1-POINT GRID CARRIES NO LATTICE. It is a fan from its single
+        // vanishing point plus the horizon, and nothing else - the square grid
+        // that used to be laid over it is not in the reference and was reading as
+        // a graph page with a fan on top. 2-point keeps its verticals, which are
+        // a true family of that configuration rather than an overlay.
+        if (vpCount == 2)
         {
             // The verticals stay perpendicular to the horizon, so they turn with
             // it - that IS the grid re-solving under the tilt.

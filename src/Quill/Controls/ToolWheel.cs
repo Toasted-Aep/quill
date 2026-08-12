@@ -153,9 +153,37 @@ public sealed class ToolWheel
 
     // §1.4 inner disc, all offsets in units of r = RingIn.
     private const double DiscR = RingIn;
-    private const double Row1Y = -0.45 * DiscR;    // size glyph + readout
+    // 14.1 SUPERSEDES §1.4's row table for all three readouts.
+    //
+    // The disc has to read as: SIZE ROW HIGH, the two glyphs on the horizontal
+    // midline level with the colour dot, and the two values LOW AND DRAWN IN
+    // TOWARD THE CENTRE - not as two vertical glyph-over-value pairs, which is
+    // what §1.4's -0.45 / ±0.61 / +0.42 grid produced.
+    //
+    // 1. The size row moves UP, from -0.45 r to -0.62 r: "nearer the top of the
+    //    inner disc, further from the colour dot". The dot's own top edge is at
+    //    -0.34 r (DotR = 19.1 against DiscR = 56.8), so the gap above the dot
+    //    goes from 6.5 DIP to 16 and the glyph still clears the disc's rim by
+    //    13 DIP.
+    private const double Row1Y = -0.62 * DiscR;    // size glyph + readout
+    // 2. The GLYPHS do not move - §1.4's x is right and 14.1 confirms them "on
+    //    the horizontal midline level with the colour dot".
     private const double ColX = 0.61 * DiscR;      // smoothness left / opacity right
-    private const double Row3Y = 0.42 * DiscR;     // the two values
+    // 3. The VALUES are OFFSET from their glyphs rather than centred under them:
+    //    inward toward the centre (0.61 r -> 0.50 r) and downward (0.42 r ->
+    //    0.52 r), so the stability value sits down-and-RIGHT of its waveform and
+    //    the opacity value down-and-LEFT of its half-disc, both nearer the
+    //    disc's lower edge than their marks.
+    //
+    //    How far they can be drawn in is bounded, and by something 14.1 cannot
+    //    see: 10.2 item 5 moved UNDO and REDO inside the disc, onto exactly the
+    //    lower-centre ground the values are being pulled toward. Their glyph
+    //    boxes run x 5.4..26.4 either side of the midline from y 28.1 down, and
+    //    a value that reached the centre would be drawn on top of them. 0.50 r
+    //    and 0.52 r is the offset that reads clearly against the old centred
+    //    layout while leaving the arrows their own ground.
+    private const double ValueX = 0.50 * DiscR;    // was ColX - pulled inward
+    private const double ValueY = 0.52 * DiscR;    // was 0.42 - pushed down
     // Icons.Mark draws at the authored 24-grid scale instead of stretching the
     // geometry to the box - that stretch WAS the K.5 defect - so a mark that
     // does not fill its grid now comes out at its true size. The boxes grow to
@@ -168,7 +196,7 @@ public sealed class ToolWheel
     // outline." Aim and HoverGeometry are written against the SAME quadrant
     // table (11.22 item 1) now, so the outline IS the hit region by
     // construction rather than by a second, independent measurement. The
-    // previous split - a chord at Row1Y/2, a dead column at 0.18 DiscR and two
+    // previous split - a chord at half the size row, a dead column at 0.18 DiscR and two
     // 29 DIP squares - is gone with it, and so is the 46%-covered size plate and
     // the 977 DIP2 of tool ring the column plates used to paint on.
     //
@@ -1240,8 +1268,9 @@ public sealed class ToolWheel
 
         Put(_smoothGlyph, -ColX, 0, SetBox);
         Put(_opacGlyph, +ColX, 0, SetBox);
-        PutValue(_smoothText, -ColX, Row3Y);
-        PutValue(_opacText, +ColX, Row3Y);
+        // 14.1: OFFSET from the glyphs above them, not centred under them.
+        PutValue(_smoothText, -ValueX, ValueY);
+        PutValue(_opacText, +ValueX, ValueY);
 
         _dot.Width = _dot.Height = DotR * 2;
         _dot.StrokeThickness = 2;
