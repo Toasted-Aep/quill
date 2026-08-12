@@ -770,39 +770,38 @@ public sealed class SettingsWindow
     // =======================================================================
 
     /// <summary>§12.1/§12.2's paper-white controls: the Back pill, the value
-    /// boxes and the slider knob. The only things on this surface that do NOT
-    /// come from PageTheme, and deliberately so.
+    /// boxes and the slider knob.
     ///
-    /// <para><b>Re-examined against the reference and against a live dark page,
-    /// and kept.</b> The objection was that a Blueprint or Brown Paper page
-    /// tints every other surface, so white would read as foreign. It does not,
-    /// because THIS WINDOW IS NOT TINTED: <see cref="PageTheme.Panel"/> rides a
-    /// luminance ramp with <b>neutral chroma throughout</b> - it tracks how light
-    /// the ground is and never what colour it is - which is also why
-    /// <see cref="PanelAlt"/> above steps off the panel instead of using
-    /// SurfaceAlt. Measured on a live Blueprint page (ground #2F81C3): the panel
-    /// body samples <b>#3D3D3D at every point, chroma 0</b>, while the preset
-    /// thumbnails sample #2B77B4 and the canvas #2F81C3. The only blue anywhere
-    /// is in the pictures OF the page, which are meant to carry it. There is no
-    /// ground hue on this surface for a white field to clash with.</para>
+    /// <para><b>These were literally <c>Colors.White</c>, and that was right
+    /// until the ground moved under it.</b> The case for white rested on this
+    /// window being hue-neutral - §6 said panels are flat whatever the page's
+    /// colour, and <see cref="PageTheme.Panel"/> was a neutral ramp, so a white
+    /// field could not clash with anything. It was measured that way: on a
+    /// Blueprint page the panel body sampled #3D3D3D with zero chroma at every
+    /// point. <c>bc7deb6</c> changed that. Panel now CARRIES THE GROUND'S HUE -
+    /// cream on warm papers, dark navy on Blueprint, dark brown on Brown Paper -
+    /// so the premise is gone and a neutral white field is now the one surface
+    /// on the page belonging to nothing.</para>
     ///
-    /// <para>The reference is also literal about it. §12.1 item 3 says <i>"a
-    /// white pill"</i> with the label <i>"in near-black"</i>, and §12.2 says
-    /// <i>"white rounded field, hairline border"</i> and <i>"white round knob
-    /// with a hairline"</i> - three plain colour words in sentences that name
-    /// theme tokens for everything beside them (a thin <c>Outline</c> ring, a
-    /// 2 DIP <c>OnSurface</c> ring, a 2 DIP <c>OnSurface</c> track). The
-    /// transcription distinguishes tokens from colours, so "white" is a colour.
-    /// The pill in particular floats over the PREVIEW STRIP, which does carry
-    /// the page: deriving it would put a blue pill on a blue strip and lose the
-    /// near-black label and soft shadow §12.1 asks to be copied exactly.</para>
+    /// <para>So they are derived, and derived from the GROUND rather than from
+    /// the panel, because what §12.2 is describing is paper: a raised light
+    /// field that a near-black label sits on. Lightening the ground keeps the
+    /// reference's reading - on an ivory page this lands within a shade of white
+    /// exactly as the captures show - while giving a Blueprint page a cool paper
+    /// and a Brown Paper page a warm one, which is what every other surface in
+    /// this window now does.</para>
     ///
-    /// <para>FORK, for the user rather than for the next agent to re-decide: if
-    /// the boxes are wanted quieter on a dark panel, these two constants are the
-    /// whole change, and the knob must move with them or one §12.2 sentence ends
-    /// up split across two colour systems.</para></summary>
-    private static readonly Color FieldFill = Colors.White;
-    private static readonly Color FieldInk = Color.FromArgb(0xFF, 0x14, 0x14, 0x14);
+    /// <para>The ink is the field taken almost to black, so §12.1's
+    /// <i>"near-black"</i> comes out of the same family rather than being a
+    /// second, unrelated grey.</para>
+    ///
+    /// <para>Properties, not constants: the ground moves while the panel is
+    /// alive, and a <c>static readonly</c> would freeze the first page's
+    /// paper.</para></summary>
+    private static Color FieldFill => Mix(PageTheme.Ground, Colors.White,
+                                          PageTheme.IsDark ? 0.86 : 0.72);
+
+    private static Color FieldInk => Mix(FieldFill, Colors.Black, 0.90);
 
     private void OpenGridPage(GridKind kind)
     {
