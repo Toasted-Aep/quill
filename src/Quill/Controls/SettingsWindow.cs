@@ -301,7 +301,18 @@ public sealed class SettingsWindow
         // The two things that can repaint this panel from outside it. The ground
         // change is a full repaint - every colour in the panel moved. The tool
         // surface is one section's worth.
-        PageTheme.Changed += () => { if (IsOpen) Refresh(); };
+        // A ground move is the WINDOW's rebuild to do, not this panel's.
+        // FloatingWindow subscribes to the same event first and answers it with
+        // RefreshContent(preserveScroll: true); this handler used to call
+        // Refresh() as well, which rebuilt a second time - and the second
+        // rebuild snapshots the scroller's offset to preserve it, at a moment
+        // when the first rebuild has already swapped the content out and its own
+        // restore has not landed. It preserved a zero, and the panel went to the
+        // top while looking like it had done the right thing.
+        //
+        // All this has left to do is drop the rendered swatches, which were
+        // painted against the old ground.
+        PageTheme.Changed += () => { if (IsOpen) _previews.Clear(); };
         ToolSurfaceService.Changed += _ => { if (IsOpen) Touch("Tool Setup"); };
     }
 
@@ -380,6 +391,33 @@ public sealed class SettingsWindow
     public void TouchMouseMode()
     {
         if (IsOpen) Touch("Keyboard & Mouse");
+    }
+
+    /// <summary>Run something that MAY move the ground, and end with exactly one
+    /// rebuild however it goes.
+    ///
+    /// <para>Picking a paper, a custom page colour or a theme moves the ground,
+    /// which raises <see cref="PageTheme.Changed"/> synchronously, which the
+    /// WINDOW answers with its own scroll-preserving rebuild. Calling
+    /// <see cref="Refresh"/> afterwards therefore rebuilt a second time, and a
+    /// second rebuild reads the scroll offset back out of a scroller whose
+    /// content the first one has just replaced - so it preserves a zero. The
+    /// window's revision counter is the only honest way to ask whether the
+    /// rebuild has already happened.</para>
+    ///
+    /// <para>Picking the colour that is already set moves nothing, so no event is
+    /// raised and this does the single rebuild itself - the selection ring still
+    /// has to move.</para></summary>
+    private void GroundAction(Action mutate)
+    {
+        // Dropped BEFORE the mutation: the window may rebuild inside it, and a
+        // swatch rendered against the old ground must not be handed to it. Every
+        // key in this cache carries the ground it was painted for, so a stale
+        // entry could never be returned anyway - this only stops it being kept.
+        _previews.Clear();
+        int rev = _win.ContentRevision;
+        try { mutate(); } catch { }
+        if (_win.ContentRevision == rev) _win.RefreshContent(preserveScroll: true);
     }
 
     private void Touch(params string[] titles)
@@ -528,13 +566,10 @@ public sealed class SettingsWindow
                          () => PreviewBrush(PaperTextures.Preview(o.Id, ground, (float)SwatchD))) ?? B(ground);
 
             strip.Children.Add(Circle(SwatchD, o.Label, selected, () =>
-            {
-                _h.SetPaper(o.Id, o.Background);
-                Refresh();
-            }, fill: fill));
+                GroundAction(() => _h.SetPaper(o.Id, o.Background)), fill: fill));
         }
 
-        return HRow(strip);
+        return HRow(strip, "paper");
     }
 
     /// <summary>§9.5 — press once to APPLY, press again to EDIT.
@@ -563,8 +598,7 @@ public sealed class SettingsWindow
             if (everSet && !selected)
             {
                 // FIRST press: apply what the user already chose. No picker.
-                _h.SetPaper(null, stored);
-                Refresh();
+                GroundAction(() => _h.SetPaper(null, stored));
                 return;
             }
             // SECOND press (or a colour never set): edit it.
@@ -582,9 +616,11 @@ public sealed class SettingsWindow
                 {
                     string hex = ColorUtil.ToHex(c);
                     lib.CustomPageColor = hex;
-                    _h.SetPaper(null, hex);
-                    _h.Save();
-                    Refresh();
+                    GroundAction(() =>
+                    {
+                        _h.SetPaper(null, hex);
+                        _h.Save();
+                    });
                 });
             }
             catch { _h.Status("The colour picker could not be opened here."); }
@@ -659,7 +695,7 @@ public sealed class SettingsWindow
 
             if (paint is { } got) paints.Add((k, got));
         }
-        return HRow(strip);
+        return HRow(strip, "gridtype");
     }
 
     /// <summary>One-of selection across the whole row. A perspective kind and a
@@ -1075,7 +1111,7 @@ public sealed class SettingsWindow
             if (paint is { } repaint)
                 _gridBind.Add(() => repaint(_spec?.Preset == n, isCustom ? FillFor() : null));
         }
-        return HRow(strip);
+        return HRow(strip, "presets");
     }
 
     private void ApplyPreset(string name)
@@ -1369,7 +1405,7 @@ public sealed class SettingsWindow
             paintCustom?.Invoke(!string.IsNullOrEmpty(spec.Colour), CustomFill());
         });
 
-        box.Children.Add(HRow(strip));
+        box.Children.Add(HRow(strip, "gridcolour"));
         return box;
     }
 
@@ -1406,7 +1442,7 @@ public sealed class SettingsWindow
             paintP?.Invoke(spec.Portrait, null);
         });
 
-        box.Children.Add(HRow(strip));
+        box.Children.Add(HRow(strip, "orientation"));
         return box;
     }
 
@@ -1649,7 +1685,7 @@ public sealed class SettingsWindow
         }
         more.Flyout = flyout;
         chips.Children.Add(more);
-        box.Children.Add(HRow(chips));
+        box.Children.Add(HRow(chips, "artboard"));
 
         return box;
     }
@@ -1811,7 +1847,7 @@ public sealed class SettingsWindow
             () => { lib.MeasurePrecision = "Tenths"; _h.Save(); Touch("Measurements", "Artboard"); }, inner: DiscText("6.0", 18)));
         groups.Children.Add(prec);
 
-        box.Children.Add(HRow(groups));
+        box.Children.Add(HRow(groups, "measure"));
 
         // ---- the two toggle rows ------------------------------------------
         box.Children.Add(Spacer(18));
@@ -1864,7 +1900,7 @@ public sealed class SettingsWindow
                 Touch("Measurements", "Artboard");
             }, inner: DiscText(face, size)));
         }
-        return HRow(strip);
+        return HRow(strip, "units");
     }
 
     // ---- unit maths ------------------------------------------------------
@@ -1916,7 +1952,7 @@ public sealed class SettingsWindow
         strip.Children.Add(Circle(UnitD, "Bar", cur == ToolSurface.Bar,
             () => ToolSurfaceService.Set(ToolSurface.Bar),
             inner: Icons.Mark(Icons.SurfaceBar, cur == ToolSurface.Bar ? Ink : Muted, 40)));
-        box.Children.Add(HRow(strip));
+        box.Children.Add(HRow(strip, "toolsetup"));
         return box;
     }
 
@@ -1974,10 +2010,14 @@ public sealed class SettingsWindow
                         break;
                 }
                 // ApplyTheme re-derives through ResolveGround, which is the only
-                // thing in the app that knows what the ground now is.
-                _h.ApplyTheme();
-                _h.Save();
-                Refresh();
+                // thing in the app that knows what the ground now is - and moving
+                // the ground is what rebuilds this panel, so it must not be
+                // rebuilt a second time on the way out.
+                GroundAction(() =>
+                {
+                    _h.ApplyTheme();
+                    _h.Save();
+                });
             }, fill: fill);
             ToolTipService.SetToolTip(cell, tip);
             strip.Children.Add(cell);
@@ -1993,7 +2033,7 @@ public sealed class SettingsWindow
         Add("System", "Windows", Split(light, dark),
             "Track the Windows light/dark setting.");
 
-        box.Children.Add(HRow(strip));
+        box.Children.Add(HRow(strip, "appearance"));
         return box;
     }
 
@@ -2026,7 +2066,7 @@ public sealed class SettingsWindow
                 Refresh();          // every string in the panel just changed size
             }));
         }
-        box.Children.Add(HRow(all));
+        box.Children.Add(HRow(all, "developer"));
 
         box.Children.Add(Spacer(16));
         box.Children.Add(SubHead("Per page"));
@@ -2252,7 +2292,7 @@ public sealed class SettingsWindow
             strip.Children.Add(Circle(SwatchD, label, false, () => { },
                 inner: Icons.Mark(glyph, Muted, 30, stroked: stroked, thickness: 2), enabled: false));
         }
-        box.Children.Add(HRow(strip));
+        box.Children.Add(HRow(strip, "taphold"));
 
         box.Children.Add(Spacer(10));
         box.Children.Add(SubHead("Activation time"));
@@ -2391,7 +2431,7 @@ public sealed class SettingsWindow
             ToolTipService.SetToolTip(cell, tip);
             strip.Children.Add(cell);
         }
-        box.Children.Add(HRow(strip));
+        box.Children.Add(HRow(strip, "eraser"));
 
         box.Children.Add(Spacer(10));
         box.Children.Add(SubHead("Size"));
@@ -2511,7 +2551,7 @@ public sealed class SettingsWindow
                 ToolTipService.SetToolTip(cell, mode.Tip);
                 modes.Children.Add(cell);
             }
-            box.Children.Add(HRow(modes));
+            box.Children.Add(HRow(modes, "keyboard"));
         }
 
         return box;
@@ -2598,7 +2638,7 @@ public sealed class SettingsWindow
                 : $"Quill has no finger-dispatch for “{f.Label}” yet. It is shown so the row matches the reference, and switched off rather than pretending.");
             strip.Children.Add(cell);
         }
-        box.Children.Add(HRow(strip));
+        box.Children.Add(HRow(strip, "touch"));
         return box;
     }
 
@@ -2920,7 +2960,18 @@ public sealed class SettingsWindow
     /// offset proportional to how far along the row is, in Outline. Hidden
     /// outright when nothing overflows, because an indicator that always spans
     /// the full width is just a rule.</summary>
-    private FrameworkElement HRow(UIElement content)
+    /// <summary>Where each named strip was scrolled to, across rebuilds.
+    ///
+    /// <para>A rebuilt <c>ScrollViewer</c> starts at 0,0 on BOTH axes. The window
+    /// preserves the panel's VERTICAL offset across a repaint (§10.5 item 20) and
+    /// nothing preserved the strips' horizontal ones, so <i>"if I scrolled
+    /// sideways returns to the left"</i> was the same fault one axis over and was
+    /// never going to be fixed by the vertical path. Keyed by what the row IS
+    /// rather than by the element, because the element is exactly what does not
+    /// survive.</para></summary>
+    private readonly Dictionary<string, double> _stripX = new();
+
+    private FrameworkElement HRow(UIElement content, string? key = null)
     {
         // §10.5 item 25: the wheel, the rail and the chaining are STRIP
         // behaviour, not settings-panel behaviour, so they come from the one
@@ -2963,10 +3014,60 @@ public sealed class SettingsWindow
         track.SizeChanged += (_, _) => Sync();
         sv.Loaded += (_, _) => Sync();
 
+        if (key is { Length: > 0 }) Remember(sv, key);
+
         var box = new StackPanel();
         box.Children.Add(sv);
         box.Children.Add(track);
         return box;
+    }
+
+    /// <summary>Gives one strip a memory of its own horizontal offset.
+    ///
+    /// <para>The restore has the same race the window's vertical one has: a
+    /// ScrollViewer has no extent until its new content is measured, and a
+    /// <c>ChangeView</c> issued before that silently clamps to zero and reports
+    /// success. Measure, ask, then ask again on the next layout pass.</para>
+    ///
+    /// <para>The zero a freshly built scroller reports is NOT the reader moving
+    /// to the left, so it is ignored until the row has settled - otherwise the
+    /// rebuild would overwrite the very offset this is trying to keep. Once a
+    /// real offset has been seen, a genuine scroll back to zero is recorded
+    /// normally.</para></summary>
+    private void Remember(ScrollViewer sv, string key)
+    {
+        bool settling = true;
+
+        void Record()
+        {
+            // Nothing overflows: there is no position to have an opinion about,
+            // and recording zero here would forget a real one from a wider layout.
+            if (sv.ExtentWidth <= sv.ViewportWidth + 0.5) return;
+            double x = sv.HorizontalOffset;
+            if (settling)
+            {
+                if (x <= 0.5) return;
+                settling = false;
+            }
+            _stripX[key] = x;
+        }
+
+        sv.ViewChanged += (_, _) => Record();
+
+        sv.Loaded += (_, _) =>
+        {
+            double want = _stripX.TryGetValue(key, out double x) ? x : 0;
+            if (want <= 0.5) { settling = false; return; }
+            try { sv.UpdateLayout(); } catch { }
+            try { sv.ChangeView(want, null, null, true); } catch { }
+            void Once(object? _, object __)
+            {
+                sv.LayoutUpdated -= Once;
+                try { sv.ChangeView(want, null, null, true); } catch { }
+                settling = false;
+            }
+            sv.LayoutUpdated += Once;
+        };
     }
 
     /// <summary>One circular option (§3.1, §9.9).
