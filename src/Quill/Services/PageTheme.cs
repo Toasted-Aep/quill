@@ -58,6 +58,18 @@ public static class PageTheme
     /// page - it is their choice, not the paper's.</summary>
     public static Color Accent { get; set; } = Color.FromArgb(255, 0xD9, 0x77, 0x57);
 
+    /// <summary>How much of the ground's colour a PANEL carries.
+    ///
+    /// <para>Panels used to be neutral by design - section 6 had them flat
+    /// whatever the page's hue, unlike Surface which carries it. The user asked
+    /// for the opposite: cream on a warm paper, and the equivalent elsewhere.
+    /// Light panels take most of the ground's a/b, because that is where cream
+    /// lives and where a tint reads easily at all; dark panels take far less, so
+    /// a dark surface only hints at its page instead of becoming a coloured
+    /// slab.</para></summary>
+    private const double LightPanelChroma = 0.85;
+    private const double DarkPanelChroma = 0.35;
+
     /// <summary>Raised whenever the ground changes and every surface must repaint.</summary>
     public static event Action? Changed;
 
@@ -98,22 +110,38 @@ public static class PageTheme
         //
         // The clamps are a legibility floor, not taste: they hold the panel away
         // from the text that will sit on it, which is at its worst exactly at
-        // the middle where IsDark flips. Neutral chroma throughout - section 6
-        // says panels are flat whatever the page's hue, unlike Surface.
+        // the middle where IsDark flips.
+        //
+        // Panels also CARRY THE GROUND'S HUE now. They were neutral by design -
+        // section 6 had them flat whatever the page's colour, unlike Surface -
+        // and the user asked for the opposite: cream on a warm paper, and the
+        // equivalent elsewhere. Light panels take most of the ground's a/b,
+        // because that is where cream lives and where a tint reads easily; dark
+        // panels take less, so a dark surface hints at its page rather than
+        // becoming a coloured slab.
         double gy = Luminance(g);
         if (IsDark)
         {
             // A ground that is very nearly black gets a panel that IS black -
             // the user asked for OLED black there specifically, so Darkprint and
             // a pinned black both land on #000000 rather than easing toward it.
-            // The step at 0.05 is the point of the rule, not a rough edge.
+            // The step at 0.05 is the point of the rule, not a rough edge, and
+            // black keeps ZERO chroma: black asked for is black, not near-black
+            // wearing a cast.
             Panel = gy <= 0.05
                 ? Color.FromArgb(255, 0, 0, 0)
-                : FromLab(10.0 + 16.0 * Math.Min(1.0, gy / 0.5), 0, 0);
+                : FromLab(10.0 + 16.0 * Math.Min(1.0, gy / 0.5),
+                          a * DarkPanelChroma, b * DarkPanelChroma);
         }
         else
         {
-            Panel = FromLab(Math.Max(84.0, 8.0 + 89.0 * gy), 0, 0);
+            // L* 90..97 across the top half of the luminance range. The previous
+            // 84..97 put Heavyweight on #D1D1D1 - grey rather than off-white -
+            // and the user asked for the light end to be lighter. The papers
+            // stay distinguishable from one another inside the narrower band,
+            // and the carried chroma is what turns a warm paper's panel cream.
+            double t = Math.Clamp((gy - 0.5) / 0.5, 0.0, 1.0);
+            Panel = FromLab(90.0 + 7.0 * t, a * LightPanelChroma, b * LightPanelChroma);
         }
         Probe();
     }
