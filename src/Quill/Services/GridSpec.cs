@@ -170,18 +170,54 @@ public sealed class GridSpec
 /// </summary>
 public static class GridPresets
 {
-    // Separation between the outer vanishing points, in frame widths. Narrow is
-    // the strong, close-together pair; Ultrawide is nearly orthographic.
-    private const double SepNarrow = 1.7;
-    private const double SepWide = 3.2;
-    private const double SepUltra = 6.0;
+    // =======================================================================
+    // 14.5 - QUARTERING THE REFERENCE FRAME
+    //
+    // Every position below is an integer number of QUARTERS of the reference
+    // frame, because that is how 14.5 says the points are placed:
+    //
+    //     quarter 1 - the first vanishing point
+    //     quarter 2 - the centre
+    //     quarter 3 - the second vanishing point
+    //
+    // So the plain "2 Point" preset puts its points on the frame's own quarter
+    // marks, 0.25 and 0.75, and the named presets move OFF THAT QUARTERING
+    // rather than off the window's edge - which is what makes "Side" mean "off
+    // the frame" instead of "at the edge of whatever is on screen right now".
+    //
+    // What this replaced: separations of 1.7, 3.2 and 6.0 FRAME WIDTHS with the
+    // bare preset defaulting to 3.2, which put the left point of a default
+    // 2-point grid more than a frame width off the left edge. That is the
+    // "far left edge of the page" 14.5 rejects.
+    // =======================================================================
+    private const double Q = 0.25;
 
-    // "Side": the pair is not centred on the frame — one point sits just off the
-    // left edge and the other falls wherever the separation puts it.
-    private const double SideX = -0.06;
+    // Half the separation between the outer points, IN QUARTERS. Narrow IS the
+    // quartering - one quarter either side of centre - and each step out adds
+    // another quarter, so every point still lands on a quarter mark: Wide on the
+    // frame's own edges, Ultrawide one quarter beyond them.
+    //
+    // FORK, flagged to the user: 14.5 fixes the quartering and 12.4 orders the
+    // three names, but neither says how much wider Wide and Ultrawide are than
+    // Narrow. One quarter per step is the reading that keeps every preset on a
+    // quarter mark of the frame; the alternative (a geometric run, so Ultrawide
+    // goes nearly orthographic) cannot be quartered.
+    private const int HalfNarrow = 1;   // points at 0.25 / 0.75 - the quartering
+    private const int HalfWide = 2;     // points at 0.00 / 1.00 - the frame edges
+    private const int HalfUltra = 3;    // points at -0.25 / 1.25 - off both edges
 
-    // How far off the horizon the third point sits, in frame heights.
-    private const double ThirdReach = 1.55;
+    // "Side puts a point off the edge" (12.4). The pair keeps its separation and
+    // slides two quarters - half a frame - to the left, so the FIRST point is
+    // always off the frame whichever separation it is carrying. Anchoring the
+    // first point AT a fixed -0.25 instead would have made "Side Ultrawide"
+    // identical to plain "Ultrawide", since that is already where the centred
+    // arrangement puts it.
+    private const int SideShift = 2;
+
+    // The third point sits on the frame's vertical centre line - quarter 2, the
+    // same centre the horizon's points are measured from - four quarters, one
+    // whole frame height, from the horizon.
+    private const int ThirdQuarters = 4;
 
     private static readonly string[] NoPresets = { };
 
@@ -291,34 +327,58 @@ public static class GridPresets
         }
     }
 
-    /// <summary>The frame-relative shape a perspective preset describes. Returns
-    /// null for a lattice grid, and a sane default for <c>Custom</c> so the
-    /// preview has something to draw before the user has moved a point.</summary>
+    /// <summary>The default preset for a perspective kind - the row's first
+    /// entry, and the shape a page gets when the points are placed without one
+    /// being named.</summary>
+    public static string DefaultPreset(int vpCount) => vpCount switch
+    {
+        1 => "1 Point",
+        2 => "2 Point",
+        _ => "3 Point",
+    };
+
+    /// <summary>The frame-relative shape a perspective preset describes, as
+    /// FRACTIONS of 14.5's reference frame. Returns null for a lattice grid, and
+    /// the default shape for <c>Custom</c> so the preview has something to draw
+    /// before the user has moved a point.
+    ///
+    /// <para>Read the name and the answer falls out of the quartering: a fraction
+    /// is where the horizon crosses the frame, Narrow / Wide / Ultrawide is how
+    /// many quarters the points sit either side of the centre, Side slides the
+    /// pair off the frame, and Below drops the third point beneath the horizon
+    /// instead of above it.</para></summary>
     public static VpShape? Shape(GridKind kind, string preset, int vpCount)
     {
         if (vpCount == 0) return null;
+        // 14.4: one point, on the frame's centre, with a horizon through it. No
+        // separation to name and nothing else to place.
         if (vpCount == 1) return new VpShape(0.5, new[] { 0.5 }, null);
 
         // Read the name: a fraction, a separation, and the two modifiers.
-        double horizon = Fraction(preset) ?? 0.5;
-        double sep = Separation(preset);
+        double horizon = Fraction(preset) ?? 0.5;   // no fraction = quarter 2
+        int half = HalfQuarters(preset);
         bool side = preset.Contains("Side", StringComparison.Ordinal);
         bool below = preset.Contains("Below", StringComparison.Ordinal);
 
-        double x0 = side ? SideX : 0.5 - sep / 2;
-        double x1 = x0 + sep;
+        // Centred on quarter 2, then slid left by SideShift quarters if the name
+        // says Side. Both points stay on quarter marks either way.
+        double centre = 0.5 - (side ? SideShift * Q : 0);
+        double x0 = centre - half * Q;
+        double x1 = centre + half * Q;
 
         if (vpCount == 2)
         {
             // A 2-point grid has no third point for "Below" to move, so the only
-            // reading left of the word is the eye line dropping further down the
-            // frame. FORK, flagged to the user: §12.4 defines Below only for the
-            // third point but §12.4's own 2-Point row contains "1/2 Wide Below".
-            if (below) horizon = Math.Min(0.95, horizon + 0.25);
+            // reading left of the word is the eye line dropping a quarter further
+            // down the frame. FORK, flagged to the user: §12.4 defines Below only
+            // for the third point but its own 2-Point row contains
+            // "1/2 Wide Below".
+            if (below) horizon += Q;
             return new VpShape(horizon, new[] { x0, x1 }, null);
         }
 
-        double third = below ? horizon + ThirdReach : horizon - ThirdReach;
+        double reach = ThirdQuarters * Q;
+        double third = below ? horizon + reach : horizon - reach;
         return new VpShape(horizon, new[] { x0, x1, 0.5 }, third);
     }
 
@@ -330,9 +390,11 @@ public static class GridPresets
         return null;
     }
 
-    private static double Separation(string preset) =>
-        preset.Contains("Ultrawide", StringComparison.Ordinal) ? SepUltra
-        : preset.Contains("Wide", StringComparison.Ordinal) ? SepWide
-        : preset.Contains("Narrow", StringComparison.Ordinal) ? SepNarrow
-        : SepWide;   // the bare "2 Point" / "3 Point" default
+    /// <summary>How many quarters each point sits from the pair's centre. The
+    /// bare "2 Point" / "3 Point" carries no separation word and takes the
+    /// quartering itself, which is Narrow's value.</summary>
+    private static int HalfQuarters(string preset) =>
+        preset.Contains("Ultrawide", StringComparison.Ordinal) ? HalfUltra
+        : preset.Contains("Wide", StringComparison.Ordinal) ? HalfWide
+        : HalfNarrow;
 }
