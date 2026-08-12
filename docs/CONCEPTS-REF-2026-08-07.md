@@ -1788,3 +1788,33 @@ improved rather than being traded away.
 with §7's `Panel` column and §13/§13.1's tables. This is the third deliberate
 divergence from Concepts on this value; do not restore neutrality or the two
 original constants to make an older table pass.
+
+### 13.3 Panel margins and edge-to-edge strips — 2026-08-12
+
+> *"reduce page margins by 30%, make circular icons ignore the margins and go
+> straight to the end of the page."*
+
+**Two changes to the settings page's layout.**
+
+1. **The content margin drops by 30%.** Whatever the panel's left/right content
+   inset is today, multiply it by 0.7. Headings, captions, sliders, value boxes
+   and toggles all follow it — they keep aligning with each other.
+
+2. **The horizontally-scrolling circle strips ignore that margin entirely.**
+   Every strip of circles — background swatches, grid types, units, presets,
+   format/precision, orientation, Wheel|Bar — has a **viewport spanning the full
+   panel width**, so a circle scrolls out to the panel's true edge instead of
+   being clipped short at the content inset.
+
+**The part that is easy to get wrong:** bleeding the viewport must not drag the
+first circle to the frame. The strip's **content** keeps a leading inset equal
+to the new content margin, so at rest the first circle still lines up under its
+heading; only the *viewport* is edge-to-edge, so items pass under the panel's
+edge as they scroll rather than vanishing at an invisible inner boundary.
+
+So: headings and the first item stay aligned; the scroll region is wider than
+the text column. Getting this backwards — moving the whole strip left, first
+item included — misaligns every row against its own heading.
+
+The scroll-position indicator rules under each strip should span the strip's
+**content**, not the bled viewport, or they will read as offset.
