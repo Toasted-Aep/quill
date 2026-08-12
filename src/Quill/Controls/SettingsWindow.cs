@@ -711,11 +711,37 @@ public sealed class SettingsWindow
     // change that would reintroduce it.
     // =======================================================================
 
-    /// <summary>§12.1/§12.2's paper-white controls: the Back pill and the value
-    /// boxes. These are the only two things on this surface that do NOT come
-    /// from PageTheme - the reference specifies them as white with near-black
-    /// text and the user asked for the pill to be copied exactly. Flagged as a
-    /// fork: on a near-black panel they are a deliberate, bright contrast.</summary>
+    /// <summary>§12.1/§12.2's paper-white controls: the Back pill, the value
+    /// boxes and the slider knob. The only things on this surface that do NOT
+    /// come from PageTheme, and deliberately so.
+    ///
+    /// <para><b>Re-examined against the reference and against a live dark page,
+    /// and kept.</b> The objection was that a Blueprint or Brown Paper page
+    /// tints every other surface, so white would read as foreign. It does not,
+    /// because THIS WINDOW IS NOT TINTED: <see cref="PageTheme.Panel"/> is
+    /// documented as near-neutral - <i>flat #F7F7F7 or #141414 regardless of the
+    /// page's hue</i> - which is also why <see cref="PanelAlt"/> above steps off
+    /// the panel instead of using SurfaceAlt. Measured on a Blueprint page
+    /// (ground #2F81C3): the panel body samples #141414 at every point, and the
+    /// only blue anywhere on the page is the preview strip and the preset
+    /// thumbnails, which are pictures OF the page and are meant to carry it.
+    /// There is no ground hue here for a white field to clash with.</para>
+    ///
+    /// <para>The reference is also literal about it. §12.1 item 3 says <i>"a
+    /// white pill"</i> with the label <i>"in near-black"</i>, and §12.2 says
+    /// <i>"white rounded field, hairline border"</i> and <i>"white round knob
+    /// with a hairline"</i> - three plain colour words in sentences that name
+    /// theme tokens for everything beside them (a thin <c>Outline</c> ring, a
+    /// 2 DIP <c>OnSurface</c> ring, a 2 DIP <c>OnSurface</c> track). The
+    /// transcription distinguishes tokens from colours, so "white" is a colour.
+    /// The pill in particular floats over the PREVIEW STRIP, which does carry
+    /// the page: deriving it would put a blue pill on a blue strip and lose the
+    /// near-black label and soft shadow §12.1 asks to be copied exactly.</para>
+    ///
+    /// <para>FORK, for the user rather than for the next agent to re-decide: if
+    /// the boxes are wanted quieter on a dark panel, these two constants are the
+    /// whole change, and the knob must move with them or one §12.2 sentence ends
+    /// up split across two colour systems.</para></summary>
     private static readonly Color FieldFill = Colors.White;
     private static readonly Color FieldInk = Color.FromArgb(0xFF, 0x14, 0x14, 0x14);
 
