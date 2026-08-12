@@ -100,9 +100,21 @@ public static class PageTheme
         // from the text that will sit on it, which is at its worst exactly at
         // the middle where IsDark flips. Neutral chroma throughout - section 6
         // says panels are flat whatever the page's hue, unlike Surface.
-        double panelL = 8.0 + 89.0 * Luminance(g);
-        panelL = IsDark ? Math.Min(panelL, 34.0) : Math.Max(panelL, 84.0);
-        Panel = FromLab(panelL, 0, 0);
+        double gy = Luminance(g);
+        if (IsDark)
+        {
+            // A ground that is very nearly black gets a panel that IS black -
+            // the user asked for OLED black there specifically, so Darkprint and
+            // a pinned black both land on #000000 rather than easing toward it.
+            // The step at 0.05 is the point of the rule, not a rough edge.
+            Panel = gy <= 0.05
+                ? Color.FromArgb(255, 0, 0, 0)
+                : FromLab(10.0 + 16.0 * Math.Min(1.0, gy / 0.5), 0, 0);
+        }
+        else
+        {
+            Panel = FromLab(Math.Max(84.0, 8.0 + 89.0 * gy), 0, 0);
+        }
         Probe();
     }
 
