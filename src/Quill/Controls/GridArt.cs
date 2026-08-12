@@ -236,19 +236,17 @@ internal static class GridArt
         int rays = Math.Clamp(s.Density, 3, 96);
         float rayW = Math.Max(0.5f, lw * 0.75f);
 
-        // The true families each configuration leaves: a 1-point keeps both axes,
-        // a 2-point keeps the verticals, a 3-point keeps nothing straight.
+        // The true families each configuration leaves: a 2-point keeps the
+        // verticals, a 3-point keeps nothing straight, and 14.4 removes the
+        // square lattice a 1-point used to be given - "a one-point grid is a fan
+        // from a single vanishing point plus the horizon", and the overlaid grid
+        // is not in the reference.
         // 12.5: "very fine and low-contrast - a wash of blue-grey guides, never
         // heavy black lines". Two vanishing points whose rays are nearly parallel
-        // crowd a 300 DIP strip, so the true families and the fan both sit well
+        // crowd a 300 DIP strip, so the true family and the fan both sit well
         // under the horizon and only the horizon reads as a line.
         float step = MathF.Max(10f, h / 9f);
-        if (pts.Count == 1)
-        {
-            for (float y = 0; y <= h; y += step) ds.DrawLine(0, y, w, y, Fade(ink, 0.34), rayW);
-            for (float x = 0; x <= w; x += step) ds.DrawLine(x, 0, x, h, Fade(ink, 0.34), rayW);
-        }
-        else if (pts.Count == 2)
+        if (pts.Count == 2)
         {
             for (float x = 0; x <= w; x += step) ds.DrawLine(x, 0, x, h, Fade(ink, 0.34), rayW);
         }

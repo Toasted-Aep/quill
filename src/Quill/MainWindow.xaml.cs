@@ -234,6 +234,10 @@ public sealed partial class MainWindow : Window
         // costs anything while the panel is up.
         Surface.UndoManager.Changed += () => _historyWin?.Refresh();
         Surface.ViewChanged += OnViewChanged;
+        // 14.5: the reference frame is captured once, on the page's first frame,
+        // and has to REACH THE FILE. Derived again next session it would be taken
+        // from a different view and every vanishing point would have moved.
+        Surface.RefFrameCaptured += ScheduleSave;
         Surface.RulerAngleChanged += OnRulerAngleChanged;
         Surface.StrokeTapped += stroke => SeekAudioToStroke(stroke);
         _audioRecorder.ElapsedChanged += elapsed => { DispatcherQueue.TryEnqueue(() => AudioTimeText.Text = elapsed.ToString(@"m\:ss")); };
@@ -6896,21 +6900,28 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Resolves a 12.4 preset's FRAME FRACTIONS into the canvas
-    /// coordinates the model actually stores.
+    /// coordinates the model actually stores, against 14.5's REFERENCE FRAME.
     ///
-    /// <para>The frame is the artboard when the page has one and the visible view
-    /// when it does not - which is the only reading under which "1/2" and "Side"
-    /// mean anything on an unbounded canvas.</para></summary>
+    /// <para>The frame is <see cref="NotePage.RefFrame"/> - the viewport as it
+    /// stood on the page's first frame - and nothing else. Not the live view,
+    /// which the user has panned and zoomed by the time a preset is picked, and
+    /// which would slide every point each time it moved. Not the artboard
+    /// either, which this used to prefer when the page had one: 14.5 is explicit
+    /// that the frame is the FIRST VIEW and therefore differs between screens,
+    /// and an artboard-derived frame is the same on every screen. A page that
+    /// somehow reaches here without one - the surface has never painted it - gets
+    /// the live view as a last resort, which is what the capture would have
+    /// stored anyway.</para></summary>
     private void PlacePerspectiveShape(PerspectiveDef def, GridSpec s)
     {
         var shape = s.Shape();
-        if (shape == null || shape.VpXF.Length == 0) { PlacePerspectivePoints(def, s.VpCount); return; }
+        if (shape == null || shape.VpXF.Length == 0) return;
 
+        Surface.EnsureRefFrame();
         double fx, fy, fw, fh;
-        if (_curPage != null && PageSizes.TryResolve(_curPage, out double aw, out double ah) &&
-            aw > 0 && ah > 0)
+        if (_curPage?.RefFrame is { IsUsable: true } frame)
         {
-            fx = 0; fy = 0; fw = aw; fh = ah;
+            fx = frame.X; fy = frame.Y; fw = frame.W; fh = frame.H;
         }
         else
         {
@@ -6932,6 +6943,11 @@ public sealed partial class MainWindow : Window
         }
 
         def.HorizonY = fy + shape.HorizonF * fh;
+        // 12.4 describes positions and never a tilt, so a preset is LEVEL. Left
+        // standing, a tilt the user had put in with 12.9's rotation grip would
+        // survive the placement and the horizon - drawn through the first point
+        // at the stored angle - would no longer pass through the second.
+        def.HorizonAngle = 0;
         def.Vps.Clear();
         foreach (double xf in shape.VpXF)
             def.Vps.Add(new CanvasPoint(fx + xf * fw, def.HorizonY));
@@ -6967,34 +6983,28 @@ public sealed partial class MainWindow : Window
         _gridEditor.Begin();
     }
 
-    // Sensible starting geometry from the current view: horizon through the view
-    // centre, VPs spread wide so guide fans cross the page usefully. Dragging the
-    // pins on canvas is a later increment; re-centre covers repositioning.
+    /// <summary>Places N points with no preset named - the perspective combo and
+    /// the Recentre button.
+    ///
+    /// <para>14.5 leaves ONE placement rule, so this is the default preset put
+    /// through the same quartering rather than a second geometry of its own. The
+    /// version it replaces spread the points 1.3 half-views either side of the
+    /// LIVE view centre, which is both the "far left edge" 14.5 rejects and the
+    /// read-the-viewport-live behaviour it forbids.</para></summary>
     private void PlacePerspectivePoints(PerspectiveDef def, int vpCount)
     {
-        float z = Surface.ViewZoom;
-        var off = Surface.ViewOffset;
-        double vw = Surface.ActualWidth, vh = Surface.ActualHeight;
-        double cx = (vw * 0.5 - off.X) / z, cy = (vh * 0.5 - off.Y) / z;
-        double halfW = vw * 0.5 / z;
-
-        def.HorizonY = cy;
-        def.Vps.Clear();
-        switch (Math.Clamp(vpCount, 1, 3))
+        int n = Math.Clamp(vpCount, 1, 3);
+        PlacePerspectiveShape(def, new GridSpec
         {
-            case 1:
-                def.Vps.Add(new CanvasPoint(cx, cy));
-                break;
-            case 2:
-                def.Vps.Add(new CanvasPoint(cx - halfW * 1.3, cy));
-                def.Vps.Add(new CanvasPoint(cx + halfW * 1.3, cy));
-                break;
-            case 3:
-                def.Vps.Add(new CanvasPoint(cx - halfW * 1.3, cy));
-                def.Vps.Add(new CanvasPoint(cx + halfW * 1.3, cy));
-                def.Vps.Add(new CanvasPoint(cx, cy + vh / z * 1.4));
-                break;
-        }
+            Kind = n switch
+            {
+                1 => GridKind.OnePoint,
+                2 => GridKind.TwoPoint,
+                _ => GridKind.ThreePoint,
+            },
+            Preset = GridPresets.DefaultPreset(n),
+            Portrait = _curPage?.GridPortrait ?? false,
+        });
     }
 
     private void GridColorPreset_Click(object sender, RoutedEventArgs e)
