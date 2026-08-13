@@ -238,7 +238,9 @@ public sealed partial class MainWindow : Window
         // and has to REACH THE FILE. Derived again next session it would be taken
         // from a different view and every vanishing point would have moved.
         Surface.RefFrameCaptured += ScheduleSave;
-        Surface.RulerAngleChanged += OnRulerAngleChanged;
+        // 11.4 items 28/29 and 10.8: the three tools that answer on the page.
+        Surface.Sampled += OnToolSampled;
+        Surface.RulerDialRequested += ShowRulerAngleEntry;
         Surface.StrokeTapped += stroke => SeekAudioToStroke(stroke);
         _audioRecorder.ElapsedChanged += elapsed => { DispatcherQueue.TryEnqueue(() => AudioTimeText.Text = elapsed.ToString(@"m\:ss")); };
         // when playback finishes, restore the play icon and un-hide the ink (#55)
@@ -373,7 +375,7 @@ public sealed partial class MainWindow : Window
         // HistoryFlyout and MouseModeBtn.Flyout are gone: history is a floating
         // panel now and mouse modes are circles in Settings > Interaction.
         foreach (var fb in new FlyoutBase?[]
-                 { SearchBtn.Flyout, PageSettingsBtn.Flyout, ZoomBtn.Flyout, RulerBtn.Flyout })
+                 { SearchBtn.Flyout, PageSettingsBtn.Flyout, ZoomBtn.Flyout })
         {
             if (fb is Flyout fl)
                 fl.Opened += (_, _) => { if (fl.Content is FrameworkElement root) PopIn(root, 0.9, 280); };
@@ -6235,6 +6237,17 @@ public sealed partial class MainWindow : Window
             case ToolType.FreeSpace:
                 ShowStatus("Drag downwards to push everything below apart; drag up to pull together.");
                 break;
+            case ToolType.Eyedropper:
+                ShowStatus("Tap anything on the page to take its colour as your ink.");
+                break;
+            case ToolType.Ruler:
+                ShowStatus("Draw along the straightedge. Twist with two fingers to tilt it, " +
+                           "or click the angle bubble to type an exact one.");
+                break;
+            case ToolType.Mix:
+                ShowStatus("Tap a colour on the page to mix it into your ink. " +
+                           "Tap bare paper and the ink thins instead, the way water thins paint.");
+                break;
         }
         ToolUiChanged?.Invoke();
     }
@@ -6320,29 +6333,130 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    private void RulerToggle_Toggled(object sender, RoutedEventArgs e)
+    /// <summary>11.4 item 29's tilt visualiser, on the mouse path: "clickable by
+    /// mouse to type an exact angle." The bubble the ruler already draws at its
+    /// centre is the visualiser; clicking it opens this.
+    ///
+    /// <para>A plain text box rather than a slider. The gesture and the slider
+    /// both give you an approximate angle already - what a keyboard is for here
+    /// is 30 exactly, and a slider cannot promise that at any width.</para></summary>
+    private void ShowRulerAngleEntry(System.Numerics.Vector2 screen)
     {
-        Surface.RulerMode = RulerToggle.IsOn;
-        if (RulerToggle.IsOn) SelectTool("Pen");
-        Surface.Refresh();
+        var fly = new Flyout();
+        var panel = new StackPanel { Spacing = 8, Width = 188 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Ruler angle",
+            FontSize = 12,
+            Opacity = 0.7,
+        });
+        var box = new TextBox
+        {
+            Text = $"{(((Surface.RulerAngle % 180) + 180) % 180):0}",
+            SelectionStart = 0,
+        };
+        panel.Children.Add(box);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Degrees. Two fingers on the page twist it too.",
+            FontSize = 11,
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        void Commit()
+        {
+            if (double.TryParse(box.Text.Trim().TrimEnd('\u00B0'),
+                                System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.CurrentCulture, out double deg) ||
+                double.TryParse(box.Text.Trim().TrimEnd('\u00B0'),
+                                System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out deg))
+            {
+                Surface.RulerAngle = deg;
+                Surface.Refresh();
+                ShowStatus($"Ruler at {(((deg % 180) + 180) % 180):0}\u00B0.");
+            }
+            fly.Hide();
+        }
+
+        box.KeyDown += (_, ke) =>
+        {
+            if (ke.Key != Windows.System.VirtualKey.Enter) return;
+            ke.Handled = true;
+            Commit();
+        };
+        var set = new Button { Content = "Set", HorizontalAlignment = HorizontalAlignment.Right };
+        set.Click += (_, _) => Commit();
+        panel.Children.Add(set);
+
+        fly.Content = panel;
+        fly.ShowAt(Surface, new FlyoutShowOptions
+        {
+            Position = new Point(screen.X, screen.Y),
+        });
+        box.Focus(FocusState.Programmatic);
+        box.SelectAll();
     }
 
-    private void RulerSlider_Changed(object sender, RangeBaseValueChangedEventArgs e)
+    /// <summary>11.4 item 28 and 10.8 - what the two sampling tools do with what
+    /// they picked up.
+    ///
+    /// <para><b>Eyedropper</b> takes the colour, exactly as the keyboard
+    /// accelerator has always done.</para>
+    ///
+    /// <para><b>Mix</b> blends it into the ink you are holding. The interesting
+    /// case is a tap on bare paper: 10.8 rules that mixing with the page
+    /// DILUTES rather than tints, so tapping the paper thins your ink toward
+    /// transparency instead of dragging it toward the paper's colour. The fork
+    /// is not made here - the ground is simply handed to
+    /// <see cref="PigmentMix.Blend"/>, which is where 10.8 asks for it to
+    /// live.</para>
+    ///
+    /// <para>The ground passed is <c>PaperTextures.Ground</c>, not
+    /// <c>NotePage.Background</c>: on a Blueprint or Brown Paper page those
+    /// differ, and it is the one the reader can SEE that a tap on the paper
+    /// means.</para></summary>
+    private void OnToolSampled(ToolType tool, Windows.UI.Color sampled, bool bareGround)
     {
-        if (RulerDegLabel == null) return;
-        Surface.RulerAngle = e.NewValue;
-        RulerDegLabel.Text = $"Angle: {(int)e.NewValue}°";
-        Surface.Refresh();
-    }
+        var ground = PaperTextures.Ground(_curPage);
+        Windows.UI.Color result;
+        if (tool == ToolType.Eyedropper)
+        {
+            result = sampled;
+        }
+        else
+        {
+            // A tap that fell through to the paper means the ground itself,
+            // whatever NotePage.Background happens to hold under a texture.
+            var other = bareGround ? ground : sampled;
+            var ink = ActivePreset() is { } cur ? ColorUtil.Parse(cur.Color) : Surface.PenColor;
+            result = PigmentMix.Blend(ink, other, 0.5, ground);
+        }
 
-    // Keep the Settings flyout slider in sync when the ruler is tilted by gesture.
-    private void OnRulerAngleChanged(double deg)
-    {
-        if (RulerSlider == null) return;
-        _syncingUi = true;
-        try { RulerSlider.Value = ((deg % 180) + 180) % 180; } catch { }
-        _syncingUi = false;
-        if (RulerDegLabel != null) RulerDegLabel.Text = $"Angle: {(int)deg}°";
+        if (ActivePreset() is { } preset)
+        {
+            preset.Color = ColorUtil.ToHex(result);
+            BuildPenStrip();
+            ScheduleSave();
+        }
+        Surface.PenColor = result;
+        PushRecentColor(result);
+        ToolUiChanged?.Invoke();
+
+        if (tool == ToolType.Eyedropper)
+        {
+            ShowStatus($"Picked {ColorUtil.ToHex(result)}");
+        }
+        else if (bareGround)
+        {
+            ShowStatus($"Thinned to {Math.Round(result.A / 255.0 * 100)}% \u2014 " +
+                       "mixing with the page dilutes the ink rather than tinting it.");
+        }
+        else
+        {
+            ShowStatus($"Mixed to {ColorUtil.ToHex(result)}");
+        }
     }
 
     private void InsertShape_Click(object sender, RoutedEventArgs e)
@@ -7042,7 +7156,13 @@ public sealed partial class MainWindow : Window
         bool showChip = !_uiHidden && !rowOn;
         // outside pen/eraser mode neither the row nor its reopen chip belongs
         // on screen (#14-batch4); the floating pen in minimal UI stays manual
-        bool penMode = _toolTag is "Pen" or "Eraser";
+        //
+        // The three tools 11.4 and 10.8 add all ACT ON THE PEN, so the row stays:
+        // the ruler draws with it, and the eyedropper and Mix both write its
+        // colour. Hiding the row under them would hide the one thing they change,
+        // and Mix in particular is unreadable without it - the whole feedback for
+        // a dilution is watching the row's swatch go pale.
+        bool penMode = _toolTag is "Pen" or "Eraser" or "Ruler" or "Eyedropper" or "Mix";
         if (!penMode && !_uiHidden) { showRow = false; showChip = false; }
         // ONE request, THREE surfaces, exactly one of them up. The dial and the
         // section 2 palette each re-filter this on ToolSurfaceService inside
@@ -7499,7 +7619,9 @@ public sealed partial class MainWindow : Window
                 return Surface.SampleColorAt(new System.Numerics.Vector2((float)cp.X, (float)cp.Y));
             },
             GetMode = () => (ColorWheelMode)Math.Clamp(_library.ColorPickerMode, 0, 2),
-            SetMode = m => { _library.ColorPickerMode = (int)m; ScheduleSave(); }
+            SetMode = m => { _library.ColorPickerMode = (int)m; ScheduleSave(); },
+            // 11.3 item 25: the wheel's star reaches the Colors tab.
+            OpenPalettes = () => EnsureBrushesWindow()?.ShowColors()
         });
     }
 
@@ -8952,7 +9074,10 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
     private void ApplyToolbarVisibility()
     {
-        bool pen = _toolTag == "Pen";
+        // 11.4 item 29: the ruler is the pen with a straightedge under it, so the
+        // pen's own top-bar controls stay in context while it is up. The two
+        // sampling tools are NOT drawing tools and are deliberately not included.
+        bool pen = _toolTag is "Pen" or "Ruler";
         void Set(FrameworkElement? el, string key, bool inContext = true)
         {
             if (el == null) return;

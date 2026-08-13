@@ -365,6 +365,23 @@ public sealed class FloatingWindow
         ShowTab(0);
     }
 
+    /// <summary>Bring one of <see cref="SetTabs"/>' categories up by NAME.
+    /// Returns false when no tab carries that label, so a caller that names a
+    /// tab which has been renamed finds out rather than silently landing on
+    /// whichever tab happened to be active.
+    ///
+    /// <para>By label and not by index because the caller is in another file:
+    /// 11.3 item 25's star asks for "the Colors tab", and an index would break
+    /// the moment a tab is inserted before it.</para></summary>
+    public bool SelectTab(string label)
+    {
+        int i = _tabs.FindIndex(t =>
+            string.Equals(t.Label, label, StringComparison.OrdinalIgnoreCase));
+        if (i < 0) return false;
+        ShowTab(i);
+        return true;
+    }
+
     /// <summary>Throws away the built content so the next activation rebuilds it —
     /// used after a theme or language change, exactly like the rest of Quill's
     /// code-built surfaces.</summary>

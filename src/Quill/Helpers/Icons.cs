@@ -161,6 +161,39 @@ public static class Icons
     public const string Smoothness =
         "M2 17.2 L4.6 8.2 L6.6 15.8 L8.6 7.4 L10.8 14.2 C12.9 14.2 13.3 8.4 15.7 8.4 C18.1 8.4 18.6 15 22 15";
 
+    /// <summary>Ruler (11.4 item 29): a straightedge tilted 20 degrees with
+    /// three notches cut into its measuring edge. The tilt is the point - this
+    /// tool's whole character is that it turns - and the notches are part of the
+    /// OUTLINE rather than punched subpaths, so the mark survives being filled
+    /// at any size instead of relying on an even-odd hole that closes up.</summary>
+    public const string Ruler =
+        "M 2.00 12.02 L 5.81 10.63 L 6.97 13.83 L 8.38 13.32 L 7.22 10.12 L 10.13 9.06 " +
+        "L 11.30 12.26 L 12.70 11.74 L 11.54 8.55 L 14.45 7.49 L 15.62 10.68 L 17.03 10.17 " +
+        "L 15.86 6.98 L 19.67 5.59 L 22.00 11.98 L 4.33 18.41 Z";
+
+    /// <summary>Eyedropper (11.4 item 28): the same silhouette
+    /// <c>ColorWheel.DrawEyedropper</c> paints - a bulb on a 45 degree shaft
+    /// tapering to a point - expressed as a path so the dial, the pen row and
+    /// the Brushes library all show the mark the wheel already uses.
+    ///
+    /// <para><c>F1</c> (nonzero) because the bulb OVERLAPS the shaft: under the
+    /// default even-odd rule the join would punch a hole exactly where the two
+    /// meet, which is the middle of the mark.</para></summary>
+    public const string Eyedropper =
+        "F1 M 3.20 20.80 L 4.80 15.40 L 13.00 7.20 L 16.60 10.80 L 8.40 19.00 Z " +
+        "M 13.32 6.01 L 16.01 3.32 A 2.60 2.60 0 0 1 19.69 3.32 L 20.68 4.31 " +
+        "A 2.60 2.60 0 0 1 20.68 7.99 L 17.99 10.68 A 2.60 2.60 0 0 1 14.31 10.68 " +
+        "L 13.32 9.69 A 2.60 2.60 0 0 1 13.32 6.01 Z";
+
+    /// <summary>Mix (10.8): two discs overlapping, drawn even-odd so the lens
+    /// where they meet reads as a THIRD colour rather than as a blob. That lens
+    /// is the whole tool - two inks going in, one coming out - and it is the one
+    /// part of the mark that must not fill, which is why this keeps the default
+    /// rule while the eyedropper above does not.</summary>
+    public const string Mix =
+        "M 2.10 12.00 A 6.60 6.60 0 1 0 15.30 12.00 A 6.60 6.60 0 1 0 2.10 12.00 Z " +
+        "M 8.70 12.00 A 6.60 6.60 0 1 0 21.90 12.00 A 6.60 6.60 0 1 0 8.70 12.00 Z";
+
     /// <summary>Tool tag (the same strings ToolType uses) to its mark.</summary>
     public static string Tool(string tag) => tag switch
     {
@@ -170,6 +203,9 @@ public static class Icons
         "Eraser" => Eraser,
         "FreeSpace" => FreeSpace,
         "Fill" => Fill,
+        "Eyedropper" => Eyedropper,
+        "Ruler" => Ruler,
+        "Mix" => Mix,
         _ => Pen,
     };
 

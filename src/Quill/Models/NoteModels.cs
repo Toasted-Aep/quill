@@ -7,7 +7,14 @@ public enum PenType
     Standard, Brush, Fountain, Highlighter, Pencil, Marker, Calligraphy,
     Crayon, Watercolor, Monoline, Rollerball, Gel, Ballpoint, FeltTip
 }
-public enum ToolType { Pen, Eraser, Select, Text, FreeSpace }
+// APPENDED ONLY, like GridType above. Nothing serialises ToolType as an
+// integer today - a dial sector and a pen-row cell both store "tool:<tag>" by
+// NAME - but appending costs nothing and keeps that guarantee if one ever does.
+//
+// The last three are 11.4 items 28 and 29 and 10.8: the eyedropper, the ruler
+// and Mix become SELECTABLE TOOLS, assignable to a dial sector or a pen-row
+// cell like any other, rather than living on the top bar or in the wheel.
+public enum ToolType { Pen, Eraser, Select, Text, FreeSpace, Eyedropper, Ruler, Mix }
 // How the mouse behaves while the Pen tool is active. Auto = "normal mouse"
 // (click to select/focus, drag empty space to rubber-band select).
 public enum MouseMode { Auto, Grab, Select, Move }

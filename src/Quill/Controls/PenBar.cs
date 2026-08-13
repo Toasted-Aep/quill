@@ -659,6 +659,12 @@ public sealed class PenBar
         yield return "tool:Eraser";
         yield return "tool:Select";
         yield return "tool:Text";
+        // 11.4 items 28 and 29, and 10.8. The ruler in particular LEAVES the bar
+        // it used to sit on as a switch and arrives here as a tool, so it is
+        // picked and dropped the same way every other instrument is.
+        yield return "tool:Eyedropper";
+        yield return "tool:Ruler";
+        yield return "tool:Mix";
         foreach (var x in _extras) yield return "cmd:" + x.Id;
     }
 

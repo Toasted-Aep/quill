@@ -298,6 +298,25 @@ public sealed class BrushesWindow
         DrawPreview();
     }
 
+    /// <summary>11.3 item 25: open this panel on its <c>Colors</c> tab. The
+    /// colour wheel's star calls it, which is the route the reference gives -
+    /// until now the tab existed but could only be reached by opening Brushes
+    /// and then clicking across the tab strip.
+    ///
+    /// <para>Any aim is dropped first. The star means "show me my palettes", not
+    /// "assign something to the slot I right-clicked a moment ago", and leaving
+    /// a live target would have the next tap assign into it.</para></summary>
+    public void ShowColors()
+    {
+        _target = null;
+        HookPagePress();
+        _win.Show();
+        // After Show, for the reason Rebuild records: refreshing a window that
+        // is not yet up clears the built cache and then Show puts the stale tree
+        // straight back on screen.
+        if (!_win.SelectTab("Colors")) _h.Status("The Colors tab could not be found.");
+    }
+
     // =======================================================================
     // 11.25 item 2 — a press on the page closes the panel
     // =======================================================================
@@ -855,6 +874,15 @@ public sealed class BrushesWindow
             "Cuts a stroke in two where you cross it, without thinning it."),
         new("Nudge", "Eraser", EraserStyle.Nudge, NudgeGeometry, true,
             "Pushes ink out of the way instead of deleting it."),
+        // 11.4 item 28, 11.4 item 29 and 10.8. These three are why this row is
+        // reachable from a right-click at all: a dial sector or a pen-row cell
+        // can now hold them, which is what "becomes a selectable tool" means.
+        new("Eyedropper", "Eyedropper", null, Icons.Eyedropper, false,
+            "Tap the page to take the colour under the pointer as your ink."),
+        new("Ruler", "Ruler", null, Icons.Ruler, false,
+            "A straightedge to draw along. Twist with two fingers to tilt it, or click the angle bubble to type an exact one."),
+        new("Mix", "Mix", null, Icons.Mix, false,
+            "Tap a colour on the page to mix it into your ink. Tap bare paper and the ink thins instead, like adding water."),
     };
 
     private FrameworkElement ToolCell(ToolDef t)
