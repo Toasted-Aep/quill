@@ -238,6 +238,15 @@
   <data name="Wheel.Tool.FreeSpace" xml:space="preserve">
     <value>Insert free space</value>
   </data>
+  <data name="Wheel.Tool.Eyedropper" xml:space="preserve">
+    <value>Eyedropper</value>
+  </data>
+  <data name="Wheel.Tool.Ruler" xml:space="preserve">
+    <value>Ruler</value>
+  </data>
+  <data name="Wheel.Tool.Mix" xml:space="preserve">
+    <value>Mix</value>
+  </data>
   <data name="Wheel.Cmd.Undo" xml:space="preserve">
     <value>Undo</value>
   </data>

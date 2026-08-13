@@ -48,6 +48,21 @@ public sealed class InkSurface : UserControl
     public event Action? RefFrameCaptured;
     public event Action<double>? RulerAngleChanged; // raised when 2-finger tilt changes the ruler
 
+    /// <summary>11.4 item 28 and 10.8: one of the two SAMPLING tools was used.
+    /// Carries which tool it was, the colour under the tap, and whether that tap
+    /// landed on bare paper rather than on ink.
+    ///
+    /// <para>The bare-paper flag is reported rather than inferred by comparing
+    /// the colour, because 10.8's dilution turns on exactly that question and a
+    /// colour comparison would get it wrong in both directions - a stroke drawn
+    /// in the page's own colour is not the page, and on a textured paper the
+    /// ground the reader sees is not <c>NotePage.Background</c>.</para></summary>
+    public event Action<ToolType, Color, bool>? Sampled;
+
+    /// <summary>11.4 item 29's tilt visualiser was clicked with a mouse. Carries
+    /// the screen point, so the host can put its angle entry there.</summary>
+    public event Action<Vector2>? RulerDialRequested;
+
     // ---- tool state -------------------------------------------------------
     public ToolType Tool { get; private set; } = ToolType.Pen;
     public PenType Pen { get; set; } = PenType.Standard;
@@ -752,6 +767,11 @@ public sealed class InkSurface : UserControl
     public void SetTool(ToolType tool)
     {
         Tool = tool;
+        // 11.4 item 29: the ruler IS a tool now, so the straightedge follows the
+        // selection instead of a separate switch on the top bar. Selecting any
+        // other tool puts it away - which is what made the old toggle awkward,
+        // since it could be left on under a tool that had no use for it.
+        RulerMode = tool == ToolType.Ruler;
         CancelPendingText();
         if (tool != ToolType.Select)
         {
@@ -1204,6 +1224,21 @@ public sealed class InkSurface : UserControl
             return;
         }
 
+        // 11.4 item 29: "a tilt visualiser clickable by mouse to type an exact
+        // angle." The bubble is the visualiser, and it is tested before anything
+        // else can claim the press - it sits in the middle of the page, over
+        // whatever happens to be there.
+        //
+        // Mouse only, deliberately. The same bubble under a finger or a pen tip
+        // would eat a stroke started in the centre of the page, and touch has
+        // the two-finger twist for this already.
+        if (RulerMode && isMouse && RulerBubble().Contains(new Point(pos.X, pos.Y)))
+        {
+            RulerDialRequested?.Invoke(screen);
+            e.Handled = true;
+            return;
+        }
+
         var tool = Tool;
         // Pen first button (eraser tip / inverted pen / extra side buttons)
         // acts as the eraser.
@@ -1211,6 +1246,26 @@ public sealed class InkSurface : UserControl
         {
             tool = ToolType.Eraser;
         }
+
+        // 11.4 item 28 and 10.8. Both sampling tools ANSWER ON PRESS: they take
+        // no capture, start no gesture and commit nothing to the page, so they
+        // are handled here rather than as two more cases in the switch below,
+        // every arm of which is about a drag.
+        if (tool is ToolType.Eyedropper or ToolType.Mix)
+        {
+            var hit = SampleColorAt(screen, out bool bare);
+            if (hit is Color got) Sampled?.Invoke(tool, got, bare);
+            e.Handled = true;
+            return;
+        }
+
+        // 11.4 item 29: the ruler is the PEN with a straightedge under it.
+        // Everything below - the mouse modes, the selection grabs, the stroke
+        // itself - is the pen's behaviour, and RulerMode is what bends the
+        // committed points onto the edge (see BuildRulerPoints). Folding it in
+        // here is what keeps the two from drifting apart; a ninth case in the
+        // switch would have to be kept in step with the pen's by hand.
+        if (tool == ToolType.Ruler) tool = ToolType.Pen;
 
         if (tool == ToolType.Pen && !isPen && !HandDrawMode)
         {
@@ -2190,6 +2245,17 @@ public sealed class InkSurface : UserControl
         return pts;
     }
 
+    /// <summary>The tilt visualiser's box, in WORLD units. One definition, two
+    /// consumers - <see cref="DrawRuler"/> paints it and the press handler hit
+    /// tests it - because a visualiser you can click is only as good as the
+    /// agreement between where it is drawn and where the click is caught.</summary>
+    private Rect RulerBubble()
+    {
+        var c = ToWorld(new Vector2((float)ActualWidth / 2, (float)ActualHeight / 2));
+        float bw = 70f / ViewZoom, bh = 34f / ViewZoom;
+        return new Rect(c.X - bw / 2, c.Y - bh / 2, bw, bh);
+    }
+
     private void DrawRuler(CanvasDrawingSession ds, Color bg)
     {
         if (!RulerMode) return;
@@ -2229,8 +2295,7 @@ public sealed class InkSurface : UserControl
         }
         // degree readout in a bubble at the centre of the ruler
         string deg = $"{(((RulerAngle % 180) + 180) % 180):0}°";
-        float bw = 70f / ViewZoom, bh = 34f / ViewZoom;
-        var br = new Rect(center.X - bw / 2, center.Y - bh / 2, bw, bh);
+        var br = RulerBubble();
         ds.FillRoundedRectangle(br, 9f / ViewZoom, 9f / ViewZoom, Color.FromArgb(235, 28, 28, 32));
         ds.DrawRoundedRectangle(br, 9f / ViewZoom, 9f / ViewZoom, edgeColor, 1.5f / ViewZoom);
         // reuse one format across frames (DrawRuler runs every frame while the
@@ -3769,8 +3834,20 @@ public sealed class InkSurface : UserControl
     // element and returns its true authored colour, which is what a picker wants
     // (a pixel read would return antialiased blends at stroke edges). Draw order
     // is shapes below ink, so strokes win; within each list, later = on top.
-    public Color? SampleColorAt(Vector2 screenPt)
+    public Color? SampleColorAt(Vector2 screenPt) => SampleColorAt(screenPt, out _);
+
+    /// <summary>As above, and additionally reports whether the tap fell through
+    /// to BARE PAPER - nothing drawn under it - which 10.8's Mix tool needs in
+    /// order to tell "thin this ink" from "blend this ink with that one".
+    ///
+    /// <para>The returned colour is unchanged on that path: it is still
+    /// <c>NotePage.Background</c>, exactly as before, so the existing eyedropper
+    /// behaves identically. A caller that needs the ground the READER sees - the
+    /// texture's own colour on a Brown Paper or Blueprint page - resolves it
+    /// through <c>PaperTextures.Ground</c> off the back of this flag.</para></summary>
+    public Color? SampleColorAt(Vector2 screenPt, out bool bareGround)
     {
+        bareGround = false;
         if (_page == null) return null;
         var w = ToWorld(screenPt);
         float slop = 3f / ViewZoom;   // small screen-constant tolerance
@@ -3807,6 +3884,7 @@ public sealed class InkSurface : UserControl
             try { return ColorUtil.Parse(sh.Color); } catch { }
         }
 
+        bareGround = true;
         try { return ColorUtil.Parse(_page.Background); } catch { return null; }
     }
 

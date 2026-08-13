@@ -54,6 +54,12 @@ public static class ColorPickerService
         /// Persisted mode get/set. The setter should schedule a save.
         public required Func<ColorWheelMode> GetMode { get; init; }
         public required Action<ColorWheelMode> SetMode { get; init; }
+        /// <summary>11.3 item 25: open the Brushes panel's <c>Colors</c> tab,
+        /// which the wheel's star asks for. Deliberately NOT <c>required</c> -
+        /// this file's contract is that the picker degrades to a no-op rather
+        /// than throwing when a host has not wired something, exactly as
+        /// <see cref="Open"/> does before <see cref="Configure"/>.</summary>
+        public Action? OpenPalettes { get; init; }
     }
 
     private static HostConfig? _host;
@@ -233,6 +239,15 @@ public static class ColorPickerService
         w.ModeChanged += m => _host?.SetMode(m);
         w.SampleRequested += p => w.ApplySample(_host?.Sample(p));
         w.Dismissed += Close;
+        // 11.3 item 25. The wheel stands down first: the palettes arrive in a
+        // floating panel, and leaving a full-window ring up behind it would put
+        // two colour surfaces on screen arguing about which one is being used.
+        w.PalettesRequested += () =>
+        {
+            var open = _host?.OpenPalettes;
+            Close();
+            open?.Invoke();
+        };
         // V3 K.11: the wheel closes itself the moment a colour is chosen. The
         // eyedropper deliberately does NOT go through here - it is a repeatable
         // tool and closing on every sample would make it unusable.

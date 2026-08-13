@@ -292,7 +292,12 @@ public sealed class ToolWheel
     public Func<int, bool>? BrushPickerHook { get; set; }
 
     private const string KindPen = "pen:", KindTool = "tool:", KindCmd = "cmd:";
-    private static readonly string[] ToolKinds = { "Eraser", "Select", "Text", "FreeSpace", "Fill" };
+    // 11.4 items 28/29 and 10.8 add the last three. The assignment flyout and
+    // the Brushes library both read this list, so a tool named here is placeable
+    // in any of the ten sectors - including 11.2 item 11's two empty + cells,
+    // which 11.11 rules must stay unassigned until the user fills them.
+    private static readonly string[] ToolKinds =
+        { "Eraser", "Select", "Text", "FreeSpace", "Fill", "Eyedropper", "Ruler", "Mix" };
     private static readonly string[] BuiltInCmds = { "Undo", "Redo", "MouseMode" };
 
     /// <summary>A top-bar command donated to the dial. The host owns the

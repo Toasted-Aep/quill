@@ -772,22 +772,12 @@
                             <FontIcon Glyph="&#xE710;" FontSize="12"/>
                         </Button>
 
-                        <DropDownButton x:Name="RulerBtn" Padding="6,4" HorizontalAlignment="Center" VerticalAlignment="Center" ToolTipService.ToolTip="Ruler — draw straight lines at any angle">
-                            <!-- new diagonal ruler with tick cutouts (approved icon set) -->
-                            <PathIcon Data="M3 17.4 L17.4 3 21 6.6 6.6 21 Z M7.4 14.2 9 15.8 8.2 16.6 6.6 15 Z M10.6 11 12.2 12.6 11.4 13.4 9.8 11.8 Z M13.8 7.8 15.4 9.4 14.6 10.2 13 8.6 Z"/>
-                            <DropDownButton.Flyout>
-                                <Flyout>
-                                    <StackPanel Spacing="8" Width="230">
-                                        <ToggleSwitch x:Name="RulerToggle" Header="Show ruler" Toggled="RulerToggle_Toggled"/>
-                                        <TextBlock x:Name="RulerDegLabel" Text="Angle: 0°" FontSize="12"/>
-                                        <Slider x:Name="RulerSlider" Minimum="0" Maximum="180" StepFrequency="1" Value="0"
-                                                ValueChanged="RulerSlider_Changed"/>
-                                        <TextBlock Text="Turn it on, set any angle, then draw with the pen — lines lock to that angle."
-                                                   FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
-                                    </StackPanel>
-                                </Flyout>
-                            </DropDownButton.Flyout>
-                        </DropDownButton>
+                        <!-- CONCEPTS-REF 11.4 item 29: the ruler LEFT this bar and became a
+                             selectable tool. It is picked from the Brushes library's Tools row,
+                             or assigned to a dial sector or a pen-row cell like any other
+                             instrument; its angle is set by a two-finger twist or by clicking
+                             the tilt bubble on the page. A switch here as well would be a
+                             second way to turn on a tool that is now selected, not toggled. -->
 
                         <AppBarSeparator HorizontalAlignment="Center" VerticalAlignment="Center"/>
 

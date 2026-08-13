@@ -308,6 +308,18 @@ public sealed class ColorWheel : UserControl
     /// as opposed to merely changing one. V3 K.11: the host closes on this.</summary>
     public event Action? Picked;
 
+    /// <summary>11.3 item 25: the STAR in the hub opens the <c>Colors</c> tab -
+    /// current colour, the COPIC/HEX/RGB/HSB read-outs, My Palettes and Dynamic
+    /// Palettes. The tab was reachable only from the Brushes panel's own tab
+    /// strip, which is not the route the reference describes.
+    ///
+    /// <para>Note this is the star, NOT <c>Icons.Palette</c>. 11.25 holds the
+    /// palette mark back - "defined and measured but has no call site ... do not
+    /// wire it anywhere" - until the user decides where a picker mark belongs.
+    /// Item 25 names a star for this specific job, so the star is authored here
+    /// and the palette mark stays unwired.</para></summary>
+    public event Action? PalettesRequested;
+
     /// The colour the picker is showing. Setting it does NOT raise ColorChanged.
     public Color Color
     {
@@ -499,7 +511,7 @@ public sealed class ColorWheel : UserControl
     // 11.20 item 1. The leading above the cap line at the current code size.
     private float _codeInkMeasured = -1f, _codeInkTop;
     private readonly Vector2[] _labelPt = new Vector2[3];
-    private Vector2 _dropPt, _puckPt;
+    private Vector2 _dropPt, _puckPt, _starPt;
     private readonly List<(Vector2 Pt, Color Col)> _chipPts = new();
     // 10.8: the OFF / 25% / 50% / 75% arc that used to sit here is GONE, and
     // with it V3 K.12's whole "arm a ratio, then the next swatch mixes" model.
@@ -1066,6 +1078,19 @@ public sealed class ColorWheel : UserControl
         // 32 DIP closer to the centre than its midpoint does - enough to
         // swallow a puck that only cleared the midpoint's radius.
         _puckPt = At(_rPuck, _base + Roll + Step * 2.4f);
+        // 11.3 item 25's star, on the PLATE arc at the puck's angle - so the two
+        // read as one pair, which is what they are: the puck is the current
+        // colour and the star is where that colour goes to be kept.
+        //
+        // Not a fifth item on the plate arc. 11.13 already recorded that five
+        // abreast do not fit the quadrant a docked dial leaves on screen, which
+        // is why the puck came off this arc in the first place. Stacking the
+        // star radially instead costs no arc at all: _rLabel - _rPuck is 0.30 of
+        // the band (42 DIP at the measured 140), against 20 for the puck's
+        // radius and 15.3 for the star's half-extent - 6.7 DIP of daylight.
+        // Angularly it is 0.9 x Step clear of the eyedropper, the same gap the
+        // puck already holds.
+        _starPt = At(_rLabel, _base + Roll + Step * 2.4f);
 
         _chipPts.Clear();
         int n = Math.Min(12, Recents.Count);
@@ -1668,6 +1693,43 @@ public sealed class ColorWheel : UserControl
         DrawEyedropper(ds, _dropPt, 44f * _ui * Elem,
             Fade(_sampling ? Services.PageTheme.Accent : Services.PageTheme.OnSurface, a),
             a);
+
+        // 36 rather than the eyedropper's 44: the star has to clear the puck
+        // sitting one band inside it, and a five-pointed mark reads at a smaller
+        // size than a pipette does because its silhouette is the whole shape.
+        DrawStar(ds, _starPt, 36f * _ui * Elem,
+                 Fade(Services.PageTheme.OnSurface, a));
+    }
+
+    /// <summary>11.3 item 25's star. Authored on the same 24-unit grid as every
+    /// other mark in Quill and drawn filled, like the eyedropper beside it, with
+    /// no frame or plate behind it - 11.16 is explicit that the hub's marks are
+    /// "just the mark".
+    ///
+    /// <para>Outer radius 10.2, inner 4.3. The 0.42 ratio is deliberately fuller
+    /// than the classical 0.382: the same lesson 11.23 records for the palette's
+    /// wells applies to a star's arms, which at the hub's smallest scale turn to
+    /// spindles and lose the five-point read long before the mark is too small
+    /// to see.</para></summary>
+    private static void DrawStar(CanvasDrawingSession ds, Vector2 c, float size, Color col)
+    {
+        float k = size / 24f;
+        Vector2 L(float x, float y) => c + new Vector2((x - 12f) * k, (y - 12f) * k);
+
+        using var b = new CanvasPathBuilder(ds);
+        b.BeginFigure(L(12.00f, 1.80f));
+        b.AddLine(L(14.53f, 8.52f));
+        b.AddLine(L(21.70f, 8.85f));
+        b.AddLine(L(16.09f, 13.33f));
+        b.AddLine(L(18.00f, 20.25f));
+        b.AddLine(L(12.00f, 16.30f));
+        b.AddLine(L(6.00f, 20.25f));
+        b.AddLine(L(7.91f, 13.33f));
+        b.AddLine(L(2.30f, 8.85f));
+        b.AddLine(L(9.47f, 8.52f));
+        b.EndFigure(CanvasFigureLoop.Closed);
+        using var geo = CanvasGeometry.CreatePath(b);
+        ds.FillGeometry(geo, col);
     }
 
     // Hand-authored eyedropper: a bulb on a 45° shaft that tapers to a point,
@@ -1791,7 +1853,14 @@ public sealed class ColorWheel : UserControl
             return;
         }
 
-        // chrome first: it sits over the empty middle of the ring
+        // chrome first: it sits over the empty middle of the ring.
+        // The star is tested before the puck's arc so the two never argue over a
+        // press: they share an angle and are only 42 DIP apart radially.
+        if (Vector2.Distance(p, _starPt) < 24f * _ui)
+        {
+            PalettesRequested?.Invoke();
+            return;
+        }
         if (Vector2.Distance(p, _dropPt) < 30f * _ui)
         {
             _sampling = true;
