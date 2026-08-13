@@ -61,6 +61,29 @@ namespace Quill.Helpers;
 ///   white + black    #656565   mid grey
 ///   grey + grey      #808080   exact
 ///
+/// DILUTION IS NOT MIXING. <see cref="Blend"/> is the entry point pens and
+/// brushes use, and it has two arms. Two PIGMENTS go through <see cref="Mix"/>
+/// above. A pigment and THE PAGE GROUND go through <see cref="Dilute"/>, which
+/// is a different operation and deliberately so (CONCEPTS-REF 10.8): the page
+/// is not a paint you can add, it is what you are painting ON, so thinning a
+/// colour toward it must behave like adding water or medium, not like stirring
+/// in a light grey.
+///
+/// The user's words: "if mixing with background make paint gradually
+/// transparent as if it is mixing with the page colour." So the hue is held
+/// EXACTLY and only the alpha moves - 50% gives the same hue at half opacity,
+/// and further dilution approaches fully transparent rather than approaching
+/// the ground's colour.
+///
+/// WHY THIS IS LOAD-BEARING AND NOT COSMETIC. A hue-lerp toward the ground
+/// yields a flat OPAQUE colour that happens to match a plain white page. On a
+/// textured, Blueprint or Brown Paper page it is visibly wrong twice over: the
+/// paper's grain cannot show through an opaque fill, and a diluted stroke laid
+/// over ink underneath would hide that ink instead of glazing it. Reduced alpha
+/// gets both right for free, because the compositor is what does the showing
+/// through - which is also why this lives here rather than at each call site,
+/// where the oil-paint work would have had to reinvent it.
+///
 /// LICENCE. Nothing here is ported. The CIE observer tables are measurement, the
 /// primaries were authored and fitted for this file, and the mixing law is the
 /// classical weighted geometric mean of reflectance. Mixbox is the other
@@ -194,6 +217,68 @@ public static class PigmentMix
 
         byte alpha = (byte)Math.Clamp(Math.Round(a.A * (1 - w) + b.A * w), 0, 255);
         return Color.FromArgb(alpha, Encode(r), Encode(g), Encode(bl));
+    }
+
+    /// <summary>How close two colours have to be before one COUNTS as the
+    /// page ground. Deliberately tight: this exists only to absorb a hex
+    /// round-trip (a ground stored as "#FFFDF6" and re-parsed must still match
+    /// itself), NOT to catch colours that merely resemble the paper. A loose
+    /// tolerance here would silently turn a deliberately chosen off-white
+    /// pigment into a dilution on an ivory page, which is the one way this
+    /// feature could surprise someone.</summary>
+    private const int GroundTolerance = 2;
+
+    /// <summary>Whether <paramref name="c"/> IS the page ground, and so means
+    /// "thin this" rather than "stir this in". Alpha is ignored: the ground is
+    /// the opaque paper, whatever alpha a caller happens to carry it with.</summary>
+    public static bool IsGround(Color c, Color ground) =>
+        Math.Abs(c.R - ground.R) <= GroundTolerance &&
+        Math.Abs(c.G - ground.G) <= GroundTolerance &&
+        Math.Abs(c.B - ground.B) <= GroundTolerance;
+
+    /// <summary>Thins <paramref name="pigment"/> toward transparency -
+    /// CONCEPTS-REF 10.8's dilute path. <paramref name="t"/> is how much GROUND
+    /// goes in: 0 returns the pigment untouched, 1 returns it fully
+    /// transparent, 0.5 halves its opacity.
+    ///
+    /// <para>The three channels are returned bit-for-bit unchanged. That is the
+    /// whole point - a diluted colour must still BE its colour, so that two
+    /// washes of it stack into the same hue getting stronger, and so that the
+    /// paper's grain reads through it rather than being covered by an average
+    /// of paint and paper.</para></summary>
+    public static Color Dilute(Color pigment, double t)
+    {
+        double w = Math.Clamp(t, 0, 1);
+        byte alpha = (byte)Math.Clamp(Math.Round(pigment.A * (1 - w)), 0, 255);
+        return Color.FromArgb(alpha, pigment.R, pigment.G, pigment.B);
+    }
+
+    /// <summary>The one call a pen or brush colour blend should make.
+    /// <paramref name="t"/> is how much of <paramref name="b"/> goes in, exactly
+    /// as in <see cref="Mix"/>.
+    ///
+    /// <para>Routes to <see cref="Dilute"/> when either side is the page ground
+    /// and to <see cref="Mix"/> otherwise, so no call site has to know the
+    /// difference or repeat the test - 10.8 asks for the fork to live here
+    /// precisely because the oil-paint work sits on the same substrate.</para>
+    ///
+    /// <para>Note which way round the dilution runs. If <paramref name="b"/> is
+    /// the ground then t IS the amount of thinner, so the pigment is a. If
+    /// <paramref name="a"/> is the ground then the thinner is what is LEFT, so
+    /// the pigment is b and the dilution is 1 - t. Getting this backwards would
+    /// make the slider run the wrong way for one of the two orders.</para>
+    ///
+    /// <para><paramref name="ground"/> is null for a surface that has no page
+    /// behind it, and then this is simply <see cref="Mix"/>.</para></summary>
+    public static Color Blend(Color a, Color b, double t, Color? ground)
+    {
+        if (ground is not Color g) return Mix(a, b, t);
+        bool aIsGround = IsGround(a, g), bIsGround = IsGround(b, g);
+        // Both sides the paper: there is no pigment to keep, so thinning the
+        // ground toward nothing is the only answer that stays consistent.
+        if (bIsGround) return Dilute(a, t);
+        if (aIsGround) return Dilute(b, 1 - t);
+        return Mix(a, b, t);
     }
 
     /// <summary>Fills <paramref name="curve"/> with the colour's pigment
