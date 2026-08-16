@@ -389,9 +389,24 @@ public static class Icons
     /// so one geometry has to serve both PathIcon and <see cref="Mark"/>. Each
     /// arrow is a single seven-point polygon (tip, two barbs, two shaft
     /// shoulders, two tail corners), so nothing overlaps within an arrow;
-    /// <c>F1</c> guards the pair against a rule change upstream.</para></summary>
+    /// <c>F1</c> guards the pair against a rule change upstream.</para>
+    ///
+    /// <para><b>The weights were chosen at the size the mark DRAWS, not at a
+    /// size where every version looks fine.</b> The hover strip runs its marks
+    /// at 15 DIP, which is 15 px on a 100% display, and 11.23 already records
+    /// what happens to a fine feature there: the palette's wells and the star's
+    /// arms both lost their read long before they were too small to see. Four
+    /// candidates were rasterised at 15 / 16 / 22 / 30 px, antialiased and
+    /// through Stretch.Uniform's extent fit, which is what
+    /// <see cref="Filled"/> actually applies. Shaft half-width 1.9 against head
+    /// half-width 4.3 is the one that keeps the barbs distinguishable from the
+    /// shaft at 15 px without the heads clubbing up at 30. Thinner (1.4) reads
+    /// as a dashed diagonal at 15; thicker (2.1) merges head into shaft. The
+    /// tails also pull in to 4.2 from the corner rather than 3.0: a shorter
+    /// arrow is scaled UP more by the extent fit, so it lands heavier for the
+    /// same nominal size.</para></summary>
     public const string FullscreenExit =
-        "F1 M12.6 11.4 L13.59 5.32 L15.15 6.87 L20.01 2.01 L21.99 3.99 L17.13 8.85 L18.68 10.41 Z M11.4 12.6 L10.41 18.68 L8.85 17.13 L3.99 21.99 L2.01 20.01 L6.87 15.15 L5.32 13.59 Z";
+        "F1 M12.6 11.4 L13.24 4.68 L14.93 6.38 L18.46 2.86 L21.14 5.54 L17.62 9.07 L19.32 10.76 Z M11.4 12.6 L10.76 19.32 L9.07 17.62 L5.54 21.14 L2.86 18.46 L6.38 14.93 L4.68 13.24 Z";
 
     // ---- pen stroke silhouettes (UI-SPEC-V3 K.8) -------------------------
     // A pen slot on the dial does not show the PEN — it shows THE MARK THE PEN

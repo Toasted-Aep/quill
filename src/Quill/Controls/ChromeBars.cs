@@ -54,6 +54,25 @@ public sealed class ChromeBars
         /// only line that has to change.</summary>
         public const bool GlassBars = false;
 
+        /// <summary><b>THE PRO SWITCH, and it is off.</b> 15.3 originally had a
+        /// `PRO` badge ride down into the fullscreen cluster with the bracket;
+        /// the user has since asked for it to come out — "remove pro button for
+        /// now, keep it in code for possible reuse much later" — so the
+        /// fullscreen cluster is now
+        /// <c>[ ] | 10% 0deg down up gear ?</c>.
+        ///
+        /// <para>The badge's construction path is RETAINED AND LIVE, not
+        /// commented out and not deleted: <see cref="ProBadge"/> still compiles,
+        /// is still referenced, and turning this to true puts it back. Commented
+        /// code bit-rots silently and does not survive the next refactor of the
+        /// method it sat in; code that still compiles does.</para>
+        ///
+        /// <para>It is read in a condition alongside a field rather than on its
+        /// own, so the compiler never sees a constant-false <c>if</c> and never
+        /// reports the call unreachable — the build stays at zero
+        /// warnings.</para></summary>
+        public const bool ProBadgeVisible = false;
+
         // ---- measured (docs/CONCEPTS-UI-REFERENCE.md §1.3, §1.7) ----
         /// <summary>Hit target per icon. Measured 84 physical px on both
         /// clusters, uniform.</summary>
@@ -447,12 +466,14 @@ public sealed class ChromeBars
         // 15.3, in FULLSCREEN, this cluster changes shape. The caption bar is
         // gone, and the fullscreen glyph migrates down into it:
         //
-        //     [ ]  |  10%   0deg   PRO   down   up   gear   ?
+        //     [ ]  |  10%   0deg   down   up   gear   ?
         //
         // The bracket LEADS, and a thin vertical rule separates it from the zoom
         // readout. Neither exists windowed - the divider is there BECAUSE the
         // bracket moved in, so both are built behind the same flag rather than
-        // being left up and hidden.
+        // being left up and hidden. `PRO` used to sit after the tilt readout and
+        // was taken back out at the user's request; the divider is unaffected,
+        // because it belongs to the bracket rather than to the badge.
         var right = ChromeUi.Row(0);
         right.VerticalAlignment = VerticalAlignment.Center;
         if (_fullscreen)
@@ -461,7 +482,7 @@ public sealed class ChromeBars
             right.Children.Add(Divider(Metrics.FsDividerGapL, Metrics.FsDividerGapR));
         }
         foreach (var el in BuildViewReadout()) right.Children.Add(el);
-        if (_fullscreen) right.Children.Add(ProBadge());
+        if (_fullscreen && Metrics.ProBadgeVisible) right.Children.Add(ProBadge());
         // K.18: the AI button sits immediately to the LEFT of Import. It carries
         // the top bar's own flyout rather than a second copy of the menu.
         var ai = BarButton(Icons.Ai, "AI assistant — summarise, tag, ask, improve", () => { });
@@ -564,17 +585,24 @@ public sealed class ChromeBars
     };
 
     /// <summary>15.3's `PRO`, which in Concepts is the Pro Store button — it
-    /// reads `PRO` once bought and `Go PRO` before. It rides down into this
+    /// reads `PRO` once bought and `Go PRO` before, and rode down into this
     /// cluster in fullscreen exactly as the bracket does.
     ///
-    /// <para><b>Quill has no store, no account and no paid tier</b>, so this
-    /// badge is deliberately INERT and deliberately quiet: muted ink, an outline
-    /// rather than a fill, and a tooltip that says plainly there is nothing
-    /// behind it. It is here because 15.3 specifies the cluster's contents and
-    /// the slot carries the cluster's measured shape — the same treatment the
-    /// import menu's "Take a photo" gets, which is present, disabled and honest
-    /// about why rather than absent or fake. It must not become a button that
-    /// implies something can be purchased.</para></summary>
+    /// <para><b>PARKED, NOT DEAD.</b> The user asked for the badge to come out
+    /// of the cluster "for now" and for the code to stay "for possible reuse
+    /// much later", so this method is still compiled and still called — behind
+    /// <see cref="Metrics.ProBadgeVisible"/>, which is false. Flip that constant
+    /// and the badge is back in its measured place after the tilt readout.
+    /// Nothing here is commented out, because commented-out code does not
+    /// survive the next refactor of the method it used to live in.</para>
+    ///
+    /// <para><b>Quill has no store, no account and no paid tier</b>, so if it is
+    /// ever switched back on it stays deliberately INERT and deliberately quiet:
+    /// muted ink, an outline rather than a fill, and a tooltip that says plainly
+    /// there is nothing behind it — the same treatment the import menu's "Take a
+    /// photo" gets, which is present, disabled and honest about why rather than
+    /// absent or fake. It must not become a button that implies something can be
+    /// purchased.</para></summary>
     private static FrameworkElement ProBadge()
     {
         var text = new TextBlock

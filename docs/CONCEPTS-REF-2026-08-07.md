@@ -2017,3 +2017,77 @@ Four things to get right:
   reads as opaque dark in the capture, but the capture is of a white page.
   Decide deliberately whether it tracks the theme or stays dark always, and
   say which was chosen and why.
+
+### 15.4 Fullscreen chrome — amended after the first build, 2026-08-16
+
+**Amends §15.3. Everything §15.3 says that is not contradicted here still
+stands, including the captures it transcribes** — the diagram above is a
+record of what was photographed and is deliberately left as it was.
+
+**1. `PRO` comes out of the cluster.** The user, having seen it built:
+*"remove pro button for now, keep it in code for possible reuse much
+later."* The fullscreen right-hand cluster is therefore
+
+    [ ]  │  10%   0°   ↓   ↑   ⚙   ?
+
+The bracket still leads and the **divider still separates it from the zoom
+readout** — the rule exists because the bracket moved in, so `PRO` leaving
+does not touch it.
+
+*Parked, not deleted.* The badge's construction path stays compiled, called
+and reachable behind one constant (`ChromeBars.Metrics.ProBadgeVisible`,
+false). Commenting it out would have let it rot silently through the next
+refactor of the method it lived in; code that still compiles cannot. The
+constant is read alongside a field rather than on its own so the compiler
+never sees a constant-false `if` and the build stays at zero warnings.
+
+**2. The strip slides down, and retracts up.** Chosen over sliding in from
+the right because it is the same gesture that revealed it: the pointer
+pushes at the top edge and the strip comes down to meet it.
+
+Four things matter more than the curve:
+
+- **Reversible mid-flight.** The pointer routinely leaves before the strip
+  has arrived. That must turn round from wherever it is, not snap open and
+  then start closing. **One easing curve serves both directions**, because
+  two would make the eased position discontinuous at the moment of reversal
+  — a visible jump.
+- **Hit-testing tracks the visual.** Whatever has visibly arrived is exactly
+  what is clickable. A strip on its way *out* is made inert outright, so a
+  click can never land on something that is leaving.
+- **No flutter at the boundary.** Reveal arms at **4 DIP** from the top;
+  once up, hugging the top edge keeps it up out to **14 DIP**, and the
+  strip's own rectangle carries 6 DIP of slack. The dead band is the
+  mechanism rather than a dwell timer, because a dwell would put latency
+  into a gesture whose whole point is that it is immediate.
+- **Quill's own timings, not invented ones.** 190 ms out / 130 ms back and
+  the cubic-bezier `(0.12, 0.9) → (0.2, 1.0)` open curve, which are the
+  app's menu open/close motion (`Helpers/MenuAnim.cs`, commit `9d0d6cf`).
+
+**3. The strip's colour, resolved: it TRACKS THE THEME.** §15.3 asked for
+the choice to be made deliberately, and the capture cannot settle it — it is
+a capture of a white page. §0 settles it: every surface derives from the
+page ground and new chrome may not invent a second theme source. The strip
+takes **`Panel`**, not `Surface`: §6/§13 give `Panel` to opaque floating
+chrome, while `Surface` is a raised *tint* of the page and would let the
+cluster underneath show through — and occluding that cluster is the strip's
+whole job. §13.1's table guarantees `Panel` against `OnSurface` at no worse
+than 12.1:1 on every ground. The consequence is that on a near-white page
+the strip comes out **light**, not dark. That is the theme contract
+disagreeing with one screenshot of one page, and the contract wins.
+
+The one colour that does **not** track the theme is close-on-hover red
+(`#C42B1C`, the same value the windowed caption button already uses). It is
+Windows' own signal for *this closes the app*; re-deriving it per page would
+make the most destructive control the least recognisable.
+
+**4. What the caption row does in fullscreen.** Windowed, Quill's `TopBar`
+*is* the caption bar — the system one is removed and that row's own three
+buttons are the minimise / maximise / close the user gets. §15.3's "the OS
+title bar is gone" therefore means **that row folds away**, which is what
+lets the app's own top bar (under the dial surface that is `ChromeBars`, per
+§5, not that row) sit at the screen's top edge where §15.3 draws it, and
+what makes the hover strip the thing carrying the window controls. It folds
+**only while `ChromeBars` is up**: with the radial surface off there are no
+floating clusters, that row is the only chrome there is, and hiding it would
+leave a bare canvas.
