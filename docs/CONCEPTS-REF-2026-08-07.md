@@ -1903,3 +1903,117 @@ whatever is currently on screen".
 
 **The user's instruction on fidelity is emphatic and repeated: 1-Point, 2-Point
 and 3-Point, with every variant, must look exactly like the captures.**
+
+---
+
+## 15. The preset catalogue, and fullscreen chrome — 2026-08-16
+
+Ten new captures of the perspective presets, plus one of the fullscreen
+top-right corner.
+
+### 15.1 The preset names are a grammar, not a list
+
+The captured names are `Side Ultrawide`, `3 Point`, `3/4 Narrow`,
+`1/2 Narrow`, `3/4 Wide`, `1/4 Wide`, `Side Wide Below`, `1/4 Wide Below`,
+`3/4 Ultrawide Below`, `3/4 Ultrawide`. They decompose into three
+independent axes:
+
+- **Position** — `1/4`, `1/2`, `3/4`, `Side`. Which quarter mark of the
+  page's stored reference frame the vanishing-point pair straddles. This is
+  §14.5's quartering, and the presets are named directly after it: the rule
+  and the vocabulary are one system, not two.
+- **Spread** — `Narrow`, `Wide`, `Ultrawide`. How far apart the two points
+  sit along the horizon.
+- **Elevation** — the bare name, or `Below`.
+
+**The catalogue is the full cross product**: 4 × 3 × 2 = 24 two-point
+presets, plus `1 Point`, `2 Point`, `3 Point`. The user chose this over
+shipping only the ten that were captured — a list where `3/4 Wide` and
+`1/4 Wide` exist but `1/2 Wide` does not is a list with holes in it.
+
+This also settles the open question from the last pass about **`2 Point` and
+`1/2 Narrow` rendering identically**. They are not an accidental duplicate:
+`2 Point` *is* the centred default, and `1/2 Narrow` names that same
+geometry explicitly. Keep both. Two names reaching one grid is correct here.
+
+### 15.2 The geometry must be MEASURED, and these captures cannot supply it
+
+Do not derive the numbers from the ten images. Two of them are at 100% zoom
+and eight at 10%, and the pan differs between captures, so the
+vanishing-point separations in them are not comparable to each other. Every
+spread read off those images would be a guess wearing a decimal point.
+
+The user chose a measurement pass instead. How it must be run:
+
+1. **Work in a NEW Concepts drawing.** Do not touch `Drawing 5` or any
+   other existing drawing. The user's own work is not a test fixture.
+2. **Fix the view once**, then never pan or zoom again for the whole sweep.
+   Record the zoom readout. Every preset must be captured under one
+   identical viewport or the numbers cannot be compared — which is exactly
+   what went wrong with the ten reference images.
+3. **Enumerate the preset list verbatim first** — every name, in the order
+   Concepts lists them. That list is a deliverable in its own right; it
+   confirms or corrects the 24 + 3 grammar above before any measuring
+   starts.
+4. **Capture each preset to its own PNG**, named for the preset.
+5. **Measure from the PNGs programmatically, never by eye.** The horizon is
+   the one full-width horizontal rule; find it by row-scanning for the
+   darkest full-width row. The vanishing points are the small dots sitting
+   on it; find them as local minima along that row.
+6. **Report fractions, not pixels** — horizon `y` as a fraction of frame
+   height, each vanishing point `x` as a fraction of frame width. §14.5
+   established that these positions are relative to a stored reference
+   frame and therefore differ per screen; a pixel figure measured on one
+   monitor is worthless on another, a fraction is not.
+7. **Then derive the three axis constants**: what fraction of frame width
+   each of `Narrow` / `Wide` / `Ultrawide` spans, what offset each of
+   `1/4` / `1/2` / `3/4` / `Side` applies, and what `Below` does to the
+   horizon height. If the three axes turn out not to be separable — if, say,
+   `Below` also changes the spread — say so plainly rather than forcing the
+   grammar.
+
+**The user's instruction on fidelity is unchanged and emphatic: every
+variant must look exactly like the captures.**
+
+### 15.3 Fullscreen chrome
+
+**Windowed** (captures 1–3): the OS title bar carries `+`, the account
+mark, `PRO`, a fullscreen glyph, then minimize / restore / close. The app's
+own top bar carries `100%`, `0°`, then download, upload, gear, help.
+
+**Fullscreen** (captures 4–10): the OS title bar is gone, and `PRO` and the
+fullscreen glyph have **migrated down into the app's top bar**. Its
+right-hand cluster then reads, left to right:
+
+    [ ]  │  10%   0°   PRO   ↓   ↑   ⚙   ?
+
+So the fullscreen bracket **leads** the cluster, and a thin vertical rule
+separates it from the zoom readout. That divider does not exist windowed —
+it appears only because the bracket moved in.
+
+**On hover at the top edge** (final capture): a dark strip slides in over
+the top-right, drawn **on top of** the app's own top bar and covering the
+right end of that cluster. It carries three marks — minimize, **exit
+fullscreen**, close.
+
+Behaviour, as the user specified it: **reveal when the pointer reaches the
+top edge of the screen, hide when the pointer leaves the strip.** Fullscreen
+only; windowed already has the real title bar and needs no overlay.
+
+Four things to get right:
+
+- **The middle mark is exit-fullscreen, not restore-down.** Its glyph is two
+  arrows pointing inward at each other diagonally, not the windowed
+  double-square. Author it on the same 24-grid as every other mark — and per
+  the standing rule, no emoji.
+- **The app's own `[ ]` bracket stays visible the whole time.** Only the
+  three OS controls hide and reveal. The bracket is the ordinary way back
+  out of fullscreen; the strip is the shortcut.
+- **The reveal region must not swallow ink.** It is a few DIPs of the screen
+  top, and a stroke begun at the top of the canvas has to survive it. Test
+  that explicitly — this is the same class of fault as §11's pen row, where
+  a handler ate an input nobody noticed was gone.
+- **Check the strip's colour against `PageTheme` before hardcoding.** It
+  reads as opaque dark in the capture, but the capture is of a white page.
+  Decide deliberately whether it tracks the theme or stays dark always, and
+  say which was chosen and why.
