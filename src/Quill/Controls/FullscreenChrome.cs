@@ -35,20 +35,25 @@ namespace Quill.Controls;
 /// stroke that starts lower down and travels up to the top edge must not pop a
 /// strip out under the nib mid-stroke.</para>
 ///
-/// <para><b>Colour tracks the page, it is not hardcoded dark.</b> 15.3 asks for
-/// that decision to be made deliberately: the capture reads as an opaque dark
-/// slab, but the capture is of a white page, so it cannot settle the question.
-/// §0 does — every surface in the shell derives from the page ground and new
-/// chrome may not invent a second theme source. The strip therefore takes
-/// <see cref="PageTheme.Panel"/>, which is the token §6/§13 assign to opaque
-/// floating chrome (Settings / Export / Brushes / Objects) rather than
-/// <c>Surface</c>, which is a raised TINT of the page and would let the cluster
-/// underneath show through — and this strip's whole job is to occlude that
-/// cluster. §13.1's table guarantees Panel against OnSurface at no worse than
-/// 12.1:1 on every ground, so the three marks stay legible on paper, on
-/// Blueprint and on Darkprint alike. On a near-white page it comes out light
-/// rather than dark; that is the theme contract disagreeing with one screenshot
-/// of one page, and the contract wins.</para>
+/// <para><b>The strip's fill is a FIXED dark. It is NOT theme-derived.</b>
+/// This was built the other way first, deriving from <c>PageTheme.Panel</c> on
+/// the argument that §0 makes every surface derive from the page ground, and
+/// the user reversed it. Do not reinstate the derivation from that argument:
+/// the point that settles it was already conceded below, for close-hover red.
+/// These are the OS window controls, borrowed. Windows' own caption buttons do
+/// not track the colour of your document, and the carve-out that red already
+/// needed generalises from the one destructive button to the whole strip.
+/// Matching the capture and matching the platform convention agree here, which
+/// is why the disagreement with §0 is worth taking.</para>
+///
+/// <para>The BORDER stays themed, and that is not an inconsistency left behind
+/// by the change. The fill's job is to read as OS chrome, which is
+/// page-independent. The border's job is to separate the strip from the page
+/// behind it, which is page-RELATIVE: on a light page the dark strip already
+/// separates itself and the rule barely shows, whereas on Darkprint the strip
+/// and the page sit within a few levels of each other and that rule is the only
+/// thing dividing them. A fixed border would vanish on exactly the ground that
+/// needs it most.</para>
 ///
 /// <para><b>It slides DOWN out of the screen edge and retracts back up.</b> The
 /// user chose that over sliding in from the right, because it is the same
@@ -109,11 +114,34 @@ public sealed class FullscreenChrome
     }
 
     /// <summary>Close goes red on hover — the one caption affordance users
-    /// expect, and the same <c>#C42B1C</c> the windowed caption button in
-    /// MainWindow already uses. Deliberately NOT themed: this is Windows' own
-    /// signal for "this closes the app", and re-deriving it per page would make
-    /// the most destructive control the least recognisable.</summary>
+    /// expect. <c>#C42B1C</c> is Windows' own close-hover red; it is introduced
+    /// here and is NOT, as an earlier version of this comment claimed, already
+    /// used by MainWindow's <c>BtnWinClose</c>, which is plain Transparent with
+    /// no red hover at all. That windowed button arguably wants the same
+    /// treatment, but it is a separate change and is not made here.
+    ///
+    /// <para>Deliberately not themed: this is Windows' signal for "this closes
+    /// the app", and re-deriving it per page would make the most destructive
+    /// control the least recognisable. It is also the precedent the whole strip
+    /// now follows — see the class remarks.</para></summary>
     private static readonly Color CloseHot = Color.FromArgb(0xFF, 0xC4, 0x2B, 0x1C);
+
+    /// <summary>The strip's ground and its marks, both fixed. Neither value is
+    /// invented here: <c>#202020</c> is the ground Windows 11 gives its own dark
+    /// caption bar, and <c>#F2F2F2</c> is the light ink Quill's dark themes
+    /// already use.
+    ///
+    /// <para>Measured contrast is <b>14.6:1</b>, against the 12.1:1 floor
+    /// §13.1's table guarantees for themed chrome. Dropping theme derivation did
+    /// not drop the guarantee with it — it raised it, because a fixed pair
+    /// cannot land on the worst case the way a derived one can. On close-hover
+    /// the mark swaps to white rather than staying <c>StripInk</c>, so the pair
+    /// that matters there is white on <c>#C42B1C</c> at <b>5.7:1</b> — past the
+    /// 3:1 non-text needs. The red patch itself reads against the strip ground
+    /// at only 2.9:1, which is a state cue rather than content and is the same
+    /// margin Windows lives with on its own dark caption bar.</para></summary>
+    private static readonly Color StripGround = Color.FromArgb(0xFF, 0x20, 0x20, 0x20);
+    private static readonly Color StripInk = Color.FromArgb(0xFF, 0xF2, 0xF2, 0xF2);
 
     private readonly Grid _root;
     private readonly Host _h;
@@ -186,7 +214,7 @@ public sealed class FullscreenChrome
     /// these capture their colours at build time.</summary>
     public void Repaint()
     {
-        _strip.Background = new SolidColorBrush(PageTheme.Panel);
+        _strip.Background = new SolidColorBrush(StripGround);
         _strip.BorderBrush = new SolidColorBrush(PageTheme.Outline);
         // Only the two edges that meet the app get a rule; the other two are
         // flush against the screen. Order is L, T, R, B.
@@ -208,7 +236,7 @@ public sealed class FullscreenChrome
 
     private Button Mark(string geometry, string tip, Action click, bool stroked = false, bool close = false)
     {
-        var ink = PageTheme.OnSurface;
+        var ink = StripInk;
         var art = stroked
             ? Icons.Stroked(geometry, ink, Metrics.GlyphSize, 1.5)
             : Icons.Filled(geometry, ink, Metrics.GlyphSize);
@@ -259,7 +287,7 @@ public sealed class FullscreenChrome
             b.PointerExited += (_, _) =>
             {
                 cell.Background = new SolidColorBrush(Colors.Transparent);
-                if (art != null) art.Stroke = new SolidColorBrush(PageTheme.OnSurface);
+                if (art != null) art.Stroke = new SolidColorBrush(StripInk);
             };
         }
         return b;
