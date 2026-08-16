@@ -2064,22 +2064,42 @@ Four things matter more than the curve:
   the cubic-bezier `(0.12, 0.9) → (0.2, 1.0)` open curve, which are the
   app's menu open/close motion (`Helpers/MenuAnim.cs`, commit `9d0d6cf`).
 
-**3. The strip's colour, resolved: it TRACKS THE THEME.** §15.3 asked for
-the choice to be made deliberately, and the capture cannot settle it — it is
-a capture of a white page. §0 settles it: every surface derives from the
-page ground and new chrome may not invent a second theme source. The strip
-takes **`Panel`**, not `Surface`: §6/§13 give `Panel` to opaque floating
-chrome, while `Surface` is a raised *tint* of the page and would let the
-cluster underneath show through — and occluding that cluster is the strip's
-whole job. §13.1's table guarantees `Panel` against `OnSurface` at no worse
-than 12.1:1 on every ground. The consequence is that on a near-white page
-the strip comes out **light**, not dark. That is the theme contract
-disagreeing with one screenshot of one page, and the contract wins.
+**3. The strip's colour: decided as themed, then REVERSED by the user. It is
+a fixed dark.**
 
-The one colour that does **not** track the theme is close-on-hover red
-(`#C42B1C`, the same value the windowed caption button already uses). It is
-Windows' own signal for *this closes the app*; re-deriving it per page would
-make the most destructive control the least recognisable.
+It was first built theme-derived, taking `Panel` on the argument that §0
+makes every surface derive from the page ground and that new chrome may not
+invent a second theme source. That argument is recorded here rather than
+deleted, because anyone reading only "the strip is dark" will re-derive it
+from §0 and assume it was never considered.
+
+What settles it is a point the themed version had **already conceded** for
+close-on-hover red: these are the **OS window controls**, borrowed. Windows'
+own caption buttons do not track the colour of your document. Once red is
+exempt on that basis, the exemption belongs to the whole strip and not only
+to its most destructive button — and matching the capture and matching the
+platform convention then agree, which is what makes the disagreement with
+§0 worth taking.
+
+So: ground `#202020`, the value Windows 11 gives its own dark caption bar;
+marks `#F2F2F2`, the light ink Quill's dark themes already use. Neither is
+invented. Measured **14.6:1**, against the 12.1:1 floor §13.1 guarantees for
+themed chrome — dropping derivation raised the floor rather than lowering
+it, because a fixed pair cannot land on the worst case the way a derived one
+can. Close-hover swaps the mark to white: white on `#C42B1C` is **5.7:1**.
+
+**The border stays themed, and that is deliberate.** The fill reads as OS
+chrome, which is page-independent. The border separates the strip from the
+page behind it, which is page-*relative*: on a light page the dark strip
+already separates itself, while on Darkprint the strip and the page sit
+within a few levels of each other and that rule is the only thing dividing
+them. A fixed border would vanish on exactly the ground that needs it most.
+
+One correction carried in with this: an earlier comment claimed `#C42B1C`
+was "the same value the windowed caption button already uses". It is not.
+`MainWindow`'s `BtnWinClose` is plain `Transparent` with **no red hover at
+all**. The windowed button arguably wants the same treatment, but that is a
+separate change and was not made here.
 
 **4. What the caption row does in fullscreen.** Windowed, Quill's `TopBar`
 *is* the caption bar — the system one is removed and that row's own three
