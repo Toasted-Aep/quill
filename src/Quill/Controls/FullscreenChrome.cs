@@ -5,7 +5,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Animation;
+using System.Diagnostics;
 using Windows.Foundation;
 using Windows.UI;
 
@@ -27,9 +27,9 @@ namespace Quill.Controls;
 /// fault. So this class never puts an element over the canvas. It attaches ONE
 /// passive <c>PointerMoved</c> listener to the root grid with
 /// <c>handledEventsToo: true</c>, reads the pointer's y, and never sets
-/// <c>Handled</c>. Nothing is added to the hit-test path until the strip is
-/// actually up, and while it is down its <c>Visibility</c> is Collapsed, which
-/// takes it out of hit-testing entirely.</para>
+/// <c>Handled</c>. Nothing joins the hit-test path until the strip is actually
+/// up, and while it is down its <c>Visibility</c> is Collapsed, which takes it
+/// out of hit-testing entirely.</para>
 ///
 /// <para>The reveal is additionally gated on <c>!Pointer.IsInContact</c>: a
 /// stroke that starts lower down and travels up to the top edge must not pop a
@@ -49,6 +49,12 @@ namespace Quill.Controls;
 /// Blueprint and on Darkprint alike. On a near-white page it comes out light
 /// rather than dark; that is the theme contract disagreeing with one screenshot
 /// of one page, and the contract wins.</para>
+///
+/// <para><b>It slides DOWN out of the screen edge and retracts back up.</b> The
+/// user chose that over sliding in from the right, because it is the same
+/// gesture that revealed it: the pointer pushes at the top edge and the strip
+/// comes down to meet it. See <see cref="Tick"/> for why the motion is a
+/// hand-pumped tween rather than a Storyboard or a composition animation.</para>
 /// </summary>
 public sealed class FullscreenChrome
 {
@@ -61,25 +67,42 @@ public sealed class FullscreenChrome
         public required Func<bool> ReduceMotion { get; init; }
     }
 
-    /// <summary>Every number the strip is laid out with, in one block, like
-    /// <see cref="ChromeBars.Metrics"/>.</summary>
+    /// <summary>Every number the strip is laid out and animated with, in one
+    /// block, like <see cref="ChromeBars.Metrics"/>.</summary>
     public static class Metrics
     {
-        /// <summary>DIPs of the screen top that arm the reveal. A few — enough
+        /// <summary>DIPs of the screen top that ARM the reveal. A few — enough
         /// that a mouse flung at the edge (which the OS clamps to y = 0) always
         /// lands in it, small enough that it is not a band the user crosses by
         /// accident on the way somewhere else.</summary>
         public const double RevealBand = 4;
+        /// <summary>THE HYSTERESIS. Once the strip is up, hugging the top edge
+        /// keeps it up out to here — two and a half times the band that armed
+        /// it. Without the gap, a pointer resting at y ≈ RevealBand would sample
+        /// alternately just inside and just outside it and the strip would
+        /// flutter. A dwell timer would also stop the flutter, but it would put
+        /// latency into a gesture whose whole point is that it is immediate, so
+        /// the dead band is the mechanism and the reveal stays instant.</summary>
+        public const double KeepBand = 14;
+        /// <summary>Tolerance around the strip's own rectangle, for the same
+        /// reason: leaving it must be a decision, not a tremor.</summary>
+        public const double StripSlack = 6;
         /// <summary>Caption-bar proportions: the same 32-ish band Windows uses,
         /// so the strip reads as a title bar rather than as a floating card.</summary>
         public const double StripHeight = 34;
         /// <summary>Hit target per mark. Wider than tall, again like a caption
         /// button rather than like the bars' 42 DIP square slots.</summary>
         public const double MarkPitch = 46;
+        /// <summary>15 DIP, and the exit-fullscreen mark's weights were chosen
+        /// against exactly this number rather than against a large preview —
+        /// see <see cref="Icons.FullscreenExit"/>.</summary>
         public const double GlyphSize = 15;
-        /// <summary>Slide distance and duration. The strip comes DOWN out of the
-        /// screen edge, so it travels its own height.</summary>
-        public const double SlideMs = 130, HideMs = 110;
+        /// <summary>QUILL'S OWN MOTION, not a duration invented here. 190 out /
+        /// 130 back are the app's menu open/close timings (MenuAnim.cs, commit
+        /// 9d0d6cf "Menu animations"), and <see cref="Ease"/> is that file's
+        /// open curve. Reusing them is what keeps this strip in the same
+        /// vocabulary as every flyout in the app.</summary>
+        public const double OpenMs = 190, CloseMs = 130;
         /// <summary>Bottom-left corner only: the strip is flush against the top
         /// and right edges of the screen and only its inner corner is free.</summary>
         public const double InnerRadius = 10;
@@ -98,9 +121,11 @@ public sealed class FullscreenChrome
     private readonly StackPanel _row = new() { Orientation = Orientation.Horizontal, Spacing = 0 };
     private readonly TranslateTransform _slide = new();
 
-    private Storyboard? _sb;
     private bool _active;      // fullscreen
-    private bool _shown;
+    private bool _shown;       // WANTED state; _t is where the strip actually is
+    private double _t;         // 0 = fully retracted, 1 = fully out
+    private bool _ticking;
+    private long _lastTick;
 
     public static FullscreenChrome Attach(Grid root, Host h) => new(root, h);
 
@@ -124,6 +149,7 @@ public sealed class FullscreenChrome
             // is never null.
             Background = new SolidColorBrush(Colors.Transparent),
         };
+        _slide.Y = -Metrics.StripHeight;
         // The strip spans every row: it has to sit over the app's own top bar,
         // not inside the canvas row underneath it.
         Grid.SetRow(_strip, 0);
@@ -137,10 +163,11 @@ public sealed class FullscreenChrome
         // handled; this listener reads and never writes, so a stroke is
         // unaffected either way.
         _root.AddHandler(UIElement.PointerMovedEvent, new PointerEventHandler(OnRootPointerMoved), true);
-        // Leaving the strip is what hides it (15.3). Belt and braces alongside
-        // the geometric test in OnRootPointerMoved, which covers the pointer
-        // that leaves without ever generating a move inside the strip.
-        _strip.PointerExited += (_, _) => Hide();
+        // The pointer leaving the window stops generating moves, so the
+        // geometric test below would never fire again and the strip would be
+        // stranded up. This is the only other input this class listens to, and
+        // it is on the ROOT, not over the canvas.
+        _root.PointerExited += (_, _) => { if (_active) Hide(); };
 
         PageTheme.Changed += Repaint;
         Build();
@@ -210,6 +237,8 @@ public sealed class FullscreenChrome
             // propagates to every descendant, which has silently killed overlays
             // in this codebase before. Only Icons.Mark's own art canvas opts out,
             // and it is a child of the target rather than the target itself.
+            // The one place the flag IS used is the strip as a whole, in Apply(),
+            // where the propagation is exactly what is wanted.
         };
         ToolTipService.SetToolTip(b, tip);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, tip);
@@ -248,21 +277,29 @@ public sealed class FullscreenChrome
         try
         {
             var p = e.GetCurrentPoint(_root).Position;
-            // Mid-stroke the strip must not appear under the nib. A stroke that
-            // starts below and is dragged up to the top edge keeps drawing.
-            bool drawing = e.Pointer.IsInContact;
-            if (!drawing && p.Y <= Metrics.RevealBand) { Show(); return; }
-            if (_shown && !OverStrip(p)) Hide();
+            if (!_shown)
+            {
+                // Mid-stroke the strip must not appear under the nib. A stroke
+                // that starts below and is dragged up to the top edge keeps
+                // drawing.
+                if (!e.Pointer.IsInContact && p.Y <= Metrics.RevealBand) Show();
+                return;
+            }
+            // Up already. TWO overlapping ways to stay up, both wider than the
+            // band that armed the reveal, so a pointer sitting on either
+            // boundary cannot oscillate the strip.
+            if (p.Y <= Metrics.KeepBand) return;      // still hugging the top edge
+            if (OverStrip(p)) return;                 // on the strip itself
+            Hide();
         }
         catch { }
     }
 
     private bool OverStrip(Point p)
     {
-        if (_strip.ActualWidth <= 0) return false;
-        double right = _root.ActualWidth;
-        double left = right - _strip.ActualWidth;
-        return p.X >= left - 1 && p.X <= right && p.Y >= 0 && p.Y <= Metrics.StripHeight;
+        double w = _strip.ActualWidth > 0 ? _strip.ActualWidth : Metrics.MarkPitch * 3;
+        double left = _root.ActualWidth - w - Metrics.StripSlack;
+        return p.X >= left && p.Y <= Metrics.StripHeight + Metrics.StripSlack;
     }
 
     private void Show()
@@ -271,8 +308,8 @@ public sealed class FullscreenChrome
         _shown = true;
         Repaint();
         _strip.Visibility = Visibility.Visible;
-        if (_h.ReduceMotion()) { _slide.Y = 0; return; }
-        Animate(-Metrics.StripHeight, 0, Metrics.SlideMs, collapse: false);
+        if (_h.ReduceMotion()) { _t = 1; Apply(); return; }
+        Pump();
     }
 
     private void Hide()
@@ -280,50 +317,108 @@ public sealed class FullscreenChrome
         if (!_shown) return;
         _shown = false;
         if (_h.ReduceMotion()) { HideNow(); return; }
-        Animate(_slide.Y, -Metrics.StripHeight, Metrics.HideMs, collapse: true);
+        Apply();     // inert immediately: nothing on the way out is clickable
+        Pump();
     }
 
     private void HideNow()
     {
         _shown = false;
-        // A finished Storyboard HOLDS its end value (FillBehavior.HoldEnd is the
-        // default) and keeps overriding direct sets until it is stopped. Without
-        // this Stop the slide would be stuck wherever the last animation left it
-        // and the strip would never come back.
-        try { _sb?.Stop(); } catch { }
+        StopTick();
+        _t = 0;
+        Apply();
         _strip.Visibility = Visibility.Collapsed;
-        _slide.Y = -Metrics.StripHeight;
     }
 
-    private void Animate(double from, double to, double ms, bool collapse)
+    // =====================================================================
+    // The slide
+    //
+    // A hand-pumped tween rather than a Storyboard or a composition animation,
+    // for two reasons the brief makes non-negotiable.
+    //
+    // REVERSIBLE MID-FLIGHT. The pointer routinely leaves before the strip has
+    // finished arriving, and that has to turn round from wherever it is rather
+    // than snap open and then close. A Storyboard cannot: it holds its end value
+    // (FillBehavior.HoldEnd) so direct sets are ignored until it is stopped, and
+    // Stop() reverts to the BASE value rather than the current one - so every
+    // reversal would jump. Here the position is a pure function of _t, _t simply
+    // starts moving the other way from where it is, and the position stays
+    // continuous across the turn. One easing curve serves both directions for
+    // exactly that reason: two curves would make Ease(_t) discontinuous at the
+    // moment of reversal, which is a visible jump.
+    //
+    // HIT-TESTING TRACKS THE VISUAL. The strip is moved by a XAML
+    // RenderTransform, which is part of the element's transform chain and so is
+    // part of hit-testing: whatever has visibly arrived is exactly what is
+    // clickable, no more and no less. A composition-visual Translation - the
+    // mechanism MenuAnim uses for menus - is a render-time transform that
+    // hit-testing does not follow, so the buttons would be clickable at their
+    // final positions while still visibly sliding. Going the other way, a strip
+    // that is on its way OUT is made inert outright, so a click can never land
+    // on something that is leaving.
+    // =====================================================================
+
+    private void Apply()
     {
-        try
+        _slide.Y = -Metrics.StripHeight * (1 - Ease(_t));
+        // Propagation is the POINT here, unlike everywhere else in this file:
+        // one flag makes the whole retracting strip inert.
+        _strip.IsHitTestVisible = _shown;
+    }
+
+    private void Pump()
+    {
+        if (_ticking) return;
+        _ticking = true;
+        _lastTick = Stopwatch.GetTimestamp();
+        CompositionTarget.Rendering += Tick;
+    }
+
+    private void StopTick()
+    {
+        if (!_ticking) return;
+        _ticking = false;
+        CompositionTarget.Rendering -= Tick;
+    }
+
+    private void Tick(object? sender, object e)
+    {
+        double target = _shown ? 1 : 0;
+        long now = Stopwatch.GetTimestamp();
+        double ms = (now - _lastTick) * 1000.0 / Stopwatch.Frequency;
+        _lastTick = now;
+        // A frame that took absurdly long (a breakpoint, a stalled GPU) must not
+        // teleport the strip; clamp to about four frames' worth.
+        ms = Math.Clamp(ms, 0, 64);
+        double step = ms / (_shown ? Metrics.OpenMs : Metrics.CloseMs);
+        _t = Math.Abs(target - _t) <= step ? target : _t + Math.Sign(target - _t) * step;
+        Apply();
+        if (_t != target) return;
+        StopTick();
+        if (_t <= 0) _strip.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>The app's own open curve — cubic-bezier (0.12, 0.9) to
+    /// (0.2, 1.0), lifted from MenuAnim.cs so the strip eases like every flyout
+    /// in Quill. Solved by bisection because a cubic Bezier's x is not
+    /// invertible in closed form; 18 halvings resolve x to about 4e-6, which is
+    /// far under a pixel of the 34 DIP it drives.</summary>
+    private static double Ease(double t)
+    {
+        if (t <= 0) return 0;
+        if (t >= 1) return 1;
+        const double X1 = 0.12, Y1 = 0.9, X2 = 0.2, Y2 = 1.0;
+        static double Bez(double u, double p1, double p2)
         {
-            try { _sb?.Stop(); } catch { }
-            _slide.Y = from;
-            var a = new DoubleAnimation
-            {
-                From = from,
-                To = to,
-                Duration = new Duration(TimeSpan.FromMilliseconds(ms)),
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-            };
-            // The canonical form: target the ELEMENT and walk to the transform's
-            // property. Targeting the TranslateTransform directly resolves in
-            // some hosts and silently no-ops in others.
-            Storyboard.SetTarget(a, _strip);
-            Storyboard.SetTargetProperty(a, "(UIElement.RenderTransform).(TranslateTransform.Y)");
-            var sb = new Storyboard();
-            sb.Children.Add(a);
-            if (collapse)
-                sb.Completed += (_, _) => { if (!_shown) _strip.Visibility = Visibility.Collapsed; };
-            _sb = sb;
-            sb.Begin();
+            double m = 1 - u;
+            return (3 * m * m * u * p1) + (3 * m * u * u * p2) + (u * u * u);
         }
-        catch
+        double lo = 0, hi = 1, u = t;
+        for (int i = 0; i < 18; i++)
         {
-            _slide.Y = to;
-            if (collapse && !_shown) _strip.Visibility = Visibility.Collapsed;
+            u = (lo + hi) / 2;
+            if (Bez(u, X1, X2) < t) lo = u; else hi = u;
         }
+        return Bez(u, Y1, Y2);
     }
 }
