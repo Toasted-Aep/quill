@@ -67,6 +67,8 @@ public sealed partial class MainWindow : Window
     // bars are up, so the top bar stops offering them (V3 I).
     private ChromeBars? _chromeBars;
     private HashSet<string> _barTools = new(StringComparer.Ordinal);
+    // 15.3: the hover-revealed window controls, which only exist in fullscreen.
+    private FullscreenChrome? _fsChrome;
     // Both tool surfaces subscribe to this and are dumb renderers over the same
     // state, so the linear row and the dial can never diverge (§2.2).
     private event Action? ToolUiChanged;
@@ -691,6 +693,7 @@ public sealed partial class MainWindow : Window
             Wheel = _toolWheel,
             Bar = _penBar,
             OpenGallery = () => OpenGallery_Click(this, new RoutedEventArgs()),
+            ToggleFullscreen = () => Fullscreen_Click(this, new RoutedEventArgs()),
             RenamePage = () => _ = RenamePageFromTitleAsync(),
             OpenSettings = OpenSettingsWindow,
             ImportPdf = () => ImportPdf_Click(this, new RoutedEventArgs()),
@@ -708,6 +711,17 @@ public sealed partial class MainWindow : Window
             CollectVectors = pages => CollectVectorPagesAsync(pages.ToList()),
         });
         _chromeBars.OwnedKeysChanged += t => { _barTools = new HashSet<string>(t, StringComparer.Ordinal); ApplyToolbarVisibility(); };
+        // 15.3: the three window controls that hide and reveal at the screen's
+        // top edge. Attached to RootGrid, not to CanvasArea, because the strip
+        // has to sit at the TOP EDGE OF THE SCREEN and be drawn OVER the app's
+        // own top bar - and those are two different rows of this grid.
+        _fsChrome = FullscreenChrome.Attach(RootGrid, new FullscreenChrome.Host
+        {
+            Minimise = () => WinMin_Click(this, new RoutedEventArgs()),
+            ExitFullscreen = LeaveFullscreen,
+            Close = Close,
+            ReduceMotion = () => _reduceMotion,
+        });
         // K.21: the Notebooks window and the radial dial join the panel solver.
         // The dial is an OBSTACLE - ToolWheel owns its own placement through
         // TopInset - so the Notebooks window is the one that gives way, which is
@@ -2441,9 +2455,7 @@ public sealed partial class MainWindow : Window
     {
         if (AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
         {
-            AppWindow.SetPresenter(AppWindowPresenterKind.Default);   // leave full screen
-            ReapplyBorderlessCaption();
-            UpdateFullscreenIcon();
+            LeaveFullscreen();
             return;
         }
         ToggleMaximise();
@@ -7189,6 +7201,9 @@ public sealed partial class MainWindow : Window
         // slide in from the bottom edge the dock lives on, like the other bars
         if (showRow) FadeIn(PenRow, slideY: 24); else FadeOut(PenRow);
         if (showChip) FadeIn(PenRowShowBtn); else FadeOut(PenRowShowBtn);
+        // 15.3's fold depends on whether the floating clusters are up, and this
+        // is the one place that decides it.
+        ApplyFullscreenChrome();
     }
 
     private void PenRowCollapse_Click(object sender, RoutedEventArgs e)
@@ -7408,14 +7423,22 @@ public sealed partial class MainWindow : Window
 
     private void Fullscreen_Click(object sender, RoutedEventArgs e)
     {
-        var presenter = AppWindow.Presenter;
-        if (presenter.Kind == AppWindowPresenterKind.FullScreen)
-        {
-            AppWindow.SetPresenter(AppWindowPresenterKind.Default);
-            ReapplyBorderlessCaption();
-        }
-        else
-            AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+        if (AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen) { LeaveFullscreen(); return; }
+        AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+        UpdateFullscreenIcon();
+    }
+
+    /// <summary>ONE way out of fullscreen, for all five routes into it: the
+    /// caption button, F11, Esc, the top bar's own `[ ]` bracket (15.3) and the
+    /// hover strip's middle mark. Switching presenters hands back a fresh
+    /// OverlappedPresenter WITH the system caption, so restoring the borderless
+    /// one is part of leaving - Esc used to skip that step and come back with a
+    /// system title bar above Quill's own.</summary>
+    private void LeaveFullscreen()
+    {
+        if (AppWindow.Presenter.Kind != AppWindowPresenterKind.FullScreen) return;
+        AppWindow.SetPresenter(AppWindowPresenterKind.Default);
+        ReapplyBorderlessCaption();
         UpdateFullscreenIcon();
     }
 
@@ -7427,6 +7450,43 @@ public sealed partial class MainWindow : Window
                        || AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Maximized };
             BtnFullscreenIcon.Glyph = covers ? "" : "";   // inward once it fills the screen
             ToolTipService.SetToolTip(BtnWinFull, covers ? "Restore down" : "Maximise");
+        }
+        catch { }
+        ApplyFullscreenChrome();
+    }
+
+    /// <summary>CONCEPTS-REF 15.3 — the chrome changes SHAPE in fullscreen.
+    ///
+    /// <para>Windowed, <c>TopBar</c> IS the caption bar: the system one is
+    /// removed (<see cref="ReapplyBorderlessCaption"/>) and that row's own three
+    /// buttons are the minimise / maximise / close the user gets. 15.3 says that
+    /// in fullscreen the title bar is GONE — so this folds it away, which lets
+    /// the app's own top bar (which under the dial surface is ChromeBars, per
+    /// section 5, not this row) rise to the screen's top edge where 15.3 draws
+    /// it. The fullscreen glyph and PRO migrate into its right cluster, and the
+    /// three window controls become the hover-revealed strip.</para>
+    ///
+    /// <para><b>The row is only folded away when ChromeBars is actually up.</b>
+    /// With the radial surface switched off there are no floating clusters, this
+    /// row is the only chrome there is, and hiding it would leave a bare canvas
+    /// with no way back except the keyboard. Self-correcting rather than
+    /// change-guarded, because it also runs on SizeChanged and after every
+    /// surface switch, and several of those paths fade the bar the other way
+    /// first.</para></summary>
+    private void ApplyFullscreenChrome()
+    {
+        try
+        {
+            bool fs = AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
+            _chromeBars?.SetFullscreen(fs);
+            _fsChrome?.SetActive(fs);
+            bool fold = fs && _chromeBars?.IsVisible == true;
+            if (fold)
+            {
+                if (TopBar.Visibility == Visibility.Visible) FadeOut(TopBar);
+            }
+            else if (!_uiHidden && TopBar.Visibility != Visibility.Visible)
+                FadeIn(TopBar, pop: false, slideY: -14);
         }
         catch { }
     }
@@ -7456,8 +7516,7 @@ public sealed partial class MainWindow : Window
         }
         if (Surface.ActiveTextBox == null && AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
         {
-            AppWindow.SetPresenter(AppWindowPresenterKind.Default);
-            UpdateFullscreenIcon();
+            LeaveFullscreen();
             args.Handled = true;
             return;
         }
