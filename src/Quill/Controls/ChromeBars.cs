@@ -66,12 +66,21 @@ public sealed class ChromeBars
         /// <summary>Row centre sits 31 DIP below the title bar, so a 42 DIP
         /// target starts 10 DIP down.</summary>
         public const double RowTop = 31 - IconPitch / 2;
-        /// <summary>The divider rule: 1 x 16 DIP, LEFT CLUSTER ONLY, between the
-        /// gallery icon and the page name. Colour below.</summary>
+        /// <summary>The divider rule: 1 x 16 DIP. Left cluster, between the
+        /// gallery icon and the page name — and, in fullscreen only, right
+        /// cluster too (15.3). Colour below.</summary>
         public const double DividerW = 1, DividerH = 16;
         /// <summary>Gaps around the divider: 27 phys from the glyph, 23 phys to
         /// the name — 13.5 and 11.5 DIP.</summary>
         public const double DividerGapL = 13.5, DividerGapR = 11.5;
+        /// <summary>Gaps around the FULLSCREEN divider, which is a different
+        /// situation from the left cluster's: that one separates a 42 DIP slot
+        /// from a text run and needs the measured 13.5/11.5, while this one sits
+        /// between TWO 42 DIP slots, each already carrying ~13 DIP of its own
+        /// padding around a 16 DIP glyph. Reusing 13.5/11.5 here would put ~51
+        /// DIP between the bracket and the lock, roughly twice the gap 15.3's
+        /// `[ ]  │  10%` shows.</summary>
+        public const double FsDividerGapL = 3, FsDividerGapR = 3;
         /// <summary>Active-menu indicator: TWO SEPARATE underlines, one centred
         /// under each active toggle — never one bar spanning the group.</summary>
         public const double UnderlineW = 40, UnderlineH = 2;
@@ -101,6 +110,11 @@ public sealed class ChromeBars
         public PenBar? Bar { get; init; }
 
         public required Action OpenGallery { get; init; }
+        /// <summary>15.3: the `[ ]` bracket that LEADS the fullscreen cluster is
+        /// the ordinary way back out of fullscreen — the hover strip is only the
+        /// shortcut. It calls the same toggle the caption button and F11 do, so
+        /// the three can never disagree about what fullscreen means.</summary>
+        public required Action ToggleFullscreen { get; init; }
         public required Action RenamePage { get; init; }
         public required Action OpenSettings { get; init; }
         /// <summary>DIPs of the right edge the docked settings panel is
@@ -202,6 +216,7 @@ public sealed class ChromeBars
     public PanelLayout Layout => _layout;
 
     private bool _on;
+    private bool _fullscreen;
     private bool _zoomLocked;
     private float _lockedZoom = 1f;
     private bool _reasserting;
@@ -271,6 +286,24 @@ public sealed class ChromeBars
     // =====================================================================
     // Show / hide
     // =====================================================================
+
+    /// <summary>True while these bars are the app's top bar. MainWindow reads it
+    /// to decide whether hiding the caption bar in fullscreen would leave the
+    /// user with no chrome at all.</summary>
+    public bool IsVisible => _on;
+
+    /// <summary>Fullscreen changes the SHAPE of the right cluster (15.3): the
+    /// bracket and its divider lead it, and the PRO slot joins the readouts.
+    /// Cheap and idempotent; a rebuild only happens while the bars are up,
+    /// because <see cref="SetVisible"/> rebuilds on the way in anyway.</summary>
+    public void SetFullscreen(bool on)
+    {
+        if (_fullscreen == on) return;
+        _fullscreen = on;
+        if (!_on) return;
+        try { Build(); } catch { }
+        PushInset();
+    }
 
     /// <summary>Shown exactly when the radial dial is the tool surface.</summary>
     public void SetVisible(bool on)
@@ -410,9 +443,25 @@ public sealed class ChromeBars
         _leftRow.Children.Add(Cluster(left));
 
         // ---- RIGHT CLUSTER: lock zoom tilt | AI import export settings
+        //
+        // 15.3, in FULLSCREEN, this cluster changes shape. The caption bar is
+        // gone, and the fullscreen glyph migrates down into it:
+        //
+        //     [ ]  |  10%   0deg   PRO   down   up   gear   ?
+        //
+        // The bracket LEADS, and a thin vertical rule separates it from the zoom
+        // readout. Neither exists windowed - the divider is there BECAUSE the
+        // bracket moved in, so both are built behind the same flag rather than
+        // being left up and hidden.
         var right = ChromeUi.Row(0);
         right.VerticalAlignment = VerticalAlignment.Center;
+        if (_fullscreen)
+        {
+            right.Children.Add(BarButton(Icons.Fullscreen, "Leave full screen (F11)", _h.ToggleFullscreen));
+            right.Children.Add(Divider(Metrics.FsDividerGapL, Metrics.FsDividerGapR));
+        }
         foreach (var el in BuildViewReadout()) right.Children.Add(el);
+        if (_fullscreen) right.Children.Add(ProBadge());
         // K.18: the AI button sits immediately to the LEFT of Import. It carries
         // the top bar's own flyout rather than a second copy of the menu.
         var ai = BarButton(Icons.Ai, "AI assistant — summarise, tag, ask, improve", () => { });
@@ -499,15 +548,68 @@ public sealed class ChromeBars
         return b;
     }
 
-    /// <summary>The measured 1 x 16 DIP rule, LEFT CLUSTER ONLY, sampled #262829.</summary>
-    private static FrameworkElement Divider() => new Border
+    /// <summary>The measured 1 x 16 DIP rule, sampled #262829. Left cluster
+    /// always; right cluster only in fullscreen, where 15.3 puts one between the
+    /// migrated bracket and the zoom readout. The gaps are a parameter because
+    /// the two situations are not the same measurement — see
+    /// <see cref="Metrics.FsDividerGapL"/>.</summary>
+    private static FrameworkElement Divider(double gapL = Metrics.DividerGapL,
+                                            double gapR = Metrics.DividerGapR) => new Border
     {
         Width = Metrics.DividerW,
         Height = Metrics.DividerH,
-        Margin = new Thickness(Metrics.DividerGapL, 0, Metrics.DividerGapR, 0),
+        Margin = new Thickness(gapL, 0, gapR, 0),
         VerticalAlignment = VerticalAlignment.Center,
         Background = new SolidColorBrush(ChromeUi.BarDivider),
     };
+
+    /// <summary>15.3's `PRO`, which in Concepts is the Pro Store button — it
+    /// reads `PRO` once bought and `Go PRO` before. It rides down into this
+    /// cluster in fullscreen exactly as the bracket does.
+    ///
+    /// <para><b>Quill has no store, no account and no paid tier</b>, so this
+    /// badge is deliberately INERT and deliberately quiet: muted ink, an outline
+    /// rather than a fill, and a tooltip that says plainly there is nothing
+    /// behind it. It is here because 15.3 specifies the cluster's contents and
+    /// the slot carries the cluster's measured shape — the same treatment the
+    /// import menu's "Take a photo" gets, which is present, disabled and honest
+    /// about why rather than absent or fake. It must not become a button that
+    /// implies something can be purchased.</para></summary>
+    private static FrameworkElement ProBadge()
+    {
+        var text = new TextBlock
+        {
+            Text = "PRO",
+            FontSize = 10.5,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            CharacterSpacing = 90,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(ChromeUi.Dim),
+        };
+        var pill = new Border
+        {
+            Child = text,
+            Padding = new Thickness(6, 1, 5, 2),
+            CornerRadius = new CornerRadius(4),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(ChromeUi.Wash(0x55)),
+            Background = new SolidColorBrush(Colors.Transparent),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var cell = new Grid
+        {
+            Height = Metrics.IconPitch,
+            Margin = new Thickness(6, 0, 6, 0),
+            Background = new SolidColorBrush(Colors.Transparent),
+            Children = { pill },
+        };
+        ToolTipService.SetToolTip(cell,
+            "Concepts carries a Pro Store badge here, and reference 15.3 has it move into this cluster in " +
+            "full screen. Quill has no store, no account and no paid tier, so the badge is inert: there is " +
+            "nothing to buy and nothing it unlocks.");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(cell, "PRO badge (inert - Quill has no paid tier)");
+        return cell;
+    }
 
     /// <summary>A menu toggle. Its underline lights while its pane is on canvas -
     /// TWO SEPARATE underlines, one per active toggle, never one bar spanning the
