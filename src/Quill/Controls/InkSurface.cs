@@ -3776,6 +3776,11 @@ public sealed class InkSurface : UserControl
         }
 
         int rays = Math.Clamp(def.RayCount, 4, 96);
+        // The viewport corners do not change across the VP loop - tl/br are fixed
+        // for the frame - so the buffer is filled once here rather than re-made on
+        // each pass. Same four points either way; it just keeps the stackalloc off
+        // a repeated path (CA2014).
+        Span<Vector2> corners = stackalloc Vector2[4] { tl, new(br.X, tl.Y), br, new(tl.X, br.Y) };
         for (int i = 0; i < vpCount; i++)
         {
             var vp = new Vector2((float)def.Vps[i].X, (float)def.Vps[i].Y);
@@ -3786,7 +3791,6 @@ public sealed class InkSurface : UserControl
             float a0 = 0f, a1 = MathF.PI * 2f;
             if (!inside)
             {
-                Span<Vector2> corners = stackalloc Vector2[4] { tl, new(br.X, tl.Y), br, new(tl.X, br.Y) };
                 float lo = float.MaxValue, hi = float.MinValue;
                 float baseA = MathF.Atan2(((tl.Y + br.Y) * 0.5f) - vp.Y, ((tl.X + br.X) * 0.5f) - vp.X);
                 foreach (var corner in corners)
