@@ -277,7 +277,10 @@ public sealed class InkSurface : UserControl
     private readonly Dictionary<string, CanvasBitmap?> _bitmaps = new();
     private readonly HashSet<string> _bitmapLoading = new();
 
-    private const float OriginMargin = 48f;
+    // Last view that was numerically valid, kept so OnViewChanged can refuse a
+    // non-finite one (16.1). Not a bound - see the note there.
+    private Vector2 _lastGoodOffset = Vector2.Zero;
+    private float _lastGoodZoom = 1f;
     private readonly CanvasTextFormat _titleFormat = new()
     {
         FontFamily = "Poppins",
@@ -412,7 +415,6 @@ public sealed class InkSurface : UserControl
 
         ContentChanged += () =>
         {
-            _contentMaxDirty = true;   // view clamp bounds follow edits (#inkfix)
             // text-box keystrokes never touch ink, so they leave the static-ink
             // cache valid; every other edit invalidates it (#43). The per-stroke
             // cache-append optimisation was removed — it dropped just-drawn ink.
@@ -549,22 +551,44 @@ public sealed class InkSurface : UserControl
 
     private void OnViewChanged()
     {
-        // The top/left clamp existed, but nothing bounded the other side: a
-        // stray palm-fling (touch pan + inertia) could hurl the view thousands
-        // of px past the content AND get saved with the page — every stroke
-        // looked "invisible" because the viewport was in empty space (#inkfix).
-        if (_page != null && ActualWidth > 10)
-        {
-            EnsureContentMax();
-            double worldR = Math.Max(Math.Max(_page.Width, _contentMaxX), 1500) + 900;
-            double worldB = Math.Max(Math.Max(_page.Height, _contentMaxY), 2200) + 900;
-            ViewOffset = new Vector2(
-                MathF.Max(ViewOffset.X, (float)(-worldR * ViewZoom + Math.Min(ActualWidth * 0.3, 260))),
-                MathF.Max(ViewOffset.Y, (float)(-worldB * ViewZoom + Math.Min(ActualHeight * 0.3, 260))));
-        }
-        ViewOffset = new Vector2(
-            MathF.Min(ViewOffset.X, OriginMargin),
-            MathF.Min(ViewOffset.Y, OriginMargin));
+        // CONCEPTS-REF 16.1: THE CANVAS IS INFINITE. Pan has no stop in any
+        // direction, so NOTHING here may bound ViewOffset. Two walls used to
+        // stand at this spot and both are gone:
+        //
+        // * The bottom/right clamp (27e999b, "Invisible-ink root cause (view
+        //   teleport)"). It pinned the view inside max(page size, content) + 900
+        //   world units, which on a default page is a wall about 2400 x 3100 out
+        //   - roughly one page plus a screen, which is exactly the symptom the
+        //   user reported. It was layer 1 of a THREE-layer fix for a palm-fling
+        //   that hurled the view thousands of px past the content and then SAVED
+        //   it there. Layers 2 and 3 are the ones that actually address that bug
+        //   and both stay untouched: OnManipStarted rejects a touch pan within
+        //   400ms of a pen, and LoadPage self-heals a restored view that shows
+        //   none of the page's content by jumping to it. This clamp added no
+        //   protection those two do not already give; it only made the canvas
+        //   finite.
+        //
+        // * The top/left OriginMargin clamp, here since 1.0, which kept the world
+        //   origin within 48px of the viewport's top-left corner and so made
+        //   every negative coordinate unreachable. NormalizeContent existed only
+        //   to shovel pre-clamp content back inside that wall "so it stays
+        //   reachable"; with no wall nothing is unreachable, so the migration and
+        //   the image-drop clamp that dodged its trigger zone have gone with it.
+        //
+        // What is left is a VALIDITY guard, not a bound. A degenerate
+        // manipulation (a zero or NaN scale) can produce a non-finite offset or
+        // zoom, and one of those poisons every ToWorld() that follows - the view
+        // never recovers, and the page saves the poison. Such a value is refused
+        // and the last good one kept. Any FINITE offset, however far out, is
+        // accepted: there is no distance at which panning stops.
+        if (float.IsFinite(ViewOffset.X) && float.IsFinite(ViewOffset.Y))
+            _lastGoodOffset = ViewOffset;
+        else
+            ViewOffset = _lastGoodOffset;
+        if (float.IsFinite(ViewZoom) && ViewZoom > 0f)
+            _lastGoodZoom = ViewZoom;
+        else
+            ViewZoom = _lastGoodZoom;
         if (_page != null)
         {
             _page.ViewX = ViewOffset.X;
@@ -642,7 +666,6 @@ public sealed class InkSurface : UserControl
     {
         StopReplay();
         CancelPendingText();
-        NormalizeContent(page);
         _page = page;
         // Evict decoded image bitmaps the new page doesn't reference — the cache
         // previously only ever grew, keeping every pasted image of the whole
@@ -665,7 +688,6 @@ public sealed class InkSurface : UserControl
         _activeShape = null;
         ViewOffset = new Vector2((float)page.ViewX, (float)page.ViewY);
         ViewZoom = Math.Clamp((float)page.ViewZoom, 0.1f, 8f);
-        _contentMaxDirty = true;
         // Heal cells eaten by the old empty-box cleanup (#cellfix): every grid
         // slot of every table needs a TextElement, EXCEPT slots covered by a
         // merged cell's span (merges legitimately remove hidden cells).
@@ -713,56 +735,16 @@ public sealed class InkSurface : UserControl
         catch { }
     }
 
-    /// <summary>
-    /// One-time migration: content drawn above/left of the origin (before the
-    /// title-bar clamp existed) is shifted into the valid region so it stays
-    /// reachable.
-    /// </summary>
-    private static void NormalizeContent(NotePage page)
-    {
-        double minX = double.MaxValue, minY = double.MaxValue;
-        foreach (var st in page.Strokes)
-            foreach (var p in st.Points)
-            {
-                if (p.X < minX) minX = p.X;
-                if (p.Y < minY) minY = p.Y;
-            }
-        foreach (var t in page.Texts)
-        {
-            if (t.X < minX) minX = t.X;
-            if (t.Y < minY) minY = t.Y;
-        }
-        foreach (var sh in page.Shapes)
-        {
-            double sx = Math.Min(sh.X, sh.X + sh.W), sy = Math.Min(sh.Y, sh.Y + sh.H);
-            if (sx < minX) minX = sx;
-            if (sy < minY) minY = sy;
-        }
-        if (minX == double.MaxValue) return;
-
-        double dx = minX < -10 ? 44 - minX : 0;
-        double dy = minY < -10 ? 104 - minY : 0;
-        if (dx == 0 && dy == 0) return;
-
-        foreach (var st in page.Strokes)
-            foreach (var p in st.Points)
-            {
-                p.X += (float)dx;
-                p.Y += (float)dy;
-            }
-        foreach (var t in page.Texts)
-        {
-            t.X += dx;
-            t.Y += dy;
-        }
-        foreach (var sh in page.Shapes)
-        {
-            sh.X += dx;
-            sh.Y += dy;
-        }
-        page.ViewX -= dx * page.ViewZoom;
-        page.ViewY -= dy * page.ViewZoom;
-    }
+    // NormalizeContent stood here: a load-time migration that shifted every
+    // stroke, text and shape down-right whenever anything sat more than 10 world
+    // units above or left of the origin. Its whole purpose was the OriginMargin
+    // wall - content out there could not be panned to, so it was moved where it
+    // could. 16.1 removes the wall, which removes the premise: negative
+    // coordinates are now ordinary canvas. Keeping the migration would have been
+    // strictly worse than the bug it fixed, because ink the user had just drawn
+    // up and to the left would be silently relocated on the next page load -
+    // which is the "#27-batch2" failure (an equation insert moving the notes)
+    // turned from an edge case into the normal path.
 
     public void SetTool(ToolType tool)
     {
@@ -1936,35 +1918,8 @@ public sealed class InkSurface : UserControl
         e.Handled = true;
     }
 
-    // Cached content extents for the view clamp; refreshed lazily after edits.
-    private bool _contentMaxDirty = true;
-    private double _contentMaxX, _contentMaxY;
-    private void EnsureContentMax()
-    {
-        if (!_contentMaxDirty || _page == null) return;
-        _contentMaxDirty = false;
-        double mx = 0, my = 0;
-        foreach (var s in _page.Strokes)
-        {
-            if (s.Points.Count == 0) continue;
-            s.GetBounds(out _, out _, out float x1, out float y1);
-            if (x1 > mx) mx = x1;
-            if (y1 > my) my = y1;
-        }
-        foreach (var sh in _page.Shapes)
-        {
-            double x1 = Math.Max(sh.X, sh.X + sh.W), y1 = Math.Max(sh.Y, sh.Y + sh.H);
-            if (x1 > mx) mx = x1;
-            if (y1 > my) my = y1;
-        }
-        foreach (var t in _page.Texts)
-        {
-            if (t.X + t.Width > mx) mx = t.X + t.Width;
-            if (t.Y + 60 > my) my = t.Y + 60;
-        }
-        _contentMaxX = mx;
-        _contentMaxY = my;
-    }
+    // The content-extent cache that used to live here fed the view clamp and
+    // had no other reader; 16.1 removed the clamp, so it went with it.
 
     public Vector2 ScreenToWorld(Point screen) => ToWorld(new Vector2((float)screen.X, (float)screen.Y));
 
@@ -5114,12 +5069,14 @@ public sealed class InkSurface : UserControl
             Kind = ShapeKind.Image,
             ImagePath = path,
             EquationLatex = equationLatex,
-            // clamp out of NormalizeContent's trigger zone: an image dropped
-            // above/left of the origin used to make the next page load shift
-            // ALL content down-right — the "inserting an equation moved my
-            // notes" bug (#27-batch2)
-            X = Math.Max(44, atCaret ? c.X : c.X - w / 2),
-            Y = Math.Max(104, atCaret ? c.Y : c.Y - h / 2),
+            // An image lands where it was dropped, negative coordinates included.
+            // It used to be clamped to (44, 104) to stay out of
+            // NormalizeContent's trigger zone; with 16.1's infinite canvas that
+            // migration is gone, and the clamp with it - it would otherwise fling
+            // an image across the page whenever the user was panned above or left
+            // of the origin, which is now somewhere they can be.
+            X = atCaret ? c.X : c.X - w / 2,
+            Y = atCaret ? c.Y : c.Y - h / 2,
             W = w,
             H = h,
             Size = 0
