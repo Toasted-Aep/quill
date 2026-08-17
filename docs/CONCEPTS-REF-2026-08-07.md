@@ -2427,7 +2427,8 @@ corner. But it is the **same visual complaint** `4a7ab47` fixed for the reopen
 path, arrived at through the still-open path: `HostGeometryChanged` shifts
 without consulting `_userPlaced`, while `Show()` now does. A panel the user never
 touched ends up in two different places depending only on whether it happened to
-be open while the host grew. Worth deciding on; not changed here.
+be open while the host grew. **Ruled a bug and fixed — see §15.4c. The table
+above is left as the measurement of the build it was taken on.**
 
 **3. NOT VERIFIED: whether a panel the user DRAGGED keeps its spot.** This is the
 other half of `4a7ab47` — `_userPlaced` set on drag and on resize, so that
@@ -2439,6 +2440,60 @@ rather than merely harmless, and it is still open. To close it: drag the panel b
 its grab bar to a position valid in both hosts, close it, toggle fullscreen,
 reopen, and confirm it comes back at the dragged host-relative position instead
 of at 14 / 60.
+
+### 15.4c The two placement paths now answer one question — 2026-08-17
+
+**Closes §15.4b item 2. The user's ruling: the asymmetry is a bug, not a design
+question, and the rule must be uniform in both paths — user-placed → preserve the
+position and clamp; auto-placed → re-anchor to the corner `OpenOn` promises.** A
+panel merely open across the change deserves the same answer as one being
+reopened, which is what `4a7ab47` established for the reopen path.
+
+**What was wrong.** Two methods decided the same thing and disagreed.
+`FloatingWindow.Show()` asked `!_placed || !_userPlaced` and re-anchored when the
+answer was yes. `HostGeometryChanged` asked only `!_placed`, and for everything
+past that shifted the popup's absolute offsets by the host-origin delta, so an
+auto-placed panel that happened to be open across the toggle kept a position it
+was never given deliberately.
+
+Fullscreen → windowed *looked* right, but only by accident: the shift landed the
+panel outside a host 360 DIP narrower and `Constrain()` clamped it back to the
+right edge. That is a clamp, not an anchor, and it is why the two directions
+disagreed — windowed → fullscreen has nothing to clamp against, so 543.5 DIP
+became 537.0 (the host-origin delta exactly) and the panel sat mid-screen with a
+387 DIP right gap. **The clamp had been standing in for the rule, and it only
+works in the direction where the host shrinks.**
+
+**What was built.** One predicate, `FloatingWindow.KeepsOwnPosition`
+(`_placed && _userPlaced`), read by both paths.
+
+- `Show()` — `if (!KeepsOwnPosition) PlaceAnchored();` Same behaviour as before;
+  `!_placed || !_userPlaced` was already that expression, and naming it is what
+  makes the second call site obviously the same test rather than a similar one.
+- `HostGeometryChanged` — the `!_placed` early return stays (a window never
+  placed has no position to preserve and no corner to return to; `Show()` will
+  place it against the current origin when it opens). Then
+  `if (!KeepsOwnPosition) { PlaceAnchored(); return; }` before the shift, so the
+  auto arm re-anchors and the user arm still shifts-and-clamps exactly as
+  `57d1aad` intended.
+
+`PlaceAnchored` recomputes from the current origin and size and ends in
+`Constrain()`, so the re-anchoring arm is not skipping the clamp; it also
+refreshes `_lastOrg`, so a later drag shifts from the right baseline. The
+predicate keeps `_placed` in it only for the never-placed case: a resize sets
+`_userPlaced` without touching `_placed`, but a window being resized is open and
+therefore placed by construction.
+
+A consequence worth naming, because it is wider than fullscreen: an auto-placed
+panel now re-anchors on **every** host size change, including an ordinary drag of
+the window border. That is the rule, not a side effect — a panel positioned only
+by `OpenOn` belongs in `OpenOn`'s corner, and widening the window used to leave it
+stranded inland with nothing to clamp it back.
+
+Builds at 0 warnings. **Not yet verified on screen: the dragged-panel case is
+still §15.4b item 3's, and it is now the thing that decides whether the whole
+`_userPlaced` distinction is right rather than merely harmless — if a drag does
+not survive a close / toggle / reopen, both call sites are wrong together.**
 
 ### 15.5 The preset sweep — the list, enumerated from Concepts, 2026-08-17
 
