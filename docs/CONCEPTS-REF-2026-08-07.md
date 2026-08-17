@@ -2241,3 +2241,68 @@ a third of `_t`. A third of 130 ms is ≈ 43 ms, and the measured retraction fro
 60 px to 0 took ≈ 50 ms. A retraction that had taken the full 130 ms from there
 would have meant `_t` was being reset rather than reversed.
 
+### 15.4b Proof 7 — where the Settings panel actually lands, 2026-08-17
+
+Measured on the build at `4a7ab47`, in an instance started fresh so `_placed`
+and `_userPlaced` began unset and the failing path was the real one. Two hosts:
+
+- **windowed** — restored, not maximised, outer window rect 98, 98 → 2258, 1411 px
+  = **1080 × 656 DIP**, which is close to the 1072 DIP host `4a7ab47`'s message
+  describes;
+- **fullscreen** — 0, 0 → 2880, 1800 px = **1440 × 900 DIP**.
+
+Panel rectangles were taken by differencing panel-open against panel-closed
+*inside the window's client area only* and keeping the span where the changed-
+pixel density is at least half its maximum, which excludes the drop shadow. All
+four states measure the panel at **516 × 444 DIP**, so nothing below changes its
+size.
+
+| state | right gap | top | verdict |
+| --- | --- | --- | --- |
+| opened WINDOWED, first time | 20.5 DIP | 93.0 DIP | the windowed anchor |
+| closed, F11, **REOPENED FULLSCREEN** | **14.0 DIP** | **60.0 DIP** | re-anchored |
+| F11 out, panel left open | 20.5 DIP | 93.0 DIP | identical to the first open |
+| F11 back in, panel left open | 387.0 DIP | 60.0 DIP | *not* right-anchored |
+
+Gaps in the windowed rows are measured from the **outer** window rect, which
+includes the invisible resize border and the caption row; the 20.5 / 93.0 pair is
+the same host-relative position as 14 / 60, which is why rows 1 and 3 agree
+exactly.
+
+**1. The `_placed`-survives-`Hide()` case is fixed.** Opened windowed, closed,
+fullscreen entered, reopened: the panel comes back at **exactly `EdgeGap` = 14.0
+DIP from the right edge and `TopBand` = 60.0 DIP from the top** of the 1440 DIP
+host. Not a caption row low, not at the windowed x. Those two numbers falling on
+the constants to a tenth is the proof — `Show()` re-anchored, which is what
+`4a7ab47`'s `!_placed || !_userPlaced` was written to make it do. (What the old
+code would have done instead is `57d1aad`'s and `4a7ab47`'s reasoning, not
+something measured here; the pre-fix build was not run.)
+
+**2. Across a fullscreen toggle with the panel OPEN, size and top band survive
+— and the horizontal behaviour is asymmetric.** Fullscreen → windowed puts it
+back at the windowed anchor, because `57d1aad`'s shift-by-host-delta lands it
+outside a host 360 DIP narrower and `Constrain()` then clamps it to the right
+edge. Windowed → fullscreen instead keeps its absolute left: 543.5 DIP becomes
+537.0, a shift of 6.5 DIP, which is exactly the host-origin delta. So it stays
+where it was and the now-1440 DIP host leaves it with a **387 DIP right gap** —
+sitting in the middle of the screen rather than in the corner it opens in.
+
+That is not a regression in either commit, and it does not contradict
+`57d1aad`, which deliberately preserves position rather than snapping to the
+corner. But it is the **same visual complaint** `4a7ab47` fixed for the reopen
+path, arrived at through the still-open path: `HostGeometryChanged` shifts
+without consulting `_userPlaced`, while `Show()` now does. A panel the user never
+touched ends up in two different places depending only on whether it happened to
+be open while the host grew. Worth deciding on; not changed here.
+
+**3. NOT VERIFIED: whether a panel the user DRAGGED keeps its spot.** This is the
+other half of `4a7ab47` — `_userPlaced` set on drag and on resize, so that
+`Show()` re-anchors auto-placed panels only. The run was stood down (the machine
+is shared, and input arrived that the run did not generate) with the drag
+injection queued and not yet delivered, so **the `_userPlaced` distinction is
+untested on screen.** It is the case that matters most for the fix being right
+rather than merely harmless, and it is still open. To close it: drag the panel by
+its grab bar to a position valid in both hosts, close it, toggle fullscreen,
+reopen, and confirm it comes back at the dragged host-relative position instead
+of at 14 / 60.
+
