@@ -2713,8 +2713,13 @@ From the capture, an image attachment when selected shows:
 - **A floating bar centred above it**, carrying, left to right: a paperclip, a
   padlock, a duplicate mark, a waste bin, then a **divider**, then flip
   horizontal and flip vertical.
-- **An edge frame** — a thin line marking the attachment's exact bounds, with a
-  small circular handle at each of the four corners.
+- **Guide lines and corner handles.** Four small hollow circles mark the corners
+  of the bounding box. The lines are **NOT a box on those bounds** — an earlier
+  version of this section said they were and was wrong. They are **full-canvas
+  guides projected from the box**: two verticals at its left and right edges
+  running the whole viewport height, two horizontals at its top and bottom
+  running the whole width. Thin and low-contrast; they read as alignment
+  guides, not as a selection outline.
 - **A bottom action row**, centred below: **Rotate**, **Scale**, **Filter**,
   each an icon with its word beside it.
 
@@ -2837,4 +2842,55 @@ Four things to get right:
 4. **The switch is live.** Changing the surface in settings updates the top bar
    immediately — no restart, no reopening the page. A setting that needs a
    relaunch to take effect reads as a bug.
+
+### 16.9 Drawn strokes get the same selection treatment
+
+*"remember the selection? add the lines and other stuff for selection of
+drawings too. (you are already doing these lines and quick actions for
+attachments and typed texts)."*
+
+So a selected **stroke** gets everything §16.2 gives an attachment: the floating
+quick-action bar above, the four corner handles, the full-canvas guide lines,
+and the **Rotate / Scale / Filter** row below. One selection presentation, three
+kinds of subject.
+
+**But the dial does NOT grey the way §16.3 describes.** That is the difference
+between the two cases and it matters. In the capture, a selected stroke leaves
+the dial *live and populated with that stroke's own values* — size reading
+`2.31 cm`, stability `0%`, opacity `100%`, and the colour dot showing the
+stroke's blue. §16.3 greys the dial for an attachment because a photograph has
+no pen size and cannot be recoloured. **A stroke has all of those**, so the
+controls stay usable and editing them edits the selection.
+
+Do not generalise §16.3's greying to selection as a whole. It is specific to
+subjects that genuinely lack the properties the dial exposes.
+
+### 16.10 Click to select, without dragging
+
+*"make just holding selection button on pen and clicking (not dragging to
+select) select the stroke."*
+
+Today selection requires a drag — a lasso or marquee around the target. A
+**click on a stroke must select that stroke**, with no drag at all.
+
+**Implement this for the selection modality however it is reached**, rather than
+for one trigger. The phrase "selection button on pen" could mean the stylus
+barrel button (`_barrelGesture` already exists in `InkSurface`) or the selection
+tool chosen in the pen row or dial. The generous reading covers both and cannot
+be wrong: **whenever selection is the active modality, a press-and-release
+without meaningful movement selects the stroke under the point.** A drag
+continues to lasso exactly as it does now.
+
+Three things to get right:
+
+1. **Distinguish a click from a drag by movement, not by timing.** A held press
+   that never moves is still a click, and a stylus always jitters a little — use
+   a small movement threshold in screen space, and remember the canvas can be at
+   any zoom from 0.1x to 16x, so a world-space threshold would mean something
+   different at each end.
+2. **Hit-test with tolerance.** A hairline stroke is nearly impossible to hit on
+   its mathematical path. There is precedent in the file: eraser and selection
+   proximity tests already pad by roughly the stroke's own size.
+3. **Say what happens when strokes overlap** — topmost, or nearest centre. Pick
+   one, state it, and be consistent with whatever the lasso already does.
 
