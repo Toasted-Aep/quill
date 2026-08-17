@@ -146,6 +146,19 @@ public sealed class FloatingWindow
     /// place".</para></summary>
     private Point _lastOrg;
 
+    /// <summary>Whether the USER put the window where it is, as opposed to
+    /// <see cref="PlaceAnchored"/> having done it.
+    ///
+    /// <para><c>_placed</c> alone cannot answer that — it is set by both — and
+    /// conflating them left a real gap: a window auto-placed against the narrow
+    /// windowed host, closed, and reopened in fullscreen came back at the old
+    /// x, which is right-anchored for a 1072 DIP host and adrift in the middle
+    /// of a 1440 DIP one. Only a window the user actually moved or resized has
+    /// a position worth preserving across that; anything else should re-anchor
+    /// to the corner it always opens in, which is what <see cref="OpenOn"/>
+    /// already promises.</para></summary>
+    private bool _userPlaced;
+
     /// <summary>Raised when the info / help button is pressed.</summary>
     public Action? InfoRequested { get; set; }
     /// <summary>Raised after the window is closed.</summary>
@@ -599,7 +612,11 @@ public sealed class FloatingWindow
         // stamp the resolved theme onto the panel explicitly, or a window opened
         // on a Blueprint page would come up wearing the last page's palette.
         PaintPanel();
-        if (!_placed) PlaceAnchored();
+        // Re-anchor on every open unless the user has chosen a position: the host
+        // may be a different size and in a different place than it was last time
+        // (fullscreen toggled while this was closed), and the default corner is
+        // defined relative to the host, not remembered in absolute coordinates.
+        if (!_placed || !_userPlaced) PlaceAnchored();
         if (_scroller.Content == null) ShowTab(_active);
         _popup.IsOpen = true;
         // The window is made visible OUTRIGHT and only then animated: a fade that
@@ -712,6 +729,7 @@ public sealed class FloatingWindow
         _popup.HorizontalOffset += dx;
         _popup.VerticalOffset += dy;
         _placed = true;
+        _userPlaced = true;      // from here on this window's own position wins
         ClampIntoView();
     }
 
@@ -815,6 +833,9 @@ public sealed class FloatingWindow
         grip.ManipulationDelta += (_, e) =>
         {
             double dx = e.Delta.Translation.X, dy = e.Delta.Translation.Y;
+            // A resize is the user choosing this geometry just as much as a drag
+            // is - and the left/top grips move the origin as well as the size.
+            _userPlaced = true;
             var (maxW, maxH) = MaxSize();
             if (sx < 0)
             {
