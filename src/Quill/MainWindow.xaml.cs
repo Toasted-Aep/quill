@@ -7280,8 +7280,10 @@ public sealed partial class MainWindow : Window
         try
         {
             if (_hideEnteredFullscreen && AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen)
+            {
                 AppWindow.SetPresenter(AppWindowPresenterKind.Default);
-                ReapplyBorderlessCaption();
+                ReapplyBorderlessCaption();   // as in LeaveFullscreen: the fresh presenter brings the system caption back
+            }
         }
         catch { }
         _hideEnteredFullscreen = false;
