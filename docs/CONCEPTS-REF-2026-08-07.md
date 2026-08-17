@@ -2382,3 +2382,77 @@ its grab bar to a position valid in both hosts, close it, toggle fullscreen,
 reopen, and confirm it comes back at the dragged host-relative position instead
 of at 14 / 60.
 
+### 15.5 The preset sweep — the list, enumerated from Concepts, 2026-08-17
+
+Run per §15.2. **Setup, in the order that section requires it:** Concepts was
+already fullscreen (window rect 0, 0 → 2880, 1800, and its cluster reads
+`[ ] │ 82% 0° PRO ↓ ↑ ⚙ ?` — the bracket leading with the divider, which is what
+§15.3 transcribed), and it was fullscreen **before** the scratch drawing was made.
+A **new blank drawing** was then created from the gallery — it came up as
+**Drawing 7** — at **100% zoom, 0° tilt**, and the viewport has not been panned or
+zoomed since. `Drawing 5` was opened only far enough to see its gallery thumbnail
+(which is labelled `1/4 Ultrawide`, confirming it is the drawing the reference
+captures came from) and was **not** opened or altered. Nothing was deleted.
+
+**Step 3 of §15.2 — the verbatim list — does not confirm the 24 + 3 grammar. It
+corrects it, and the correction is structural: THE PRESETS ARE PER GRID TYPE.**
+
+The presets do not live in one catalogue. Precision ▸ Grid offers nine grid
+**types** — `No Grid`, `Dot Grid`, `Graph Paper`, `Lined Paper`, `Isometric Grid`,
+`Triangle`, `1-Point`, `2-Point`, `3-Point` — and each of the three perspective
+types opens its own editor (`Edit Grid`) with its **own** `Preset` strip. Read off
+those strips, left to right, exactly as Concepts lists them:
+
+**1-Point** — two entries:
+
+    1 Point   │   Custom
+
+**2-Point** — nine presets, then `Custom`:
+
+    2 Point   │   1/2 Narrow   │   1/4 Narrow   │   Side Narrow   │   1/2 Wide
+    1/4 Wide  │   Side Wide    │   1/2 Wide Below   │   Side Ultrawide   │   Custom
+
+**3-Point** — nine presets, then `Custom`:
+
+    3 Point        │   3/4 Narrow          │   1/2 Narrow   │   3/4 Wide
+    1/4 Wide       │   Side Wide Below     │   1/4 Wide Below
+    3/4 Ultrawide Below              │   3/4 Ultrawide       │   Custom
+
+**What this settles about the ten captures.** §15.1 read the ten captured names as
+one two-point catalogue with holes in it. They are not. Nine of the ten —
+`3 Point`, `3/4 Narrow`, `1/2 Narrow`, `3/4 Wide`, `1/4 Wide`, `Side Wide Below`,
+`1/4 Wide Below`, `3/4 Ultrawide Below`, `3/4 Ultrawide` — **are exactly the
+3-Point list, in order and complete**. The tenth, `Side Ultrawide`, is the ninth
+entry of the **2-Point** list. So the captures were a complete sweep of the
+3-Point presets plus one 2-Point preset, and the reason `1/2 Wide` appeared to be
+a missing sibling of `3/4 Wide` and `1/4 Wide` is that those three names are not
+siblings at all — `1/2 Wide` is 2-Point's, the other two are 3-Point's.
+
+Consequences for §15.1, which should be read against this:
+
+- **There is no 24-entry two-point catalogue in Concepts.** The cross product
+  `4 × 3 × 2 = 24` is not what the app ships; each perspective type ships a
+  curated nine. Shipping 24 remains a perfectly good *decision* — but it is
+  Quill's decision, not a reconstruction of Concepts, and §15.1 presents it as
+  the latter.
+- **The axes are real as vocabulary and not as a grid.** `Narrow` / `Wide` /
+  `Ultrawide` and `1/4` / `1/2` / `3/4` / `Side` and the bare / `Below` pair all
+  appear, but no list enumerates them combinatorially: 2-Point never says `3/4`,
+  3-Point never says `Side Narrow`, and `Ultrawide` appears once in the 2-Point
+  list and twice in the 3-Point one.
+- **`2 Point` and `1/2 Narrow` are both in the 2-Point list**, adjacent, which is
+  consistent with §15.1's finding that they render identically and that keeping
+  both is correct.
+- Each list ends with **`Custom`**, which §15.1 does not mention and which is how
+  Concepts exposes a hand-placed configuration.
+
+**Still to do: steps 4 to 7 — the measurement.** The viewport is frozen and the
+scratch drawing is in place, but each preset has not yet been captured to its own
+PNG and no horizon or vanishing point has been measured, so **no spread /
+position / `Below` constants are derived here and none should be inferred from
+this section.** What is above is step 3 and step 3 only. When the measurement is
+run, the sweep is **19 named presets across three lists**, not 27 in one, and the
+per-list grouping is itself a variable: whether `1/4 Wide` in the 2-Point list and
+`1/4 Wide` in the 3-Point list place their shared points identically is one of the
+things the numbers will answer.
+
