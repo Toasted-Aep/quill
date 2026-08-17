@@ -159,6 +159,24 @@ public sealed class FloatingWindow
     /// already promises.</para></summary>
     private bool _userPlaced;
 
+    /// <summary>THE ONE QUESTION BOTH PLACEMENT PATHS ASK: does this window's own
+    /// position outrank the corner <see cref="OpenOn"/> promises?
+    ///
+    /// <para>Only if the USER put it there. <see cref="Show"/> and
+    /// <see cref="HostGeometryChanged"/> used to answer this differently - Show
+    /// consulted <c>_userPlaced</c> and the host-change path did not - and the
+    /// disagreement was measurable. A panel nobody had touched, left OPEN across a
+    /// toggle into fullscreen, kept its absolute left and landed mid-screen with a
+    /// 387 DIP right gap, while the same panel closed and reopened came back in the
+    /// corner (15.4b item 2). Both paths read this property now, so a panel merely
+    /// open across the change and one being reopened cannot drift apart again.</para>
+    ///
+    /// <para><c>_placed</c> is in the test only for the never-yet-placed window,
+    /// which has no position to outrank anything with; a resize sets
+    /// <c>_userPlaced</c> without touching <c>_placed</c>, but an open window is
+    /// placed by construction.</para></summary>
+    private bool KeepsOwnPosition => _placed && _userPlaced;
+
     /// <summary>Raised when the info / help button is pressed.</summary>
     public Action? InfoRequested { get; set; }
     /// <summary>Raised after the window is closed.</summary>
@@ -616,7 +634,7 @@ public sealed class FloatingWindow
         // may be a different size and in a different place than it was last time
         // (fullscreen toggled while this was closed), and the default corner is
         // defined relative to the host, not remembered in absolute coordinates.
-        if (!_placed || !_userPlaced) PlaceAnchored();
+        if (!KeepsOwnPosition) PlaceAnchored();
         if (_scroller.Content == null) ShowTab(_active);
         _popup.IsOpen = true;
         // The window is made visible OUTRIGHT and only then animated: a fade that
@@ -687,24 +705,46 @@ public sealed class FloatingWindow
     /// <summary>The host moved or resized under an already-placed window —
     /// entering or leaving fullscreen being the case that matters.
     ///
-    /// <para>RE-PLACED, NOT RE-OPENED. The window keeps the position the user
-    /// dragged it to, shifted by exactly the amount the host moved, so it holds
-    /// still relative to the top bar it is anchored under. Snapping it back to
-    /// the default corner on every F11 would be a different bug, not a fix.</para>
+    /// <para>ONE RULE, AND IT IS <see cref="Show"/>'S RULE. A window the user
+    /// placed is RE-PLACED, NOT RE-OPENED: it keeps the position it was dragged
+    /// to, shifted by exactly the amount the host moved, so it holds still
+    /// relative to the top bar it is anchored under. A window THIS CLASS placed
+    /// re-anchors instead, because the corner <see cref="OpenOn"/> promises is the
+    /// whole of what ever positioned it, and that corner has just moved. Snapping
+    /// a DRAGGED window back to the default corner on every F11 would be a
+    /// different bug, not a fix — which is why the two arms exist rather than one.</para>
+    ///
+    /// <para>The old version shifted BOTH arms by the host-origin delta, and
+    /// 15.4b item 2 measured what that does. Fullscreen → windowed only looked
+    /// right by accident: the shift put the window outside a host 360 DIP
+    /// narrower and <see cref="Constrain"/> clamped it back to the right edge.
+    /// Windowed → fullscreen had nothing to clamp against, so an untouched
+    /// panel's 543.5 DIP left became 537.0 — the host-origin delta exactly —
+    /// leaving a 387 DIP right gap. Same panel, same toggle, two different
+    /// answers depending only on which direction it went.</para>
     ///
     /// <para>Then <see cref="Constrain"/>, because the host changed SIZE as well
     /// as origin: a window dragged to the bottom edge of a fullscreen page, or
     /// sized to its full height, does not fit the smaller windowed one and has to
     /// be clamped back into it. That clamp is one-way by nature — coming back to
     /// fullscreen leaves it at the size the windowed bounds forced, because the
-    /// size the user chose is not recoverable once it has been overwritten.</para></summary>
+    /// size the user chose is not recoverable once it has been overwritten.
+    /// <see cref="PlaceAnchored"/> ends in the same clamp, so the re-anchoring arm
+    /// is not skipping it.</para></summary>
     private void HostGeometryChanged(object sender, SizeChangedEventArgs e)
     {
-        // Never placed: Show() will run PlaceAnchored against the current origin
-        // anyway, and shifting a not-yet-meaningful offset would corrupt it.
+        // Never placed at all: nothing to preserve and no corner to return to
+        // yet. Show() will run PlaceAnchored against the current origin when it
+        // opens, and shifting a not-yet-meaningful offset would corrupt it.
         if (!_placed) return;
         try
         {
+            // Auto-placed: re-anchor. PlaceAnchored recomputes from the CURRENT
+            // origin and size, so it is correct whichever way the host changed,
+            // and it refreshes _lastOrg itself - a later drag then shifts from
+            // the right baseline.
+            if (!KeepsOwnPosition) { PlaceAnchored(); return; }
+
             var org = HostOrigin;
             double dx = org.X - _lastOrg.X, dy = org.Y - _lastOrg.Y;
             if (dx != 0 || dy != 0)
