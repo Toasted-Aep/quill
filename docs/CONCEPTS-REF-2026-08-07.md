@@ -2200,14 +2200,34 @@ before it could be.** Three things to check, and one number to check them agains
    `SetPresenter` — it does not lay out synchronously; `ApplyFullscreenChrome` is
    self-correcting and runs again on `SizeChanged`.
 
-**The tight number is item 2, and it is tight by 2 DIP.** `OverStrip` reaches
+**The tight number is item 2, and it WAS tight by 2 DIP.** `OverStrip` reaches
 `StripHeight + StripSlack` = **40 DIP** down, while the first row of format-bar
-buttons now starts at `StripHeight (34) + FormatBarStripGap (4) + the bar's own
-4 DIP top padding` = **42 DIP**. So the buttons clear the strip's hit rectangle by
-2 DIP, and the bar's top 2 DIP of *background* still fall inside it — background
-only, no control. If item 2 fails, or if this is ever run at a scale factor where
-2 DIP rounds away, **`FormatBarStripGap` is the constant to raise**; it exists for
-exactly that.
+buttons started at `StripHeight (34) + FormatBarStripGap (4) + the bar's own
+4 DIP top padding` = **42 DIP**. So the buttons cleared the strip's hit rectangle
+by 2 DIP, and the bar's top 2 DIP of *background* fell inside it — background
+only, no control.
+
+**`FormatBarStripGap` has since been raised from 4 to 12 — 2 DIP is not
+clearance.** The user's ruling: two DIP sits inside layout-rounding noise, and
+this project has already been bitten by exactly that magnitude — §14.3's corner
+target snapped from 5.747 to 5.5 and broke a hitbox. The floor asked for is **8
+DIP of clearance, measured**. At 12 the first control starts at `34 + 12 + 4` =
+**50 DIP** and clears the 40 DIP hit rectangle by **10**, and the bar's background
+no longer enters the rectangle at all.
+
+Ten and not the eight asked for, deliberately: a nominal 8 that rounds to 7.5 has
+not met an 8 DIP floor, and the point of raising the constant is to stop the
+answer depending on rounding at all. Two DIP of canvas, in text mode only.
+
+**The reason it was 4 is the reason it must not be picked in isolation again.**
+The margin already reads `StripHeight` from `FullscreenChrome.Metrics` so that
+retuning the strip moves the bar — but `StripSlack` was never in the arithmetic,
+and the clearance is a function of `StripHeight + StripSlack`, not of
+`StripHeight`. The invariant, recorded on the constant itself:
+`(StripHeight + FormatBarStripGap + the bar's padding) − (StripHeight +
+StripSlack) ≥ 8`. If either metric is retuned, **confirm it by measuring where the
+first button row lands — not by re-doing that arithmetic**, which is what produced
+a 2 DIP answer that read as fine on paper.
 
 ### 15.3b Driving Quill from injected input — two traps that fake a null result
 
