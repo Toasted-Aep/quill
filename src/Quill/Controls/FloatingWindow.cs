@@ -131,6 +131,21 @@ public sealed class FloatingWindow
     private int _active;
     private bool _placed;
 
+    /// <summary>THE HOST ORIGIN THE CURRENT OFFSETS WERE COMPUTED AGAINST.
+    ///
+    /// <para>Both offsets are absolute in the popup's space, but every limit they
+    /// were derived from is relative to <see cref="_host"/>. So the pair is only
+    /// meaningful together with the origin that produced it, and that origin
+    /// MOVES: entering fullscreen folds the caption row away (15.4 item 4) and
+    /// the page host rises by that row's height.</para>
+    ///
+    /// <para>Without this, <see cref="Show"/>'s <c>if (!_placed)</c> means a
+    /// window placed once is never placed again — so one opened windowed and
+    /// reopened in fullscreen came back at its old offset, sitting a caption row
+    /// too low. That is the bug the user saw as "settings page opens off
+    /// place".</para></summary>
+    private Point _lastOrg;
+
     /// <summary>Raised when the info / help button is pressed.</summary>
     public Action? InfoRequested { get; set; }
     /// <summary>Raised after the window is closed.</summary>
@@ -169,6 +184,20 @@ public sealed class FloatingWindow
     {
         _host = host;
         ActiveRoot ??= host.XamlRoot;
+        // Self-correcting, rather than a call from whoever toggled fullscreen.
+        // SetPresenter does not lay out synchronously and the caption row is
+        // FADED away, so the host's geometry settles some frames after the
+        // toggle - anything that re-placed at the call site would read the OLD
+        // origin. Reacting to the host's own SizeChanged instead is by
+        // construction after layout, and it covers every route that moves the
+        // row (F11, the bracket, the strip's middle mark, Esc, the dial surface
+        // going away) without any of them knowing this class exists.
+        //
+        // SizeChanged and not LayoutUpdated: the latter fires for every layout
+        // pass in the tree, and this would do a TransformToVisual on each. The
+        // host cannot move without also changing size here - folding the row
+        // both raises the host and makes it taller.
+        _host.SizeChanged += HostGeometryChanged;
 
         _panel = new Border
         {
@@ -633,8 +662,43 @@ public sealed class FloatingWindow
             ? EdgeGap
             : Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap));
         _popup.VerticalOffset = org.Y + TopBand;
+        _lastOrg = org;
         _placed = true;
         Constrain();
+    }
+
+    /// <summary>The host moved or resized under an already-placed window —
+    /// entering or leaving fullscreen being the case that matters.
+    ///
+    /// <para>RE-PLACED, NOT RE-OPENED. The window keeps the position the user
+    /// dragged it to, shifted by exactly the amount the host moved, so it holds
+    /// still relative to the top bar it is anchored under. Snapping it back to
+    /// the default corner on every F11 would be a different bug, not a fix.</para>
+    ///
+    /// <para>Then <see cref="Constrain"/>, because the host changed SIZE as well
+    /// as origin: a window dragged to the bottom edge of a fullscreen page, or
+    /// sized to its full height, does not fit the smaller windowed one and has to
+    /// be clamped back into it. That clamp is one-way by nature — coming back to
+    /// fullscreen leaves it at the size the windowed bounds forced, because the
+    /// size the user chose is not recoverable once it has been overwritten.</para></summary>
+    private void HostGeometryChanged(object sender, SizeChangedEventArgs e)
+    {
+        // Never placed: Show() will run PlaceAnchored against the current origin
+        // anyway, and shifting a not-yet-meaningful offset would corrupt it.
+        if (!_placed) return;
+        try
+        {
+            var org = HostOrigin;
+            double dx = org.X - _lastOrg.X, dy = org.Y - _lastOrg.Y;
+            if (dx != 0 || dy != 0)
+            {
+                _popup.HorizontalOffset += dx;
+                _popup.VerticalOffset += dy;
+                _lastOrg = org;
+            }
+            Constrain();
+        }
+        catch { }
     }
 
     private void FirstPlacement(object sender, SizeChangedEventArgs e)
