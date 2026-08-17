@@ -2018,6 +2018,101 @@ Four things to get right:
   Decide deliberately whether it tracks the theme or stays dark always, and
   say which was chosen and why.
 
+### 15.3a Verified on screen, 2026-08-17
+
+**The diagram and the four bullets in §15.3 are the transcription of the
+captures and are left exactly as they were. This section records where that
+transcription does not match the cluster that was built, what the reveal region
+actually does to a stroke, and one conflict that has no answer yet.** Measured
+on a 2880 × 1800 screen at 192 DPI, so 1 DIP = 2 px throughout: the 4 DIP
+reveal band is the top 8 px and the 14 DIP keep band the top 28 px.
+
+**a. The cluster diagram omits two marks and carries a third that does not
+exist.** Read off `ChromeBars.BuildViewReadout` and the four `right.Children.Add`
+calls after it, the right cluster is lock, zoom, tilt, AI, Import, Export,
+Settings. In fullscreen, with the bracket and its divider led in, that is
+
+    [ ]  │  🔓  100%  0°  ✦  ↓  ↑  ⚙
+
+- The **lock** leads the readouts (`Icons.LockOpen` / `Icons.LockClosed` — the
+  zoom lock, and it is real: while it is on a stray pinch snaps back). §15.3's
+  diagram has no lock in it.
+- The **AI mark** (`Icons.Ai`, V3 K.18, "immediately to the LEFT of Import")
+  sits between the tilt readout and Import. §15.3's diagram has no AI mark
+  either.
+- The trailing **`?` help mark does not exist anywhere in the code.** There is
+  no help button, no `Icons.Help`, and no `?` mark in `ChromeBars` or in
+  `MainWindow.xaml`. Help was **specified in §5** — "Help (`?`, with a small
+  `Accent` dot when unread)" — and was never built. §15.3 drew it because §5
+  promised it, not because a capture showed one. The document stops implying it
+  is there as of this line; if Help is wanted it is new work, not a regression.
+
+Both the lock and the AI mark were verified present on screen in fullscreen, and
+no `?` was found anywhere in the cluster.
+
+**b. The reveal region does not swallow ink.** §15.3's third bullet asked for
+this to be tested explicitly. It now has been, twice, and it holds.
+
+- **A stroke pressed at the very top edge draws from row 0.** Pressed at y = 1
+  DIP at mid-width, then dragged down: ink runs continuously from **screen row 0**
+  to row 364, 10 px wide — 40 changed pixels inside rows 0–3 and 80 inside rows
+  0–7, i.e. the reveal band is fully inked. The strip revealed at the top right
+  at the same time, as it should; it is right-aligned and was nowhere near the
+  nib.
+- **A stroke dragged UP into the edge keeps the strip away.** Pressed at y = 430
+  px in the strip's own column (x = 2700, inside the strip's 2604–2880) and
+  dragged to row 0: ink reached row 0, and at the moment the nib sat there the
+  strip was **absent** — the `↓ ↑ ⚙` marks it would have covered were still
+  visible. The `!Pointer.IsInContact` gate in `OnRootPointerMoved` is doing the
+  job the comment claims for it.
+
+**The control is not optional, and here is why.** *A mouse cannot draw in Quill
+at all unless "Touch draw" is on.* `InkSurface.OnPointerPressed` sends
+`tool == Pen && !isPen && !HandDrawMode` into `HandleMousePress`, which under the
+default `MouseMode.Auto` starts a rubber-band rectangle and commits nothing to
+the page. An injected mouse drag therefore leaves no ink **anywhere**, mid-canvas
+included, and that null is indistinguishable by screenshot from a stroke the
+reveal region ate. The switch is Settings ▸ Interaction ▸ Touch Input ▸ **Touch
+draw**; it also writes `Library.FingerAction`, but nothing reads that back at
+startup, so it has to be set through the panel on every run. Run the mid-canvas
+control first, every time, and only trust a top-edge null once the control has
+inked.
+
+A second way to get a guaranteed null, for the record: testing this with the
+**text** tool. Selecting text raises the format bar across the whole top of the
+screen (see **c**), which covers the exact band under test.
+
+**c. OPEN CONFLICT — the text format bar and the strip both want the top edge.**
+Observed, not resolved. In fullscreen the caption row folds (§15.4 item 4), so
+`FormatBar` — `Grid.Row` 1 — rises to the screen's top edge whenever the text
+tool is selected or a text box is active. What was seen:
+
+- With the text tool selected, the format bar occupies the **full width of the
+  top 88 px (44 DIP)** and pushes the `ChromeBars` cluster row down to y ≈ 146 px.
+  The strip's 34 DIP band is entirely inside the format bar's own row.
+- Pushing the pointer to the top edge **still reveals the strip**, and the strip
+  draws **on top of** the format bar — covering its two right-most buttons
+  (dictation and the `Ω` special-character button). The passive root listener
+  sees the pointer whatever child it is over, so the format bar does not block
+  the reveal.
+- While the strip is up those two buttons **cannot be reached at all**. Walking
+  down from the edge onto the dictation button leaves the pointer inside
+  `OverStrip`, so the strip stays up (ground sampled `#202020`) and the mark
+  under the pointer lights instead (`#8D8D8D`). Approaching the same button from
+  *below*, without entering the top 4 DIP, leaves the strip down and the button
+  reachable (`#F5F5F1`). So the buttons are reachable or not depending on which
+  direction the pointer arrives from.
+- Leaving the edge retracts the strip and the format bar comes back intact.
+
+Nothing is broken in the sense of being unclickable forever, and nothing here
+contradicts §15.4's hit-testing rule — the strip is exactly as clickable as it
+looks. But a row of live controls that can be covered by window chrome, and
+whose reachability depends on the approach path, is not a decided design. **The
+resolution is the user's to pick** — suppress the format bar while the strip is
+out, move the strip below the format bar in text mode, disable the reveal while
+the format bar is up, or accept the overlap. It is recorded here rather than
+guessed at.
+
 ### 15.4 Fullscreen chrome — amended after the first build, 2026-08-16
 
 **Amends §15.3. Everything §15.3 says that is not contradicted here still
