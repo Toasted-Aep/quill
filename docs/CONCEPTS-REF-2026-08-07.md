@@ -2593,6 +2593,160 @@ SHA-256 before and after, as was the still-running Concepts instance.
 3. **§15.3a item c** — the format bar, all three checks, now against
    `FormatBarStripGap` = 12 rather than 4.
 
+### 15.4e A panel's position is an INSET from the side it is anchored to — 2026-08-17
+
+**This replaces every absolute offset in `FloatingWindow`, and it retires §15.4b's
+one-way clamp along with §15.4c's two arms. Read this before touching the
+placement code: reintroducing an absolute offset reintroduces both bugs.**
+
+The user's own wording, which is the specification:
+
+> make it so that when panel gets resized the distance from the side they're on
+> gets remembered, and the panels move accordingly. when the panels encounter
+> another panel element (for example when the window gets too small) they try to
+> fill the screen but still remember the original distance.
+
+**The model, as four rules.**
+
+1. **The stored geometry is an INSET plus a wanted size, and it is the only source
+   of truth.** `_insetSide` is the distance from the panel's anchored edge to the
+   host edge on its `OpenOn` side; `_insetTop` is the distance from the host's top;
+   `_wantW` / `_wantH` are the size it wants. The popup's offsets and the panel's
+   `Width` / `Height` are *derived* from those four on every host change and are
+   never read back as state. A panel 14 DIP from the right edge stays 14 DIP from
+   the right edge whatever the host does; one dragged to 387 stays at 387.
+2. **Only a user gesture writes the stored geometry.** A drag writes the insets; a
+   resize writes the insets and the wanted size. Nothing else does — not a
+   fullscreen toggle, not a window-border drag, not a clamp.
+3. **A resize preserves the anchored-side distance.** The grabbed edge moves and
+   the opposite edge holds still, so on a right-anchored panel the far (left) edge
+   grows inward and the right gap is untouched. This is not arranged for; it falls
+   out of the inset being the thing stored, because a resize that leaves the
+   anchored edge alone cannot change a distance measured to that edge.
+4. **Clamping is NON-DESTRUCTIVE.** §11.6 item 42's limits still hold on every
+   frame — the whole panel on the page, inside its margins, below the top-bar band
+   — but they are applied to a *candidate* rect on its way to the screen and
+   returned, never written back. A panel with no room fills what there is and
+   returns to its stored geometry exactly when the room comes back.
+
+Rule 4 is the one §15.4b recorded as an accepted limitation: *"clamping into
+smaller windowed bounds is one-way, so a panel sized to full fullscreen height
+stays at the clamped size on return."* It is no longer true. `Resolve` is pure and
+`Constrain`'s successors return their answers, so the clamp has nothing to
+overwrite.
+
+**"Another panel element" is, today, the top band.** `TopBand` is the top bar's
+two clusters, and it is the one such element a floating window can currently meet;
+the other three sides are `EdgeGap`. The room is computed in `MaxSize` and
+`ConstrainPosition` and nowhere else, so a future reserved region — a dock, a
+second floating panel via `PanelLayout` — goes in those two methods and inherits
+rule 4 for free. That is deliberately *not* built here: nothing in this change
+plumbs another panel's rect into `FloatingWindow`, and the parenthetical case the
+user named ("when the window gets too small") is the one that is.
+
+**What was removed, and why it was safe.**
+
+| gone | why |
+| --- | --- |
+| `_lastOrg` | the baseline a shift-by-delta needed. `HostOrigin` is now read fresh on every apply as the *current* translation, never differenced, so there is no delta to take. |
+| `_userPlaced` | it recorded "the user chose this position" as a MODE. The inset records it as a NUMBER, which is strictly more information. No readers left. |
+| `KeepsOwnPosition` | §15.4c's shared predicate, and with `_userPlaced` gone there is nothing to predicate on. |
+| `PlaceAnchored` | the re-anchor arm. An auto-placed panel's inset *is* `EdgeGap`, so preserving the inset re-anchors it — the arm and the rule are the same computation. |
+| `FirstPlacement` | a one-shot `SizeChanged` handler for the not-yet-measured host. The permanent subscription fires on the same event; `Resolve` simply returns false until then. |
+| `Constrain` / `ClampIntoView` (as mutators) | split into pure `ConstrainSize` and `ConstrainPosition`. **The safety role is intact** — it runs on every apply — but it can no longer be mistaken for the positioning rule. |
+| one of two `_host.SizeChanged` handlers | `ClampIntoView` was subscribed alongside `HostGeometryChanged` and clamped the offsets the latter had just shifted. Resolving clamps on the way through. |
+
+**The `KeepsOwnPosition` question, answered.** §15.4c's two arms *are* subsumed,
+and this is the reasoning to keep: an auto-placed panel's inset is `EdgeGap`, so
+preserving it re-anchors; a dragged panel's inset is whatever it was dragged to,
+so preserving it holds position. One rule, both correct behaviours. `_userPlaced`
+was deleted only after confirming it had no other reader anywhere in the tree — it
+was private to `FloatingWindow.cs` and read solely through `KeepsOwnPosition`.
+
+One behavioural improvement falls out. Under §15.4c a *resize* set `_userPlaced`,
+so a panel resized in its default corner stopped re-anchoring and began shifting
+by the host delta. Under the inset model a far-edge resize leaves the anchored
+inset at `EdgeGap`, so it keeps landing in the corner — which is what a panel that
+was only ever resized should do.
+
+**The arithmetic, worked on paper against §15.4b's measured hosts.** `EdgeGap`
+14.0, `TopBand` = `RowTop` + `IconPitch` + 8 = 10 + 42 + 8 = **60.0**, Settings
+requesting 516 × 724. Windowed 1080 × 656 DIP, fullscreen 1440 × 900 DIP.
+
+| case | host | left | right gap | top | size | stored |
+| --- | --- | --- | --- | --- | --- | --- |
+| **A** auto-placed, open | 1080 × 656 | 550.0 | **14.0** | 60.0 | 516 × 582 | auto / auto, want 516 × 724 |
+| A, host grows | 1440 × 900 | 910.0 | **14.0** | 60.0 | 516 × 724 | unchanged |
+| A, back | 1080 × 656 | 550.0 | **14.0** | 60.0 | 516 × 582 | unchanged |
+| **B** dragged to a 387 gap | 1080 × 656 | 177.0 | **387.0** | 60.0 | 516 × 582 | 387.0 / auto |
+| B, host grows | 1440 × 900 | 537.0 | **387.0** | 60.0 | 516 × 724 | unchanged |
+| B, back | 1080 × 656 | 177.0 | **387.0** | 60.0 | 516 × 582 | unchanged |
+
+Case A is the whole of §15.4c's complaint, and note that **no clamp is involved in
+either direction** — 910 and 550 are both derived, both interior, and the two
+directions are symmetric by construction rather than by one of them happening to
+overflow. The old model reached case B's 387 *by accident*: §15.4b measured a
+windowed left of 543.5, the shift-by-delta moved it to 537.0 (the host-origin
+delta of −6.5 exactly), and 1440 − 537.0 − 516 = **387.0** on a host wide enough
+to leave it stranded mid-screen. Now 387 is reached only when the user actually
+drags there, and then it is held in both hosts.
+
+**The round trip, which is rule 4's proof.** Fullscreen 1440 × 900, the bottom-left
+grip dragged out 400 in each axis:
+
+| step | host | rendered | stored |
+| --- | --- | --- | --- |
+| resized to fill | 1440 × 900 | 916 × 826 at left 510.0, gap 14.0 | 14.0 / auto, want **916 × 826** |
+| host shrunk | 720 × 420 | 692 × 346 at left 14.0, gap 14.0 | **unchanged** |
+| host tiny | 300 × 300 | 320 × 260 at left 14.0 | **unchanged** |
+| **back** | 1440 × 900 | **916 × 826 at left 510.0, gap 14.0** | **unchanged** |
+
+Identical to the pre-shrink rect in all four numbers, and the stored tuple
+`(14.0, auto, 916.0, 826.0)` is byte-identical before, during and after. The 300 ×
+300 row is the documented `MinW` / `MinH` floor: the room is narrower than the
+window's 320 DIP minimum, so the minimum wins and the panel hangs 34 DIP past the
+right margin rather than shrinking to nothing. That floor is `MaxSize`'s
+pre-existing behaviour, unchanged.
+
+**Two destruction paths that had to be closed by hand,** because rule 4 is not
+automatic once a gesture is involved:
+
+- A plain **move** must not bank the rendered size. The first draft routed both
+  gestures through one "store this rect" method, and a horizontal drag in a
+  windowed host therefore committed the *clamped* height as the wanted height —
+  destroying a fullscreen-chosen height through the drag handler rather than
+  through the clamp. Verified: sized to 826 fullscreen, clamped to 582 windowed,
+  dragged sideways there, back to fullscreen → still 826.
+- A gesture commits **only the axis that moved**. A purely horizontal drag in a
+  host with no vertical slack would otherwise bank the clamped top as a deliberate
+  choice and lose the one made when there was room for it.
+
+A drag *does* bank the clamped position on the axis it moved, which is not a
+violation of rule 4 — it is rule 2. Storing the raw pointer target instead would
+give the drag a dead zone (shove 200 DIP past the edge and the first 200 DIP back
+moves nothing) and bank a number no host can honour. The old in-place `Constrain`
+had the same effect, so the feel is unchanged.
+
+**Builds at 0 warnings** (`--no-incremental`; an incremental build here skips the
+C# compile and reports a 0 it did not earn).
+
+**NOT VERIFIED ON SCREEN.** The whole of the above is arithmetic and reasoning; the
+change was written, built and committed without the app being launched, because
+another run was in progress on this machine. Still open, in order of value:
+
+1. **The round trip.** Open a panel fullscreen, drag the bottom-left grip until it
+   fills the page, leave fullscreen, confirm it clamps, re-enter fullscreen and
+   confirm it returns to the *same* size and gap. This is the case §15.4b logged as
+   a limitation and the one this change exists for.
+2. **§15.4d item 1, the 387 asymmetry.** Auto-placed panel open across a toggle,
+   both directions. Must be `EdgeGap` 14.0 / `TopBand` 60.0 of whichever host is
+   up, and — the part the old build could not give — the *same* in both directions.
+3. **§15.4b item 3, the dragged panel.** Drag by the header pill, close, toggle,
+   reopen. Must return to the dragged distance, not to the corner. This no longer
+   tests a flag; it tests whether the inset is being read on the reopen path.
+4. **A resize's anchored edge.** Drag the bottom-left grip on the right-anchored
+   Settings panel and confirm the right gap does not move (rule 3).
+
 ### 15.5 The preset sweep — the list, enumerated from Concepts, 2026-08-17
 
 Run per §15.2. **Setup, in the order that section requires it:** Concepts was
