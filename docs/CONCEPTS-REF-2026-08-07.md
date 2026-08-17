@@ -2119,6 +2119,38 @@ second copy of 34 is how two numbers that must agree stop agreeing. A small gap
 is left rather than having the two abut exactly, so a 1 DIP rounding difference
 cannot make them touch.
 
+**What was built.** `MainWindow.ApplyFullscreenChrome` sets `FormatBar.Margin`'s
+top to `FullscreenChrome.Metrics.StripHeight + FormatBarStripGap` (4 DIP) and back
+to zero otherwise. It is gated on the **fold** — `fs && _chromeBars.IsVisible` —
+rather than on fullscreen alone, because the fold is precisely what lifts the bar
+to the screen's top edge: with the radial surface off, the caption row stays put
+and the bar already sits below the strip's band, so offsetting there would spend
+canvas for nothing. It is still a fixed geometry, not a hover-dependent one —
+both `fs` and the surface choice are states the user changes deliberately, not
+things that move while a pointer approaches a button. It also costs nothing while
+the bar is collapsed, because a collapsed child adds no height to an `Auto` row,
+which is what confines the loss to text mode. Builds at 0 warnings.
+
+**Not verified on screen — the run was stood down under the shared-machine rule
+before it could be.** Three things to check, and one number to check them against:
+
+1. Fullscreen, text tool, strip revealed: it must cover **no** format-bar button.
+2. Every format-bar button clickable **both** approaching from below **and**
+   walking down from the top edge. The second is the case that failed before,
+   because walking down kept the pointer inside `OverStrip`.
+3. Leaving fullscreen must put the bar back. Do not read geometry straight after
+   `SetPresenter` — it does not lay out synchronously; `ApplyFullscreenChrome` is
+   self-correcting and runs again on `SizeChanged`.
+
+**The tight number is item 2, and it is tight by 2 DIP.** `OverStrip` reaches
+`StripHeight + StripSlack` = **40 DIP** down, while the first row of format-bar
+buttons now starts at `StripHeight (34) + FormatBarStripGap (4) + the bar's own
+4 DIP top padding` = **42 DIP**. So the buttons clear the strip's hit rectangle by
+2 DIP, and the bar's top 2 DIP of *background* still fall inside it — background
+only, no control. If item 2 fails, or if this is ever run at a scale factor where
+2 DIP rounds away, **`FormatBarStripGap` is the constant to raise**; it exists for
+exactly that.
+
 ### 15.3b Driving Quill from injected input — two traps that fake a null result
 
 **Not about fullscreen. This is here because it cost eleven attempts at §15.3's
