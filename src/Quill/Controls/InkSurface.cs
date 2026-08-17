@@ -440,12 +440,29 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     // View transform
     // =======================================================================
+    /// <summary>The zoom range, finalised by the user at 0.1x - 16x.
+    ///
+    /// <para>ONE definition, because there were three, at two different values:
+    /// <see cref="ZoomAround"/> clamped 0.1..8, <see cref="SetView"/> clamped
+    /// 0.05..8, and page restore clamped 0.1..8. Copies of a range drift the
+    /// moment one is retuned - the fullscreen strip's clearance reached 2 DIP
+    /// exactly this way - and the odd 0.05 meant a programmatic view could sit
+    /// at a zoom the user could neither have chosen nor return to.</para>
+    ///
+    /// <para>This is an AFFORDANCE, not a canvas bound. 16.1 removed the wall
+    /// that made the canvas finite; a zoom range stops you getting lost at
+    /// scales where a stroke is subpixel or the whole page is a speck, which is
+    /// a different concern from extent. Fit-to-content keeps its own 4x ceiling
+    /// on top of this - it is a heuristic about not blowing a small drawing up,
+    /// not a limit on where the user may go.</para></summary>
+    public const float MinZoom = 0.1f, MaxZoom = 16f;
+
     private Vector2 ToWorld(Vector2 screen) => (screen - ViewOffset) / ViewZoom;
     private Vector2 ToWorld(Point screen) => ToWorld(new Vector2((float)screen.X, (float)screen.Y));
 
     private void ZoomAround(Vector2 screenPivot, float newZoom)
     {
-        newZoom = Math.Clamp(newZoom, 0.1f, 8f);
+        newZoom = Math.Clamp(newZoom, MinZoom, MaxZoom);
         var world = ToWorld(screenPivot);
         ViewZoom = newZoom;
         ViewOffset = screenPivot - world * newZoom;
@@ -471,7 +488,7 @@ public sealed class InkSurface : UserControl
 
     public void SetView(Vector2 offset, float zoom)
     {
-        ViewZoom = Math.Clamp(zoom, 0.05f, 8f);
+        ViewZoom = Math.Clamp(zoom, MinZoom, MaxZoom);
         ViewOffset = offset;
         OnViewChanged();
     }
@@ -687,7 +704,7 @@ public sealed class InkSurface : UserControl
         ClearSelection();
         _activeShape = null;
         ViewOffset = new Vector2((float)page.ViewX, (float)page.ViewY);
-        ViewZoom = Math.Clamp((float)page.ViewZoom, 0.1f, 8f);
+        ViewZoom = Math.Clamp((float)page.ViewZoom, MinZoom, MaxZoom);
         // Heal cells eaten by the old empty-box cleanup (#cellfix): every grid
         // slot of every table needs a TextElement, EXCEPT slots covered by a
         // merged cell's span (merges legitimately remove hidden cells).
