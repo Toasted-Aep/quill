@@ -7457,6 +7457,35 @@ public sealed partial class MainWindow : Window
         ApplyFullscreenChrome();
     }
 
+    /// <summary>CONCEPTS-REF 15.3 item c. The clearance left between the hover
+    /// strip's band and the text format bar underneath it. A few DIPs rather than
+    /// a flush abutment: the two are computed from different roots, and a 1 DIP
+    /// rounding difference on another scale factor should not be able to make them
+    /// touch.
+    ///
+    /// <para>RAISED FROM 4 TO 12, 2026-08-17. The distance that matters is not
+    /// this constant but the one from the BOTTOM OF OverStrip's hit rectangle —
+    /// <c>StripHeight + StripSlack</c> = 40 DIP — down to the format bar's first
+    /// control. At 4 that control started at <c>StripHeight</c> (34) + 4 + the
+    /// bar's own 4 DIP top padding = 42, so the clearance was TWO DIP. Two DIP is
+    /// inside layout-rounding noise: 14.3's corner target snapped from 5.747 to
+    /// 5.5 and broke a hitbox on exactly that scale of error. At 12 the first
+    /// control starts at 34 + 12 + 4 = 50 and clears the hit rectangle by 10.</para>
+    ///
+    /// <para>Ten rather than the eight asked for, because a nominal 8 that rounds
+    /// to 7.5 has not met an 8 DIP floor, and the entire point of raising this is
+    /// to stop the answer depending on rounding. The 2 DIP of overshoot costs 2
+    /// DIP of canvas in text mode and nowhere else.</para>
+    ///
+    /// <para>THIS TRACKS <c>StripSlack</c>, NOT ONLY <c>StripHeight</c>. The 34 is
+    /// already read from Metrics below; the 6 DIP of slack is not, and choosing
+    /// this constant without reference to that slack is what produced the 2 DIP.
+    /// The invariant to hold if either is retuned:
+    /// <c>(StripHeight + FormatBarStripGap + bar padding) − (StripHeight +
+    /// StripSlack) ≥ 8</c>, confirmed by MEASURING where the first button row
+    /// lands, not by re-doing this arithmetic.</para></summary>
+    private const double FormatBarStripGap = 12;
+
     /// <summary>CONCEPTS-REF 15.3 — the chrome changes SHAPE in fullscreen.
     ///
     /// <para>Windowed, <c>TopBar</c> IS the caption bar: the system one is
@@ -7475,13 +7504,6 @@ public sealed partial class MainWindow : Window
     /// change-guarded, because it also runs on SizeChanged and after every
     /// surface switch, and several of those paths fade the bar the other way
     /// first.</para></summary>
-    /// <summary>CONCEPTS-REF 15.3 item c. The clearance left between the hover
-    /// strip's band and the text format bar underneath it. A few DIPs rather than
-    /// a flush abutment: the two are computed from different roots, and a 1 DIP
-    /// rounding difference on another scale factor should not be able to make them
-    /// touch.</summary>
-    private const double FormatBarStripGap = 4;
-
     private void ApplyFullscreenChrome()
     {
         try
