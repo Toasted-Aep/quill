@@ -1911,30 +1911,85 @@ and 3-Point, with every variant, must look exactly like the captures.**
 Ten new captures of the perspective presets, plus one of the fullscreen
 top-right corner.
 
-### 15.1 The preset names are a grammar, not a list
+### 15.1 The presets are three per-type lists — 19 named entries, not a cross product
 
-The captured names are `Side Ultrawide`, `3 Point`, `3/4 Narrow`,
-`1/2 Narrow`, `3/4 Wide`, `1/4 Wide`, `Side Wide Below`, `1/4 Wide Below`,
-`3/4 Ultrawide Below`, `3/4 Ultrawide`. They decompose into three
-independent axes:
+**Corrected 2026-08-17. What this section said before was that the catalogue is
+the full cross product `{1/4, 1/2, 3/4, Side} × {Narrow, Wide, Ultrawide} ×
+{—, Below}` = 24 two-point presets, plus `1 Point` / `2 Point` / `3 Point`, all
+in one list. THAT WAS MY RECONSTRUCTION FROM THE TEN SCREENSHOTS AND IT WAS
+WRONG.** The wrong version is spelled out here rather than quietly deleted,
+because it was specific enough to build from and anyone who met it once could
+rebuild it from memory or from a diff. There is no 24-entry catalogue anywhere in
+Concepts, `1/2 Wide` was never a missing entry, and `3/4 Wide` and `1/4 Wide` are
+not siblings.
 
-- **Position** — `1/4`, `1/2`, `3/4`, `Side`. Which quarter mark of the
-  page's stored reference frame the vanishing-point pair straddles. This is
-  §14.5's quartering, and the presets are named directly after it: the rule
-  and the vocabulary are one system, not two.
-- **Spread** — `Narrow`, `Wide`, `Ultrawide`. How far apart the two points
-  sit along the horizon.
+**What Concepts actually ships**, enumerated from the running app (the run is
+recorded in §15.5): **the presets are per grid type.** Precision ▸ Grid offers
+nine grid types, and each of the three perspective types — `1-Point`, `2-Point`,
+`3-Point` — opens its own `Edit Grid` editor carrying its **own** `Preset` strip.
+Each strip ends in `Custom`. Left to right, verbatim:
+
+**1-Point** — one named preset:
+
+    1 Point   │   Custom
+
+**2-Point** — nine named presets:
+
+    2 Point   │   1/2 Narrow   │   1/4 Narrow   │   Side Narrow   │   1/2 Wide
+    1/4 Wide  │   Side Wide    │   1/2 Wide Below   │   Side Ultrawide   │   Custom
+
+**3-Point** — nine named presets:
+
+    3 Point        │   3/4 Narrow          │   1/2 Narrow   │   3/4 Wide
+    1/4 Wide       │   Side Wide Below     │   1/4 Wide Below
+    3/4 Ultrawide Below              │   3/4 Ultrawide       │   Custom
+
+**That is 19 named presets across three lists — 1 + 9 + 9 — plus one `Custom`
+entry per list.**
+
+**THE USER HAS RULED: mirror Concepts exactly, 19 across three lists. No cross
+product.** Their earlier decision to ship 24 is **reversed** — it was taken on my
+false premise, and the premise going takes the decision with it. Do not build the
+cross product, and do not "fill the holes" in any of the three lists above: the
+lists are not holed, they are curated, and each perspective type curates a
+different set.
+
+**Where the ten captures actually came from.** Nine of them — `3 Point`,
+`3/4 Narrow`, `1/2 Narrow`, `3/4 Wide`, `1/4 Wide`, `Side Wide Below`,
+`1/4 Wide Below`, `3/4 Ultrawide Below`, `3/4 Ultrawide` — are **exactly the
+3-Point list, complete and in order**. The tenth, `Side Ultrawide`, is the
+**ninth entry of the 2-Point list**. So the captures are a full sweep of one list
+plus one stray from another, which is precisely why they read as a holed
+catalogue: the apparent gap between `3/4 Wide` and `1/4 Wide` is a list
+*boundary*, not a missing preset.
+
+**The axes are vocabulary, not a grid.** The three name parts are real, and worth
+keeping as vocabulary —
+
+- **Position** — `1/4`, `1/2`, `3/4`, `Side`. Which quarter mark of the page's
+  stored reference frame the vanishing-point pair straddles. This is §14.5's
+  quartering, and the presets are named directly after it: the rule and the
+  vocabulary are one system, not two.
+- **Spread** — `Narrow`, `Wide`, `Ultrawide`. How far apart the two points sit
+  along the horizon.
 - **Elevation** — the bare name, or `Below`.
 
-**The catalogue is the full cross product**: 4 × 3 × 2 = 24 two-point
-presets, plus `1 Point`, `2 Point`, `3 Point`. The user chose this over
-shipping only the ten that were captured — a list where `3/4 Wide` and
-`1/4 Wide` exist but `1/2 Wide` does not is a list with holes in it.
+— but **no list enumerates them combinatorially.** 2-Point never says `3/4`,
+3-Point never says `Side Narrow`, and `Ultrawide` appears once in the 2-Point
+list and twice in the 3-Point one. Read the parts to know what a name *means*;
+read the lists to know what *exists*.
 
-This also settles the open question from the last pass about **`2 Point` and
-`1/2 Narrow` rendering identically**. They are not an accidental duplicate:
-`2 Point` *is* the centred default, and `1/2 Narrow` names that same
-geometry explicitly. Keep both. Two names reaching one grid is correct here.
+**`2 Point` and `1/2 Narrow` are adjacent entries of the same list, and both
+stay.** The last pass found them rendering identically. They are not an
+accidental duplicate: `2 Point` *is* the centred default, and `1/2 Narrow` names
+that same geometry explicitly. Concepts ships both, side by side, so Quill ships
+both. Two names reaching one grid is correct here.
+
+Whether names shared *between* lists agree numerically — whether 2-Point's
+`1/4 Wide` and 3-Point's `1/4 Wide` place their common points identically, and
+whether `1/2 Narrow` matches across the two lists that both carry it — is not
+settled by the names, and is one of the things the §15.2 measurement has to
+answer.
 
 ### 15.2 The geometry must be MEASURED, and these captures cannot supply it
 
@@ -1953,8 +2008,11 @@ The user chose a measurement pass instead. How it must be run:
    what went wrong with the ten reference images.
 3. **Enumerate the preset list verbatim first** — every name, in the order
    Concepts lists them. That list is a deliverable in its own right; it
-   confirms or corrects the 24 + 3 grammar above before any measuring
-   starts.
+   confirms or corrects whatever structure §15.1 claims, before any
+   measuring starts. **Run — recorded in §15.5. It corrected §15.1, which
+   now carries the real structure: 19 named presets across three per-type
+   lists.** The sweep below is therefore three lists, not one, so the grid
+   *type* changes during it.
 4. **Capture each preset to its own PNG**, named for the preset.
 5. **Measure from the PNGs programmatically, never by eye.** The horizon is
    the one full-width horizontal rule; find it by row-scanning for the
@@ -2428,13 +2486,16 @@ entry of the **2-Point** list. So the captures were a complete sweep of the
 a missing sibling of `3/4 Wide` and `1/4 Wide` is that those three names are not
 siblings at all — `1/2 Wide` is 2-Point's, the other two are 3-Point's.
 
-Consequences for §15.1, which should be read against this:
+Consequences for §15.1. **§15.1 has since been rewritten to carry the corrected
+structure and the user's ruling — 19 named presets across three lists, no cross
+product. The bullets below are the reasoning that forced that rewrite, kept as
+the record of how it was found:**
 
 - **There is no 24-entry two-point catalogue in Concepts.** The cross product
   `4 × 3 × 2 = 24` is not what the app ships; each perspective type ships a
-  curated nine. Shipping 24 remains a perfectly good *decision* — but it is
-  Quill's decision, not a reconstruction of Concepts, and §15.1 presents it as
-  the latter.
+  curated nine. Shipping 24 remained a perfectly good *decision* at the moment
+  this was written — Quill's decision, not a reconstruction of Concepts. **The
+  user then ruled against it: mirror Concepts exactly. The 24 are off.**
 - **The axes are real as vocabulary and not as a grid.** `Narrow` / `Wide` /
   `Ultrawide` and `1/4` / `1/2` / `3/4` / `Side` and the bare / `Below` pair all
   appear, but no list enumerates them combinatorially: 2-Point never says `3/4`,
@@ -2443,8 +2504,9 @@ Consequences for §15.1, which should be read against this:
 - **`2 Point` and `1/2 Narrow` are both in the 2-Point list**, adjacent, which is
   consistent with §15.1's finding that they render identically and that keeping
   both is correct.
-- Each list ends with **`Custom`**, which §15.1 does not mention and which is how
-  Concepts exposes a hand-placed configuration.
+- Each list ends with **`Custom`**, which the old §15.1 did not mention at all
+  and which is how Concepts exposes a hand-placed configuration. The rewritten
+  §15.1 carries it.
 
 **Still to do: steps 4 to 7 — the measurement.** The viewport is frozen and the
 scratch drawing is in place, but each preset has not yet been captured to its own
