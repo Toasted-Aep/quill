@@ -7475,6 +7475,13 @@ public sealed partial class MainWindow : Window
     /// change-guarded, because it also runs on SizeChanged and after every
     /// surface switch, and several of those paths fade the bar the other way
     /// first.</para></summary>
+    /// <summary>CONCEPTS-REF 15.3 item c. The clearance left between the hover
+    /// strip's band and the text format bar underneath it. A few DIPs rather than
+    /// a flush abutment: the two are computed from different roots, and a 1 DIP
+    /// rounding difference on another scale factor should not be able to make them
+    /// touch.</summary>
+    private const double FormatBarStripGap = 4;
+
     private void ApplyFullscreenChrome()
     {
         try
@@ -7483,6 +7490,35 @@ public sealed partial class MainWindow : Window
             _chromeBars?.SetFullscreen(fs);
             _fsChrome?.SetActive(fs);
             bool fold = fs && _chromeBars?.IsVisible == true;
+
+            // CONCEPTS-REF 15.3 item c - THE FORMAT BAR MOVES OUT FROM UNDER THE
+            // STRIP, and it does so for as long as the caption row is folded
+            // rather than only while the strip is revealed.
+            //
+            // The bar is Grid.Row 1. Folding the caption row away is what lifts it
+            // to the screen's top edge, which is the strip's own band, so in text
+            // mode the strip covered live buttons and whether they could be
+            // reached depended on which direction the pointer arrived from.
+            //
+            // The user ruled for a FIXED offset over the cheaper hover-driven one.
+            // Shifting the bar only while the strip is out costs no canvas at all,
+            // but it would move a row of buttons under the pointer as the user
+            // reaches for them, which reads as broken however correct the geometry
+            // is. So the offset is a property of being fullscreen, not of the
+            // strip's animation state, and the ~34 DIP of canvas it costs in text
+            // mode is a price that was knowingly paid. DO NOT make this
+            // hover-dependent again as an optimisation.
+            //
+            // Taken from FullscreenChrome.Metrics.StripHeight rather than written
+            // as a literal 34: retuning the strip has to move the bar with it, and
+            // a second copy of the number is how two values that must agree stop
+            // agreeing. Costs nothing while the bar is Collapsed, because a
+            // collapsed child contributes no height to an Auto row - so the canvas
+            // only pays for this in text mode, which is the whole bargain.
+            FormatBar.Margin = fold
+                ? new Thickness(0, FullscreenChrome.Metrics.StripHeight + FormatBarStripGap, 0, 0)
+                : new Thickness(0);
+
             if (fold)
             {
                 if (TopBar.Visibility == Visibility.Visible) FadeOut(TopBar);
