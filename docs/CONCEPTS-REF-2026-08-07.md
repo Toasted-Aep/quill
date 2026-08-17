@@ -2066,52 +2066,96 @@ this to be tested explicitly. It now has been, twice, and it holds.
   visible. The `!Pointer.IsInContact` gate in `OnRootPointerMoved` is doing the
   job the comment claims for it.
 
-**The control is not optional, and here is why.** *A mouse cannot draw in Quill
-at all unless "Touch draw" is on.* `InkSurface.OnPointerPressed` sends
-`tool == Pen && !isPen && !HandDrawMode` into `HandleMousePress`, which under the
-default `MouseMode.Auto` starts a rubber-band rectangle and commits nothing to
-the page. An injected mouse drag therefore leaves no ink **anywhere**, mid-canvas
-included, and that null is indistinguishable by screenshot from a stroke the
-reveal region ate. The switch is Settings ▸ Interaction ▸ Touch Input ▸ **Touch
-draw**; it also writes `Library.FingerAction`, but nothing reads that back at
-startup, so it has to be set through the panel on every run. Run the mid-canvas
-control first, every time, and only trust a top-edge null once the control has
-inked.
+**Neither of those results means anything without the mid-canvas control that
+was run first.** Eleven earlier attempts at this proof returned nothing, and
+both reasons were properties of the harness rather than of the reveal region.
+They are written up on their own in **§15.3b**, because they will catch the next
+person who automates this app for any reason at all.
 
-A second way to get a guaranteed null, for the record: testing this with the
-**text** tool. Selecting text raises the format bar across the whole top of the
-screen (see **c**), which covers the exact band under test.
+**c. The text format bar and the strip both wanted the top edge. RESOLVED:
+in fullscreen the bar sits BELOW the strip's band.**
 
-**c. OPEN CONFLICT — the text format bar and the strip both want the top edge.**
-Observed, not resolved. In fullscreen the caption row folds (§15.4 item 4), so
-`FormatBar` — `Grid.Row` 1 — rises to the screen's top edge whenever the text
-tool is selected or a text box is active. What was seen:
+In fullscreen the caption row folds (§15.4 item 4), so `FormatBar` — `Grid.Row` 1
+— rises to the screen's top edge whenever the text tool is selected or a text box
+is active. That put it under the strip. What was observed before the change:
 
-- With the text tool selected, the format bar occupies the **full width of the
-  top 88 px (44 DIP)** and pushes the `ChromeBars` cluster row down to y ≈ 146 px.
-  The strip's 34 DIP band is entirely inside the format bar's own row.
-- Pushing the pointer to the top edge **still reveals the strip**, and the strip
-  draws **on top of** the format bar — covering its two right-most buttons
-  (dictation and the `Ω` special-character button). The passive root listener
-  sees the pointer whatever child it is over, so the format bar does not block
-  the reveal.
-- While the strip is up those two buttons **cannot be reached at all**. Walking
-  down from the edge onto the dictation button leaves the pointer inside
-  `OverStrip`, so the strip stays up (ground sampled `#202020`) and the mark
-  under the pointer lights instead (`#8D8D8D`). Approaching the same button from
-  *below*, without entering the top 4 DIP, leaves the strip down and the button
-  reachable (`#F5F5F1`). So the buttons are reachable or not depending on which
-  direction the pointer arrives from.
-- Leaving the edge retracts the strip and the format bar comes back intact.
+- With the text tool selected the format bar occupied the **full width of the top
+  88 px (44 DIP)** and pushed the `ChromeBars` cluster row down to y ≈ 146 px. The
+  strip's 34 DIP band sat entirely inside the format bar's own row.
+- Pushing the pointer to the top edge **still revealed the strip**, and the strip
+  drew **on top of** the bar, covering its two right-most buttons (dictation and
+  the `Ω` special-character button). The passive root listener sees the pointer
+  whatever child it is over, so the bar never blocked the reveal.
+- While the strip was up those two buttons **could not be reached at all**.
+  Walking down from the edge onto the dictation button left the pointer inside
+  `OverStrip`, so the strip stayed up (ground sampled `#202020`) and the mark
+  under the pointer lit instead (`#8D8D8D`). Approaching the same button from
+  *below*, without entering the top 4 DIP, left the strip down and the button
+  reachable (`#F5F5F1`). Reachability depended on which direction the pointer
+  arrived from.
+- Leaving the edge retracted the strip and the bar came back intact.
 
-Nothing is broken in the sense of being unclickable forever, and nothing here
-contradicts §15.4's hit-testing rule — the strip is exactly as clickable as it
-looks. But a row of live controls that can be covered by window chrome, and
-whose reachability depends on the approach path, is not a decided design. **The
-resolution is the user's to pick** — suppress the format bar while the strip is
-out, move the strip below the format bar in text mode, disable the reveal while
-the format bar is up, or accept the overlap. It is recorded here rather than
-guessed at.
+**The user's ruling: while the app is fullscreen the format bar is offset down by
+the strip's band, so the two never overlap. Windowed behaviour is unchanged.**
+
+**The offset is FIXED for as long as the app is fullscreen — it is not applied
+only while the strip is revealed, and that is the whole point.** The rejected
+variant was to shift the bar just for the moment the strip is out, which costs no
+canvas at all. It loses because it would move a row of buttons *under the pointer
+as the user reaches for them*, which reads as broken however correct the geometry
+is. A hover-dependent layout trades a visible glitch for 34 DIP of canvas in text
+mode only, and the user took the canvas loss instead. **Do not reintroduce the
+hover-dependent version as an optimisation** — the wasted band is the price that
+was knowingly paid, not an oversight.
+
+Also considered and rejected: suppressing the strip in text mode (the window
+controls are the one thing that must not become unreachable), shrinking the
+strip's hit region (it would break §15.4's rule that hit-testing tracks the
+visual), and simply accepting the overlap.
+
+The offset is derived from `FullscreenChrome.Metrics.StripHeight` rather than
+written as a literal, so retuning the strip's height moves the bar with it; a
+second copy of 34 is how two numbers that must agree stop agreeing. A small gap
+is left rather than having the two abut exactly, so a 1 DIP rounding difference
+cannot make them touch.
+
+### 15.3b Driving Quill from injected input — two traps that fake a null result
+
+**Not about fullscreen. This is here because it cost eleven attempts at §15.3's
+ink test, and it will cost the same again on any automated test of any part of
+this app.** Both traps produce a screenshot with no ink in it, which is exactly
+what a genuinely broken feature produces.
+
+**1. A MOUSE CANNOT DRAW IN QUILL unless "Touch draw" is on.** With the pen tool
+selected, `InkSurface.OnPointerPressed` sends
+
+    tool == ToolType.Pen && !isPen && !HandDrawMode  →  HandleMousePress(...)
+
+and `HandleMousePress` under the default `MouseMode.Auto` starts a **rubber-band
+rectangle**, which commits nothing to the page and leaves no trace once the
+button comes up. So an injected mouse drag draws nothing **anywhere on the
+canvas** — not at the top edge, not in the middle — and the blank capture is
+indistinguishable from a stroke that some handler ate. `HandDrawMode` comes from
+the `TouchDrawToggle`, which `ChromeBars` removes from the top bar (K.14) and
+rehouses at **Settings ▸ Interaction ▸ Touch Input ▸ Touch draw**. Toggling it
+also writes `Library.FingerAction`, but **nothing reads that back at startup**, so
+an isolated instance has to be walked through the panel on every single run.
+
+**2. Selecting the TEXT tool raises the format bar over the top of the screen.**
+In fullscreen it takes the top 44 DIP full width (see §15.3 item c). A test of
+anything in that band with the text tool selected is testing the format bar.
+A related decoy: with the text tool the press does not create a text box, it
+calls `SetPendingText`, which leaves a **blinking caret** — a thin dark vertical
+mark that appears and disappears between captures and reads like intermittent
+ink. It blinks on an even cadence; ink does not.
+
+**The rule that separates a broken harness from a broken feature: always run the
+same gesture, with the same tool and the same injection, through the MIDDLE of
+the canvas first.** If the control does not ink, the harness is wrong and no
+conclusion about the feature is available yet. Only once the control has inked
+does a null anywhere else mean anything. §15.3's ink test was reported as
+"passes" on exactly that basis: the control laid down `#D97757` along the
+injected path, 3243 changed pixels, before either edge case was attempted.
 
 ### 15.4 Fullscreen chrome — amended after the first build, 2026-08-16
 
