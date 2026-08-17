@@ -129,53 +129,47 @@ public sealed class FloatingWindow
     private readonly List<(string Label, Func<FrameworkElement> Build)> _tabs = new();
     private readonly Dictionary<int, FrameworkElement> _built = new();
     private int _active;
-    private bool _placed;
+    /// <summary>THE STORED POSITION — AN INSET FROM THE SIDE THIS WINDOW IS
+    /// ANCHORED TO (<see cref="OpenOn"/>). Null until something chooses one, in
+    /// which case the resolver reads <see cref="EdgeGap"/> in its place.
+    ///
+    /// <para>This, with <see cref="_insetTop"/> and <see cref="_wantW"/> /
+    /// <see cref="_wantH"/>, is the ONLY source of truth for this window's
+    /// geometry. The popup's offsets and the panel's Width / Height are DERIVED
+    /// from it against the current host on every change, and are never read back
+    /// as state. That is the model the user specified: "make it so that when panel
+    /// gets resized the distance from the side they're on gets remembered, and the
+    /// panels move accordingly" (§15.4e).</para>
+    ///
+    /// <para>An inset, and not an absolute offset to be shifted. The absolute
+    /// version needed a remembered host origin to shift AGAINST (<c>_lastOrg</c>)
+    /// and a flag to choose between shifting and re-anchoring (<c>_userPlaced</c>,
+    /// via <c>KeepsOwnPosition</c>), and the two call sites that read them
+    /// disagreed — §15.4b item 2 measured a 387 DIP gap opening up under a panel
+    /// nobody had touched. An inset has nothing to accumulate and nothing to
+    /// disagree about, and it subsumes BOTH of that fix's arms: the corner an
+    /// untouched panel wants IS inset <see cref="EdgeGap"/>, so preserving the
+    /// inset re-anchors it, while preserving a dragged panel's inset holds it
+    /// exactly where it was put. One rule, both behaviours.</para></summary>
+    private double? _insetSide;
 
-    /// <summary>THE HOST ORIGIN THE CURRENT OFFSETS WERE COMPUTED AGAINST.
-    ///
-    /// <para>Both offsets are absolute in the popup's space, but every limit they
-    /// were derived from is relative to <see cref="_host"/>. So the pair is only
-    /// meaningful together with the origin that produced it, and that origin
-    /// MOVES: entering fullscreen folds the caption row away (15.4 item 4) and
-    /// the page host rises by that row's height.</para>
-    ///
-    /// <para>Without this, <see cref="Show"/>'s <c>if (!_placed)</c> means a
-    /// window placed once is never placed again — so one opened windowed and
-    /// reopened in fullscreen came back at its old offset, sitting a caption row
-    /// too low. That is the bug the user saw as "settings page opens off
-    /// place".</para></summary>
-    private Point _lastOrg;
+    /// <summary>The inset from the host's TOP — the vertical half of the pair.
+    /// Null defaults to <see cref="TopBand"/>, the band §11.6 item 42 keeps clear.
+    /// The default is resolved LATE rather than banked at first placement, so a
+    /// window nobody has moved follows that band if §11.5 item 31's thicker top
+    /// bar ever moves it.</summary>
+    private double? _insetTop;
 
-    /// <summary>Whether the USER put the window where it is, as opposed to
-    /// <see cref="PlaceAnchored"/> having done it.
+    /// <summary>THE SIZE THE WINDOW WANTS, which is not always the size it has.
     ///
-    /// <para><c>_placed</c> alone cannot answer that — it is set by both — and
-    /// conflating them left a real gap: a window auto-placed against the narrow
-    /// windowed host, closed, and reopened in fullscreen came back at the old
-    /// x, which is right-anchored for a 1072 DIP host and adrift in the middle
-    /// of a 1440 DIP one. Only a window the user actually moved or resized has
-    /// a position worth preserving across that; anything else should re-anchor
-    /// to the corner it always opens in, which is what <see cref="OpenOn"/>
-    /// already promises.</para></summary>
-    private bool _userPlaced;
-
-    /// <summary>THE ONE QUESTION BOTH PLACEMENT PATHS ASK: does this window's own
-    /// position outrank the corner <see cref="OpenOn"/> promises?
-    ///
-    /// <para>Only if the USER put it there. <see cref="Show"/> and
-    /// <see cref="HostGeometryChanged"/> used to answer this differently - Show
-    /// consulted <c>_userPlaced</c> and the host-change path did not - and the
-    /// disagreement was measurable. A panel nobody had touched, left OPEN across a
-    /// toggle into fullscreen, kept its absolute left and landed mid-screen with a
-    /// 387 DIP right gap, while the same panel closed and reopened came back in the
-    /// corner (15.4b item 2). Both paths read this property now, so a panel merely
-    /// open across the change and one being reopened cannot drift apart again.</para>
-    ///
-    /// <para><c>_placed</c> is in the test only for the never-yet-placed window,
-    /// which has no position to outrank anything with; a resize sets
-    /// <c>_userPlaced</c> without touching <c>_placed</c>, but an open window is
-    /// placed by construction.</para></summary>
-    private bool KeepsOwnPosition => _placed && _userPlaced;
+    /// <para>A host with no room for it is rendered smaller — §11.6 item 42's
+    /// limits are not negotiable — but this pair is left ALONE, so the window
+    /// returns to the wanted size when the room comes back. §15.4b recorded the
+    /// destructive version as an accepted limitation: "clamping into smaller
+    /// windowed bounds is one-way, so a panel sized to full fullscreen height
+    /// stays at the clamped size on return". Keeping the intent separate from the
+    /// render is the whole of what retires it.</para></summary>
+    private double _wantW, _wantH;
 
     /// <summary>Raised when the info / help button is pressed.</summary>
     public Action? InfoRequested { get; set; }
@@ -214,6 +208,10 @@ public sealed class FloatingWindow
     private FloatingWindow(Panel host, double width, double height)
     {
         _host = host;
+        // The tenant's requested size is an INTENT, not the rendered size: a host
+        // too small for it renders it smaller without forgetting this.
+        _wantW = width;
+        _wantH = height;
         ActiveRoot ??= host.XamlRoot;
         // Self-correcting, rather than a call from whoever toggled fullscreen.
         // SetPresenter does not lay out synchronously and the caption row is
@@ -374,7 +372,11 @@ public sealed class FloatingWindow
             // the window may legitimately hang past the host's edge while dragged
             ShouldConstrainToRootBounds = false,
         };
-        _host.SizeChanged += (_, _) => ClampIntoView();
+        // ONE SizeChanged subscription, not two. `ClampIntoView` was hooked here
+        // as well, and it clamped the very offsets `HostGeometryChanged` had just
+        // shifted — a clamp cleaning up after a shift. Resolving from the insets
+        // does the clamping on the way through (§15.4e), so a second pass has
+        // nothing left to correct.
     }
 
     // =======================================================================
@@ -630,11 +632,15 @@ public sealed class FloatingWindow
         // stamp the resolved theme onto the panel explicitly, or a window opened
         // on a Blueprint page would come up wearing the last page's palette.
         PaintPanel();
-        // Re-anchor on every open unless the user has chosen a position: the host
-        // may be a different size and in a different place than it was last time
-        // (fullscreen toggled while this was closed), and the default corner is
-        // defined relative to the host, not remembered in absolute coordinates.
-        if (!KeepsOwnPosition) PlaceAnchored();
+        // Resolve against the CURRENT host on every open. The host may be a
+        // different size and in a different place than it was last time
+        // (fullscreen toggled while this was closed), and the position is stored
+        // as an inset from the host's own edge rather than in absolute
+        // coordinates — so this is the SAME one line the host-change path runs.
+        // No re-anchor arm and no `KeepsOwnPosition` test: a window nobody has
+        // moved has null insets and lands in `OpenOn`'s corner, and one the user
+        // dragged comes back at the distance they dragged it to (§15.4e).
+        ApplyGeometry();
         if (_scroller.Content == null) ShowTab(_active);
         _popup.IsOpen = true;
         // The window is made visible OUTRIGHT and only then animated: a fade that
@@ -669,115 +675,141 @@ public sealed class FloatingWindow
         Closed?.Invoke();
     }
 
-    /// <summary>Which edge the window first appears against. The export pane
-    /// keeps the reference's right edge; the Objects library opens on the LEFT
-    /// (UI-SPEC-V3 L), which is where Concepts puts it. Only the FIRST placement
-    /// uses this — once the user drags the window, its own position wins.</summary>
+    /// <summary>WHICH SIDE THIS WINDOW'S STORED DISTANCE IS MEASURED FROM. The
+    /// export pane keeps the reference's right edge; the Objects library opens on
+    /// the LEFT (UI-SPEC-V3 L), which is where Concepts puts it.
+    ///
+    /// <para>Not "only the first placement" any more. Under §15.4e the window
+    /// remembers an INSET from this side, so this names the edge it holds its
+    /// distance from for as long as it exists — and the edge a resize therefore
+    /// does not move. A window the user drags still keeps its own position; what
+    /// their drag changes is the NUMBER, not which side it is measured
+    /// against.</para></summary>
     public enum Side { Right, Left }
 
     public Side OpenOn { get; set; } = Side.Right;
 
-    // Anchored to an edge, directly below the top bar — the reference position,
-    // and §11.6 item 42's "they open as high as possible".
-    private void PlaceAnchored()
-    {
-        double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
-        if (hostW <= 0 || hostH <= 0)
-        {
-            // the layer has not been measured yet — place on the first arrange
-            _host.SizeChanged += FirstPlacement;
-            return;
-        }
-        var (maxW, maxH) = MaxSize();
-        _panel.Width = Math.Min(_panel.Width, maxW);
-        _panel.Height = Math.Min(_panel.Height, maxH);
+    // The reference position — anchored to an edge, directly below the top bar,
+    // §11.6 item 42's "they open as high as possible" — is what the DEFAULT
+    // insets come to, so there is no separate "place anchored" step to call.
+    // `PlaceAnchored` was that step, and `Show` and `HostGeometryChanged` each
+    // decided for themselves whether to run it; both now simply resolve.
 
-        var org = HostOrigin;
-        _popup.HorizontalOffset = org.X + (OpenOn == Side.Left
-            ? EdgeGap
-            : Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap));
-        _popup.VerticalOffset = org.Y + TopBand;
-        _lastOrg = org;
-        _placed = true;
-        Constrain();
+    /// <summary>THE ONE RULE: the rendered rect is the stored intent resolved
+    /// against the CURRENT host. Nothing is shifted by a delta, nothing
+    /// accumulates, and nothing is re-anchored as a special case.
+    ///
+    /// <para>PURE — it reads <see cref="_insetSide"/>, <see cref="_insetTop"/>,
+    /// <see cref="_wantW"/> and <see cref="_wantH"/> and writes none of them. That
+    /// is what makes the clamping NON-DESTRUCTIVE: the window can be pulled into a
+    /// host that cannot hold it without losing the geometry it is being pulled
+    /// away from, so it returns to it exactly when the room comes back.</para>
+    ///
+    /// <para>Returns false when the host has not been measured yet. No one-shot
+    /// re-try handler is needed for that (<c>FirstPlacement</c> was one): the
+    /// permanent <c>SizeChanged</c> subscription fires the moment ActualWidth
+    /// stops being zero, which is the same event the one-shot waited for.</para>
+    ///
+    /// <para>The ORDER is the order <c>Constrain</c> used and for the same reason:
+    /// SIZE first, then the position derived from the insets against THAT size,
+    /// then the position clamp. Deriving the position from the wanted width while
+    /// rendering a clamped one would put the anchored edge in the wrong place and
+    /// leave the position clamp to rescue it — which is exactly the "clamp
+    /// standing in for the rule" that §15.4c had to unpick.</para></summary>
+    private bool Resolve(out double left, out double top, out double w, out double h)
+    {
+        left = top = w = h = 0;
+        double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
+        if (hostW <= 0 || hostH <= 0) return false;
+
+        (w, h) = ConstrainSize(_wantW, _wantH);
+        double side = _insetSide ?? EdgeGap;
+        left = OpenOn == Side.Left ? side : hostW - w - side;
+        top = _insetTop ?? TopBand;
+        (left, top) = ConstrainPosition(left, top, w, h);
+        return true;
     }
 
-    /// <summary>The host moved or resized under an already-placed window —
-    /// entering or leaving fullscreen being the case that matters.
+    /// <summary>Push the resolved rect at the popup — the only writer of the
+    /// popup's offsets and of the panel's Width / Height.
     ///
-    /// <para>ONE RULE, AND IT IS <see cref="Show"/>'S RULE. A window the user
-    /// placed is RE-PLACED, NOT RE-OPENED: it keeps the position it was dragged
-    /// to, shifted by exactly the amount the host moved, so it holds still
-    /// relative to the top bar it is anchored under. A window THIS CLASS placed
-    /// re-anchors instead, because the corner <see cref="OpenOn"/> promises is the
-    /// whole of what ever positioned it, and that corner has just moved. Snapping
-    /// a DRAGGED window back to the default corner on every F11 would be a
-    /// different bug, not a fix — which is why the two arms exist rather than one.</para>
+    /// <para><see cref="HostOrigin"/> is read FRESH here rather than differenced
+    /// against a remembered one. The offsets are absolute in the popup's space and
+    /// every inset is relative to the host, so the origin is needed on every
+    /// apply — but only as the current translation, never as a baseline. That is
+    /// what retired <c>_lastOrg</c>: there is no delta to take.</para></summary>
+    private void ApplyGeometry()
+    {
+        if (!Resolve(out double left, out double top, out double w, out double h)) return;
+        var org = HostOrigin;
+        _panel.Width = w;
+        _panel.Height = h;
+        _popup.HorizontalOffset = org.X + left;
+        _popup.VerticalOffset = org.Y + top;
+    }
+
+    /// <summary>The anchored-side inset that a rect of this width, with its left
+    /// edge here, comes to. One place, because a drag and a resize have to agree on
+    /// what "the distance from the side they're on" means.
     ///
-    /// <para>The old version shifted BOTH arms by the host-origin delta, and
-    /// 15.4b item 2 measured what that does. Fullscreen → windowed only looked
-    /// right by accident: the shift put the window outside a host 360 DIP
-    /// narrower and <see cref="Constrain"/> clamped it back to the right edge.
-    /// Windowed → fullscreen had nothing to clamp against, so an untouched
-    /// panel's 543.5 DIP left became 537.0 — the host-origin delta exactly —
-    /// leaving a 387 DIP right gap. Same panel, same toggle, two different
-    /// answers depending only on which direction it went.</para>
+    /// <para>Measured against the width PASSED IN — the width on screen — not
+    /// against <see cref="_wantW"/>. The user set the distance they could see.</para></summary>
+    private double SideInsetOf(double left, double w)
+        => OpenOn == Side.Left ? left : _host.ActualWidth - w - left;
+
+    /// <summary>The host moved or resized under the window — entering or leaving
+    /// fullscreen being the case that matters.
     ///
-    /// <para>Then <see cref="Constrain"/>, because the host changed SIZE as well
-    /// as origin: a window dragged to the bottom edge of a fullscreen page, or
-    /// sized to its full height, does not fit the smaller windowed one and has to
-    /// be clamped back into it. That clamp is one-way by nature — coming back to
-    /// fullscreen leaves it at the size the windowed bounds forced, because the
-    /// size the user chose is not recoverable once it has been overwritten.
-    /// <see cref="PlaceAnchored"/> ends in the same clamp, so the re-anchoring arm
-    /// is not skipping it.</para></summary>
+    /// <para>ONE LINE, AND IT IS <see cref="Show"/>'S LINE. Both paths used to
+    /// decide for themselves whether to shift the old offsets or re-anchor to the
+    /// corner, and §15.4c had to introduce a shared predicate to stop them drifting
+    /// apart. There is nothing left for either to decide: the insets say where the
+    /// window goes, and the current host says how much room there is.</para>
+    ///
+    /// <para>No <c>!_placed</c> early return either. A window that has never been
+    /// positioned has no offsets left to corrupt — it has NULL insets, which
+    /// resolve to the anchored corner of whatever host is up, which is exactly
+    /// where it should open.</para>
+    ///
+    /// <para>Nor is this the fullscreen path only. An auto-placed panel re-anchors
+    /// on every host size change including an ordinary drag of the window border,
+    /// and a user-placed one holds its distance through the same — §15.4c named
+    /// that consequence for its re-anchoring arm and it is unchanged here, because
+    /// it is the rule rather than a side effect of it.</para></summary>
     private void HostGeometryChanged(object sender, SizeChangedEventArgs e)
     {
-        // Never placed at all: nothing to preserve and no corner to return to
-        // yet. Show() will run PlaceAnchored against the current origin when it
-        // opens, and shifting a not-yet-meaningful offset would corrupt it.
-        if (!_placed) return;
-        try
-        {
-            // Auto-placed: re-anchor. PlaceAnchored recomputes from the CURRENT
-            // origin and size, so it is correct whichever way the host changed,
-            // and it refreshes _lastOrg itself - a later drag then shifts from
-            // the right baseline.
-            if (!KeepsOwnPosition) { PlaceAnchored(); return; }
-
-            var org = HostOrigin;
-            double dx = org.X - _lastOrg.X, dy = org.Y - _lastOrg.Y;
-            if (dx != 0 || dy != 0)
-            {
-                _popup.HorizontalOffset += dx;
-                _popup.VerticalOffset += dy;
-                _lastOrg = org;
-            }
-            Constrain();
-        }
-        catch { }
-    }
-
-    private void FirstPlacement(object sender, SizeChangedEventArgs e)
-    {
-        _host.SizeChanged -= FirstPlacement;
-        PlaceAnchored();
+        try { ApplyGeometry(); } catch { }
     }
 
     private void MoveBy(double dx, double dy)
     {
-        _popup.HorizontalOffset += dx;
-        _popup.VerticalOffset += dy;
-        _placed = true;
-        _userPlaced = true;      // from here on this window's own position wins
-        ClampIntoView();
-    }
+        // Dragged from what the user can SEE, which is the resolved rect and not
+        // the stored intent: when the host is too small to honour the insets the
+        // window renders clamped, and a drag that started from the unreachable
+        // stored position would jump on the first delta.
+        if (!Resolve(out double left, out double top, out double w, out double h)) return;
+        var (nl, nt) = ConstrainPosition(left + dx, top + dy, w, h);
 
-    /// <summary>§11.6 item 42. This used to let the window hang most of the way
-    /// off the page as long as 120 DIP of header stayed grabbable, and to sit at
-    /// y = 0 — straight over the top bar's two clusters. It now keeps the whole
-    /// window on the page, inside its margins, and below the chrome.</summary>
-    private void ClampIntoView() => Constrain();
+        // Clamped, and the CLAMPED value is what gets banked, so a drag into the
+        // page edge remembers the inset it actually reached. Storing the raw target
+        // instead would give the drag a dead zone — shove 200 DIP past the edge and
+        // the first 200 DIP back would move nothing — which is also what the old
+        // in-place `Constrain()` did, so this is not a change of feel.
+        //
+        // THE SIZE IS NOT TOUCHED. A move is not a resize. Banking the rendered
+        // size here would let a drag in a windowed host quietly discard the height
+        // the user chose in a fullscreen one — the exact destruction §15.4e's
+        // clamping rule exists to prevent, arriving through the drag handler
+        // instead of through the clamp.
+        //
+        // And only the axis that actually MOVED is committed. A purely horizontal
+        // drag in a host with no vertical slack would otherwise bank the clamped
+        // top as though the user had chosen it, losing the one they chose when
+        // there was room for it: the same destruction again, by the side door.
+        if (nl != left) _insetSide = SideInsetOf(nl, w);
+        if (nt != top) _insetTop = nt;
+        ApplyGeometry();
+    }
 
     // =======================================================================
     // Resize grips — iPadOS-style corner brackets + edge pills
@@ -802,7 +834,15 @@ public sealed class FloatingWindow
     // §11.6 item 42 — the constraints every floating panel obeys
     // =======================================================================
     /// <summary>The largest this window may be on the current host: the page
-    /// minus its edge margins, and minus the top-bar band it may not enter.</summary>
+    /// minus its edge margins, and minus the top-bar band it may not enter.
+    ///
+    /// <para>THE TOP BAND IS "ANOTHER PANEL ELEMENT" — it is the top bar's two
+    /// clusters, and it is the one such element a floating window can currently
+    /// meet. Any further reserved region (a dock, a second floating panel) belongs
+    /// in this method and in <see cref="ConstrainPosition"/> beside it, and
+    /// inherits the non-destructive behaviour for free: everything here is applied
+    /// to a candidate rect on its way to the screen and never written back over
+    /// the stored intent.</para></summary>
     private (double W, double H) MaxSize()
     {
         double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
@@ -811,25 +851,37 @@ public sealed class FloatingWindow
                 Math.Max(MinH, hostH - TopBand - EdgeGap));
     }
 
-    /// <summary>Brings the window inside every constraint at once — size first,
-    /// then position, because clamping a position against a size that is itself
-    /// out of bounds gives the wrong answer.</summary>
-    private void Constrain()
+    /// <summary>The room clamp, applied to a SIZE and returned. Floored at
+    /// <c>MinW</c> / <c>MinH</c> rather than at the room, because a host smaller
+    /// than the window's minimum leaves the minimum winning — the window hangs
+    /// over the margin rather than shrinking to nothing.</summary>
+    private (double W, double H) ConstrainSize(double w, double h)
+    {
+        var (maxW, maxH) = MaxSize();
+        return (Math.Clamp(w, MinW, maxW), Math.Clamp(h, MinH, maxH));
+    }
+
+    /// <summary>The room clamp, applied to a POSITION against a size already
+    /// through <see cref="ConstrainSize"/>, and returned.
+    ///
+    /// <para>This is <c>Constrain</c>'s safety role, unchanged in substance: the
+    /// whole window on the page, inside its margins, below the chrome. §11.6 item
+    /// 42 still holds on every frame. What changed is that the answer is RETURNED
+    /// instead of being written over the window's memory of where it was, so the
+    /// clamp can no longer be mistaken for the positioning rule — §15.4c found the
+    /// old one standing in for exactly that, and working in only the one direction
+    /// where the host shrinks.</para>
+    ///
+    /// <para>Each upper bound is floored at its own lower bound so the clamp stays
+    /// well-formed on a host with no room at all: <c>Math.Clamp</c> throws when min
+    /// exceeds max, and a 320 DIP minimum window on a narrower host reaches that
+    /// case.</para></summary>
+    private (double L, double T) ConstrainPosition(double left, double top, double w, double h)
     {
         double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
-        if (hostW <= 0 || hostH <= 0) return;
-
-        var (maxW, maxH) = MaxSize();
-        if (_panel.Width > maxW) _panel.Width = maxW;
-        if (_panel.Height > maxH) _panel.Height = maxH;
-
-        var org = HostOrigin;
-        double left = Math.Max(EdgeGap, hostW - _panel.Width - EdgeGap);
-        _popup.HorizontalOffset = Math.Clamp(_popup.HorizontalOffset,
-                                             org.X + EdgeGap, org.X + left);
-        double top = Math.Max(TopBand, hostH - _panel.Height - EdgeGap);
-        _popup.VerticalOffset = Math.Clamp(_popup.VerticalOffset,
-                                           org.Y + TopBand, org.Y + top);
+        if (hostW <= 0 || hostH <= 0) return (left, top);
+        return (Math.Clamp(left, EdgeGap, Math.Max(EdgeGap, hostW - w - EdgeGap)),
+                Math.Clamp(top, TopBand, Math.Max(TopBand, hostH - h - EdgeGap)));
     }
 
     private static SolidColorBrush GripBrush() => new(PageTheme.WithAlpha(PageTheme.OnSurface, 0x8C));
@@ -872,33 +924,53 @@ public sealed class FloatingWindow
         grip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
         grip.ManipulationDelta += (_, e) =>
         {
-            double dx = e.Delta.Translation.X, dy = e.Delta.Translation.Y;
+            // THE GRABBED EDGE MOVES; THE OPPOSITE EDGE HOLDS STILL. §11.6 items
+            // 41 and 42 left only the two BOTTOM corners, so the edge held is
+            // always the top and — on a right-anchored window — the right. The
+            // panel therefore grows INWARD, and the distance from the side it is
+            // anchored to survives the resize untouched: rule 3 of §15.4e. Nothing
+            // here arranges for that. It falls out of the inset being the thing
+            // stored, because a resize that leaves the anchored edge alone cannot
+            // change a distance measured to that edge.
+            //
             // A resize is the user choosing this geometry just as much as a drag
-            // is - and the left/top grips move the origin as well as the size.
-            _userPlaced = true;
-            var (maxW, maxH) = MaxSize();
+            // is, which is what `_userPlaced` was set here to record. The flag has
+            // no readers left: the stored inset and wanted size now carry
+            // everything it was consulted for, and they carry it as NUMBERS rather
+            // than as a mode, which is why the two placement paths can no longer
+            // disagree about which arm to take (§15.4c).
+            if (!Resolve(out double left, out double top, out double w, out double h)) return;
+            double left0 = left, top0 = top;
+            double dx = e.Delta.Translation.X, dy = e.Delta.Translation.Y;
+
             if (sx < 0)
             {
-                double w = Math.Clamp(_panel.Width - dx, MinW, maxW);
-                _popup.HorizontalOffset += _panel.Width - w;
-                _panel.Width = w;
+                double nw = ConstrainSize(w - dx, h).W;
+                left += w - nw;         // the left edge is the one under the pointer
+                w = nw;
             }
             else if (sx > 0)
             {
-                _panel.Width = Math.Clamp(_panel.Width + dx, MinW, maxW);
+                w = ConstrainSize(w + dx, h).W;
             }
-            _ = maxH;   // used by the vertical arm below
             if (sy < 0)
             {
-                double h = Math.Clamp(_panel.Height - dy, MinH, maxH);
-                _popup.VerticalOffset += _panel.Height - h;
-                _panel.Height = h;
+                double nh = ConstrainSize(w, h - dy).H;
+                top += h - nh;
+                h = nh;
             }
             else if (sy > 0)
             {
-                _panel.Height = Math.Clamp(_panel.Height + dy, MinH, maxH);
+                h = ConstrainSize(w, h + dy).H;
             }
-            Constrain();
+
+            // The size IS the intent here, and both arms already clamped it.
+            _wantW = w;
+            _wantH = h;
+            var (nl, nt) = ConstrainPosition(left, top, w, h);
+            if (nl != left0) _insetSide = SideInsetOf(nl, w);
+            if (nt != top0) _insetTop = nt;
+            ApplyGeometry();
         };
     }
 
