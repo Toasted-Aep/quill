@@ -2206,3 +2206,38 @@ what makes the hover strip the thing carrying the window controls. It folds
 **only while `ChromeBars` is up**: with the radial surface off there are no
 floating clusters, that row is the only chrome there is, and hiding it would
 leave a bare canvas.
+
+### 15.4a The slide, measured on screen — 2026-08-17
+
+Frame bursts of the strip's own rectangle (276 × 96 px at the top right),
+grabbed in one process at about 8 ms a frame with the foreground window checked
+on every frame, so nothing else could be in front. 1 DIP = 2 px on this screen;
+the strip's full extension is 34 DIP = 68 px, and the visible height below is the
+lowest row still filled with the strip's `#202020` ground.
+
+**The descent decelerates and settles.** Already recorded and re-seen here:
+travel per frame 10, 13, 13, 8, 6, 4, 3, 2, 1 px, monotone and easing out.
+
+**§15.4's first bullet — "reversible mid-flight" — holds, and the strip demonstrably
+never arrives before turning round.** Two runs, pulling the pointer off the edge
+at different points in the flight:
+
+| pointer pulled away | height when pulled | peak height reached | then |
+| --- | --- | --- | --- |
+| 76 ms after the reveal armed | 59 px (29.5 DIP) | **60 px (30.0 DIP)** | 58, 54, 48, 37, 17, 0 |
+| 40 ms after the reveal armed | 43 px (21.5 DIP) | **49 px (24.5 DIP)** | 39, 21, 0 |
+
+The peak is the whole point. In neither run does the strip ever reach 68 px — it
+tops out at 30.0 DIP and 24.5 DIP of 34 — so it cannot have snapped open and then
+closed. The sequence through the turn is continuous in both: one frame carries on
+outward after the pull (the move lands between frames), then every following
+frame is lower than the last, with no jump at the reversal. That is the single
+easing curve doing what §15.4 says two curves could not.
+
+The retraction is also the right *duration* for a shared curve rather than for a
+fixed 130 ms slide. Visible 60 px is `Ease(_t) = 0.88`, and this ease is front-
+loaded (cubic-bezier 0.12, 0.9 → 0.2, 1.0), so 0.88 of the distance is only about
+a third of `_t`. A third of 130 ms is ≈ 43 ms, and the measured retraction from
+60 px to 0 took ≈ 50 ms. A retraction that had taken the full 130 ms from there
+would have meant `_t` was being reset rather than reversed.
+
