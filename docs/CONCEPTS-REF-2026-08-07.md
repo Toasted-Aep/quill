@@ -2735,10 +2735,9 @@ Because almost nothing in the dial applies to a photo:
   an attachment is selected, and greying it would destroy information rather
   than disable a control.
 
-**The grey itself must be sampled, not chosen.** The user asked for *"the exact
-shade of grey shown in photo"*. Concepts is running on the machine and can be
-captured; take the value from a pixel rather than picking something plausible,
-and record the sampled hex here.
+Use the disabled treatment the dial already has for an unavailable readout;
+this clause is about **which marks** grey, not about a new colour. The grey the
+user asked for by hex belongs to the page, not to the dial - see §16.7.
 
 ### 16.4 A greyed readout centres in its section
 
@@ -2774,3 +2773,35 @@ the one on the inner edge. Make the head symmetric about its own shaft.
 
 Re-author the geometry on the 24-unit grid rather than nudging numbers, and
 render it at the size it actually draws before calling it fixed.
+
+### 16.7 While an attachment is selected, the PAGE fades to grey
+
+Corrected from a misreading. *"make texts the exact shade of grey shown in
+photo ... make them slowly turn grey not instantly"* is not about the dial's
+labels. It is about **everything the user has put on the page** - pen strokes,
+typed text, objects - which de-emphasises while an attachment is selected, so
+the attachment reads as the thing being worked on. The greyed handwriting
+beneath the attachment in the capture is the example.
+
+**The colour is `#8E8E8E`**, given directly by the user. Not sampled, not
+approximated - that exact value.
+
+Three things this must get right:
+
+1. **It is a RENDER-TIME effect and must never touch stored colour.** Nothing
+   may write `#8E8E8E` into a stroke, a text run or an object. The page's own
+   colours have to come back exactly when the attachment is deselected, and a
+   user who saves in this state must not find their drawing greyed on reload.
+   This is the one way to turn a visual nicety into data loss.
+2. **It animates.** The user was explicit: *"slowly turn grey not instantly"*.
+   Use Quill's own motion rather than inventing a duration - `MenuAnim.cs` runs
+   190 ms out and 130 ms back on a `(0.12, 0.9) -> (0.2, 1.0)` curve, and the
+   fullscreen strip already borrows it. Fade back on deselect too; a
+   one-directional fade would leave the page grey until something forced a
+   repaint.
+3. **The attachment itself does not fade.** It is the subject. In the capture
+   it holds full contrast while the ink around it is grey.
+
+Interaction worth deciding rather than assuming: what happens with **two**
+attachments, or an attachment selected while a stroke is mid-flight. Report
+what the implementation does rather than leaving it to be discovered.
