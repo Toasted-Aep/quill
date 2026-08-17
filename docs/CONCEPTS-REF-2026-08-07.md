@@ -2671,3 +2671,106 @@ per-list grouping is itself a variable: whether `1/4 Wide` in the 2-Point list a
 `1/4 Wide` in the 3-Point list place their shared points identically is one of the
 things the numbers will answer.
 
+
+---
+
+## 16. Attachments, the greyed dial, and the canvas that stopped being infinite — 2026-08-17
+
+One capture: a **dark page** with an image attachment selected, the dial at the
+top-left with most of its marks greyed, and the attachment carrying a floating
+action bar, an edge frame and a bottom action row.
+
+### 16.1 THE CANVAS IS NO LONGER INFINITE — regression, highest priority
+
+The user, marked five out of five: *"at some point you've managed to make the
+canvas limited, make it infinite again."*
+
+Quill's canvas is unbounded by design — pan and zoom have never had a stop.
+Something in recent work introduced one. **Find the cause before changing
+anything**; do not "add infinity back" by removing whatever clamp is found
+first, because the clamp may be load-bearing for something else.
+
+Leading suspects, in the order worth checking:
+
+1. **`NotePage.RefFrame`** (§14.5). A frame captured on the page's first
+   painted frame, added so vanishing points could be quartered against it. If
+   anything treats that frame as the extent of the page rather than as a
+   measuring reference, the canvas acquires exactly one page's worth of bounds.
+2. **The grid editor's confine-to-artboard** option (§12), if it is being
+   applied when it was not asked for.
+3. **Any clamp added for panel or chrome geometry** that reached the canvas
+   transform by mistake.
+
+Bisect against history rather than reasoning from the code alone — the change
+is recent and the symptom is sharp, so a bisect will name it faster than a read.
+Report which commit introduced it.
+
+### 16.2 Attachments get quick actions and an edge frame
+
+Text already gets a floating action bar. **An attachment must get one too.**
+From the capture, an image attachment when selected shows:
+
+- **A floating bar centred above it**, carrying, left to right: a paperclip, a
+  padlock, a duplicate mark, a waste bin, then a **divider**, then flip
+  horizontal and flip vertical.
+- **An edge frame** — a thin line marking the attachment's exact bounds, with a
+  small circular handle at each of the four corners.
+- **A bottom action row**, centred below: **Rotate**, **Scale**, **Filter**,
+  each an icon with its word beside it.
+
+The frame is the part the user called out specifically — *"add the lines that
+mark the edges of the attachment."* Selection is currently ambiguous without it.
+
+### 16.3 The dial greys out when an attachment is selected
+
+Because almost nothing in the dial applies to a photo:
+
+- **Grey every mark EXCEPT opacity, undo and redo.** Those three stay live —
+  an attachment's opacity is adjustable, and undo/redo always apply.
+- **The colour circle goes WHITE and becomes unusable**, in the dial *and* in
+  the pen row. You cannot recolour a photograph, and a live-looking colour
+  control that silently does nothing is worse than one that says so.
+- **Do NOT grey the per-pen colour arcs on the ring.** The user was explicit.
+  Those arcs report which colour each pen carries; that fact is still true while
+  an attachment is selected, and greying it would destroy information rather
+  than disable a control.
+
+**The grey itself must be sampled, not chosen.** The user asked for *"the exact
+shade of grey shown in photo"*. Concepts is running on the machine and can be
+captured; take the value from a pixel rather than picking something plausible,
+and record the sampled hex here.
+
+### 16.4 A greyed readout centres in its section
+
+Size, opacity and stability each occupy a section of the inner disc. **When one
+is unavailable, its glyph and value move to the middle of that section** rather
+than staying in the offset glyph/value arrangement §14.1 describes. Disabled,
+there is no value to read, so the split that exists to separate mark from
+number has nothing to separate.
+
+### 16.5 Stability and opacity move up and outward
+
+**This supersedes §14.1 item 2 and the `0.33 r` lift.** The user: *"move
+stability and opacity up and to the outer side (left for stability, right for
+opacity) and move their texts that show the percentage accordingly to not
+overlap redo and undo."*
+
+So both the glyphs and their values move **up** and **outward** — stability
+toward the left edge of the disc, opacity toward the right. The values follow
+their glyphs and must still clear undo and redo, which is what the `0.33 r` lift
+was for; moving outward gives more room to do it with, because the arrows sit
+low and central.
+
+Measure the result against the arrows' boxes rather than trusting the
+constants — §14.1 named that bound correctly and then picked a number that
+violated it, and the collision the user reported was `9 × 6 DIP` of digits
+sitting on top of an arrow.
+
+### 16.6 The undo and redo arrowheads are asymmetric
+
+*"redo and undo icons are a bit off, the arrow tip is longer on the outer
+side."* The head is lopsided — the barb on the outer edge extends further than
+the one on the inner edge. Make the head symmetric about its own shaft.
+
+Re-author the geometry on the 24-unit grid rather than nudging numbers, and
+render it at the size it actually draws before calling it fixed.
