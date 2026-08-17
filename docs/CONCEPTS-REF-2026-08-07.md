@@ -2513,7 +2513,85 @@ stranded inland with nothing to clamp it back.
 Builds at 0 warnings. **Not yet verified on screen: the dragged-panel case is
 still §15.4b item 3's, and it is now the thing that decides whether the whole
 `_userPlaced` distinction is right rather than merely harmless — if a drag does
-not survive a close / toggle / reopen, both call sites are wrong together.**
+not survive a close / toggle / reopen, both call sites are wrong together.** What
+the one run on this build did reach is §15.4d.
+
+### 15.4d The run on the fixed build — one row measured, then stood down again
+
+**Third stand-down under the shared-machine rule. Read this before automating any
+of it a fourth time: the launch state below is not what the settings file says it
+is, and knowing that is most of the setup cost.**
+
+The build carrying both §15.4c and §15.3a's raised gap was launched with
+`QUILL_DATA_FOLDER` pointed at the isolated scratch folder. Three facts about how
+it comes up, none of them assumable:
+
+- **It came up WINDOWED, not fullscreen, despite `Ui.StartFullscreen = true` in
+  that folder's `settings.json`.** Outer rect 196, 196 → 2356, 1509 px = **1080 ×
+  656.5 DIP** at dpi 192 (scale 2), which is the same host *size* §15.4b measured
+  and a different origin. So every fullscreen step has to be entered explicitly,
+  and a harness that assumes the first capture is fullscreen is measuring the
+  windowed host.
+- **It came up on the gallery** ("Welcome back"), so a page has to be opened
+  before any chrome exists to measure. The `Continue` button was used, which lands
+  in the scratch library's own notebook and never touches the user's.
+- **The Settings panel came up ALREADY OPEN** with the page — so the very first
+  capture is a first `Show()` on a fresh process, `_placed` and `_userPlaced` both
+  starting false. That is the auto-placed path, which is convenient, but it also
+  means a run that wants a *closed* starting state has to close it first.
+
+The radial surface was up (the dial visible at the top left), so
+`_chromeBars.IsVisible` was true and the caption row would have folded on
+fullscreen — the precondition §15.3a item c's offset is gated on.
+
+**What was measured — the windowed first-open anchor, on the fixed build.** Taken
+from the capture offline, so no differencing pair was needed: the panel's fill is
+`#F7F7F7` against a `#FCFCFC` page, which separates them directly. Keeping the
+columns and rows whose fill-run is at least half the widest, then including the
+1–3 px warm border and shadow:
+
+| | measured here | §15.4b row 1 |
+| --- | --- | --- |
+| top | **93.0 DIP** | 93.0 DIP |
+| right gap | 21.0 DIP | 20.5 DIP |
+| left | **543.5 DIP** | 543.5 DIP |
+| size | 515.5 × 542.5 DIP | 516 × 444 DIP |
+
+Top and left land on §15.4b's numbers exactly, and the right gap differs only by
+the half DIP that the border convention moves. So **`PlaceAnchored` still owns the
+windowed first open and §15.4c did not disturb it** — the right null result, and
+the only row of §15.4b's table this run got to.
+
+The **height differs — 542.5 rather than 444** — and that is the panel's own
+persisted size in that data folder, not a placement effect: nothing in §15.4c
+touches size, and `MaxSize` is not binding at that height on a 656.5 DIP host.
+Worth knowing only because a harness that hard-codes 444 to find the panel will
+miss it.
+
+**Then the guard tripped.** The cursor was left at 1440, 363 by the last injected
+click, was still there when that step's guard checked, and had moved to
+**1344, 1002** by the start of the next step — with no injection in flight
+between the two. Afterwards `GetLastInputInfo` counted steadily up from 34 s with
+no further input and the foreground was still the Quill this run had activated, so
+it reads as a single real pointer move from the person at the machine rather than
+a stream of them. Under the rule that is a stop either way. The Quill was closed
+with `WM_CLOSE` (posted, not clicked — closing by injection would have been more
+injection), and the user's own `library.json` was confirmed byte-identical by
+SHA-256 before and after, as was the still-running Concepts instance.
+
+**Consequently unverified, and in this order of value:**
+
+1. **§15.4c itself** — the 387 DIP asymmetry. The toggle was never entered, so the
+   fix is compiled and reasoned and *not* seen. The cheapest possible check, and
+   it needs only what this run already had on screen: with the panel open at the
+   windowed anchor above, enter fullscreen and measure. Auto-placed, so the answer
+   must be `EdgeGap` 14.0 / `TopBand` 60.0 of the 1440 DIP host, where the old
+   build gave 387.0 / 60.0.
+2. **§15.4b item 3** — the dragged panel. Still the case that decides whether
+   `_userPlaced` earns its keep. The drag handle is the pill in the panel header,
+   centred at the panel's own top; in this capture it sat at 1800, 404 px.
+3. **§15.3a item c** — the format bar, all three checks, now against
+   `FormatBarStripGap` = 12 rather than 4.
 
 ### 15.5 The preset sweep — the list, enumerated from Concepts, 2026-08-17
 
