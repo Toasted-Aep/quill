@@ -2805,3 +2805,36 @@ Three things this must get right:
 Interaction worth deciding rather than assuming: what happens with **two**
 attachments, or an attachment selected while a stroke is mid-flight. Report
 what the implementation does rather than leaving it to be discovered.
+
+### 16.8 The top bar drops undo and redo when the dial is the surface
+
+The user: *"remove redo and undo if radial dial is selected from top bar as
+redo and undo is already present in the radial dial."*
+
+**Conditional on the active tool surface, not unconditional.** The radial dial
+carries undo and redo in its lower quadrant (§10.2 item 5), so a second pair in
+the top bar is duplication. The **pen row has no undo or redo of its own**, so
+when the Bar surface is selected the top-bar pair must stay — removing them
+outright would leave that surface with no pointer route to undo at all.
+
+This continues §5's rule that the top bar carries no tools: the bar holds what
+has nowhere else to live, and the moment the dial provides a home, the bar's
+copy is redundant.
+
+Where it lives: `BtnUndo` and `BtnRedo` in `MainWindow.xaml` (around lines
+231-236), immediately preceded by an `AppBarSeparator`.
+
+Four things to get right:
+
+1. **Hide the separator with them if it exists only to divide that pair**, or
+   removing the buttons leaves a rule floating against its neighbour. Check what
+   the separator actually separates before assuming either way.
+2. **Keyboard accelerators are untouched.** `Ctrl+Z` and `Ctrl+Y` are bound
+   independently of these buttons and must keep working under every surface. The
+   dial is a pointer affordance, not the only route.
+3. **`UpdateUndoButtons()` must not fault** when the buttons are not in the
+   tree, and must not be the thing that puts them back.
+4. **The switch is live.** Changing the surface in settings updates the top bar
+   immediately — no restart, no reopening the page. A setting that needs a
+   relaunch to take effect reads as a bug.
+
