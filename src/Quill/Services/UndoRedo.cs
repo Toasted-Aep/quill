@@ -743,7 +743,7 @@ public class LockMixedAction : IPageAction
     }
 }
 
-/// <summary>CONCEPTS-REF 17: move a selection to another layer.
+/// <summary>CONCEPTS-REF 18: move a selection to another layer.
 ///
 /// <para>Modelled on <see cref="LockMixedAction"/>, and for the same reason: the
 /// per-element state it changes is a single field, so the undo record is the
