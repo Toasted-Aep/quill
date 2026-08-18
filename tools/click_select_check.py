@@ -164,6 +164,16 @@ def structural():
           i_click != -1 and i_barrel != -1 and i_click < i_barrel,
           "a barrel tap ON a stroke selects it; on empty canvas the menu still opens")
 
+    # The square lasso shares the mouse path's rubber-band rectangle, and that
+    # path's small-rectangle fallback opens a text caret. A selection tool must
+    # never reach it - not on a click, and not on a drag too small to enclose
+    # anything, which at 16x is any drag under half a world unit.
+    caret = commit.find("SetPendingText(cp)")
+    guard = commit.find("else if (_clickSelectDeselectsEmpty)")
+    check("the Select tool can never drop a text caret",
+          caret != -1 and guard != -1 and guard < caret,
+          "the caret fallback sits behind a _clickSelectDeselectsEmpty guard")
+
     reset = strip_comments(safe_body(src, "private void ResetGesture()"))
     check("the gesture reset disarms it",
           "_clickSelect" in reset,
@@ -434,6 +444,73 @@ def zoom_half():
           % (min(reaches), max(reaches)))
 
 
+# ---------------------------------------------------------------------------
+# 4. The square lasso, which shares the mouse path's rectangle
+# ---------------------------------------------------------------------------
+RECT_MIN_WORLD = 6.0   # CommitGesture: x2 - x1 > 6 && y2 - y1 > 6
+
+
+def square_release(strokes, path_screen, zoom, offset, branch):
+    """The Select tool with LassoSquare, released. Both models track the same
+    rubber-band rectangle; they differ in what a rectangle too small to enclose
+    anything means."""
+    start = path_screen[0]
+    moved = any(math.dist(pt, start) > CLICK_SLOP_PX for pt in path_screen[1:])
+    w0 = [to_world(pt, offset, zoom) for pt in path_screen]
+    x0 = min(q[0] for q in w0)
+    x1 = max(q[0] for q in w0)
+    y0 = min(q[1] for q in w0)
+    y1 = max(q[1] for q in w0)
+    if branch and not moved:
+        who = hit_stroke_for_click(strokes, to_world(start, offset, zoom), zoom)
+        return ("select", who) if who else ("deselect",)
+    if x1 - x0 > RECT_MIN_WORLD and y1 - y0 > RECT_MIN_WORLD:
+        box = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        return ("lasso", tuple(sorted(lasso_catch(strokes, box))))
+    # Too small to enclose anything. main falls into the mouse path's click
+    # handling, which drops a blinking text caret.
+    return ("deselect",) if branch else ("caret",)
+
+
+def square_half():
+    print()
+    print("  The Select tool with the SQUARE lasso, whose rectangle it borrows")
+    print("  from the mouse path")
+    print()
+    print("  %-44s  %-22s  %s" % ("gesture", "main (6010ae4)", "click-select"))
+
+    def run(label, path, zoom, offset=(0.0, 0.0)):
+        m = square_release(PAGE, path, zoom, offset, branch=False)
+        b = square_release(PAGE, path, zoom, offset, branch=True)
+        print("  %-44s  %-22s  %s" % (label, m[0], b[0] + (":" + str(b[1]) if len(b) > 1 else "")))
+        return m, b
+
+    m, b = run("click on the hairline, square lasso", press_release((300.0, 400.0)), 1.0)
+    check("the square lasso clicks to select too",
+          b == ("select", "hairline") and m == ("caret",),
+          "main dropped a text caret here; a selection tool should not")
+
+    m, b = run("click on empty canvas, square lasso", press_release((900.0, 900.0)), 1.0)
+    check("an empty click with the square lasso just deselects",
+          b == ("deselect",) and m == ("caret",),
+          "no blinking caret from a tool whose only job is selecting")
+
+    # At 16x a real 12-screen-px drag spans 0.75 world units - past the click
+    # slop, but under the rectangle's 6-unit floor.
+    off16 = (300.0 - 300.0 * 16.0, 400.0 - 400.0 * 16.0)
+    m, b = run("12px drag at 16x, too small to enclose", press_release((300.0, 400.0), [(12, 12)]),
+               16.0, off16)
+    check("a drag too small to enclose anything still never opens a caret",
+          b == ("deselect",) and m == ("caret",),
+          "0.75 world units wide: past the 8px slop, under the 6-unit floor")
+
+    m, b = run("real square drag round the hairline",
+               [(180.0, 380.0), (640.0, 420.0)], 1.0)
+    check("a real square drag still lassoes, unchanged",
+          b == m and b[0] == "lasso" and b[1] == ("hairline",),
+          "both models catch exactly the hairline")
+
+
 def main():
     print()
     print("CONCEPTS-REF 16.10 - click to select, without dragging")
@@ -441,6 +518,7 @@ def main():
     structural()
     numeric()
     zoom_half()
+    square_half()
     print()
     for state, label, detail in NOTES:
         print("  [%s] %-48s %s" % (state, label, detail))
