@@ -30,6 +30,9 @@
     <Compile Include="Program.cs" />
     <Compile Include="Veil.g.cs" />
     <Compile Include="..\..\src\Quill\Models\NoteModels.cs" Link="NoteModels.cs" />
+    <!-- NotePage carries a List<Layer> since CONCEPTS-REF 17, so the models no
+         longer compile without it. -->
+    <Compile Include="..\..\src\Quill\Models\LayerModels.cs" Link="LayerModels.cs" />
     <Compile Include="..\..\src\Quill\Services\LibraryStore.cs" Link="LibraryStore.cs" />
     <Compile Include="..\..\src\Quill\Services\SyncLog.cs" Link="SyncLog.cs" />
     <Compile Include="..\..\src\Quill\Services\SelectionSubject.cs" Link="SelectionSubject.cs" />
