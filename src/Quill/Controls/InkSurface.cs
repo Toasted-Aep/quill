@@ -2217,6 +2217,14 @@ public sealed class InkSurface : UserControl
                             new(x1, y1), new(x2, y1), new(x2, y2), new(x1, y2)
                         });
                     }
+                    else if (_clickSelectDeselectsEmpty)
+                    {
+                        // 16.10: the Select tool's square lasso, dragged too
+                        // small to enclose anything — at 16x, 8 screen px is
+                        // half a world unit, so a real drag can land here.
+                        // Deselect and no more, as for a click on empty canvas:
+                        // a selection tool never opens a text box.
+                    }
                     else
                     {
                         // a plain mouse click (no drag): title / date, then text
