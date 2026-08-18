@@ -120,6 +120,48 @@ public sealed class InkSurface : UserControl
     private bool _barrelMoved;
     private Vector2 _barrelStartScreen;
 
+    // ---- 16.10: click to select, without dragging ----
+    // "make just holding selection button on pen and clicking (not dragging to
+    // select) select the stroke."
+    //
+    // A press that never travels this far is a CLICK, however long it is held —
+    // the test is movement, not time, because a held press that never moves is
+    // exactly what the user described. SCREEN pixels deliberately: the canvas
+    // runs 0.1x to 16x (16.1), so the same wobble of the hand is 50 world units
+    // at one end and 0.3 at the other, and a world threshold would mean a
+    // different gesture at every zoom. The barrel button's own tap-vs-drag test
+    // has always used this number; now it reads it from here.
+    private const float ClickSlopPx = 8f;
+    // How far past a stroke's own painted width a click still counts, again in
+    // screen pixels. The stroke's size does the rest of the work — see
+    // HitStrokeForClick, which follows the eraser's rule (FindStrokeNear).
+    private const float ClickHitPadPx = 10f;
+    // Armed at press when selection is the active modality AND the press landed
+    // on empty ground, so no other gesture (a grab, a resize, a selection move)
+    // has already claimed it. Read on release.
+    private bool _clickSelect;
+    private bool _clickSelectMoved;
+    // True when the whole tool is selection (the Select tool), as opposed to a
+    // modality reached through a button. Only then does a click on empty canvas
+    // mean "deselect and nothing else"; the barrel keeps its context menu (#44)
+    // and the mouse modes keep their title/date/caret click.
+    private bool _clickSelectDeselectsEmpty;
+    private Vector2 _clickSelectStartScreen;
+    private Vector2 _clickSelectStartWorld;
+
+    /// <summary>Arms 16.10's click-to-select for this gesture. Called from every
+    /// press where selection is the active modality and the press found empty
+    /// ground: the Select tool, the pen's barrel button, and the mouse's Select
+    /// mode.</summary>
+    private void ArmClickSelect(Vector2 screen, Vector2 world, bool deselectsEmpty)
+    {
+        _clickSelect = true;
+        _clickSelectMoved = false;
+        _clickSelectDeselectsEmpty = deselectsEmpty;
+        _clickSelectStartScreen = screen;
+        _clickSelectStartWorld = world;
+    }
+
     public UndoRedoManager UndoManager { get; } = new();
     public NotePage? Page => _page;
     public RichEditBox? ActiveTextBox { get; private set; }
@@ -1209,6 +1251,11 @@ public sealed class InkSurface : UserControl
                 ClearSelection();
                 _activeShape = null;
                 _lasso = new List<Vector2> { pos };
+                // 16.10: the barrel button IS "the selection button on the pen",
+                // so a press-and-release here that never moves selects whatever
+                // stroke is under it. Only a click that finds no stroke falls
+                // through to the context menu this gesture has always opened.
+                ArmClickSelect(screen, pos, deselectsEmpty: false);
             }
             e.Handled = true;
             _canvas.Invalidate();
@@ -1437,6 +1484,11 @@ public sealed class InkSurface : UserControl
                 // already tracks and commits, so both shapes are one code path.
                 if (LassoSquare) { _rectSelect = true; _rectStart = pos; _rectCur = pos; }
                 else _lasso = new List<Vector2> { pos };
+                // 16.10: selection reached as a TOOL. A drag from here still
+                // lassoes, freeform or square; a press-and-release that never
+                // moves selects the stroke under it, and on empty canvas means
+                // nothing more than the deselect ClearSelection just did.
+                ArmClickSelect(screen, pos, deselectsEmpty: true);
                 break;
             }
 
@@ -1507,6 +1559,11 @@ public sealed class InkSurface : UserControl
         _rectSelect = true;
         _rectStart = pos;
         _rectCur = pos;
+        // 16.10: MouseMode.Select is the third way selection becomes the active
+        // modality, so a click there selects the stroke under it too. Auto is
+        // left alone on purpose — its click already means title, date, text box
+        // or a fresh caret, and rubber-banding is only half of what it does.
+        if (MouseMode == MouseMode.Select) ArmClickSelect(screen, pos, deselectsEmpty: false);
         e.Handled = true;
         _canvas.Invalidate();
     }
@@ -1691,6 +1748,71 @@ public sealed class InkSurface : UserControl
         return null;
     }
 
+    /// <summary>
+    /// The stroke under a click, or null when the click found empty canvas
+    /// (16.10). Not to be confused with <see cref="HitStroke"/>, whose flat
+    /// tolerance serves the tap-to-inspect gesture.
+    ///
+    /// TOLERANCE follows the eraser's rule (see FindStrokeNear): pad by the
+    /// stroke's OWN size, so a hairline is as clickable as a broad nib, plus a
+    /// fixed reach expressed in screen pixels and divided by the zoom here — so
+    /// the reach under the pen tip is the same at 0.1x as at 16x. There is no
+    /// second notion of "near" in this file.
+    ///
+    /// OVERLAP resolves to the TOPMOST stroke: the page paints in _page.Strokes
+    /// order, so walking it backwards answers with the one drawn on top, which
+    /// is the one under the user's eye. Nothing here contradicts the lasso — a
+    /// lasso takes every stroke it encloses and never has to choose — and it
+    /// matches how the lasso's own result is drawn, newest ink over oldest.
+    /// </summary>
+    private PenStroke? HitStrokeForClick(Vector2 p)
+    {
+        if (_page == null) return null;
+        float reach = ClickHitPadPx / ViewZoom;
+        // The spatial index already inflates every stroke by its own size + 8,
+        // so a query box of `reach` cannot drop a stroke that the wider per-
+        // stroke pad below would have caught (FindStrokeNear reasons the same).
+        var cand = StrokeCandidates(p.X - reach, p.Y - reach, p.X + reach, p.Y + reach);
+        for (int i = _page.Strokes.Count - 1; i >= 0; i--)
+        {
+            var s = _page.Strokes[i];
+            var pts = s.Points;
+            if (pts.Count == 0) continue;
+            if (cand != null && !cand.Contains(s)) continue;
+            float pad = reach + s.Size;
+            s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
+            if (p.X < bx0 - pad || p.X > bx1 + pad || p.Y < by0 - pad || p.Y > by1 + pad) continue;
+            if (pts.Count == 1)
+            {
+                if (Vector2.Distance(p, new Vector2(pts[0].X, pts[0].Y)) <= pad) return s;
+                continue;
+            }
+            for (int j = 1; j < pts.Count; j++)
+                if (GeometryUtil.DistToSegment(p,
+                        new Vector2(pts[j - 1].X, pts[j - 1].Y),
+                        new Vector2(pts[j].X, pts[j].Y)) <= pad)
+                    return s;
+        }
+        return null;
+    }
+
+    /// <summary>Makes one stroke the entire selection — what a click leaves
+    /// behind (16.10). Deliberately the same tail as SelectWithLasso, so a
+    /// clicked stroke and a lassoed one are selected in exactly the same
+    /// state and every consumer of the selection sees no difference.</summary>
+    private void SelectSingleStroke(PenStroke s)
+    {
+        _selected.Clear();
+        _selectedSet.Clear();
+        _selShapes.Clear();
+        _selShapeSet.Clear();
+        _selTexts.Clear();
+        _selected.Add(s);
+        _selectedSet.Add(s);
+        _activeShape = null;
+        RecomputeSelectionBounds();
+    }
+
     private void BeginSelectionMove(Vector2 pos)
     {
         _movingSel = true;
@@ -1736,8 +1858,14 @@ public sealed class InkSurface : UserControl
 
         // a barrel gesture that moves past a small threshold is a drag (lasso),
         // not a tap (which would open the context menu on release).
-        if (_barrelGesture && !_barrelMoved && Vector2.Distance(screen, _barrelStartScreen) > 8f)
+        if (_barrelGesture && !_barrelMoved && Vector2.Distance(screen, _barrelStartScreen) > ClickSlopPx)
             _barrelMoved = true;
+
+        // 16.10: the same question for the selection modality at large. Screen
+        // space, and movement only — nothing here consults a clock, so a press
+        // held still for a second is still a click.
+        if (_clickSelect && !_clickSelectMoved && Vector2.Distance(screen, _clickSelectStartScreen) > ClickSlopPx)
+            _clickSelectMoved = true;
 
         switch (_gestureTool)
         {
@@ -2041,6 +2169,35 @@ public sealed class InkSurface : UserControl
             }
             case ToolType.Select:
             {
+                // 16.10: a press and a release with no meaningful movement
+                // between them is a CLICK, and a click on a stroke selects that
+                // stroke. Tested first, because the gestures below all assume a
+                // drag happened. A click that finds no stroke falls straight
+                // through to them, so every existing empty-canvas gesture —
+                // most of all the barrel button's context menu (#44) — is
+                // exactly where it was.
+                if (_clickSelect && !_clickSelectMoved)
+                {
+                    var clicked = HitStrokeForClick(_clickSelectStartWorld);
+                    if (clicked != null)
+                    {
+                        _lasso = null;
+                        _rectSelect = false;
+                        SelectSingleStroke(clicked);
+                        break;
+                    }
+                    if (_clickSelectDeselectsEmpty)
+                    {
+                        // The Select tool: a click on empty canvas deselects and
+                        // does no more. The press already cleared the selection;
+                        // what this stops is the square lasso falling into the
+                        // mouse path's click handling below and dropping a text
+                        // caret, which is not something a selection tool does.
+                        _lasso = null;
+                        _rectSelect = false;
+                        break;
+                    }
+                }
                 if (_barrelGesture && !_barrelMoved)
                 {
                     // tapped, not dragged -> open the context menu, no selection
@@ -2195,6 +2352,9 @@ public sealed class InkSurface : UserControl
         _rectSelect = false;
         _barrelGesture = false;
         _barrelMoved = false;
+        _clickSelect = false;
+        _clickSelectMoved = false;
+        _clickSelectDeselectsEmpty = false;
         _holdTimer.Stop();
     }
 
