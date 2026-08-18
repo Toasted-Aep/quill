@@ -503,6 +503,300 @@ public class ScaleMixedAction : IPageAction
     }
 }
 
+/// <summary>CONCEPTS-REF 16.2: the selection bar's flip-horizontal and
+/// flip-vertical, for a selection of any mixture of kinds.
+///
+/// <para><b>Its own inverse.</b> Mirroring about a fixed axis twice is the
+/// identity, so Do and Undo are the same call and there is no snapshot to hold
+/// or to get out of step with the page. That is worth more than it looks: the
+/// alternative - storing every original coordinate, as
+/// <see cref="ScaleMixedAction"/> must - keeps a second copy of every point in
+/// the selection alive in the undo stack for as long as the page is open.</para>
+///
+/// <para>The axis is captured at construction from the selection's bounds and
+/// never recomputed, because undoing must mirror about the SAME line the flip
+/// used, not about wherever the selection's bounds happen to be later.</para></summary>
+public class MirrorMixedAction : IPageAction
+{
+    private readonly List<PenStroke> _strokes;
+    private readonly List<ShapeElement> _shapes;
+    private readonly List<TextElement> _texts;
+    private readonly double _axis;
+    private readonly bool _horizontal;
+
+    public MirrorMixedAction(List<PenStroke> strokes, List<ShapeElement> shapes,
+                             List<TextElement> texts, double axis, bool horizontal)
+    {
+        _strokes = strokes; _shapes = shapes; _texts = texts;
+        _axis = axis; _horizontal = horizontal;
+    }
+
+    public string Description => _horizontal ? "Flip horizontal" : "Flip vertical";
+    public bool TouchesText => _texts.Count > 0;
+    public void Do(NotePage page) => Apply();
+    public void Undo(NotePage page) => Apply();
+
+    private void Apply()
+    {
+        double a2 = _axis * 2;
+        foreach (var s in _strokes)
+            foreach (var p in s.Points)
+            {
+                if (_horizontal) p.X = (float)(a2 - p.X);
+                else p.Y = (float)(a2 - p.Y);
+            }
+        foreach (var s in _shapes)
+        {
+            // X/Y is the top-left of the bounds for every kind except Line, where
+            // it is the START point and W/H are a SIGNED delta. Mirroring the
+            // start and negating the delta is right for both readings at once:
+            // for a box, X + W is the far edge, and reflecting the far edge to
+            // become the near one is exactly what a flip does.
+            if (_horizontal) { s.X = a2 - s.X - s.W; s.W = s.W; }
+            else { s.Y = a2 - s.Y - s.H; s.H = s.H; }
+            // A rotation reflects too, or a tilted shape would come back tilted
+            // the same way and the flip would look like a translation.
+            if (Math.Abs(s.Rotation) > 0.001) s.Rotation = -s.Rotation;
+        }
+        foreach (var t in _texts)
+        {
+            // Text is NOT mirrored glyph-for-glyph - reversed writing is not what
+            // "flip" means for a text box. Its BOX is reflected so it lands where
+            // the mirrored layout puts it, and it stays readable.
+            if (_horizontal) t.X = a2 - t.X - Math.Max(60, t.Width);
+            else t.Y = a2 - t.Y - 40;
+            if (Math.Abs(t.Rotation) > 0.001) t.Rotation = -t.Rotation;
+        }
+    }
+
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Union(
+        ActionBounds.Of(_strokes),
+        _shapes.Count > 0 ? ActionBounds.Union(_shapes.Select(s => (Rect?)ActionBounds.Of(s)).ToArray()) : null,
+        _texts.Count > 0 ? ActionBounds.Union(_texts.Select(t => (Rect?)ActionBounds.Of(t)).ToArray()) : null);
+}
+
+/// <summary>CONCEPTS-REF 16.2's bottom row: Rotate. A quarter turn clockwise
+/// about the selection's centre, for a selection of any mixture of kinds.
+///
+/// <para>Undo turns the other way rather than restoring a snapshot, for the same
+/// reason <see cref="MirrorMixedAction"/> holds none: four presses return the
+/// selection to where it started EXACTLY, because a quarter turn about a fixed
+/// centre is exact in floating point for the axis-swap form used here (the
+/// coordinates are exchanged and negated, never multiplied by a sine).</para></summary>
+public class RotateQuarterMixedAction : IPageAction
+{
+    private readonly List<PenStroke> _strokes;
+    private readonly List<ShapeElement> _shapes;
+    private readonly List<TextElement> _texts;
+    private readonly double _cx, _cy;
+
+    public RotateQuarterMixedAction(List<PenStroke> strokes, List<ShapeElement> shapes,
+                                    List<TextElement> texts, double cx, double cy)
+    {
+        _strokes = strokes; _shapes = shapes; _texts = texts;
+        _cx = cx; _cy = cy;
+    }
+
+    public string Description => "Rotate selection";
+    public bool TouchesText => _texts.Count > 0;
+    public void Do(NotePage page) => Apply(true);
+    public void Undo(NotePage page) => Apply(false);
+
+    private (double X, double Y) Turn(double x, double y, bool cw)
+    {
+        double dx = x - _cx, dy = y - _cy;
+        return cw ? (_cx - dy, _cy + dx) : (_cx + dy, _cy - dx);
+    }
+
+    private void Apply(bool cw)
+    {
+        foreach (var s in _strokes)
+            foreach (var p in s.Points)
+            {
+                var (nx, ny) = Turn(p.X, p.Y, cw);
+                p.X = (float)nx; p.Y = (float)ny;
+            }
+        foreach (var s in _shapes)
+        {
+            // Turn the corner that BECOMES the new top-left, then swap the
+            // extents. Taking the stored X/Y through the turn instead would put
+            // a box a width away from where the user watched it go.
+            double x0 = Math.Min(s.X, s.X + s.W), y0 = Math.Min(s.Y, s.Y + s.H);
+            double w = Math.Abs(s.W), h = Math.Abs(s.H);
+            var (nx, ny) = cw ? Turn(x0, y0 + h, true) : Turn(x0 + w, y0, false);
+            s.X = nx; s.Y = ny; s.W = h; s.H = w;
+            s.Rotation += cw ? 90 : -90;
+            if (s.Rotation >= 360) s.Rotation -= 360;
+            if (s.Rotation <= -360) s.Rotation += 360;
+        }
+        foreach (var t in _texts)
+        {
+            double w = Math.Max(60, t.Width), h = 40;
+            var (nx, ny) = cw ? Turn(t.X, t.Y + h, true) : Turn(t.X + w, t.Y, false);
+            t.X = nx; t.Y = ny;
+            // The box does NOT swap width for height: a text box's height comes
+            // from its wrapped content, so trading them would reflow the text and
+            // a second press would not put it back.
+            t.Rotation += cw ? 90 : -90;
+            if (t.Rotation >= 360) t.Rotation -= 360;
+            if (t.Rotation <= -360) t.Rotation += 360;
+        }
+    }
+}
+
+/// <summary>CONCEPTS-REF 16.9: "the controls stay usable and EDITING THEM EDITS
+/// THE SELECTION." The dial's size / stability / opacity / colour, written to a
+/// selection of strokes instead of to the active pen.
+///
+/// <para>One action per property rather than one per stroke, so a scrub across
+/// the dial does not bury the undo stack.</para></summary>
+public class RestyleStrokesAction : IPageAction
+{
+    public enum Field { Size, Stability, Opacity, Colour }
+
+    private readonly List<PenStroke> _strokes;
+    private readonly Field _field;
+    private readonly List<(float Size, float Sens, float? Opacity, string Colour)> _before = new();
+    private readonly float _value;
+    private readonly string _colour;
+
+    public RestyleStrokesAction(List<PenStroke> strokes, Field field, float value, string colour = "")
+    {
+        _strokes = strokes; _field = field; _value = value; _colour = colour;
+        foreach (var s in strokes) _before.Add((s.Size, s.Sens, s.Opacity, s.Color));
+    }
+
+    public string Description => _field switch
+    {
+        Field.Size => "Stroke size",
+        Field.Stability => "Stroke stability",
+        Field.Opacity => "Stroke opacity",
+        _ => "Stroke colour",
+    };
+    public bool TouchesText => false;
+
+    public void Do(NotePage page)
+    {
+        foreach (var s in _strokes)
+            switch (_field)
+            {
+                case Field.Size: s.Size = _value; break;
+                case Field.Stability: s.Sens = _value; break;
+                // null IS the opaque value on the wire (see PenStroke.Opacity):
+                // writing 1f instead would add a field to every restyled stroke
+                // in a 53 MB library for no change in appearance.
+                case Field.Opacity: s.Opacity = _value >= 0.999f ? null : _value; break;
+                default: s.Color = _colour; break;
+            }
+    }
+
+    public void Undo(NotePage page)
+    {
+        for (int i = 0; i < _strokes.Count && i < _before.Count; i++)
+        {
+            var b = _before[i];
+            _strokes[i].Size = b.Size;
+            _strokes[i].Sens = b.Sens;
+            _strokes[i].Opacity = b.Opacity;
+            _strokes[i].Color = b.Colour;
+        }
+    }
+
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_strokes);
+}
+
+/// <summary>CONCEPTS-REF 16.2's padlock. Its own inverse in the same sense the
+/// mirror is: the flag's previous value is captured per element, so unlocking a
+/// mixed selection restores exactly what each element had.</summary>
+public class LockMixedAction : IPageAction
+{
+    private readonly List<PenStroke> _strokes;
+    private readonly List<ShapeElement> _shapes;
+    private readonly List<TextElement> _texts;
+    private readonly List<bool> _sBefore = new(), _hBefore = new(), _tBefore = new();
+    private readonly bool _to;
+
+    public LockMixedAction(List<PenStroke> strokes, List<ShapeElement> shapes,
+                           List<TextElement> texts, bool to)
+    {
+        _strokes = strokes; _shapes = shapes; _texts = texts; _to = to;
+        foreach (var s in strokes) _sBefore.Add(s.Locked);
+        foreach (var s in shapes) _hBefore.Add(s.Locked);
+        foreach (var t in texts) _tBefore.Add(t.Locked);
+    }
+
+    public string Description => _to ? "Lock selection" : "Unlock selection";
+    public bool TouchesText => false;
+
+    public void Do(NotePage page)
+    {
+        foreach (var s in _strokes) s.Locked = _to;
+        foreach (var s in _shapes) s.Locked = _to;
+        foreach (var t in _texts) t.Locked = _to;
+    }
+
+    public void Undo(NotePage page)
+    {
+        for (int i = 0; i < _strokes.Count && i < _sBefore.Count; i++) _strokes[i].Locked = _sBefore[i];
+        for (int i = 0; i < _shapes.Count && i < _hBefore.Count; i++) _shapes[i].Locked = _hBefore[i];
+        for (int i = 0; i < _texts.Count && i < _tBefore.Count; i++) _texts[i].Locked = _tBefore[i];
+    }
+}
+
+/// <summary>CONCEPTS-REF 16.2's PAPERCLIP: swap the file behind an attachment
+/// and keep it exactly where it is.
+///
+/// <para>Position and WIDTH are preserved and only the HEIGHT moves, to the
+/// new file's aspect. That is the one rule that makes this a replacement
+/// rather than a delete-and-insert: the user placed and sized that rectangle,
+/// and a swap that re-centred it or re-fitted it to 520 DIP would throw the
+/// placement away. InkSurface.UpdateEquationImage makes the same choice for
+/// the same reason.</para>
+///
+/// <para>Holds paths, not pixels: two strings and a double, whatever the file
+/// weighs. The bitmap cache is keyed by path and rebuilt from disk on demand,
+/// so an undo stack a hundred swaps deep costs nothing.</para></summary>
+public class ReplaceImageAction : IPageAction
+{
+    public bool TouchesText => false;
+
+    private readonly ShapeElement _shape;
+    private readonly string? _fromPath, _toPath;
+    private readonly string? _fromLatex;
+    private readonly double _fromH, _toH;
+
+    public ReplaceImageAction(ShapeElement shape, string toPath, double toH)
+    {
+        _shape = shape;
+        _fromPath = shape.ImagePath;
+        // An equation's image IS its rendering, so replacing the picture ends
+        // the equation: leaving the LaTeX behind would make the next right-click
+        // re-render over the file the user has just chosen.
+        _fromLatex = shape.EquationLatex;
+        _fromH = shape.H;
+        _toPath = toPath;
+        _toH = toH;
+    }
+
+    public string Description => "Replace attachment";
+
+    public void Do(NotePage page)
+    {
+        _shape.ImagePath = _toPath;
+        _shape.EquationLatex = null;
+        _shape.H = _toH;
+    }
+
+    public void Undo(NotePage page)
+    {
+        _shape.ImagePath = _fromPath;
+        _shape.EquationLatex = _fromLatex;
+        _shape.H = _fromH;
+    }
+
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_shape);
+}
+
 // Changes per-cell fill colour and border styling (#roadmap: table enhancements).
 public class CellStyleAction : IPageAction
 {

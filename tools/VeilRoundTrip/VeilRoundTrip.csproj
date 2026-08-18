@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- CONCEPTS-REF 16.7 item 1, proved rather than asserted.
+
+       A HEADLESS harness that runs the REAL serialiser over the REAL models and
+       the REAL Veil function, so "select, save, deselect, reload, diff" is an
+       experiment rather than a claim.  Nothing here is a copy: every source file
+       below is <Compile Include>d straight out of src/Quill, and Veil.g.cs is
+       EXTRACTED VERBATIM from InkSurface.cs by tools/selection_present_check.py,
+       which fails if the extraction and the source ever differ.
+
+       net8.0-windows10.0.19041.0 rather than plain net8.0 only because
+       ColorUtil and SelectionSubject speak in Windows.UI.Color.  No WinUI, no
+       Windows App SDK, no window: this runs in a console. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Quill.Tools</RootNamespace>
+    <AssemblyName>VeilRoundTrip</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Veil.g.cs" />
+    <Compile Include="..\..\src\Quill\Models\NoteModels.cs" Link="NoteModels.cs" />
+    <Compile Include="..\..\src\Quill\Services\LibraryStore.cs" Link="LibraryStore.cs" />
+    <Compile Include="..\..\src\Quill\Services\SyncLog.cs" Link="SyncLog.cs" />
+    <Compile Include="..\..\src\Quill\Services\SelectionSubject.cs" Link="SelectionSubject.cs" />
+    <Compile Include="..\..\src\Quill\Helpers\Util.cs" Link="Util.cs" />
+    <Compile Include="..\..\src\Quill\Helpers\Motion.cs" Link="Motion.cs" />
+  </ItemGroup>
+
+</Project>

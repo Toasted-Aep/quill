@@ -291,7 +291,21 @@ public sealed class InkSurface : UserControl
     private readonly DispatcherTimer _caretTimer = new() { Interval = TimeSpan.FromMilliseconds(530) };
 
     // ---- shapes ----
-    private ShapeElement? _activeShape;
+    private ShapeElement? _activeShapeBack;
+    /// <summary>The single selected shape or image. A PROPERTY rather than a
+    /// field so that all twenty-odd places that set it publish the selection
+    /// (CONCEPTS-REF 16.3 / 16.9) without any of them having to remember to.
+    /// Adding the twenty-first cannot forget.</summary>
+    private ShapeElement? _activeShape
+    {
+        get => _activeShapeBack;
+        set
+        {
+            if (ReferenceEquals(_activeShapeBack, value)) return;
+            _activeShapeBack = value;
+            PublishSelection();
+        }
+    }
     private bool _shapeAdjust;
     private ShapeElement? _adjustShape;
     private Vector2 _adjustAnchor;
@@ -936,6 +950,7 @@ public sealed class InkSurface : UserControl
         _selBounds = Rect.Empty;
         _movingSel = false;
         _moveDx = _moveDy = 0;
+        PublishSelection();
         _canvas.Invalidate();
     }
 
@@ -949,7 +964,10 @@ public sealed class InkSurface : UserControl
 
     public void DeleteSelection()
     {
-        if (_page == null) return;
+        // 16.2's padlock. A lock that stops a drag but not a delete is not a
+        // lock; the waste bin greys instead, so the refusal is visible before it
+        // is attempted rather than after.
+        if (_page == null || AnyLocked) return;
         if (_activeShape != null)
         {
             int idx = _page.Shapes.IndexOf(_activeShape);
@@ -1659,7 +1677,10 @@ public sealed class InkSurface : UserControl
 
     private bool TryBeginSelectionScale(Vector2 pos, float tol)
     {
-        if (!HasMultiSelection || _selBounds.IsEmpty) return false;
+        // 16.2's padlock, enforced. A locked selection still SHOWS its corner
+        // handles - hiding them would leave no clue why dragging does nothing -
+        // but the drag refuses to start.
+        if (!HasMultiSelection || _selBounds.IsEmpty || AnyLocked) return false;
         var corners = SelCorners();
         for (int i = 0; i < 4; i++)
         {
@@ -1815,6 +1836,7 @@ public sealed class InkSurface : UserControl
 
     private void BeginSelectionMove(Vector2 pos)
     {
+        if (AnyLocked) return;   // 16.2's padlock
         _movingSel = true;
         _moveStart = pos;
         _moveDx = _moveDy = 0;
@@ -3030,6 +3052,16 @@ public sealed class InkSurface : UserControl
 
     private void RecomputeSelectionBounds()
     {
+        RecomputeSelectionBoundsCore();
+        // Every path that changes the multi-selection ends here, so this is the
+        // one place the dial, the pen row and the selection chrome have to be
+        // told (16.3 / 16.9). SelectionState drops a publish that says the same
+        // thing as the last one, so calling it from a hot path is free.
+        PublishSelection();
+    }
+
+    private void RecomputeSelectionBoundsCore()
+    {
         if (!HasMultiSelection) { _selBounds = Rect.Empty; return; }
         double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
         void Inc(double x, double y)
@@ -3058,6 +3090,400 @@ public sealed class InkSurface : UserControl
         }
         if (minX == double.MaxValue) { _selBounds = Rect.Empty; return; }
         _selBounds = new Rect(minX - 8, minY - 8, (maxX - minX) + 16, (maxY - minY) + 16);
+    }
+
+    // =======================================================================
+    // THE SELECTION, PUBLISHED (CONCEPTS-REF 16.3 / 16.9)
+    //
+    // One description of what is selected and what it SUPPORTS, so the dial, the
+    // pen row and the selection chrome all answer the same question the same
+    // way. 16.3 is easy to misread as "something is selected, so grey the dial",
+    // and 16.9 corrects that: a selected stroke leaves the dial live and reading
+    // that stroke's own values. Nothing below ever asks "is anything selected?"
+    // - it asks what the selection HAS.
+    // =======================================================================
+
+    /// <summary>Reduce-motion, supplied by the host exactly as the dial and the
+    /// fullscreen strip take it. Null reads as "animate".</summary>
+    public Func<bool>? ReduceMotion { get; set; }
+
+    /// <summary>World bounds of whatever the selection presentation should frame:
+    /// the multi-selection if there is one, otherwise the active shape. Empty
+    /// when nothing is selected.</summary>
+    public Rect SubjectBoundsWorld =>
+        HasMultiSelection && !_selBounds.IsEmpty ? _selBounds
+        : _activeShape != null ? ShapeBounds(_activeShape)
+        : Rect.Empty;
+
+    /// <summary>World -> screen, the exact inverse of <see cref="ToWorld(Vector2)"/>.
+    /// The selection chrome is XAML laid over the canvas, so it needs the same
+    /// mapping the draw path uses rather than a second one that can drift.</summary>
+    public Vector2 WorldToScreen(Vector2 world) => world * ViewZoom + ViewOffset;
+
+    private bool AnyLocked =>
+        _selected.Any(s => s.Locked) || _selShapes.Any(s => s.Locked) ||
+        _selTexts.Any(t => t.Locked) || (_activeShape?.Locked ?? false);
+
+    /// <summary>True while any part of the selection is locked - the padlock
+    /// shows its closed state and the move / scale paths refuse to start.</summary>
+    public bool SelectionLocked => AnyLocked;
+
+    /// <summary>The selected attachment's file, or null when the subject is not
+    /// a single attachment. The bar's paperclip is live only for this case, on
+    /// 16.3's own rule: a subject that lacks a capability greys its control.</summary>
+    public ShapeElement? SelectedAttachment
+    {
+        get
+        {
+            if (_activeShape is { Kind: ShapeKind.Image } a) return a;
+            if (_selected.Count == 0 && _selTexts.Count == 0 &&
+                _selShapes.Count == 1 && _selShapes[0].Kind == ShapeKind.Image)
+                return _selShapes[0];
+            return null;
+        }
+    }
+
+    private static SubjectKind KindOf(bool ink, bool text, bool attach, bool otherShape)
+    {
+        int kinds = (ink ? 1 : 0) + (text ? 1 : 0) + (attach || otherShape ? 1 : 0);
+        if (kinds == 0) return SubjectKind.None;
+        if (kinds > 1) return SubjectKind.Mixed;
+        if (ink) return SubjectKind.Ink;
+        if (text) return SubjectKind.Text;
+        return attach ? SubjectKind.Attachment : SubjectKind.Mixed;
+    }
+
+    /// <summary>A value shared by every stroke in the selection, or null when
+    /// they disagree. Disagreement is a THIRD state, distinct from "the subject
+    /// has no such property": the control stays live, it simply has no single
+    /// number to print.</summary>
+    private static T? Common<T>(IReadOnlyList<PenStroke> src, Func<PenStroke, T> pick) where T : struct
+    {
+        if (src.Count == 0) return null;
+        T first = pick(src[0]);
+        for (int i = 1; i < src.Count; i++)
+            if (!EqualityComparer<T>.Default.Equals(pick(src[i]), first)) return null;
+        return first;
+    }
+
+    private void PublishSelection()
+    {
+        var strokes = _selected;
+        bool ink = strokes.Count > 0;
+        bool text = _selTexts.Count > 0;
+        var attachment = SelectedAttachment;
+        bool otherShape = _selShapes.Any(s => s.Kind != ShapeKind.Image) ||
+                          (_activeShape != null && _activeShape.Kind != ShapeKind.Image);
+        bool attach = attachment != null || _selShapes.Any(s => s.Kind == ShapeKind.Image);
+
+        var kind = KindOf(ink, text, attach, otherShape);
+        int count = strokes.Count + _selShapes.Count + _selTexts.Count +
+                    (HasMultiSelection ? 0 : _activeShape != null ? 1 : 0);
+
+        if (kind == SubjectKind.None)
+        {
+            SelectionState.Clear();
+            SetVeil(false);
+            return;
+        }
+
+        // 16.9: a STROKE has pen size, stability, opacity and a colour, so all
+        // four stay live and report the stroke's own values. Anything else in
+        // the selection takes one of them away - a photograph has no pen size,
+        // a text box has no stabiliser - and that is the ONLY thing that greys a
+        // control. An attachment keeps opacity, which is why 16.3 lists opacity
+        // beside undo and redo as the three marks that stay live.
+        bool pureInk = ink && !text && !attach && !otherShape;
+        bool anyShapeOrText = text || attach || otherShape;
+
+        var page = _page;
+        var frozen = strokes.ToList();     // the closures below outlive this call
+
+        var subject = new SelectionSubject
+        {
+            Kind = kind,
+            Count = count,
+            HasPenSize = pureInk,
+            HasStability = pureInk,
+            // Opacity is the one property everything on the page has.
+            HasOpacity = pureInk || attach || !anyShapeOrText,
+            CanRecolour = pureInk,
+            Size = pureInk ? Common(frozen, s => s.Size) : null,
+            Stability = pureInk ? Common(frozen, s => s.Sens) : null,
+            Opacity = pureInk ? Common(frozen, s => s.Opacity ?? 1f) : null,
+            Ink = pureInk && Common(frozen, s => ColorUtil.Parse(s.Color)) is { } c ? c : null,
+            SetSize = pureInk && page != null
+                ? v => Restyle(frozen, RestyleStrokesAction.Field.Size, v)
+                : null,
+            SetStability = pureInk && page != null
+                ? v => Restyle(frozen, RestyleStrokesAction.Field.Stability, v)
+                : null,
+            SetOpacity = pureInk && page != null
+                ? v => Restyle(frozen, RestyleStrokesAction.Field.Opacity, v)
+                : null,
+            SetInk = pureInk && page != null
+                ? c => Restyle(frozen, RestyleStrokesAction.Field.Colour, 0f, ColorUtil.ToHex(c))
+                : null,
+            // 16.7 is about an ATTACHMENT being selected, and its example is the
+            // handwriting greyed beneath one. A selected stroke does not fade the
+            // page it is part of - 16.9 extends the PRESENTATION to strokes and
+            // is explicit that 16.3's greying does not generalise, and the same
+            // restraint applies here.
+            FadesPage = attach,
+        };
+
+        SelectionState.Set(subject);
+        SetVeil(subject.FadesPage);
+    }
+
+    private void Restyle(List<PenStroke> strokes, RestyleStrokesAction.Field field,
+                         float value, string colour = "")
+    {
+        if (_page == null || strokes.Count == 0) return;
+        PushAction(new RestyleStrokesAction(strokes, field, value, colour), _page);
+        _inkCacheDirty = true;
+        PublishSelection();
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    // =======================================================================
+    // 16.7: WHILE AN ATTACHMENT IS SELECTED, THE PAGE FADES TO #8E8E8E
+    //
+    // "make texts the exact shade of grey shown in photo ... make them slowly
+    // turn grey not instantly". Everything the user put on the page
+    // de-emphasises so the attachment reads as the thing being worked on.
+    //
+    // THE CONSTRAINT THAT OUTRANKS EVERYTHING ELSE, from 16.7 item 1: this is a
+    // RENDER-TIME effect and must never touch stored colour. The whole mechanism
+    // is one pure function, Veil(Color) -> Color, applied to a LOCAL variable at
+    // the exact point a stored colour string has just been parsed for drawing:
+    //
+    //     var color = Veil(ColorUtil.Parse(s.Color), exempt);
+    //
+    // It takes a Color and returns a Color. It has no reference to the stroke,
+    // the shape, the text or the page, so there is nothing for it to write to
+    // even by accident, and every alpha and grain variant downstream is derived
+    // from that one local. A page saved while faded is byte-identical to the
+    // same page saved unfaded - see scratchpad/prove_veil.py, which round-trips
+    // a library through select -> save -> deselect -> reload and diffs the
+    // stored colours against a baseline.
+    // =======================================================================
+
+    /// <summary>16.7: "The colour is #8E8E8E, given directly by the user. Not
+    /// sampled, not approximated - that exact value."</summary>
+    private static readonly Color VeilGrey = Color.FromArgb(0xFF, 0x8E, 0x8E, 0x8E);
+
+    private double _veil;          // 0 = the page's own colours, 1 = fully #8E8E8E
+    private bool _veilWant;        // where it is heading
+    private bool _veilTicking;
+    private long _veilLastTick;
+
+    /// <summary>True while any of the page is de-emphasised.
+    ///
+    /// <para><b>Never during an export.</b> <see cref="ExportChromeless"/> is
+    /// set for the duration of a capture and already means "this frame is the
+    /// drawing, never the editor". A page fade is editor state by definition -
+    /// it says which object is being worked on - so an export taken while an
+    /// attachment happens to be selected must come out in the page's own
+    /// colours. This is the same class of promise as 16.7 item 1 (never write
+    /// grey into stored colour), one step further out: never write it into a
+    /// file the user asked for either.</para></summary>
+    private bool Veiling => _veil > 0.0005 && !ExportChromeless;
+
+    /// <summary>THE WHOLE EFFECT. A pure Color -> Color, called on a local that
+    /// has just been parsed out of stored data and is about to be handed to
+    /// Win2D. RGB is pulled toward <see cref="VeilGrey"/>; ALPHA IS NOT TOUCHED,
+    /// because the stroke's own opacity is applied to it further down and
+    /// fading a translucent stroke must not also make it more opaque.</summary>
+    private Color Veil(Color c, bool exempt = false)
+    {
+        if (exempt || !Veiling) return c;
+        double t = Motion.Ease(_veil);
+        static byte Mix(byte a, byte b, double k) => (byte)Math.Clamp(a + (b - a) * k, 0, 255);
+        return Color.FromArgb(c.A, Mix(c.R, VeilGrey.R, t), Mix(c.G, VeilGrey.G, t), Mix(c.B, VeilGrey.B, t));
+    }
+
+    /// <summary>Whether this element is the SUBJECT and so holds full contrast.
+    /// 16.7 item 3: "The attachment itself does not fade. It is the subject."
+    ///
+    /// <para>WITH TWO ATTACHMENTS, both selected ones hold contrast and every
+    /// unselected one fades with the rest of the page. That falls out of asking
+    /// "is this element part of the selection?" rather than "is this element an
+    /// image?", and it is the reading that keeps the effect meaning what it says:
+    /// the page recedes behind WHAT IS BEING WORKED ON, and if the user has two
+    /// attachments in hand then both of them are.</para></summary>
+    private bool IsSubject(PenStroke s) => _selectedSet.Contains(s);
+    private bool IsSubject(ShapeElement s) =>
+        ReferenceEquals(s, _activeShapeBack) || _selShapeSet.Contains(s);
+    private bool IsSubject(TextElement t) => _selTexts.Contains(t);
+
+    private void SetVeil(bool on)
+    {
+        if (_veilWant == on) return;
+        _veilWant = on;
+        if (ReduceMotion?.Invoke() == true)
+        {
+            StopVeilTick();
+            _veil = on ? 1 : 0;
+            ApplyTextVeil();
+            _inkCacheDirty = true;
+            _canvas.Invalidate();
+            return;
+        }
+        // A hand-pumped tween on the same 190 / 130 and the same curve the menus
+        // and the fullscreen strip use (Helpers/Motion). Hand-pumped rather than
+        // a Storyboard for the reason FullscreenChrome sets out at length: this
+        // reverses mid-flight every time a selection is dropped before the fade
+        // has finished, and a Storyboard holds its end value and reverts to the
+        // BASE value on Stop, so every reversal would jump.
+        //
+        // 16.7 item 2: "Fade back on deselect too; a one-directional fade would
+        // leave the page grey until something forced a repaint." That is why the
+        // tween runs on both edges and why the LAST frame of the fade-out still
+        // invalidates - the final Invalidate at _veil == 0 is the repaint that
+        // puts the page's own colours back.
+        PumpVeil();
+    }
+
+    private void PumpVeil()
+    {
+        if (_veilTicking) return;
+        _veilTicking = true;
+        _veilLastTick = System.Diagnostics.Stopwatch.GetTimestamp();
+        // The ink cache holds RENDERED pixels, so it cannot follow a fade. Mark
+        // it stale once at the start and again at the end; in between,
+        // cacheEligible refuses it outright rather than rebuilding it per frame.
+        _inkCacheDirty = true;
+        CompositionTarget.Rendering += VeilTick;
+    }
+
+    private void StopVeilTick()
+    {
+        if (!_veilTicking) return;
+        _veilTicking = false;
+        CompositionTarget.Rendering -= VeilTick;
+    }
+
+    private void VeilTick(object? sender, object e)
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        double ms = (now - _veilLastTick) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        _veilLastTick = now;
+        double target = _veilWant ? 1 : 0;
+        _veil = Motion.Step(_veil, target, ms, _veilWant ? Motion.OpenMs : Motion.CloseMs);
+        ApplyTextVeil();
+        _canvas.Invalidate();
+        if (_veil != target) return;
+        StopVeilTick();
+        _inkCacheDirty = true;
+        _canvas.Invalidate();       // the repaint that restores the page's colours
+    }
+
+    /// <summary>The typed-text half of the fade.
+    ///
+    /// <para>Text is NOT drawn by the Win2D path - every text element is a live
+    /// <c>RichEditBox</c> in the XAML overlay - so the one-line intercept the
+    /// strokes and shapes get is not available here. This sets the CONTROL's
+    /// <c>Foreground</c>, which is a XAML property and is never serialised:
+    /// <c>FlushTexts</c> stores <c>Document.GetText(FormatRtf)</c>, and the
+    /// document is not touched by this at all.</para>
+    ///
+    /// <para><b>Its limit, stated rather than hidden.</b> A run that carries its
+    /// own colour in the RTF - which Quill's own boxes do, because the default
+    /// character format is written with the page's ink colour and comes back as
+    /// a <c>\colortbl</c> plus <c>\cf1</c> - overrides <c>Foreground</c> and
+    /// will not grey. The only way to move those is to write the document's
+    /// character format, and the document is exactly what <c>FlushTexts</c>
+    /// serialises. 16.7 item 1 makes that trade for us: a visual nicety must
+    /// never become data loss, so the run keeps its colour.</para></summary>
+    private void ApplyTextVeil()
+    {
+        if (_page == null) return;
+        double t = Motion.Ease(_veil);
+        foreach (var (id, ui) in _textUi)
+        {
+            var model = _page.Texts.FirstOrDefault(x => x.Id == id);
+            bool exempt = model != null && IsSubject(model);
+            var ink = ColorUtil.IsDark(ColorUtil.Parse(_page.Background))
+                ? Color.FromArgb(255, 0xFA, 0xF9, 0xF5)
+                : Color.FromArgb(255, 0x14, 0x14, 0x13);
+            var shown = exempt || t <= 0.0005
+                ? ink
+                : Color.FromArgb(255,
+                    (byte)Math.Clamp(ink.R + (VeilGrey.R - ink.R) * t, 0, 255),
+                    (byte)Math.Clamp(ink.G + (VeilGrey.G - ink.G) * t, 0, 255),
+                    (byte)Math.Clamp(ink.B + (VeilGrey.B - ink.B) * t, 0, 255));
+            try { ui.Box.Foreground = new SolidColorBrush(shown); } catch { }
+        }
+    }
+
+    // =======================================================================
+    // 16.2's bar and bottom row, as operations on the selection
+    // =======================================================================
+
+    private (List<PenStroke> S, List<ShapeElement> H, List<TextElement> T) SelectionParts()
+    {
+        var s = _selected.ToList();
+        var h = _selShapes.ToList();
+        var t = _selTexts.ToList();
+        if (h.Count == 0 && s.Count == 0 && t.Count == 0 && _activeShape != null) h.Add(_activeShape);
+        return (s, h, t);
+    }
+
+    /// <summary>16.2's flip-horizontal / flip-vertical. Mirrors about the
+    /// selection's own centre line, so the selection lands exactly where it was
+    /// and only its contents turn over.</summary>
+    public void FlipSelection(bool horizontal)
+    {
+        if (_page == null || AnyLocked) return;
+        var b = SubjectBoundsWorld;
+        if (b.IsEmpty) return;
+        var (s, h, t) = SelectionParts();
+        if (s.Count + h.Count + t.Count == 0) return;
+        FlushTexts();
+        PushAction(new MirrorMixedAction(s, h, t, horizontal ? b.Left + b.Width / 2 : b.Top + b.Height / 2,
+                                         horizontal), _page);
+        AfterSelectionTransform(t.Count > 0);
+    }
+
+    /// <summary>16.2's bottom row: Rotate. A quarter turn clockwise about the
+    /// selection's centre - four presses return it exactly, which is why the
+    /// action swaps and negates coordinates rather than multiplying by a
+    /// sine.</summary>
+    public void RotateSelectionQuarter()
+    {
+        if (_page == null || AnyLocked) return;
+        var b = SubjectBoundsWorld;
+        if (b.IsEmpty) return;
+        var (s, h, t) = SelectionParts();
+        if (s.Count + h.Count + t.Count == 0) return;
+        FlushTexts();
+        PushAction(new RotateQuarterMixedAction(s, h, t, b.Left + b.Width / 2, b.Top + b.Height / 2), _page);
+        AfterSelectionTransform(t.Count > 0);
+    }
+
+    /// <summary>16.2's padlock. Locking any part of a mixed selection locks all
+    /// of it; unlocking restores what each element had, so a stroke that was
+    /// already locked before it was lassoed with others stays locked.</summary>
+    public void ToggleSelectionLock()
+    {
+        if (_page == null) return;
+        var (s, h, t) = SelectionParts();
+        if (s.Count + h.Count + t.Count == 0) return;
+        PushAction(new LockMixedAction(s, h, t, !AnyLocked), _page);
+        PublishSelection();
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    private void AfterSelectionTransform(bool touchedText)
+    {
+        _inkCacheDirty = true;
+        RecomputeSelectionBounds();
+        if (touchedText) RebuildTextLayer();
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
     }
 
     // =======================================================================
@@ -3204,7 +3630,8 @@ public sealed class InkSurface : UserControl
 
         // +4 inset and +16 below the fixed 16px grip bar match where the RichEditBox
         // renders its text inside the container (same offsets as the PDF exporter).
-        ds.DrawTextLayout(layout, (float)t.X + 4, (float)t.Y + 16, ink);
+        // 16.7's third intercept, for the Win2D text path (table cells, capture).
+        ds.DrawTextLayout(layout, (float)t.X + 4, (float)t.Y + 16, Veil(ink, IsSubject(t)));
 
         if (rot) ds.Transform = prevT;
     }
@@ -3451,23 +3878,28 @@ public sealed class InkSurface : UserControl
             var sb = ShapeBounds(sh);
             if (sb.Right < visMinX - 8 || sb.Left > visMaxX + 8 ||
                 sb.Bottom < visMinY - 8 || sb.Top > visMaxY + 8) continue;
+            bool veilShape = !IsSubject(sh);
             if (_movingSel && _selShapeSet.Contains(sh))
             {
                 var prev = ds.Transform;
                 ds.Transform = Matrix3x2.CreateTranslation(_moveDx, _moveDy) * prev;
-                DrawShape(ds, sh);
+                DrawShape(ds, sh, veilShape);
                 ds.Transform = prev;
             }
             else
             {
-                DrawShape(ds, sh);
+                DrawShape(ds, sh, veilShape);
             }
         }
 
         // Big pages draw settled ink from the offscreen cache (#43); anything
         // that offsets strokes (replay, selection move, free space) falls back
         // to the classic per-stroke path so offsets stay live.
-        bool cacheEligible = !_replaying && !_movingSel && !_spacing &&
+        // 16.7: the cache holds RENDERED pixels, so it cannot follow a fade that
+        // moves every frame. It stands down for the duration rather than being
+        // rebuilt 190 ms in a row, which is what marking it dirty per frame would
+        // cost on exactly the pages (2500+ strokes) that need it most.
+        bool cacheEligible = !_replaying && !_movingSel && !_spacing && !Veiling &&
                              _page.Strokes.Count >= InkCacheThreshold && AudioPlayheadPosition == null;
         if (!(cacheEligible && TryDrawInkCache(ds, sender, visMinX, visMinY, visMaxX, visMaxY)))
         {
@@ -3521,7 +3953,7 @@ public sealed class InkSurface : UserControl
                         {
                             DrawStrokeGlow(ds, sender, s, off);
                         }
-                        DrawStroke(ds, sender, s, off, null);
+                        DrawStroke(ds, sender, s, off, null, veil: !IsSubject(s));
                     }
                 }
                 idx++;
@@ -3540,7 +3972,12 @@ public sealed class InkSurface : UserControl
                 Points = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : (_wet ?? new List<StrokePoint>()),
                 PressureCurve = EffectivePressureCurve()
             };
-            DrawStroke(ds, sender, temp, Vector2.Zero, null);
+            // 16.7, THE MID-STROKE CASE. Ink under the nib is not yet part of
+            // the page, so it never fades - a stroke begun while an attachment
+            // is selected stays in the pen's own colour under the tip, and joins
+            // the faded page only once it is committed and the selection that
+            // caused the fade is still standing.
+            DrawStroke(ds, sender, temp, Vector2.Zero, null, veil: false);
         }
 
         var accent = Accent;   // follows the app accent (#6-batch3)
@@ -4098,13 +4535,21 @@ public sealed class InkSurface : UserControl
         DrawPolyline(ds, rc, pts, n, offset, color, hw, _roundStyle);
     }
 
-    private void DrawStroke(CanvasDrawingSession ds, ICanvasResourceCreator rc, PenStroke s, Vector2 offset, int? pointLimit)
+    /// <param name="veil">16.7's page fade. False for the WET stroke - ink under
+    /// the nib is not yet part of the page and must never grey mid-gesture - and
+    /// for anything that is itself the selection subject.</param>
+    private void DrawStroke(CanvasDrawingSession ds, ICanvasResourceCreator rc, PenStroke s, Vector2 offset,
+                            int? pointLimit, bool veil = true)
     {
         var pts = s.Points;
         int n = Math.Min(pointLimit ?? pts.Count, pts.Count);
         if (n == 0) return;
 
-        var color = ColorUtil.Parse(s.Color);
+        // 16.7, THE ONE INTERCEPT. This is the only place a stroke's stored
+        // colour string becomes a draw colour; every alpha and grain variant
+        // below is derived from this local, so fading the page is one call on
+        // one local variable and cannot reach `s.Color`.
+        var color = Veil(ColorUtil.Parse(s.Color), !veil);
         // Every alpha this method lays down is scaled by the stroke's own
         // opacity. Clamped off zero so a fully transparent pen still leaves a
         // hairline the user can find and erase rather than invisible geometry.
@@ -4953,7 +5398,9 @@ public sealed class InkSurface : UserControl
         return null;
     }
 
-    private void DrawShape(CanvasDrawingSession ds, ShapeElement s)
+    /// <param name="veil">16.7 again — false for the subject and for the grain
+    /// passes, which re-enter carrying the already-veiled colour.</param>
+    private void DrawShape(CanvasDrawingSession ds, ShapeElement s, bool veil = true)
     {
         Matrix3x2 prevT = ds.Transform;
         bool rot = Math.Abs(s.Rotation) > 0.01;
@@ -4983,7 +5430,9 @@ public sealed class InkSurface : UserControl
         // table's rules are structure rather than a mark - a highlighter would
         // render one unreadable.
         bool inked = s.Kind is not (ShapeKind.Image or ShapeKind.Table);
-        var color = ColorUtil.Parse(s.Color);
+        // 16.7's second intercept — the only place a shape's stored colour is
+        // parsed for drawing. Same shape as the stroke's: a local in, a local out.
+        var color = Veil(ColorUtil.Parse(s.Color), !veil);
         float w = Math.Max(1f, s.Size);
         // The faint offset passes the grainy pens lay beside their core. Held
         // until the core has been drawn, because that is the order the stroke
@@ -5010,7 +5459,9 @@ public sealed class InkSurface : UserControl
                     Pen = PenType.Monoline,
                     Opacity = (g.Alpha / 255f) * op,
                 };
-                if (PenStyle.GrainUnderneath(s.Pen)) DrawShape(ds, pass);
+                // `veil` has to ride along: the pass is a CLONE and so is not in
+                // the selection sets, so it would fade under an exempt subject.
+                if (PenStyle.GrainUnderneath(s.Pen)) DrawShape(ds, pass, veil);
                 else (overGrain ??= new List<ShapeElement>()).Add(pass);
             }
         }
@@ -5073,6 +5524,16 @@ public sealed class InkSurface : UserControl
                     ds.DrawRectangle(r, Color.FromArgb(130, 128, 128, 128), 1.5f, _dashStyle);
                     if (s.ImagePath != null) RequestBitmap(s.ImagePath);
                 }
+                // 16.7 for an attachment that is NOT the subject. A photograph
+                // has no stored colour to intercept, so the fade is composited
+                // over the pixels instead - which is the same lerp toward
+                // #8E8E8E the other two intercepts perform, done after the fact
+                // because an opaque image fills its own rectangle exactly. The
+                // bitmap is untouched; only this frame is.
+                if (veil && Veiling)
+                    ds.FillRectangle(r, Color.FromArgb(
+                        (byte)Math.Clamp(255 * Motion.Ease(_veil), 0, 255),
+                        VeilGrey.R, VeilGrey.G, VeilGrey.B));
                 break;
             }
             case ShapeKind.Table:
@@ -5168,7 +5629,7 @@ public sealed class InkSurface : UserControl
         // stroke renderer lays it. Inside the rotate/settle transform, so a
         // rotated shape's grain rotates with it.
         if (overGrain != null)
-            foreach (var pass in overGrain) DrawShape(ds, pass);
+            foreach (var pass in overGrain) DrawShape(ds, pass, veil);
         if (rot || settling) ds.Transform = prevT;   // settle pulse also bends the transform
     }
 
@@ -5330,6 +5791,30 @@ public sealed class InkSurface : UserControl
 
     /// <summary>Swaps an equation image for a re-rendered one in place, keeping
     /// its position and on-page width (#27-batch2).</summary>
+    /// <summary>CONCEPTS-REF 16.2's paperclip: point the selected attachment at
+    /// a different file.
+    ///
+    /// <para>The rectangle the user placed is kept - same X, Y and W - and only
+    /// the height follows the new file's aspect, so a replacement lands where the
+    /// old picture was rather than being re-inserted centred and re-fitted.</para>
+    ///
+    /// <para>Refuses on a LOCKED attachment, on the same rule the waste bin and
+    /// the flips follow: a lock that stops a drag but not a swap is not a
+    /// lock.</para></summary>
+    public void ReplaceAttachmentImage(ShapeElement s, string path, double pixelW, double pixelH)
+    {
+        if (_page == null || !_page.Shapes.Contains(s) || s.Kind != ShapeKind.Image) return;
+        if (s.Locked || string.IsNullOrEmpty(path)) return;
+        double h = Math.Max(24, Math.Abs(s.W) * (pixelH / Math.Max(1, pixelW)));
+        PushAction(new ReplaceImageAction(s, path, s.H < 0 ? -h : h), _page);
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+        // The bounds moved, so the guides, the corner circles and both plates have
+        // to be told - and that is one call, because every route into the selection
+        // presentation goes through the same publish.
+        PublishSelection();
+    }
+
     public void UpdateEquationImage(ShapeElement s, string path, double pixW, double pixH, string latex)
     {
         if (_page == null || !_page.Shapes.Contains(s)) return;
