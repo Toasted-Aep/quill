@@ -226,7 +226,14 @@
                          place to change the mouse's behaviour and it is the one
                          the reference shows. -->
 
-                    <AppBarSeparator/>
+                    <!-- CONCEPTS-REF 16.8: this separator fences the undo/redo
+                         PAIR off the tool group above it, and nothing else - the
+                         one below at the end of the pair divides the tools from
+                         BtnAi. So when the pair is dropped (dial surface) this
+                         one has to go with it, or two rules end up drawn against
+                         each other with nothing between them. It is named for
+                         that and followed in ApplyToolbarVisibility. -->
+                    <AppBarSeparator x:Name="SepUndo"/>
 
                     <Button x:Name="BtnUndo" Click="Undo_Click" ToolTipService.ToolTip="Undo (Ctrl+Z)">
                         <PathIcon x:Name="IconUndo"/>
