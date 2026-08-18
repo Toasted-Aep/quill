@@ -706,6 +706,9 @@ public sealed partial class MainWindow : Window
             ToggleFullscreen = () => Fullscreen_Click(this, new RoutedEventArgs()),
             RenamePage = () => _ = RenamePageFromTitleAsync(),
             OpenSettings = OpenSettingsWindow,
+            // Section 5's `?`. The same toggle F1 and the app menu already call,
+            // so Help is one surface with three doors rather than three surfaces.
+            ToggleHelp = ToggleShortcutsPanel,
             ImportPdf = () => ImportPdf_Click(this, new RoutedEventArgs()),
             PasteImage = () => _ = PasteImageAsync(),
             PickOpen = PickOpenFileAsync,
