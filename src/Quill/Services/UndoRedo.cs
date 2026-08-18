@@ -743,6 +743,61 @@ public class LockMixedAction : IPageAction
     }
 }
 
+/// <summary>CONCEPTS-REF 17: move a selection to another layer.
+///
+/// <para>Modelled on <see cref="LockMixedAction"/>, and for the same reason: the
+/// per-element state it changes is a single field, so the undo record is the
+/// list of elements plus their previous values and nothing is cloned.</para>
+///
+/// <para>Recording the BEFORE keys individually rather than one shared value is
+/// the whole point — a selection can span layers, and an undo that put
+/// everything back on one of them would quietly merge two layers' worth of
+/// drawing.</para></summary>
+public class AssignLayerAction : IPageAction
+{
+    private readonly List<PenStroke> _strokes;
+    private readonly List<ShapeElement> _shapes;
+    private readonly List<TextElement> _texts;
+    private readonly List<int> _sBefore = new(), _hBefore = new(), _tBefore = new();
+    private readonly int _to;
+
+    public AssignLayerAction(List<PenStroke> strokes, List<ShapeElement> shapes,
+                             List<TextElement> texts, int toLayerKey)
+    {
+        _strokes = strokes; _shapes = shapes; _texts = texts; _to = toLayerKey;
+        foreach (var s in strokes) _sBefore.Add(s.LayerKey);
+        foreach (var s in shapes) _hBefore.Add(s.LayerKey);
+        foreach (var t in texts) _tBefore.Add(t.LayerKey);
+    }
+
+    public string Description => "Move to layer";
+    // The Texts' LAYER changes, not their content or geometry, so the XAML text
+    // layer does not need tearing down and rebuilding.
+    public bool TouchesText => false;
+
+    public void Do(NotePage page)
+    {
+        foreach (var s in _strokes) s.LayerKey = _to;
+        foreach (var s in _shapes) s.LayerKey = _to;
+        foreach (var t in _texts) t.LayerKey = _to;
+    }
+
+    public void Undo(NotePage page)
+    {
+        for (int i = 0; i < _strokes.Count && i < _sBefore.Count; i++) _strokes[i].LayerKey = _sBefore[i];
+        for (int i = 0; i < _shapes.Count && i < _hBefore.Count; i++) _shapes[i].LayerKey = _hBefore[i];
+        for (int i = 0; i < _texts.Count && i < _tBefore.Count; i++) _texts[i].LayerKey = _tBefore[i];
+    }
+
+    public Rect? AffectedBounds(NotePage page)
+    {
+        Rect? r = ActionBounds.Of(_strokes);
+        foreach (var s in _shapes) r = ActionBounds.Union(r, ActionBounds.Of(s));
+        foreach (var t in _texts) r = ActionBounds.Union(r, ActionBounds.Of(t));
+        return r;
+    }
+}
+
 /// <summary>CONCEPTS-REF 16.2's PAPERCLIP: swap the file behind an attachment
 /// and keep it exactly where it is.
 ///
