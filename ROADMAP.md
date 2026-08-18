@@ -92,8 +92,15 @@ Four branches, none merged. `main` is at `3baff80`.
 
 ## Later
 
-- **Layers.** The data model is the blocker for PSD export, per-layer
-  visibility, selection scoping and per-object rows in the Objects library.
+- **Layers.** The data model is **done and unblocked** — branch `layers-model`,
+  reference §18, proved by `tools/LayerRoundTrip` (69 checks). Membership is an
+  int key on the element where 0 means the base layer, so an existing library
+  gains zero bytes and there is no load-time migration to go wrong. What is left
+  is the four features it was blocking, each of which is now one call:
+  `PageLayers.InOrder` for PSD export, `Layer.Hidden` + `EffectiveOpacity` for
+  per-layer visibility, `PageLayers.CanSelect(page, key, scope)` for selection
+  scoping, `PageLayers.Rows` for the Objects library — plus the panel itself,
+  which was deliberately not built.
 - **Oil paint.** Branch `oilpaint`: tile store, impasto via a distant-specular
   pass, crash-safe `.artq` v2. Built and verified, never merged.
 - **Smudge**, on the oil raster substrate.

@@ -3490,6 +3490,13 @@ Written down because each is a place where a later change loses data quietly.
   without it, erasing through a stroke on layer 3 drops its fragments onto the
   base layer. This is fixed as part of the model, not left to the renderer.
 - **Cross-page paste must re-key.** Keys are page-scoped (18.3).
+- **A table and its cells must share a layer.** A `ShapeElement` of kind `Table`
+  and the `TextElement`s carrying its cells (`TableId`) are one object to the
+  user and three lists to the model. Nothing stops them being assigned
+  separately today, and `LayerRemoval.DeleteContent` on a layer holding only the
+  cells would leave a table drawn with its contents gone. Whatever moves a
+  selection between layers should carry a table's cells with it — the same
+  obligation `ReflowTableCells` already discharges for geometry.
 - **`SyncLog` must carry the layer list in the page op.** Element ops serialise
   the whole element, so `LayerKey` rides along for free — but `PageMetaJson` is a
   hand-picked field list, and a peer that receives keys without the layers they
@@ -3522,9 +3529,36 @@ It settles, by doing it rather than asserting it:
 - an element pointing at a layer that does not exist still draws;
 - a `LayerKey` written as a **string** — the `ColorPickerMode` disaster,
   reproduced on purpose — still loads the library;
-- `InOrder` on a page with no layers reproduces today's draw order exactly.
+- `InOrder` on a page with no layers reproduces today's draw order exactly;
+- and 18.1's compatibility guarantee: on a page with one implicit layer the two
+  scopes are indistinguishable.
+
+**69 checks, all holding**, as of this section. Two of them are sharper than the
+prose above and worth naming:
+
+- *"the ONLY thing that changed is inside the layers array"*. Two saves of the
+  same library, one with a layer hidden and another at 30% and one without.
+  Strip every bracket-matched, string-aware `"Layers":[…]` out of both files and
+  what remains is **byte-identical, 4261 bytes each side**. That is 18.8 as a
+  measurement rather than a promise.
+- *"the first page op carries no layer list"*. The op log is diffed by hash, so
+  a page that has no layers must hash to exactly what it hashed to before layers
+  existed — otherwise the first save after upgrading emits one page op per page
+  in the library. It does, and the check reads the log to say so.
 
 Run: `dotnet run --project tools/LayerRoundTrip/LayerRoundTrip.csproj -c Debug`
+
+**One thing lives outside the isolation folder, and this harness puts it back.**
+`SyncLog` keeps its per-device cursors in `%LOCALAPPDATA%\Quill\synccursors.json`
+— *not* in the data folder — and `LibraryStore.Save` calls `SyncLog.OnSaved`
+unconditionally. Any harness that saves therefore rewrites the real user's cursor
+file from an empty in-memory one, resetting the read offset for every peer; per
+the roadmap's own unowned "SyncLog replay" risk, a reset cursor triggers the full
+replay that can **resurrect erased strokes**. `LayerRoundTrip` snapshots that file
+and `deviceid.txt` before its first save, restores both byte-for-byte in a
+`finally`, and checks the restore as its last line. **`tools/VeilRoundTrip` does
+not**, and neither will the next harness written to this pattern unless the
+behaviour moves into `SyncLog` itself.
 
 ### 18.12 Left for the user to rule on
 

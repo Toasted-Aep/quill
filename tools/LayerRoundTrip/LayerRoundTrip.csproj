@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- CONCEPTS-REF 18.11, proved rather than asserted.
+
+       A HEADLESS harness that runs the REAL serialiser over the REAL models and
+       the REAL layer functions, so "an existing page loses nothing" is an
+       experiment rather than a claim.  Nothing here is a copy: every source file
+       below is <Compile Include>d straight out of src/Quill.  Written to the
+       pattern tools/VeilRoundTrip set for section 16.7, for the same reason -
+       the failure mode is data loss discovered on the next reload, which is
+       exactly the kind of thing that looks perfect at the moment it is done.
+
+       net8.0-windows10.0.19041.0 to match VeilRoundTrip; nothing compiled here
+       actually needs Windows types.  No WinUI, no Windows App SDK, no window:
+       this runs in a console. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Quill.Tools</RootNamespace>
+    <AssemblyName>LayerRoundTrip</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\..\src\Quill\Models\NoteModels.cs" Link="NoteModels.cs" />
+    <Compile Include="..\..\src\Quill\Models\LayerModels.cs" Link="LayerModels.cs" />
+    <Compile Include="..\..\src\Quill\Services\LibraryStore.cs" Link="LibraryStore.cs" />
+    <Compile Include="..\..\src\Quill\Services\SyncLog.cs" Link="SyncLog.cs" />
+  </ItemGroup>
+
+</Project>
