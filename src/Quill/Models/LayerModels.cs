@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 namespace Quill.Models;
 
 // ===========================================================================
-// LAYERS (CONCEPTS-REF 17)
+// LAYERS (CONCEPTS-REF 18)
 //
 // The roadmap parks four features behind one data model - PSD export, per-layer
 // visibility, selection scoping, and per-object rows in the Objects library.
@@ -32,7 +32,7 @@ namespace Quill.Models;
 ///
 /// <para><b>Keys are PAGE-SCOPED.</b> An element copied to another page carries a
 /// key that means something else there; a cross-page paste has to re-key it
-/// (17.9). That is the price of an int, and the int is worth it: this key rides
+/// (18.10). That is the price of an int, and the int is worth it: this key rides
 /// on every stroke, shape and text box in the library, where a Guid would cost
 /// 36 characters apiece on a file that is rewritten whole every 1.5 seconds.</para></summary>
 public class Layer
@@ -55,7 +55,7 @@ public class Layer
     public bool Hidden { get; set; }
 
     /// <summary>0-1, a MULTIPLIER over each element's own opacity, applied at
-    /// DRAW TIME and never written back to an element. See 17.7: this is the
+    /// DRAW TIME and never written back to an element. See 18.8: this is the
     /// same promise §16.7 makes about the veil, and it is kept the same way.
     /// Not WhenWritingDefault, because the default that matters here is 1 and
     /// the zero value is 0 - a layer list is tens of entries, so writing it
@@ -87,7 +87,27 @@ public enum LayerRemoval
 /// <summary>Which of a page's three content lists a row came from.</summary>
 public enum LayerObjectKind { Stroke, Shape, Text }
 
-/// <summary>One layer's content, in the order it paints (17.4): shapes, then
+/// <summary>THE SCOPE SEAM (CONCEPTS-REF 18.1) — what the bottom mode bar's
+/// third control switches between.
+///
+/// <para><b>AllLayers is the zero value on purpose.</b> A default-constructed
+/// scope, an unset field, and a surface that has never heard of layers all mean
+/// today's behaviour: everything is in scope. A stub cannot accidentally scope
+/// a user out of their own drawing.</para>
+///
+/// <para>Where the current scope is STORED is the mode bar's business. This
+/// model neither persists it on <see cref="NotePage"/> nor mirrors it into
+/// Library: passing it in is the whole interface, and that is what stops a
+/// second, competing layer concept from growing beside this one.</para></summary>
+public enum LayerScope
+{
+    /// <summary>Every layer is in scope — today's behaviour.</summary>
+    AllLayers,
+    /// <summary>Only the page's active layer is in scope.</summary>
+    ActiveLayer,
+}
+
+/// <summary>One layer's content, in the order it paints (18.5): shapes, then
 /// strokes, then texts - the page's existing type order, preserved exactly
 /// inside the layer so that a page with one layer paints bit-identically to
 /// the way it painted before layers existed.</summary>
@@ -101,7 +121,7 @@ public sealed record LayerContent(
 }
 
 /// <summary>One object on the page, for the Objects library's per-object rows
-/// (17.8 seam 4). Carries IDENTITY, not a copy of the element: the caller
+/// (18.9 seam 4). Carries IDENTITY, not a copy of the element: the caller
 /// already holds the page.
 ///
 /// <para><see cref="Label"/> is a stable TYPE label ("Brush", "Ellipse", the
@@ -116,7 +136,7 @@ public sealed record LayerRow(
     bool Locked);
 
 /// <summary>
-/// EVERY QUESTION ANYTHING ASKS ABOUT LAYERS (CONCEPTS-REF 17).
+/// EVERY QUESTION ANYTHING ASKS ABOUT LAYERS (CONCEPTS-REF 18).
 ///
 /// <para>Static and pure over a <see cref="NotePage"/>, so the renderer, the
 /// exporters, the selection path and the Objects library all reach the same
@@ -169,7 +189,7 @@ public static class PageLayers
     public static Layer Active(NotePage page) => Of(page, page.ActiveLayer);
 
     /// <summary>Name for display; "" derives "Layer N" from position, counting
-    /// from the bottom. English by design - see 17.11 item 5.</summary>
+    /// from the bottom. English by design - see 18.12 item 5.</summary>
     public static string DisplayName(NotePage page, Layer layer)
     {
         if (!string.IsNullOrWhiteSpace(layer.Name)) return layer.Name;
@@ -180,7 +200,7 @@ public static class PageLayers
         return "Layer 1";
     }
 
-    // ---- the render-time answers (17.7) ----------------------------------
+    // ---- the render-time answers (18.8) ----------------------------------
 
     /// <summary>0 when hidden, otherwise the clamped opacity. A MULTIPLIER for
     /// the draw call. Nothing may write this into an element.</summary>
@@ -193,7 +213,7 @@ public static class PageLayers
     /// <summary>Whether anything on this layer is drawn at all.</summary>
     public static bool IsVisible(NotePage page, int layerKey) => !Of(page, layerKey).Hidden;
 
-    /// <summary>SELECTION SCOPING (17.8 seam 3). False when the layer is hidden
+    /// <summary>SELECTION SCOPING (18.9 seam 3). False when the layer is hidden
     /// or locked. Composes with the element's own padlock rather than replacing
     /// it - a caller wants <c>IsEditable(page, e.LayerKey) &amp;&amp; !e.Locked</c>.</summary>
     public static bool IsEditable(NotePage page, int layerKey)
@@ -208,7 +228,22 @@ public static class PageLayers
     public static bool InActive(NotePage page, int layerKey)
         => Of(page, layerKey).Key == Active(page).Key;
 
-    // ---- z-order (17.4) --------------------------------------------------
+    /// <summary>THE SCOPE SEAM (18.1). "Is this element in scope for the tool?"
+    ///
+    /// <para>On a page with one implicit layer BOTH scopes answer true for
+    /// everything, which is the compatibility guarantee a mode-bar stub can be
+    /// built against: it cannot diverge from a real layer list until the user
+    /// actually makes a second layer.</para></summary>
+    public static bool InScope(NotePage page, int layerKey, LayerScope scope)
+        => scope == LayerScope.AllLayers || InActive(page, layerKey);
+
+    /// <summary>Both halves of the selection question at once: in scope for the
+    /// tool, AND on a layer that is neither hidden nor locked. Still composes
+    /// with the element's own padlock, which is the caller's to check.</summary>
+    public static bool CanSelect(NotePage page, int layerKey, LayerScope scope)
+        => IsEditable(page, layerKey) && InScope(page, layerKey, scope);
+
+    // ---- z-order (18.5) --------------------------------------------------
 
     /// <summary>
     /// THE PAINT ORDER, and the seam PSD export iterates.
@@ -253,7 +288,7 @@ public static class PageLayers
             yield return new LayerContent(all[i], shapes[i], strokes[i], texts[i]);
     }
 
-    /// <summary>THE OBJECTS LIBRARY's rows (17.8 seam 4): one row per object,
+    /// <summary>THE OBJECTS LIBRARY's rows (18.9 seam 4): one row per object,
     /// grouped by layer, TOP layer first and topmost object first within it,
     /// because that is the order a layers list reads in.</summary>
     public static IEnumerable<LayerRow> Rows(NotePage page)

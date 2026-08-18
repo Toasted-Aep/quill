@@ -103,7 +103,7 @@ public static class SyncLog
     }
 
     // page metadata WITHOUT elements or per-device view state
-    // CONCEPTS-REF 17.9. An element op serialises the WHOLE element, so
+    // CONCEPTS-REF 18.10. An element op serialises the WHOLE element, so
     // LayerKey rides along for free - but this list is hand-picked, and a peer
     // that received the keys without the layers they name would resolve every
     // one of them to the base layer and flatten the drawing.
@@ -411,7 +411,7 @@ public static class SyncLog
                 pg.GridSpacing = meta.GridSpacing; pg.PenRowVisible = meta.PenRowVisible;
                 pg.Width = meta.Width; pg.Height = meta.Height;
                 pg.AudioFile = meta.AudioFile; pg.AudioStartTicks = meta.AudioStartTicks;
-                // CONCEPTS-REF 17.9: adopt a layer list, never CLEAR one. An op
+                // CONCEPTS-REF 18.10: adopt a layer list, never CLEAR one. An op
                 // from a peer that predates layers carries no Layers at all, and
                 // copying that absence over would delete the local list while the
                 // elements kept their keys - every layer flattened into the base
