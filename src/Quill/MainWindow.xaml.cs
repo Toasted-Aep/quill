@@ -69,6 +69,12 @@ public sealed partial class MainWindow : Window
     private HashSet<string> _barTools = new(StringComparer.Ordinal);
     // 15.3: the hover-revealed window controls, which only exist in fullscreen.
     private FullscreenChrome? _fsChrome;
+    // 16.2 / 16.9: the one selection presentation - floating bar, corner circles,
+    // full-canvas guides, Rotate/Scale/Filter row - over whatever SelectionState
+    // reports. It reads that state itself, so nothing here has to tell it what
+    // is selected; this reference exists only so the window can own its lifetime
+    // alongside the other two chromes.
+    private SelectionChrome? _selChrome;
     // Both tool surfaces subscribe to this and are dumb renderers over the same
     // state, so the linear row and the dial can never diverge (§2.2).
     private event Action? ToolUiChanged;
@@ -726,6 +732,48 @@ public sealed partial class MainWindow : Window
             Close = Close,
             ReduceMotion = () => _reduceMotion,
         });
+        // 16.2 / 16.9: THE SELECTION PRESENTATION, made reachable.
+        //
+        // On CanvasArea, not RootGrid: every number this surface places itself
+        // with comes out of InkSurface.WorldToScreen, whose screen origin is the
+        // canvas area's own top-left. Hosting it a row higher would offset the
+        // guides from the thing they are framing by the height of the top bar.
+        //
+        // It subscribes to SelectionState itself, so there is deliberately no
+        // 'tell the chrome what is selected' call anywhere in this window - the
+        // dial and the pen row take the same state from the same place (16.3 /
+        // 16.9), and a second route would be a second thing to keep in step.
+        _selChrome = SelectionChrome.Attach(CanvasArea, Surface, new SelectionChrome.Host
+        {
+            Duplicate = () => Surface.DuplicateSelection(),
+            Delete = () => Surface.DeleteSelection(),
+            ToggleLock = () => Surface.ToggleSelectionLock(),
+            Flip = horizontal => Surface.FlipSelection(horizontal),
+            Rotate = () => Surface.RotateSelectionQuarter(),
+            ReplaceAttachment = () => _ = ReplaceAttachmentAsync(),
+            // The two states in which the selection's own controls must not be on
+            // screen. The COPIC wheel reports itself as covering the whole canvas
+            // (9.3) and the panel solver already pushes every other cluster out of
+            // its way; a floating bar left sitting on top of it would be the one
+            // thing that did not. And an export moves the view under the canvas
+            // before capturing it, so a bar placed from the pre-export transform
+            // would be both wrong and, for the fraction of a second it is up, on
+            // screen - the same promise 16.7's fade makes about ExportChromeless,
+            // one surface further out.
+            IsBlocked = () => ColorPickerService.Obstructing || Surface.ExportChromeless,
+        });
+        // 16.7's fade is Quill motion, so it answers to Quill's reduce-motion
+        // setting exactly as the dial, the menus and the fullscreen strip do:
+        // with animations off the page arrives grey in one frame rather than not
+        // arriving grey at all.
+        Surface.ReduceMotion = () => _reduceMotion;
+        // The chrome cannot see the COPIC wheel go up: IsBlocked is the WINDOW's
+        // policy, so the window is what tells it that policy's answer has changed.
+        // Without this a selection made before the wheel opened would keep its bar
+        // on screen underneath it.
+        ColorPickerService.ObstacleChanged += () => _selChrome?.Refresh();
+
+
         // K.21: the Notebooks window and the radial dial join the panel solver.
         // The dial is an OBSTACLE - ToolWheel owns its own placement through
         // TopInset - so the Notebooks window is the one that gives way, which is
@@ -11075,6 +11123,52 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             pos = idx + pattern.Length;
         }
         return sb.ToString();
+    }
+
+    /// <summary>CONCEPTS-REF 16.2's paperclip. The bar offers it only when the
+    /// subject IS a single attachment, so the guard here is the second line of
+    /// defence rather than the first - the surface having re-published in the
+    /// time it took the user to pick a file is exactly the case it catches.
+    ///
+    /// <para>The chosen file is COPIED into the library's own assets folder, not
+    /// referenced where it sits. Every other image route in this window does the
+    /// same, and for the same reason: a page that pointed at a file on the
+    /// desktop would go blank the day the user tidied up.</para></summary>
+    private async Task ReplaceAttachmentAsync()
+    {
+        var shape = Surface.SelectedAttachment;
+        if (shape == null) { ShowStatus("Select an attachment to replace it."); return; }
+        try
+        {
+            var file = await PickOpenFileAsync(new[] { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp" });
+            if (file == null) return;
+            // Re-read the subject AFTER the picker: it is modal, and anything from
+            // an undo to a page switch can have happened behind it.
+            shape = Surface.SelectedAttachment;
+            if (shape == null) { ShowStatus("That attachment is no longer selected."); return; }
+
+            uint pw, ph;
+            using (var stream = await file.OpenReadAsync())
+            {
+                var decoder = await BitmapDecoder.CreateAsync(stream);
+                pw = decoder.PixelWidth;
+                ph = decoder.PixelHeight;
+            }
+
+            var dir = System.IO.Path.Combine(LibraryStore.Dir, "assets");
+            Directory.CreateDirectory(dir);
+            string ext = System.IO.Path.GetExtension(file.Path);
+            if (string.IsNullOrEmpty(ext)) ext = ".png";
+            var path = System.IO.Path.Combine(dir, $"{Guid.NewGuid():N}{ext}");
+            System.IO.File.Copy(file.Path, path, overwrite: false);
+
+            Surface.ReplaceAttachmentImage(shape, path, pw, ph);
+            ShowStatus("Attachment replaced — Ctrl+Z puts the old one back.");
+        }
+        catch
+        {
+            ShowStatus("Could not replace that attachment.");
+        }
     }
 
     private async Task PasteImageAsync(System.Numerics.Vector2? worldTopLeft = null)

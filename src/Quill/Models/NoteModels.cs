@@ -65,6 +65,12 @@ public class PenStroke
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public float? Opacity { get; set; }
     public List<StrokePoint> Points { get; set; } = new();
+    /// <summary>CONCEPTS-REF 16.2's padlock. WhenWritingDefault, for exactly the
+    /// reason <see cref="Opacity"/> is WhenWritingNull: false is what every
+    /// stroke ever saved already means, so adding this flag costs an existing
+    /// 53 MB library.json zero bytes and no stroke changes behaviour.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Locked { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
     public List<float>? PressureCurve { get; set; }
 
@@ -163,6 +169,9 @@ public class ShapeElement
     public int MergeRowSpan { get; set; } = 1;
     // Whether this is a bold header row (table shapes only).
     public bool HeaderRow { get; set; }
+    /// <summary>CONCEPTS-REF 16.2's padlock — see PenStroke.Locked.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Locked { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
 }
 
@@ -193,6 +202,9 @@ public class TextElement
     public float? BorderWidth { get; set; }
     public int CellColSpan { get; set; } = 1;
     public int CellRowSpan { get; set; } = 1;
+    /// <summary>CONCEPTS-REF 16.2's padlock — see PenStroke.Locked.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Locked { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
 }
 
