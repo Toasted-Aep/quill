@@ -2825,3 +2825,226 @@ per-list grouping is itself a variable: whether `1/4 Wide` in the 2-Point list a
 `1/4 Wide` in the 3-Point list place their shared points identically is one of the
 things the numbers will answer.
 
+
+---
+
+## 16. Attachments, the greyed dial, and the canvas that stopped being infinite — 2026-08-17
+
+One capture: a **dark page** with an image attachment selected, the dial at the
+top-left with most of its marks greyed, and the attachment carrying a floating
+action bar, an edge frame and a bottom action row.
+
+### 16.1 THE CANVAS IS NO LONGER INFINITE — regression, highest priority
+
+The user, marked five out of five: *"at some point you've managed to make the
+canvas limited, make it infinite again."*
+
+Quill's canvas is unbounded by design — pan and zoom have never had a stop.
+Something in recent work introduced one. **Find the cause before changing
+anything**; do not "add infinity back" by removing whatever clamp is found
+first, because the clamp may be load-bearing for something else.
+
+Leading suspects, in the order worth checking:
+
+1. **`NotePage.RefFrame`** (§14.5). A frame captured on the page's first
+   painted frame, added so vanishing points could be quartered against it. If
+   anything treats that frame as the extent of the page rather than as a
+   measuring reference, the canvas acquires exactly one page's worth of bounds.
+2. **The grid editor's confine-to-artboard** option (§12), if it is being
+   applied when it was not asked for.
+3. **Any clamp added for panel or chrome geometry** that reached the canvas
+   transform by mistake.
+
+Bisect against history rather than reasoning from the code alone — the change
+is recent and the symptom is sharp, so a bisect will name it faster than a read.
+Report which commit introduced it.
+
+### 16.2 Attachments get quick actions and an edge frame
+
+Text already gets a floating action bar. **An attachment must get one too.**
+From the capture, an image attachment when selected shows:
+
+- **A floating bar centred above it**, carrying, left to right: a paperclip, a
+  padlock, a duplicate mark, a waste bin, then a **divider**, then flip
+  horizontal and flip vertical.
+- **Guide lines and corner handles.** Four small hollow circles mark the corners
+  of the bounding box. The lines are **NOT a box on those bounds** — an earlier
+  version of this section said they were and was wrong. They are **full-canvas
+  guides projected from the box**: two verticals at its left and right edges
+  running the whole viewport height, two horizontals at its top and bottom
+  running the whole width. Thin and low-contrast; they read as alignment
+  guides, not as a selection outline.
+- **A bottom action row**, centred below: **Rotate**, **Scale**, **Filter**,
+  each an icon with its word beside it.
+
+The frame is the part the user called out specifically — *"add the lines that
+mark the edges of the attachment."* Selection is currently ambiguous without it.
+
+### 16.3 The dial greys out when an attachment is selected
+
+Because almost nothing in the dial applies to a photo:
+
+- **Grey every mark EXCEPT opacity, undo and redo.** Those three stay live —
+  an attachment's opacity is adjustable, and undo/redo always apply.
+- **The colour circle goes WHITE and becomes unusable**, in the dial *and* in
+  the pen row. You cannot recolour a photograph, and a live-looking colour
+  control that silently does nothing is worse than one that says so.
+- **Do NOT grey the per-pen colour arcs on the ring.** The user was explicit.
+  Those arcs report which colour each pen carries; that fact is still true while
+  an attachment is selected, and greying it would destroy information rather
+  than disable a control.
+
+Use the disabled treatment the dial already has for an unavailable readout;
+this clause is about **which marks** grey, not about a new colour. The grey the
+user asked for by hex belongs to the page, not to the dial - see §16.7.
+
+### 16.4 A greyed readout centres in its section
+
+Size, opacity and stability each occupy a section of the inner disc. **When one
+is unavailable, its glyph and value move to the middle of that section** rather
+than staying in the offset glyph/value arrangement §14.1 describes. Disabled,
+there is no value to read, so the split that exists to separate mark from
+number has nothing to separate.
+
+### 16.5 Stability and opacity move up and outward
+
+**This supersedes §14.1 item 2 and the `0.33 r` lift.** The user: *"move
+stability and opacity up and to the outer side (left for stability, right for
+opacity) and move their texts that show the percentage accordingly to not
+overlap redo and undo."*
+
+So both the glyphs and their values move **up** and **outward** — stability
+toward the left edge of the disc, opacity toward the right. The values follow
+their glyphs and must still clear undo and redo, which is what the `0.33 r` lift
+was for; moving outward gives more room to do it with, because the arrows sit
+low and central.
+
+Measure the result against the arrows' boxes rather than trusting the
+constants — §14.1 named that bound correctly and then picked a number that
+violated it, and the collision the user reported was `9 × 6 DIP` of digits
+sitting on top of an arrow.
+
+### 16.6 The undo and redo arrowheads are asymmetric
+
+*"redo and undo icons are a bit off, the arrow tip is longer on the outer
+side."* The head is lopsided — the barb on the outer edge extends further than
+the one on the inner edge. Make the head symmetric about its own shaft.
+
+Re-author the geometry on the 24-unit grid rather than nudging numbers, and
+render it at the size it actually draws before calling it fixed.
+
+### 16.7 While an attachment is selected, the PAGE fades to grey
+
+Corrected from a misreading. *"make texts the exact shade of grey shown in
+photo ... make them slowly turn grey not instantly"* is not about the dial's
+labels. It is about **everything the user has put on the page** - pen strokes,
+typed text, objects - which de-emphasises while an attachment is selected, so
+the attachment reads as the thing being worked on. The greyed handwriting
+beneath the attachment in the capture is the example.
+
+**The colour is `#8E8E8E`**, given directly by the user. Not sampled, not
+approximated - that exact value.
+
+Three things this must get right:
+
+1. **It is a RENDER-TIME effect and must never touch stored colour.** Nothing
+   may write `#8E8E8E` into a stroke, a text run or an object. The page's own
+   colours have to come back exactly when the attachment is deselected, and a
+   user who saves in this state must not find their drawing greyed on reload.
+   This is the one way to turn a visual nicety into data loss.
+2. **It animates.** The user was explicit: *"slowly turn grey not instantly"*.
+   Use Quill's own motion rather than inventing a duration - `MenuAnim.cs` runs
+   190 ms out and 130 ms back on a `(0.12, 0.9) -> (0.2, 1.0)` curve, and the
+   fullscreen strip already borrows it. Fade back on deselect too; a
+   one-directional fade would leave the page grey until something forced a
+   repaint.
+3. **The attachment itself does not fade.** It is the subject. In the capture
+   it holds full contrast while the ink around it is grey.
+
+Interaction worth deciding rather than assuming: what happens with **two**
+attachments, or an attachment selected while a stroke is mid-flight. Report
+what the implementation does rather than leaving it to be discovered.
+
+### 16.8 The top bar drops undo and redo when the dial is the surface
+
+The user: *"remove redo and undo if radial dial is selected from top bar as
+redo and undo is already present in the radial dial."*
+
+**Conditional on the active tool surface, not unconditional.** The radial dial
+carries undo and redo in its lower quadrant (§10.2 item 5), so a second pair in
+the top bar is duplication. The **pen row has no undo or redo of its own**, so
+when the Bar surface is selected the top-bar pair must stay — removing them
+outright would leave that surface with no pointer route to undo at all.
+
+This continues §5's rule that the top bar carries no tools: the bar holds what
+has nowhere else to live, and the moment the dial provides a home, the bar's
+copy is redundant.
+
+Where it lives: `BtnUndo` and `BtnRedo` in `MainWindow.xaml` (around lines
+231-236), immediately preceded by an `AppBarSeparator`.
+
+Four things to get right:
+
+1. **Hide the separator with them if it exists only to divide that pair**, or
+   removing the buttons leaves a rule floating against its neighbour. Check what
+   the separator actually separates before assuming either way.
+2. **Keyboard accelerators are untouched.** `Ctrl+Z` and `Ctrl+Y` are bound
+   independently of these buttons and must keep working under every surface. The
+   dial is a pointer affordance, not the only route.
+3. **`UpdateUndoButtons()` must not fault** when the buttons are not in the
+   tree, and must not be the thing that puts them back.
+4. **The switch is live.** Changing the surface in settings updates the top bar
+   immediately — no restart, no reopening the page. A setting that needs a
+   relaunch to take effect reads as a bug.
+
+### 16.9 Drawn strokes get the same selection treatment
+
+*"remember the selection? add the lines and other stuff for selection of
+drawings too. (you are already doing these lines and quick actions for
+attachments and typed texts)."*
+
+So a selected **stroke** gets everything §16.2 gives an attachment: the floating
+quick-action bar above, the four corner handles, the full-canvas guide lines,
+and the **Rotate / Scale / Filter** row below. One selection presentation, three
+kinds of subject.
+
+**But the dial does NOT grey the way §16.3 describes.** That is the difference
+between the two cases and it matters. In the capture, a selected stroke leaves
+the dial *live and populated with that stroke's own values* — size reading
+`2.31 cm`, stability `0%`, opacity `100%`, and the colour dot showing the
+stroke's blue. §16.3 greys the dial for an attachment because a photograph has
+no pen size and cannot be recoloured. **A stroke has all of those**, so the
+controls stay usable and editing them edits the selection.
+
+Do not generalise §16.3's greying to selection as a whole. It is specific to
+subjects that genuinely lack the properties the dial exposes.
+
+### 16.10 Click to select, without dragging
+
+*"make just holding selection button on pen and clicking (not dragging to
+select) select the stroke."*
+
+Today selection requires a drag — a lasso or marquee around the target. A
+**click on a stroke must select that stroke**, with no drag at all.
+
+**Implement this for the selection modality however it is reached**, rather than
+for one trigger. The phrase "selection button on pen" could mean the stylus
+barrel button (`_barrelGesture` already exists in `InkSurface`) or the selection
+tool chosen in the pen row or dial. The generous reading covers both and cannot
+be wrong: **whenever selection is the active modality, a press-and-release
+without meaningful movement selects the stroke under the point.** A drag
+continues to lasso exactly as it does now.
+
+Three things to get right:
+
+1. **Distinguish a click from a drag by movement, not by timing.** A held press
+   that never moves is still a click, and a stylus always jitters a little — use
+   a small movement threshold in screen space, and remember the canvas can be at
+   any zoom from 0.1x to 16x, so a world-space threshold would mean something
+   different at each end.
+2. **Hit-test with tolerance.** A hairline stroke is nearly impossible to hit on
+   its mathematical path. There is precedent in the file: eraser and selection
+   proximity tests already pad by roughly the stroke's own size.
+3. **Say what happens when strokes overlap** — topmost, or nearest centre. Pick
+   one, state it, and be consistent with whatever the lasso already does.
+
