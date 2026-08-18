@@ -232,6 +232,8 @@ public sealed class PenBar
         PageTheme.Changed += () => { if (_on) Refresh(); };
         _surface.UndoManager.Changed += Refresh;
         ToolSurfaceService.Changed += _ => Apply();
+        // 16.3: the pen row greys with the dial, so it listens to the same state.
+        SelectionState.Changed += Refresh;
 
         _hostGrid.Loaded += (_, _) => Place();
         if (_hostGrid.IsLoaded) Place();
@@ -408,13 +410,19 @@ public sealed class PenBar
         var ap = ToolPen();
         bool eraser = _h.ToolTag() == "Eraser";
         _setRows.Children.Clear();
+        // 16.9: with a stroke selected these report THAT STROKE's values. The
+        // `ap!` derefs below are only reached when there is no subject, and
+        // Enabled() already guarantees a pen in that case.
         _setRows.Children.Add(SettingRow(Prop.Size, Icons.Size, false,
-            Enabled(Prop.Size) ? (eraser ? (lib.EraserSize <= 0 ? Loc.T("Wheel.Auto") : $"{lib.EraserSize:0} px") : $"{ap!.Size:0.#} px") : "-",
+            !Enabled(Prop.Size) ? "-" : SubjectRead(Prop.Size)
+                ?? (eraser ? (lib.EraserSize <= 0 ? Loc.T("Wheel.Auto") : $"{lib.EraserSize:0} px") : $"{ap!.Size:0.#} px"),
             Enabled(Prop.Size), onSurface, muted));
         _setRows.Children.Add(SettingRow(Prop.Opacity, Icons.Opacity, false,
-            Enabled(Prop.Opacity) ? $"{ap!.Opacity * 100:0}%" : "-", Enabled(Prop.Opacity), onSurface, muted));
+            !Enabled(Prop.Opacity) ? "-" : SubjectRead(Prop.Opacity) ?? $"{ap!.Opacity * 100:0}%",
+            Enabled(Prop.Opacity), onSurface, muted));
         _setRows.Children.Add(SettingRow(Prop.Smooth, Icons.Smoothness, true,
-            Enabled(Prop.Smooth) ? $"{ap!.Stabiliser * 100:0}%" : "-", Enabled(Prop.Smooth), onSurface, muted));
+            !Enabled(Prop.Smooth) ? "-" : SubjectRead(Prop.Smooth) ?? $"{ap!.Stabiliser * 100:0}%",
+            Enabled(Prop.Smooth), onSurface, muted));
         _setRows.Children.Add(ColourRow());
 
         // ---- undo and redo ---------------------------------------------
@@ -560,10 +568,18 @@ public sealed class PenBar
 
     private FrameworkElement ColourRow()
     {
+        // 16.3, the pen row's half: WHITE and unusable when the subject cannot be
+        // recoloured. Not muted, not dimmed - white is the one fill that cannot
+        // be read as a colour the subject carries.
+        bool dead = ColourInert;
+        var sel = SelectionState.Current;
+        var fill = dead ? Colors.White
+                 : sel is { Any: true, CanRecolour: true, Ink: { } c } ? c
+                 : ActiveColour();
         var dot = new Ellipse
         {
             Width = DotSize, Height = DotSize,
-            Fill = new SolidColorBrush(ActiveColour()),
+            Fill = new SolidColorBrush(fill),
             Stroke = new SolidColorBrush(PageTheme.Outline),
             StrokeThickness = 2,
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -575,7 +591,9 @@ public sealed class PenBar
             Background = new SolidColorBrush(Colors.Transparent),
             IsTapEnabled = true,
         };
-        Tap(row, ShowColourPicker, null);
+        // Not merely dimmed: the tap is never wired at all, so there is no path
+        // by which the picker opens on a subject that cannot take a colour.
+        if (!dead) Tap(row, ShowColourPicker, null);
         return row;
     }
 
@@ -786,16 +804,56 @@ public sealed class PenBar
     private Color ActiveColour() =>
         _h.ToolTag() == "Pen" && ActivePen() is { } p ? ColorUtil.Parse(p.Color) : PageTheme.Surface;
 
+    /// <summary>CONCEPTS-REF 16.3, the same sentence the dial answers: a subject
+    /// that LACKS a property greys that property's control - never "something is
+    /// selected". With nothing selected the question falls back to the active
+    /// tool, which is the same rule about a different subject.</summary>
     private bool Enabled(Prop p)
     {
+        if (SelectionState.Current is { Any: true } sel)
+            return p switch
+            {
+                Prop.Size => sel.HasPenSize,
+                Prop.Opacity => sel.HasOpacity,
+                _ => sel.HasStability,
+            };
         var ap = ToolPen();
         return p == Prop.Size ? ap != null || _h.ToolTag() == "Eraser" : ap != null;
+    }
+
+    /// <summary>16.3: the colour circle goes WHITE and unusable "in the dial AND
+    /// IN THE PEN ROW" for a subject that cannot be recoloured. Both surfaces ask
+    /// the same question of the same object, so they cannot disagree.</summary>
+    private static bool ColourInert => SelectionState.Current is { Any: true, CanRecolour: false };
+
+    /// <summary>A selection's own value for a property, or null. Mirrors the
+    /// dial's SubjectValue so the two readouts cannot drift.</summary>
+    private static string? SubjectRead(Prop p)
+    {
+        var s = SelectionState.Current;
+        if (!s.Any) return null;
+        return p switch
+        {
+            Prop.Size => s.Size is { } v ? $"{v:0.#} px" : "—",
+            Prop.Opacity => s.Opacity is { } v ? $"{v * 100:0}%" : "—",
+            _ => s.Stability is { } v ? $"{v * 100:0}%" : "—",
+        };
     }
 
     private static double Norm01(double v, double lo, double hi) => Math.Clamp((v - lo) / (hi - lo), 0, 1);
 
     private double Value(Prop p)
     {
+        // 16.9: a scrub on a selection starts from the SELECTION's value, or the
+        // first nudge jumps it to the active pen's.
+        var sub = SelectionState.Current;
+        if (sub.Any)
+            switch (p)
+            {
+                case Prop.Size when sub.Size is { } v: return Norm01(v, 1, 24);
+                case Prop.Opacity when sub.Opacity is { } v: return Math.Clamp(v, 0, 1);
+                case Prop.Smooth when sub.Stability is { } v: return Math.Clamp(v, 0, 1);
+            }
         var lib = _h.Library();
         var ap = ToolPen();
         bool eraser = _h.ToolTag() == "Eraser";
@@ -810,6 +868,22 @@ public sealed class PenBar
     private void ApplySetting(Prop p, double t)
     {
         if (!Enabled(p)) return;
+        // 16.9: "editing them edits the selection." Same redirection the dial
+        // makes, from the same object, so the two surfaces cannot disagree about
+        // where a scrub lands.
+        if (SelectionState.Current is { Any: true } sel)
+        {
+            switch (p)
+            {
+                case Prop.Size when sel.SetSize != null:
+                    sel.SetSize((float)Math.Round(1 + t * 23, 1)); Refresh(); return;
+                case Prop.Opacity when sel.SetOpacity != null:
+                    sel.SetOpacity((float)Math.Round(Math.Max(0.05, t), 2)); Refresh(); return;
+                case Prop.Smooth when sel.SetStability != null:
+                    sel.SetStability((float)Math.Round(t, 2)); Refresh(); return;
+            }
+            return;     // never silently redirect the edit to the active pen
+        }
         var lib = _h.Library();
         var ap = ToolPen();
         switch (p)
