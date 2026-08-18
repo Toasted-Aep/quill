@@ -9237,27 +9237,33 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             // of its own, so under the Bar surface the top-bar pair is the only
             // pointer route there is and it stays.
             //
-            // 16.8's PREMISE IS OUT OF DATE AND THE RULE IS IMPLEMENTED ANYWAY.
-            // The pen row DOES carry undo and redo: Controls/PenBar.cs floats
-            // them below the panel as bare satellites, from the same
-            // Icons.UndoRound the dial and this bar draw, hit-tested and painted
-            // live/dim off the same UndoManager. They are hard-wired rather than
-            // cells, so PenBar.TopBarKey never names them and the existing
-            // hand-back has never hidden the top-bar pair for them. So under Bar
-            // the pair IS duplicated, exactly the way 16.8 objects to under
-            // Wheel. That is a decision about what the user wants, not a defect
-            // to fix in passing, so the rule is implemented as written and the
-            // finding is reported. Should Bar be included too, this line is the
-            // whole change: `= true;`.
+            // THE PREMISE ABOVE WAS FALSE AND THE USER HAS RULED. The pen row
+            // DOES carry undo and redo: Controls/PenBar.cs floats them below the
+            // panel as bare satellites, from the same Icons.UndoRound the dial
+            // and this bar draw, hit-tested and painted live/dim off the same
+            // UndoManager. They are hard-wired rather than cells, so
+            // PenBar.TopBarKey never names them and the existing hand-back never
+            // hid the top-bar pair for them - so under Bar the pair was
+            // duplicated exactly the way 16.8 objects to under Wheel.
+            //
+            // Told that, the user ruled that Bar loses the top-bar pair too. So
+            // the condition is now unconditional in practice, and the variable
+            // is named for the reason rather than for the dial.
+            //
+            // This cannot strand anyone. ToolSurface has exactly TWO members,
+            // they are mutually exclusive, and ToolSurfaceService exists
+            // precisely to stop both being off screen at once - so whichever
+            // surface is up is carrying the pair. If a third, surface-less mode
+            // is ever added, THIS is the line that has to learn about it.
             //
             // This rides the existing in-context channel rather than adding a
             // parallel one: it is the same question ApplyToolbarVisibility
             // already asks of TouchDrawToggle and ShapeBtn - is this control's
             // job being done elsewhere right now - and the user's own
             // HiddenTools choice still overrides it either way.
-            bool dialCarriesUndo = ToolSurfaceService.IsWheel;
-            Set(BtnUndo, "BtnUndo", !dialCarriesUndo);
-            Set(BtnRedo, "BtnRedo", !dialCarriesUndo);
+            const bool surfaceCarriesUndo = true;   // Wheel in its quadrant, Bar as satellites
+            Set(BtnUndo, "BtnUndo", !surfaceCarriesUndo);
+            Set(BtnRedo, "BtnRedo", !surfaceCarriesUndo);
             // The separator above the pair exists only to fence it off, so it
             // follows whatever the pair actually did - including the case where
             // the user hid both through HiddenTools, which used to leave it
