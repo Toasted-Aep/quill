@@ -71,7 +71,7 @@ public class PenStroke
     /// 53 MB library.json zero bytes and no stroke changes behaviour.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Locked { get; set; }
-    /// <summary>Which layer this stroke belongs to (CONCEPTS-REF 17). 0 is the
+    /// <summary>Which layer this stroke belongs to (CONCEPTS-REF 18). 0 is the
     /// base layer, which is where every stroke ever saved already is, so
     /// WhenWritingDefault makes this cost an existing 53 MB library.json exactly
     /// zero bytes. See <see cref="Layer"/> for why it is an int and why it
@@ -130,7 +130,7 @@ public class PenStroke
     // stroke, how duplicate works and how the selection clone works, so leaving
     // it out would silently drop every fragment of an erased stroke onto the
     // base layer - content that is intact, moved, and impossible to notice until
-    // the layer it was on is hidden (CONCEPTS-REF 17.9).
+    // the layer it was on is hidden (CONCEPTS-REF 18.10).
     public PenStroke CloneWithPoints(List<StrokePoint> pts) => new()
     {
         Pen = Pen, Color = Color, Size = Size, Sens = Sens, Points = pts, LayerKey = LayerKey, CreatedTicks = CreatedTicks, PressureCurve = PressureCurve != null ? new List<float>(PressureCurve) : null
@@ -185,7 +185,7 @@ public class ShapeElement
     /// <summary>CONCEPTS-REF 16.2's padlock — see PenStroke.Locked.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Locked { get; set; }
-    /// <summary>CONCEPTS-REF 17's layer membership — see PenStroke.LayerKey.</summary>
+    /// <summary>CONCEPTS-REF 18's layer membership — see PenStroke.LayerKey.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     [JsonConverter(typeof(TolerantIntConverter))]
     public int LayerKey { get; set; }
@@ -222,7 +222,7 @@ public class TextElement
     /// <summary>CONCEPTS-REF 16.2's padlock — see PenStroke.Locked.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Locked { get; set; }
-    /// <summary>CONCEPTS-REF 17's layer membership — see PenStroke.LayerKey.</summary>
+    /// <summary>CONCEPTS-REF 18's layer membership — see PenStroke.LayerKey.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     [JsonConverter(typeof(TolerantIntConverter))]
     public int LayerKey { get; set; }
@@ -415,7 +415,7 @@ public class NotePage
     public List<PenStroke> Strokes { get; set; } = new();
     public List<TextElement> Texts { get; set; } = new();
     public List<ShapeElement> Shapes { get; set; } = new();
-    // ---- CONCEPTS-REF 17: layers -----------------------------------------
+    // ---- CONCEPTS-REF 18: layers -----------------------------------------
     // The three lists above DO NOT MOVE. Layer membership is a key ON the
     // element (PenStroke.LayerKey and friends); a model where a Layer owned the
     // strokes would read as an EMPTY PAGE to anything that predates layers, and
