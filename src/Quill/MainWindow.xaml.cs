@@ -9262,10 +9262,15 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             // follows whatever the pair actually did - including the case where
             // the user hid both through HiddenTools, which used to leave it
             // stranded against the separator below.
+            // Null-conditional for the same reason UpdateUndoButtons is,
+            // and it matters more here: this whole body sits inside one
+            // try/catch, so a null reference would be SWALLOWED and would
+            // take every Set() below it with it - the toolbar would simply
+            // stop following the user's choices, silently.
             if (SepUndo != null)
                 SepUndo.Visibility =
-                    BtnUndo.Visibility == Visibility.Visible ||
-                    BtnRedo.Visibility == Visibility.Visible
+                    BtnUndo?.Visibility == Visibility.Visible ||
+                    BtnRedo?.Visibility == Visibility.Visible
                         ? Visibility.Visible : Visibility.Collapsed;
             Set(ToolSpace, "ToolSpace");
             Set(TouchDrawToggle, "TouchDrawToggle", pen);

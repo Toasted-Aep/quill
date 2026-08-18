@@ -13,3 +13,12 @@ UpgradeLog*.htm
 
 # MSIX build output (the .appinstaller template IS tracked)
 dist/msix/
+
+# scratchpad OUTPUT - rasters, transcripts and the historical Icons.cs the
+# comparison pulls out of git. All regenerate from the scripts beside them,
+# and a checked-in copy of a source file goes stale the moment anyone edits
+# the real one.
+scratchpad/*.png
+scratchpad/*.txt
+scratchpad/_Icons_*.cs
+scratchpad/__pycache__/

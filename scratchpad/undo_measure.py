@@ -92,6 +92,15 @@ def main():
         hw = (math.dist(a0, b1) + math.dist(a1, b0)) / 4
         return e0, e1, hw, (l0 + l1) / 2
 
+    # 16.6 fused the two barbs into ONE closed outline, so this pairwise
+    # analysis no longer applies to the committed mark; head_symmetry.py
+    # measures that one directly.  Say so rather than unpacking a short list.
+    if len(subs) != 3:
+        print(f"\nThis script wants 3 subpaths (band + 2 barbs); this literal "
+              f"has {len(subs)}.\nSince 16.6 the head is one closed outline - "
+              f"use scratchpad/head_symmetry.py.")
+        return
+
     caps = [capsule(s) for s in subs[1:]]
     for i, (e0, e1, hw, ln) in enumerate(caps):
         print(f"barb {i}: ({e0[0]:.3f},{e0[1]:.3f}) -> ({e1[0]:.3f},{e1[1]:.3f})"
