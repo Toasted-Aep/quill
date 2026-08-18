@@ -511,6 +511,12 @@ public sealed class ToolWheel
         PageTheme.Changed += OnThemeChanged;
         _surface.UndoManager.Changed += Refresh;
         ToolSurfaceService.Changed += _ => Apply();
+        // 16.3 / 16.9: which marks are live, and what the readouts say, are now a
+        // function of the SELECTION as well as of the active tool, so the dial
+        // re-renders when the selection changes exactly as it does when the tool
+        // does. Refresh is a dumb re-render of shared state and never writes it,
+        // so this cannot loop.
+        SelectionState.Changed += Refresh;
 
         // 11.22 item 3: "clicking outside the opacity / size / stability panel
         // closes it." On the ROOT, as a handled-events-too handler, and it never
@@ -875,11 +881,27 @@ public sealed class ToolWheel
         var ap = ToolPen();
         bool eraser = _h.ToolTag() == "Eraser";
         bool[] enabled = { Enabled(Prop.Size), Enabled(Prop.Opacity), Enabled(Prop.Smooth) };
+        // 16.9: with a stroke selected the disc reports THAT STROKE's values, not
+        // the active pen's - in the reference capture a selected stroke reads
+        // size, stability 0% and opacity 100% while the Select tool is in hand,
+        // which the pen-only path below cannot produce. A selection that
+        // disagrees with itself prints an em dash: the control is still live
+        // (the subject HAS the property) but there is no single number to show,
+        // which is a different state from having none.
+        var sel = SelectionState.Current;
+        string Read(Prop p, float? v, string suffix, float scale)
+        {
+            if (!Enabled(p)) return "-";
+            if (sel.Any) return v is { } n ? $"{n * scale:0.#}{suffix}" : "—";
+            return "";
+        }
         string[] read =
         {
-            enabled[0] ? (eraser ? (lib.EraserSize <= 0 ? Loc.T("Wheel.Auto") : $"{lib.EraserSize:0} px") : $"{ap!.Size:0.#} px") : "-",
-            enabled[1] ? $"{ap!.Opacity * 100:0}%" : "-",
-            enabled[2] ? $"{ap!.Stabiliser * 100:0}%" : "-",
+            Read(Prop.Size, sel.Size, " px", 1f) is { Length: > 0 } a0 ? a0
+                : eraser ? (lib.EraserSize <= 0 ? Loc.T("Wheel.Auto") : $"{lib.EraserSize:0} px")
+                : $"{ap!.Size:0.#} px",
+            Read(Prop.Opacity, sel.Opacity, "%", 100f) is { Length: > 0 } a1 ? a1 : $"{ap!.Opacity * 100:0}%",
+            Read(Prop.Smooth, sel.Stability, "%", 100f) is { Length: > 0 } a2 ? a2 : $"{ap!.Stabiliser * 100:0}%",
         };
 
         Glyph(_sizeGlyph, Icons.Size, enabled[0] ? onSurface : muted, stroked: false);
@@ -895,9 +917,21 @@ public sealed class ToolWheel
         }
         LayoutSizeRow();
 
-        _dot.Fill = new SolidColorBrush(ActiveColour());
-        _dot.Stroke = new SolidColorBrush(_hoverZone == Zone.Dot ? PageTheme.Accent : outline);
-        _dot.StrokeThickness = _hoverZone == Zone.Dot ? 3 : 2;
+        // 16.3: "The colour circle goes WHITE and becomes unusable" for a subject
+        // that cannot be recoloured. Not muted, not dimmed - white, which is the
+        // one fill that cannot be mistaken for a colour the subject carries.
+        // 16.9 keeps it live for a stroke and fills it with THAT STROKE's colour.
+        //
+        // NOTE what is NOT touched here: the per-pen colour arcs on the ring,
+        // painted above as _rimArc. 16.3 is explicit - "the user was explicit" -
+        // that they must not grey. They REPORT which colour each pen carries, and
+        // that stays true whatever is selected; greying them would destroy
+        // information rather than disable a control.
+        bool colourDead = ColourInert;
+        _dot.Fill = new SolidColorBrush(colourDead ? Colors.White : SelectionColour() ?? ActiveColour());
+        _dot.Stroke = new SolidColorBrush(
+            colourDead ? outline : _hoverZone == Zone.Dot ? PageTheme.Accent : outline);
+        _dot.StrokeThickness = !colourDead && _hoverZone == Zone.Dot ? 3 : 2;
 
         // ---- 11.2 item 13: hover indicators ------------------------------
         PlaceHover(onSurface);
@@ -1678,6 +1712,10 @@ public sealed class ToolWheel
 
         var (z, idx) = Aim(p);
         bool tap = Environment.TickCount64 - _pressMs < TapMs && Dist(p, _pressPt) <= TapSlop;
+        // 16.3: white AND UNUSABLE. A dot that still opened the picker would be
+        // the "live-looking colour control that silently does nothing" the
+        // section calls worse than one that says so.
+        if (z == Zone.Dot && ColourInert) return;
         if (z == Zone.Dot && tap) { ShowColourPicker(); return; }
         if (z == Zone.Undo && tap) { _surface.Undo(); Refresh(); return; }
         if (z == Zone.Redo && tap) { _surface.Redo(); Refresh(); return; }
@@ -1738,8 +1776,27 @@ public sealed class ToolWheel
         _ => null,
     };
 
+    /// <summary>CONCEPTS-REF 16.3, and the sentence it is easy to get wrong.
+    ///
+    /// <para>The rule is NOT "something is selected, so grey the dial". It is
+    /// <b>a subject that LACKS a property greys that property's control</b>. An
+    /// attachment has no pen size and no stabiliser, so those two grey and
+    /// opacity stays live; a STROKE has all three (16.9), so nothing greys and
+    /// the readouts show that stroke's own values. Ask the subject what it has,
+    /// never whether it exists.</para>
+    ///
+    /// <para>With nothing selected this falls through to the old question -
+    /// what does the active TOOL have - which is the same rule applied to a
+    /// different subject.</para></summary>
     private bool Enabled(Prop p)
     {
+        if (SelectionState.Current is { Any: true } sel)
+            return p switch
+            {
+                Prop.Size => sel.HasPenSize,
+                Prop.Opacity => sel.HasOpacity,
+                _ => sel.HasStability,
+            };
         var ap = ToolPen();
         bool eraser = _h.ToolTag() == "Eraser";
         return p switch
@@ -1749,8 +1806,26 @@ public sealed class ToolWheel
         };
     }
 
+    /// <summary>The subject's own value for a property, normalised to 0..1 on the
+    /// same scales <see cref="Value"/> uses, or null when there is no subject or
+    /// the selection disagrees with itself.</summary>
+    private double? SubjectValue(Prop p)
+    {
+        var sel = SelectionState.Current;
+        if (!sel.Any) return null;
+        return p switch
+        {
+            Prop.Size => sel.Size is { } v ? Norm01(v, 1, 24) : null,
+            Prop.Opacity => sel.Opacity is { } v ? Math.Clamp(v, 0, 1) : null,
+            _ => sel.Stability is { } v ? Math.Clamp(v, 0, 1) : (double?)null,
+        };
+    }
+
     private double Value(Prop p)
     {
+        // 16.9: a scrub that starts on a selection starts from the SELECTION's
+        // value, or the first nudge would jump it to the active pen's.
+        if (SubjectValue(p) is { } sv) return sv;
         var lib = _h.Library();
         var ap = ToolPen();
         bool eraser = _h.ToolTag() == "Eraser";
@@ -1776,6 +1851,33 @@ public sealed class ToolWheel
     private void ApplySetting(Prop p, double t)
     {
         if (!Enabled(p)) return;
+        // 16.9: "the controls stay usable and EDITING THEM EDITS THE SELECTION."
+        // A subject that offers a setter takes the write; the active pen is left
+        // alone, because the user is adjusting the stroke in front of them, not
+        // choosing what the next one will look like.
+        if (SelectionState.Current is { Any: true } sel)
+        {
+            switch (p)
+            {
+                case Prop.Size when sel.SetSize != null:
+                    sel.SetSize((float)Math.Round(1 + t * 23, 1));
+                    Refresh();
+                    return;
+                case Prop.Opacity when sel.SetOpacity != null:
+                    sel.SetOpacity((float)Math.Round(Math.Max(0.05, t), 2));
+                    Refresh();
+                    return;
+                case Prop.Smooth when sel.SetStability != null:
+                    sel.SetStability((float)Math.Round(t, 2));
+                    Refresh();
+                    return;
+            }
+            // A subject with no setter for this property still blocks the write:
+            // the control is live because the subject HAS the property, and
+            // silently redirecting the edit to the active pen would move a
+            // number the user is not looking at.
+            if (sel.Kind != SubjectKind.None) return;
+        }
         var lib = _h.Library();
         var ap = ToolPen();
         switch (p)
@@ -2003,7 +2105,22 @@ public sealed class ToolWheel
         // The popover is about the pen's NUMBERS; the wheel is about its colour.
         // Leaving the card up underneath the ring just buried it.
         _popover.Close();
+        if (ColourInert) return;                    // 16.3, belt and braces
+        // 16.9: with a recolourable subject in hand the wheel recolours THE
+        // SELECTION. The pen keeps its own colour - the user is changing the
+        // stroke in front of them, not the next one they will draw.
+        var subject = SelectionState.Current;
         var ap = ActivePen() ?? _h.Library().Pens.FirstOrDefault();
+        if (subject is { Any: true, CanRecolour: true, SetInk: not null })
+        {
+            var from = subject.Ink ?? (ap != null ? ColorUtil.Parse(ap.Color) : PageTheme.OnSurface);
+            void ApplyToSelection(Color c) => subject.SetInk!(c);
+            if (ColourPickerHook != null)
+            {
+                ColourPickerHook(DotRootPoint(), from, ApplyToSelection, Refresh, PopOut * _scale);
+                return;
+            }
+        }
         if (ap == null) return;
         var start = ColorUtil.Parse(ap.Color);
         void Apply(Color c)
@@ -2191,6 +2308,16 @@ public sealed class ToolWheel
     /// blue page and the dot would vanish.</summary>
     private Color ActiveColour() =>
         _h.ToolTag() == "Pen" && ActivePen() is { } p ? ColorUtil.Parse(p.Color) : PageTheme.SurfaceAlt;
+
+    /// <summary>16.3 / 16.9: whether the colour circle is white and inert. True
+    /// exactly when there is a subject and that subject cannot be recoloured -
+    /// never merely because something is selected.</summary>
+    private static bool ColourInert => SelectionState.Current is { Any: true, CanRecolour: false };
+
+    /// <summary>The selection's own ink, when it has one. Null falls through to
+    /// the active pen's colour, which is what the dot has always shown.</summary>
+    private static Color? SelectionColour() =>
+        SelectionState.Current is { Any: true, CanRecolour: true } s ? s.Ink : null;
 
     // ===================================================================
     // Art - every mark comes from Helpers/Icons, the same source the top bar
