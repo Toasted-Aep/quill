@@ -44,6 +44,18 @@ SectionR = (DotR + DiscR) / 2
 DisGlyphDy = -7.00
 DisValueDy = 9.25
 
+# 14.1's numbers, kept so the collision the user reported stays reproducible
+# rather than becoming a story.  16.5 supersedes both.
+OldValueX = 0.50 * DiscR
+OldValueY = 0.52 * DiscR
+
+# Icons.Mark draws the authored 24 grid scaled by size/24 from the box's
+# top-left corner, so grid coordinates map straight onto DIP down the box.
+# UndoRound's ink (measured on the committed literal by head_symmetry.py)
+# spans grid y 4.70..21.01, so inside a SatSize box the ink starts this far
+# below the top edge - the box overstates how close anything gets to the mark.
+UNDO_INK_TOP = 4.70 / 24.0 * SatSize        # 4.11 DIP
+
 # A TextBlock's default line box at this size, and the widest string each
 # value ever holds.  Segoe UI Variable semibold: digits advance ~0.55 em,
 # '%' ~0.85 em.  Rounded UP, so every clearance below is pessimistic.
@@ -69,6 +81,20 @@ def overlap(a, b):
     ox = min(a[2], b[2]) - max(a[0], b[0])
     oy = min(a[3], b[3]) - max(a[1], b[1])
     return (ox, oy) if ox > 0 and oy > 0 else None
+
+
+def gap(a, b):
+    """Separation between two boxes on each axis: positive is clear air,
+    negative is how far they overlap on that axis.
+
+    This used to be written inline as `b[1] - a[1] if b[3] < a[1] else
+    a[1] - b[3]`, whose two branches are the wrong way round: for a value box
+    ABOVE an arrow it returned top-to-top (-27.75) rather than the gap
+    (+15.75), and it printed the miss as the clearance.  16.11 records the
+    corrected figures; this is the arithmetic behind them.
+    """
+    return (max(a[0] - b[2], b[0] - a[2]),
+            max(a[1] - b[3], b[1] - a[3]))
 
 
 def corner_r(b):
@@ -110,12 +136,28 @@ def main():
                   ("opacity glyph", og), ("stability glyph", sg)):
         for an, a in (("undo", undo), ("redo", redo)):
             o = overlap(a, b)
+            gx, gy = gap(a, b)
             print(f"  {nm:<16} vs {an:<5} "
                   + (f"OVERLAP {o[0]:.2f} x {o[1]:.2f} DIP  <<< FAIL"
                      if o else
-                     f"clear: {b[1] - a[1] if b[3] < a[1] else a[1] - b[3]:+.2f}"
-                     f" DIP vertically, {max(a[0] - b[2], b[0] - a[2]):+.2f}"
-                     f" horizontally"))
+                     f"clear: {gy:+.2f} DIP vertically, {gx:+.2f} horizontally"
+                     + ("  (they DO overlap in x, so the vertical figure is "
+                        "the whole of the clearance)" if gx < 0 else "")))
+    print(f"  value ink bottom {ov[3]:+.2f} -> arrow BOX top {undo[1]:+.2f}"
+          f"  = {undo[1] - ov[3]:.2f} DIP")
+    print(f"  value ink bottom {ov[3]:+.2f} -> arrow INK top "
+          f"{undo[1] + UNDO_INK_TOP:+.2f}  = {undo[1] + UNDO_INK_TOP - ov[3]:.2f} DIP")
+
+    print("\n  what 14.1 did, for comparison (ValueX 0.50 r, ValueY 0.52 r):")
+    for nm, sgn, txt in (("opacity value", +1, "100%"), ("stability value", -1, "0%")):
+        old = value_box(sgn * OldValueX, OldValueY, txt)
+        show("  " + nm + " (14.1)", old)
+        for an, a in (("undo", undo), ("redo", redo)):
+            o = overlap(a, old)
+            if o:
+                print(f"    vs {an}: OVERLAP {o[0]:.2f} x {o[1]:.2f} DIP"
+                      f"  <<< the defect 16.5 was raised for")
+
     print()
     for nm, b in (("opacity glyph", og), ("opacity value", ov)):
         print(f"  {nm:<16} inside disc by {DiscR - corner_r(b):5.2f} DIP; "
@@ -123,7 +165,7 @@ def main():
               + " ".join(f"{bearing(x, y):.0f}" for x in (b[0], b[2])
                          for y in (b[1], b[3]))
               + "  (opacity section is 45..135)")
-    print(f"  glyph vs size row: {sizerow[3] - og[1]:+.2f} DIP vertical, "
+    print(f"  glyph vs size row: {og[1] - sizerow[3]:+.2f} DIP vertical, "
           f"{og[0] - sizerow[2]:+.2f} horizontal")
     print(f"  opacity glyph bottom {og[3]:+.2f} -> value ink top {ov[1]:+.2f}"
           f"  gap {ov[1] - og[3]:.2f} DIP")

@@ -184,8 +184,12 @@ public sealed class ToolWheel
     //
     //     undo / redo glyph boxes   x 5.42..26.42 either side, y 28.15..49.15
     //     opacity value ink "100%"  x 23.99..46.49, y 0.40..12.40
-    //     -> 27.75 DIP of vertical clearance, where 14.1's ValueY = 0.52 r
-    //        left 9 x 6 DIP of digits sitting ON the arrow.
+    //     -> 15.75 DIP of vertical clearance (16.11).  The two DO overlap in
+    //        x, by 2.42 DIP, so the vertical figure is the whole of it. That
+    //        is measured to the arrow's BOX; to the arrow's own INK it is
+    //        19.86, because Icons.Mark keeps the 24 grid and UndoRound's ink
+    //        starts 4.11 DIP down a 21 DIP box.  14.1's ValueY = 0.52 r left
+    //        9.25 x 7.56 DIP of digits sitting ON the arrow instead.
     //
     // and the other four bounds the pair has to satisfy:
     //
