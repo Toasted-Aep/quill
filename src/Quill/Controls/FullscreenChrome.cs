@@ -106,8 +106,13 @@ public sealed class FullscreenChrome
         /// 130 back are the app's menu open/close timings (MenuAnim.cs, commit
         /// 9d0d6cf "Menu animations"), and <see cref="Ease"/> is that file's
         /// open curve. Reusing them is what keeps this strip in the same
-        /// vocabulary as every flyout in the app.</summary>
-        public const double OpenMs = 190, CloseMs = 130;
+        /// vocabulary as every flyout in the app.
+        ///
+        /// <para>They now live in <see cref="Motion"/>, because CONCEPTS-REF
+        /// 16.7 asks for the same curve a third time for the page fade and three
+        /// copies of three numbers is how a house style stops being one. These
+        /// aliases stay so the strip's own metrics still read in one block.</para></summary>
+        public const double OpenMs = Motion.OpenMs, CloseMs = Motion.CloseMs;
         /// <summary>Bottom-left corner only: the strip is flush against the top
         /// and right edges of the screen and only its inner corner is free.</summary>
         public const double InnerRadius = 10;
@@ -415,38 +420,14 @@ public sealed class FullscreenChrome
         long now = Stopwatch.GetTimestamp();
         double ms = (now - _lastTick) * 1000.0 / Stopwatch.Frequency;
         _lastTick = now;
-        // A frame that took absurdly long (a breakpoint, a stalled GPU) must not
-        // teleport the strip; clamp to about four frames' worth.
-        ms = Math.Clamp(ms, 0, 64);
-        double step = ms / (_shown ? Metrics.OpenMs : Metrics.CloseMs);
-        _t = Math.Abs(target - _t) <= step ? target : _t + Math.Sign(target - _t) * step;
+        _t = Motion.Step(_t, target, ms, _shown ? Metrics.OpenMs : Metrics.CloseMs);
         Apply();
         if (_t != target) return;
         StopTick();
         if (_t <= 0) _strip.Visibility = Visibility.Collapsed;
     }
 
-    /// <summary>The app's own open curve — cubic-bezier (0.12, 0.9) to
-    /// (0.2, 1.0), lifted from MenuAnim.cs so the strip eases like every flyout
-    /// in Quill. Solved by bisection because a cubic Bezier's x is not
-    /// invertible in closed form; 18 halvings resolve x to about 4e-6, which is
-    /// far under a pixel of the 34 DIP it drives.</summary>
-    private static double Ease(double t)
-    {
-        if (t <= 0) return 0;
-        if (t >= 1) return 1;
-        const double X1 = 0.12, Y1 = 0.9, X2 = 0.2, Y2 = 1.0;
-        static double Bez(double u, double p1, double p2)
-        {
-            double m = 1 - u;
-            return (3 * m * m * u * p1) + (3 * m * u * u * p2) + (u * u * u);
-        }
-        double lo = 0, hi = 1, u = t;
-        for (int i = 0; i < 18; i++)
-        {
-            u = (lo + hi) / 2;
-            if (Bez(u, X1, X2) < t) lo = u; else hi = u;
-        }
-        return Bez(u, Y1, Y2);
-    }
+    /// <summary>The app's own open curve, now in <see cref="Motion.Ease"/> so the
+    /// strip and CONCEPTS-REF 16.7's page fade cannot ease differently.</summary>
+    private static double Ease(double t) => Motion.Ease(t);
 }
