@@ -166,24 +166,61 @@ public sealed class ToolWheel
     //    goes from 6.5 DIP to 16 and the glyph still clears the disc's rim by
     //    13 DIP.
     private const double Row1Y = -0.62 * DiscR;    // size glyph + readout
-    // 2. The GLYPHS do not move - §1.4's x is right and 14.1 confirms them "on
-    //    the horizontal midline level with the colour dot".
-    private const double ColX = 0.61 * DiscR;      // smoothness left / opacity right
-    // 3. The VALUES are OFFSET from their glyphs rather than centred under them:
-    //    inward toward the centre (0.61 r -> 0.50 r) and downward (0.42 r ->
-    //    0.52 r), so the stability value sits down-and-RIGHT of its waveform and
-    //    the opacity value down-and-LEFT of its half-disc, both nearer the
-    //    disc's lower edge than their marks.
     //
-    //    How far they can be drawn in is bounded, and by something 14.1 cannot
-    //    see: 10.2 item 5 moved UNDO and REDO inside the disc, onto exactly the
-    //    lower-centre ground the values are being pulled toward. Their glyph
-    //    boxes run x 5.4..26.4 either side of the midline from y 28.1 down, and
-    //    a value that reached the centre would be drawn on top of them. 0.50 r
-    //    and 0.52 r is the offset that reads clearly against the old centred
-    //    layout while leaving the arrows their own ground.
-    private const double ValueX = 0.50 * DiscR;    // was ColX - pulled inward
-    private const double ValueY = 0.52 * DiscR;    // was 0.42 - pushed down
+    // 16.5 SUPERSEDES 14.1 ITEM 2 AND ITS 0.33 r LIFT. The user: "move
+    // stability and opacity up and to the outer side (left for stability, right
+    // for opacity) and move their texts that show the percentage accordingly to
+    // not overlap redo and undo."
+    //
+    // So the glyphs leave the horizontal midline - 14.1 put them there and 16.5
+    // takes them off it - and both pairs climb the OUTER half of their own
+    // quadrant. The values follow their glyphs rather than being pulled toward
+    // the centre, which is what 14.1 did and what collided.
+    //
+    // 16.5 says not to trust these constants but to measure the result against
+    // the arrows' boxes, because 14.1 named that bound correctly and then chose
+    // a number that violated it. Measured (scratchpad/dial_layout.py, which
+    // reproduces this arithmetic and prints every clearance):
+    //
+    //     undo / redo glyph boxes   x 5.42..26.42 either side, y 28.15..49.15
+    //     opacity value ink "100%"  x 23.99..46.49, y 0.40..12.40
+    //     -> 15.75 DIP of vertical clearance (16.11).  The two DO overlap in
+    //        x, by 2.42 DIP, so the vertical figure is the whole of it. That
+    //        is measured to the arrow's BOX; to the arrow's own INK it is
+    //        19.86, because Icons.Mark keeps the 24 grid and UndoRound's ink
+    //        starts 4.11 DIP down a 21 DIP box.  14.1's ValueY = 0.52 r left
+    //        9.25 x 7.56 DIP of digits sitting ON the arrow instead.
+    //
+    // and the other four bounds the pair has to satisfy:
+    //
+    //     glyph box corner is 4.31 DIP inside the disc rim
+    //     glyph box clears the size row by 5.94 DIP vertically
+    //     value ink clears the colour dot by 4.88 DIP
+    //     every corner of both boxes lies in bearings 45..135, the opacity
+    //     section - so the 11.2 item 13 hover plate still covers them
+    private const double ColX = 0.70 * DiscR;      // stability left / opacity right
+    private const double ColY = -0.22 * DiscR;     // 16.5: up, off the midline
+    private const double ValueX = 0.62 * DiscR;    // outward WITH the glyph
+    private const double ValueY = 0.11 * DiscR;    // up WITH the glyph
+    // The value TextBlock's fixed width. It is far wider than any string it
+    // holds - the box is a centring device, not a bound - so every clearance
+    // above is measured on the INK, not on this.
+    private const double ValueW = 56;
+    //
+    // 16.4: "when one is unavailable, its glyph and value move to the middle of
+    // that section". The section is the same annular quadrant HoverGeometry
+    // draws and Aim resolves - see the quadrant table below - so its middle is
+    // the mid-radius point on the quadrant's own midline, and the glyph and its
+    // value are stacked as ONE block centred there. Disabled the value is "-",
+    // so the split that exists to separate a mark from its number has nothing
+    // left to separate.
+    private const double SectionR = (DotR + DiscR) / 2;             // 37.97
+    // The stack: 16.8 glyph, 2.0 gap, 12.0 value line = 30.8 tall. These two
+    // are the glyph's centre and the value's baseline anchor as offsets from
+    // the section's middle; they put the stack's own centre there to within
+    // 0.01 DIP.
+    private const double DisabledGlyphDy = -7.00;
+    private const double DisabledValueDy = 9.25;
     // Icons.Mark draws at the authored 24-grid scale instead of stretching the
     // geometry to the box - that stretch WAS the K.5 defect - so a mark that
     // does not fill its grid now comes out at its true size. The boxes grow to
@@ -893,7 +930,11 @@ public sealed class ToolWheel
             t.Foreground = new SolidColorBrush(en ? onSurface : muted);
             t.Opacity = en ? 1 : 0.6;
         }
-        LayoutSizeRow();
+        // 16.5 / 16.4. Placement is state-dependent, so it happens here rather
+        // than once in BuildWheel.
+        LayoutSizeRow(enabled[0]);
+        LayoutReadouts(_opacGlyph, _opacText, Prop.Opacity, enabled[1], +1);
+        LayoutReadouts(_smoothGlyph, _smoothText, Prop.Smooth, enabled[2], -1);
 
         _dot.Fill = new SolidColorBrush(ActiveColour());
         _dot.Stroke = new SolidColorBrush(_hoverZone == Zone.Dot ? PageTheme.Accent : outline);
@@ -1029,17 +1070,24 @@ public sealed class ToolWheel
 
     /// <summary>§1.4 row 1: the size glyph and its readout are a PAIR, centred
     /// together on the disc's midline - so the pair has to be measured before it
-    /// can be placed, unlike everything else here.</summary>
-    private void LayoutSizeRow()
+    /// can be placed, unlike everything else here.
+    ///
+    /// <para>16.4: the size row is already a centred pair, so being unavailable
+    /// costs it no rearrangement - only the 2.73 DIP that separates 14.1's
+    /// Row1Y from the middle of the top section. The readout is "-" by then, so
+    /// the pair is narrow and the move is the whole of what 16.4 asks for
+    /// here.</para></summary>
+    private void LayoutSizeRow(bool enabled)
     {
         _sizeText.Measure(new Size(200, 40));
         double tw = _sizeText.DesiredSize.Width;
         double total = SetBox + 5 + tw;
         double x = Half - total / 2;
+        double y = enabled ? Row1Y : SectionMid(Prop.Size).Y;
         Canvas.SetLeft(_sizeGlyph, x);
-        Canvas.SetTop(_sizeGlyph, Half + Row1Y - SetBox / 2);
+        Canvas.SetTop(_sizeGlyph, Half + y - SetBox / 2);
         Canvas.SetLeft(_sizeText, x + SetBox + 5);
-        Canvas.SetTop(_sizeText, Half + Row1Y - ReadoutSize * 0.72);
+        Canvas.SetTop(_sizeText, Half + y - ReadoutSize * 0.72);
     }
 
     // ===================================================================
@@ -1271,9 +1319,11 @@ public sealed class ToolWheel
         _wheel.Children.Add(_sizeGlyph);
         _wheel.Children.Add(_sizeText);
 
-        Put(_smoothGlyph, -ColX, 0, SetBox);
-        Put(_opacGlyph, +ColX, 0, SetBox);
-        // 14.1: OFFSET from the glyphs above them, not centred under them.
+        // 16.4 moved these two pairs off the constants and onto the enabled
+        // state, so Put/PutValue only add and configure them here; every frame's
+        // POSITION comes from LayoutReadouts, which Refresh calls.
+        Put(_smoothGlyph, -ColX, ColY, SetBox);
+        Put(_opacGlyph, +ColX, ColY, SetBox);
         PutValue(_smoothText, -ValueX, ValueY);
         PutValue(_opacText, +ValueX, ValueY);
 
@@ -1293,8 +1343,7 @@ public sealed class ToolWheel
         {
             c.Width = c.Height = box;
             c.IsHitTestVisible = false;
-            Canvas.SetLeft(c, Half + dx - box / 2);
-            Canvas.SetTop(c, Half + dy - box / 2);
+            PlaceBox(c, dx, dy, box);
             _wheel.Children.Add(c);
         }
         void PutValue(TextBlock t, double dx, double dy)
@@ -1302,12 +1351,66 @@ public sealed class ToolWheel
             t.FontSize = ValueSize;                            // §1.4 "values 12 DIP semibold"
             t.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
             t.TextAlignment = TextAlignment.Center;
-            t.Width = 56;
+            t.Width = ValueW;
             t.IsHitTestVisible = false;
-            Canvas.SetLeft(t, Half + dx - 28);
-            Canvas.SetTop(t, Half + dy - ValueSize * 0.65);
+            PlaceValue(t, dx, dy);
             _wheel.Children.Add(t);
         }
+    }
+
+    /// <summary>A square box centred at (dx, dy) from the wheel's centre.</summary>
+    private static void PlaceBox(UIElement e, double dx, double dy, double box)
+    {
+        Canvas.SetLeft(e, Half + dx - box / 2);
+        Canvas.SetTop(e, Half + dy - box / 2);
+    }
+
+    /// <summary>A value TextBlock: a fixed-width centring box whose top sits at
+    /// dy - 0.65 * ValueSize, so dy tracks the digits rather than the box.</summary>
+    private static void PlaceValue(TextBlock t, double dx, double dy)
+    {
+        Canvas.SetLeft(t, Half + dx - ValueW / 2);
+        Canvas.SetTop(t, Half + dy - ValueSize * 0.65);
+    }
+
+    /// <summary>16.4: the middle of a property's SECTION - the mid-radius point
+    /// on the quadrant's own midline.
+    ///
+    /// <para>The bearings are read straight off the quadrant table beside the
+    /// constants, the same one HoverGeometry and Aim use, so a section's centre
+    /// cannot drift away from the region the pointer resolves to.</para></summary>
+    private static Point SectionMid(Prop p) => Polar(
+        p switch
+        {
+            Prop.Size => 0,          // top,   QuadSmooth 315 .. QuadSize 45
+            Prop.Opacity => 90,      // right, QuadSize 45 .. QuadOpacity 135
+            _ => 270,                // left,  QuadUndo 225 .. QuadSmooth 315
+        }, SectionR);
+
+    /// <summary>16.5 and 16.4, as one placement pass: where stability and
+    /// opacity put their glyph and their value this frame.
+    ///
+    /// <para>Position depends on the ENABLED state now, so it cannot stay in
+    /// BuildWheel where it used to live - Refresh calls this every paint.</para>
+    ///
+    /// <para>16.4 owns the layout of the disabled case only. WHICH conditions
+    /// disable a readout is <see cref="Enabled"/>'s business, and 16.3's
+    /// attachment rule belongs there rather than here - see the note on
+    /// Enabled.</para></summary>
+    private static void LayoutReadouts(Canvas glyph, TextBlock value, Prop p,
+                                       bool enabled, int side)
+    {
+        if (enabled)
+        {
+            // 16.5: up and outward, the value following its glyph.
+            PlaceBox(glyph, side * ColX, ColY, SetBox);
+            PlaceValue(value, side * ValueX, ValueY);
+            return;
+        }
+        // 16.4: the pair stacks and centres in its section.
+        var c = SectionMid(p);
+        PlaceBox(glyph, c.X, c.Y + DisabledGlyphDy, SetBox);
+        PlaceValue(value, c.X, c.Y + DisabledValueDy);
     }
 
     private static Brush ShadowBrush()
@@ -1738,6 +1841,24 @@ public sealed class ToolWheel
         _ => null,
     };
 
+    /// <summary>Whether a readout has anything to report. THE dial's disabled
+    /// flag - there is not a second one, and there must not become one.
+    ///
+    /// <para>16.4 asks for a LAYOUT when a readout is unavailable and leaves
+    /// WHEN it is unavailable to the attachment work. This predicate is that
+    /// "when", and it already existed: a non-pen tool has no opacity and no
+    /// stabiliser, so selection and text disable all three today and the eraser
+    /// disables two. Refresh reads it once into <c>enabled[]</c> and every
+    /// consequence - the muted brush, the "-" readout, and now 16.4's centred
+    /// placement - hangs off that one array.</para>
+    ///
+    /// <para>TO THE ATTACHMENT WORK (16.3): extend THIS, do not add a parallel
+    /// flag. 16.3 wants everything greyed except opacity, undo and redo while
+    /// an attachment is selected, which is one more disjunct here -
+    /// <c>Prop.Opacity =&gt; ap != null || attachment</c> and the other two
+    /// false when an attachment is selected. Doing it anywhere else would give
+    /// the dial two disagreeing notions of "disabled", and 16.4's layout would
+    /// follow only one of them.</para></summary>
     private bool Enabled(Prop p)
     {
         var ap = ToolPen();

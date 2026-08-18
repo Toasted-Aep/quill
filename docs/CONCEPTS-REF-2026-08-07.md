@@ -3048,3 +3048,189 @@ Three things to get right:
 3. **Say what happens when strokes overlap** — topmost, or nearest centre. Pick
    one, state it, and be consistent with whatever the lasso already does.
 
+
+### 16.11 What §16.4, §16.5 and §16.6 were actually measured at — 2026-08-18
+
+§14.1 named its bound correctly — *the values must clear undo and redo* — and
+then chose a number that violated it, and that is how the collision the user
+reported got in. So the figures live here, next to the rig that reproduces
+each, and the next revision checks numbers against boxes rather than against
+prose.
+
+Three rigs, all offline, all reading the **committed source** rather than the
+generator that wrote it:
+
+- `scratchpad/verify_icons.py` — reassembles every `const string` in `Icons.cs`
+  and re-parses it. A break that lands between a coordinate's x and y fuses
+  them, still compiles, and renders **blank**; only reassembly finds it.
+  **55 literals, all parse.**
+- `scratchpad/head_symmetry.py` — reads `UndoRound` out of `Icons.cs`, takes
+  the fill rule off the literal's own `F1` prefix, and measures on the polygon.
+  Exact arithmetic where a raster would only answer to a pixel.
+- `scratchpad/dial_layout.py` — reproduces `ToolWheel.cs`'s constants and
+  prints every clearance the disc has to satisfy.
+
+#### §16.6 — the arrowheads
+
+Everything is in grid units on the authored 24-grid; the right-hand column is
+the same figure at the **21 DIP** `SatSize` actually draws.
+
+```
+                                  before (1113f8a^)   committed
+ink reach past the OUTER edge          4.302             3.220
+ink reach inside the INNER edge        3.068             3.229
+IMBALANCE                              1.234             0.009   grid units
+  at 21 DIP                            1.080             0.008   px
+subpath winding                   band CW, barbs CCW    all CW
+fill rule                         even-odd (default)    F1, nonzero
+subpaths                               3                 2
+```
+
+`1.234` is the user's complaint measured: *"the arrow tip is longer on the
+outer side"*, by just over a pixel where the dial draws it. It is now
+**0.009 grid units, eight thousandths of a pixel** — a 140-fold reduction, and
+at the floor the literal's two-decimal coordinates set.
+
+The head is a **true mirror**, not just balanced radially. Its axis of symmetry
+must pass through its own centroid, so the angle is the only free parameter;
+solved, and the outline reflected back onto itself:
+
+```
+best mirror axis                       141.996 deg
+reflected outline vs original          RMS 0.0051, max 0.0115 grid units
+                                       (0.010 px at 21 DIP)
+```
+
+and that axis is the band's own tangent, which is what *"symmetric about its
+own shaft"* means:
+
+```
+band centre        (12.0000, 12.3015)
+inner / mid / outer 7.5903 / 8.1498 / 8.7093     width 1.1191
+sweep               284.00 deg, cap centres at bearings 308.00 and 232.00
+tangent at the head end                142.002 deg
+-> the head's mirror axis is           0.006 deg off its own shaft
+```
+
+**`F1` is load-bearing, and it is not the only thing that changed.** The old
+head was two barbs wound **opposite** to the band, so it could not have been
+repaired by prefixing `F1` — under nonzero the barbs would have *subtracted*
+where they cross the band. It shipped even-odd instead, which XOR'd
+**0.496 grid²** out of the mark: the white notch at the head's vertex, plainly
+visible in a 240 px render. The committed head is **one closed outline wound
+the same way as the band**, so nonzero unions them; rendered even-odd it would
+lose **1.450 grid², 2.60% of the mark**, where the head crosses the band.
+
+**Redo is not separate geometry.** `Icons.BindTopBar` and `ToolWheel.Button`
+both draw `UndoRound` with `ScaleX = -1`, so every figure above covers the pair.
+
+#### §16.5 — the readouts, enabled
+
+All in DIP in the wheel's frame: origin at the disc centre, `+x` right,
+`+y` down. `DiscR = 56.84`.
+
+```
+undo / redo boxes         x -26.42..-5.42  and  5.42..26.42   y  28.15..49.15
+opacity value ink "100%"  x  23.99..46.49                     y   0.40..12.40
+stability value ink "0%"  x -41.54..-28.94                    y   0.40..12.40
+glyph boxes               x ±31.39..±48.19                    y -20.90..-4.10
+```
+
+```
+value ink -> arrow BOX          15.75 DIP vertically
+value ink -> arrow INK          19.86 DIP vertically
+glyph box -> arrow BOX          32.26 DIP vertically
+glyph box inside the disc rim    4.31 DIP
+value ink inside the disc rim    8.72 DIP
+glyph box clears the size row    5.94 DIP
+glyph bottom -> value ink top    4.51 DIP
+value ink clears the colour dot  4.88 DIP
+```
+
+The value and the arrow **do overlap horizontally, by 2.42 DIP**, so the
+vertical figure is the whole of the clearance — this is a stacked pair, not a
+side-by-side one. The arrow-INK figure is larger than the arrow-BOX one because
+`Icons.Mark` keeps the authored 24-grid rather than stretching it, and
+`UndoRound`'s ink starts 4.11 DIP down a 21 DIP box.
+
+Every corner of both boxes lies in bearings 45..135 — the opacity section — so
+the §11.2 item 13 hover plate still covers them.
+
+**A correction to the figure the first pass recorded.** It said *27.75 DIP of
+vertical clearance*. That is the value ink's **top** against the arrow's top,
+not a gap: the two branches of the expression that printed it were the wrong
+way round, and the same slip made the glyph figure read `-49.05` instead of
+`+32.26`. The clearance is **15.75 DIP**. Both `dial_layout.py` and the comment
+block in `ToolWheel.cs` now say so. No conclusion moves — the overlap test was
+always separate and always passed — but this is precisely the §14.1 failure
+repeating one revision later, and it is why the numbers are written down here.
+
+For comparison, §14.1's arrangement (`ValueX 0.50 r`, `ValueY 0.52 r`) measured
+the same way:
+
+```
+opacity value   OVERLAPS redo by 9.25 x 7.56 DIP
+stability value OVERLAPS undo by 4.30 x 7.56 DIP
+```
+
+#### §16.4 — the readouts, disabled
+
+The section's middle is the mid-radius point on the quadrant's own midline,
+`SectionR = 37.97`, so `(0, -37.97)` for size, `(+37.97, 0)` for opacity and
+`(-37.97, 0)` for stability.
+
+```
+glyph box 16.80 + gap 2.00 + value line 12.00 = 30.80 tall
+stack spans -15.40..+15.40 about the section's middle
+centring error                   0.00 DIP
+stack inside the disc rim        7.97 DIP
+stack vs undo and redo           clear
+size row moves                   2.73 DIP  (Row1Y -35.24 -> -37.97)
+```
+
+**One assumption here is not a measurement.** The value's line box is taken as
+`4/3 x 9 = 12.00 DIP`, WinUI's auto line height for Segoe UI Variable at this
+size. The disabled stack centres *exactly* because of it — `DisabledValueDy`
+9.25 is `15.40 - 12.00 + 0.65 x 9`. If the real line box differs by δ the
+stack's centre moves δ/2 and nothing else changes; the enabled clearances have
+15.75 DIP of room and do not care. **Measure the line box on screen and correct
+`DisabledValueDy` if it is not 12.00.**
+
+#### §16.8 — the top bar, verified by reading
+
+- **Conditional, in one line:** `bool dialCarriesUndo = ToolSurfaceService.IsWheel;`
+  feeds the existing `inContext` channel in `ApplyToolbarVisibility`, the same
+  one that takes `TouchDrawToggle` away when the pen is not up. `HiddenTools`
+  still overrides in both directions.
+- **The accelerators cannot break.** `Ctrl+Z` / `Ctrl+Y` are built by
+  `ApplyKeyPreset` into `RootGrid.KeyboardAccelerators` from the shortcut table
+  and invoke `UndoAccel_Invoked` -> `Surface.Undo()`. Neither `BtnUndo` nor
+  `BtnRedo` appears anywhere on that path, so collapsing them cannot stop it.
+- **`UpdateUndoButtons` writes only `IsEnabled`**, null-guarded, so it can
+  neither fault on an absent button nor put one back.
+- **Live:** `ToolSurfaceService.Changed` fires on `Set` and now runs
+  `ApplyToolbarVisibility` alongside `ApplyPenRowVisibility`.
+- **One owner.** Only four references to `BtnUndo`/`BtnRedo` exist in the tree:
+  `UpdateUndoButtons` (IsEnabled), `ApplyToolbarVisibility` (Visibility), and
+  `ToolWheel.TopBarKey`. `PenBar.TopBarKey` can only ever return `ToolPen`,
+  `ToolText`, `ToolSelect`, `ToolSpace`, `ToolComment` or `ShapeBtn`.
+- **`ToolWheel.TopBarKey` maps `cmd:Undo -> "BtnUndo"`**, so a user who puts
+  Undo in a dial slot hides the top-bar copy through the hand-back as well.
+  That reinforces this rule under Wheel and cannot reach it under Bar.
+- **`SepUndo` is now null-safe too.** `ApplyToolbarVisibility`'s whole body is
+  inside one `try/catch`, so a null reference in the separator's test would be
+  swallowed and would take the eight `Set()` calls below it with it — the
+  toolbar would quietly stop following the user's choices.
+- **§16.8's premise is still false and the finding stands.** `Controls/PenBar.cs`
+  floats undo and redo below the panel as bare satellites, from the same
+  `Icons.UndoRound`, so under the **Bar** surface the pair appears twice. Whether
+  Bar should lose the top-bar copy too is the user's call; `dialCarriesUndo` is
+  the one line that would change.
+
+#### Not verified on screen
+
+**Everything above is arithmetic on the committed source and offline rasters.**
+No surface was switched in a running app, no readout was seen disabled, and the
+21 DIP arrowhead has been rendered but not photographed off the display. What
+remains for a screen pass: the disabled stack's real line box (above), the
+arrowhead at its true DPI, and the top bar redrawing on a live surface switch.

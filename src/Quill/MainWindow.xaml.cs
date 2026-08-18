@@ -533,7 +533,11 @@ public sealed partial class MainWindow : Window
             v => { _library.ToolSurface = v; ScheduleSave(); });
         // Both Concepts surfaces watch the service themselves; the legacy row
         // cannot, so the window recomputes all three from one place.
-        ToolSurfaceService.Changed += _ => ApplyPenRowVisibility();
+        // 16.8 item 4, "the switch is live": the top bar's undo/redo pair now
+        // depends on the surface too, and a setting that needed a relaunch to
+        // take effect would read as a bug. ApplyToolbarVisibility is idempotent
+        // and cheap, so it simply runs on the same signal.
+        ToolSurfaceService.Changed += _ => { ApplyPenRowVisibility(); ApplyToolbarVisibility(); };
         _toolWheel = ToolWheel.Attach(CanvasArea, Surface, new ToolWheel.Host
         {
             Library = () => _library,
@@ -6503,10 +6507,18 @@ public sealed partial class MainWindow : Window
     private void Undo_Click(object sender, RoutedEventArgs e) => Surface.Undo();
     private void Redo_Click(object sender, RoutedEventArgs e) => Surface.Redo();
 
+    /// <summary>16.8 item 3. This must not fault when the pair is not there and
+    /// must not be the thing that puts it back.
+    ///
+    /// <para>It only ever writes IsEnabled - never Visibility - so it cannot
+    /// undo <see cref="ApplyToolbarVisibility"/>'s decision, and the
+    /// null-conditional covers the case where the fields have not been realised
+    /// yet. Enabling a collapsed button is harmless; the point is that whether
+    /// the pair is SHOWN has exactly one owner.</para></summary>
     private void UpdateUndoButtons()
     {
-        BtnUndo.IsEnabled = Surface.UndoManager.CanUndo;
-        BtnRedo.IsEnabled = Surface.UndoManager.CanRedo;
+        if (BtnUndo != null) BtnUndo.IsEnabled = Surface.UndoManager.CanUndo;
+        if (BtnRedo != null) BtnRedo.IsEnabled = Surface.UndoManager.CanRedo;
     }
 
     // ---- CONCEPTS-REF 11.5 item 34 / 11.20 item 14 ----------------------
@@ -9217,8 +9229,55 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             Set(ToolPen, "ToolPen");
             Set(ToolText, "ToolText");
             Set(ToolSelect, "ToolSelect");
-            Set(BtnUndo, "BtnUndo");
-            Set(BtnRedo, "BtnRedo");
+            // CONCEPTS-REF 16.8: "remove redo and undo if radial dial is
+            // selected from top bar as redo and undo is already present in the
+            // radial dial." CONDITIONAL ON THE SURFACE, not a removal. The dial
+            // carries the pair in its lower quadrant (10.2 item 5), so a second
+            // pair up here is duplication - but the PEN ROW has no undo or redo
+            // of its own, so under the Bar surface the top-bar pair is the only
+            // pointer route there is and it stays.
+            //
+            // THE PREMISE ABOVE WAS FALSE AND THE USER HAS RULED. The pen row
+            // DOES carry undo and redo: Controls/PenBar.cs floats them below the
+            // panel as bare satellites, from the same Icons.UndoRound the dial
+            // and this bar draw, hit-tested and painted live/dim off the same
+            // UndoManager. They are hard-wired rather than cells, so
+            // PenBar.TopBarKey never names them and the existing hand-back never
+            // hid the top-bar pair for them - so under Bar the pair was
+            // duplicated exactly the way 16.8 objects to under Wheel.
+            //
+            // Told that, the user ruled that Bar loses the top-bar pair too. So
+            // the condition is now unconditional in practice, and the variable
+            // is named for the reason rather than for the dial.
+            //
+            // This cannot strand anyone. ToolSurface has exactly TWO members,
+            // they are mutually exclusive, and ToolSurfaceService exists
+            // precisely to stop both being off screen at once - so whichever
+            // surface is up is carrying the pair. If a third, surface-less mode
+            // is ever added, THIS is the line that has to learn about it.
+            //
+            // This rides the existing in-context channel rather than adding a
+            // parallel one: it is the same question ApplyToolbarVisibility
+            // already asks of TouchDrawToggle and ShapeBtn - is this control's
+            // job being done elsewhere right now - and the user's own
+            // HiddenTools choice still overrides it either way.
+            const bool surfaceCarriesUndo = true;   // Wheel in its quadrant, Bar as satellites
+            Set(BtnUndo, "BtnUndo", !surfaceCarriesUndo);
+            Set(BtnRedo, "BtnRedo", !surfaceCarriesUndo);
+            // The separator above the pair exists only to fence it off, so it
+            // follows whatever the pair actually did - including the case where
+            // the user hid both through HiddenTools, which used to leave it
+            // stranded against the separator below.
+            // Null-conditional for the same reason UpdateUndoButtons is,
+            // and it matters more here: this whole body sits inside one
+            // try/catch, so a null reference would be SWALLOWED and would
+            // take every Set() below it with it - the toolbar would simply
+            // stop following the user's choices, silently.
+            if (SepUndo != null)
+                SepUndo.Visibility =
+                    BtnUndo?.Visibility == Visibility.Visible ||
+                    BtnRedo?.Visibility == Visibility.Visible
+                        ? Visibility.Visible : Visibility.Collapsed;
             Set(ToolSpace, "ToolSpace");
             Set(TouchDrawToggle, "TouchDrawToggle", pen);
             Set(ToolComment, "ToolComment");
