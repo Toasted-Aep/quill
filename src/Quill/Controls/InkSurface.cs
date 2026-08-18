@@ -5649,6 +5649,30 @@ public sealed class InkSurface : UserControl
 
     /// <summary>Swaps an equation image for a re-rendered one in place, keeping
     /// its position and on-page width (#27-batch2).</summary>
+    /// <summary>CONCEPTS-REF 16.2's paperclip: point the selected attachment at
+    /// a different file.
+    ///
+    /// <para>The rectangle the user placed is kept - same X, Y and W - and only
+    /// the height follows the new file's aspect, so a replacement lands where the
+    /// old picture was rather than being re-inserted centred and re-fitted.</para>
+    ///
+    /// <para>Refuses on a LOCKED attachment, on the same rule the waste bin and
+    /// the flips follow: a lock that stops a drag but not a swap is not a
+    /// lock.</para></summary>
+    public void ReplaceAttachmentImage(ShapeElement s, string path, double pixelW, double pixelH)
+    {
+        if (_page == null || !_page.Shapes.Contains(s) || s.Kind != ShapeKind.Image) return;
+        if (s.Locked || string.IsNullOrEmpty(path)) return;
+        double h = Math.Max(24, Math.Abs(s.W) * (pixelH / Math.Max(1, pixelW)));
+        PushAction(new ReplaceImageAction(s, path, s.H < 0 ? -h : h), _page);
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+        // The bounds moved, so the guides, the corner circles and both plates have
+        // to be told - and that is one call, because every route into the selection
+        // presentation goes through the same publish.
+        PublishSelection();
+    }
+
     public void UpdateEquationImage(ShapeElement s, string path, double pixW, double pixH, string latex)
     {
         if (_page == null || !_page.Shapes.Contains(s)) return;

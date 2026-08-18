@@ -172,7 +172,7 @@ public sealed class SelectionChrome
         _row.SizeChanged += (_, _) => Place();
 
         SelectionState.Changed += Sync;
-        _surface.ViewChanged += Place;
+        _surface.ViewChanged += OnViewMoved;
         _host.SizeChanged += (_, _) => Place();
         PageTheme.Changed += Repaint;
 
@@ -336,6 +336,11 @@ public sealed class SelectionChrome
     // Placement
     // =====================================================================
 
+    /// <summary>Re-ask the host whether this presentation is allowed on screen.
+    /// The host owns that answer - <see cref="Host.IsBlocked"/> - so the host is
+    /// also what knows when it has changed, and calls this.</summary>
+    public void Refresh() => Sync();
+
     private void Sync()
     {
         bool want = SelectionState.Current.Any && !_h.IsBlocked();
@@ -354,6 +359,19 @@ public sealed class SelectionChrome
     /// <see cref="InkSurface.WorldToScreen"/> - not through a second copy of the
     /// pan/zoom arithmetic, which is how an overlay drifts from the thing it is
     /// framing at the far end of a 0.1x-16x zoom range.</summary>
+    /// <summary>A view change is USUALLY a pan or a zoom, and then only the
+    /// placement moves. But an export changes the view too, and an export is one
+    /// of the states <see cref="Host.IsBlocked"/> names - so this re-asks the
+    /// cheap question first and only falls through to the full sync when the
+    /// answer has actually flipped. Two property reads per pan frame, against a
+    /// rebuild of every button on the bar.</summary>
+    private void OnViewMoved()
+    {
+        bool want = SelectionState.Current.Any && !_h.IsBlocked();
+        if (want != _shown) { Sync(); return; }
+        Place();
+    }
+
     private void Place()
     {
         if (!_shown) return;

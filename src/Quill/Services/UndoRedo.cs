@@ -743,6 +743,60 @@ public class LockMixedAction : IPageAction
     }
 }
 
+/// <summary>CONCEPTS-REF 16.2's PAPERCLIP: swap the file behind an attachment
+/// and keep it exactly where it is.
+///
+/// <para>Position and WIDTH are preserved and only the HEIGHT moves, to the
+/// new file's aspect. That is the one rule that makes this a replacement
+/// rather than a delete-and-insert: the user placed and sized that rectangle,
+/// and a swap that re-centred it or re-fitted it to 520 DIP would throw the
+/// placement away. InkSurface.UpdateEquationImage makes the same choice for
+/// the same reason.</para>
+///
+/// <para>Holds paths, not pixels: two strings and a double, whatever the file
+/// weighs. The bitmap cache is keyed by path and rebuilt from disk on demand,
+/// so an undo stack a hundred swaps deep costs nothing.</para></summary>
+public class ReplaceImageAction : IPageAction
+{
+    public bool TouchesText => false;
+
+    private readonly ShapeElement _shape;
+    private readonly string? _fromPath, _toPath;
+    private readonly string? _fromLatex;
+    private readonly double _fromH, _toH;
+
+    public ReplaceImageAction(ShapeElement shape, string toPath, double toH)
+    {
+        _shape = shape;
+        _fromPath = shape.ImagePath;
+        // An equation's image IS its rendering, so replacing the picture ends
+        // the equation: leaving the LaTeX behind would make the next right-click
+        // re-render over the file the user has just chosen.
+        _fromLatex = shape.EquationLatex;
+        _fromH = shape.H;
+        _toPath = toPath;
+        _toH = toH;
+    }
+
+    public string Description => "Replace attachment";
+
+    public void Do(NotePage page)
+    {
+        _shape.ImagePath = _toPath;
+        _shape.EquationLatex = null;
+        _shape.H = _toH;
+    }
+
+    public void Undo(NotePage page)
+    {
+        _shape.ImagePath = _fromPath;
+        _shape.EquationLatex = _fromLatex;
+        _shape.H = _fromH;
+    }
+
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_shape);
+}
+
 // Changes per-cell fill colour and border styling (#roadmap: table enhancements).
 public class CellStyleAction : IPageAction
 {
