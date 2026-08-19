@@ -25,14 +25,22 @@
 // ABORTS rather than continues if the resolved path is not inside the temp
 // folder this process made.
 //
-// ONE THING LIVES OUTSIDE IT AND IS PUT BACK. SyncLog keeps its per-device sync
-// cursors in %LOCALAPPDATA%\Quill\synccursors.json - NOT in the data folder -
-// and LibraryStore.Save calls SyncLog.OnSaved unconditionally. A harness that
-// saves therefore rewrites the real user's cursor file from an empty in-memory
-// one, which resets the read offsets for every peer and, per the roadmap's own
-// "SyncLog replay" risk, can resurrect erased strokes on the next launch. Both
-// that file and deviceid.txt are snapshotted before the first save and restored
-// byte-for-byte afterwards, and the restore is itself checked.
+// ONE THING USED TO LIVE OUTSIDE IT. SyncLog keeps its per-device sync cursors
+// in %LOCALAPPDATA%\Quill\synccursors.json - NOT in the data folder, on purpose,
+// because they are per-machine read offsets that must never sync - and
+// LibraryStore.Save calls SyncLog.OnSaved unconditionally. A harness that saves
+// therefore rewrote the real user's cursor file from an empty in-memory one,
+// resetting the read offset for every peer and, per the roadmap's own "SyncLog
+// replay" risk, potentially resurrecting erased strokes on the next launch.
+// tools/VeilRoundTrip had been doing it on every run.
+//
+// That is now fixed IN SyncLog rather than here: its state directory follows
+// QUILL_DATA_FOLDER, which is this app's one signal for "an isolated instance"
+// (LibraryStore.IsIsolated). An isolated folder is a temp folder nothing syncs,
+// so the reason those files live outside the data folder does not apply there.
+// The snapshot below therefore has nothing to put back - and it stays anyway,
+// checked BEFORE the restore, so that if the leak ever reopens this says so
+// instead of quietly papering over it.
 
 using System.Text.Json;
 using Quill.Models;
@@ -397,35 +405,109 @@ Check("18.10 - NextKey steps over an orphaned key, so a new layer cannot adopt "
 back.Strokes.Single(s => s.Id == Guid.Parse(St2)).LayerKey = 1;
 
 // ---------------------------------------------------------------------------
-// 11. DELETING A LAYER REASSIGNS BY DEFAULT.
+// 11. THE RULING: DELETING A LAYER DELETES ITS DRAWING - AND IS UNDOABLE.
 // ---------------------------------------------------------------------------
-int before = back.Shapes.Count;
-bool removed = PageLayers.Remove(back, 2);
-Check("18.7 - a layer is removed", removed && back.Layers!.Count == 2);
-Check("18.7 - its content is REASSIGNED, not deleted",
-      back.Shapes.Count == before &&
-      back.Shapes.Single(s => s.Id == Guid.Parse(Sh1)).LayerKey == PageLayers.BaseKey);
-Check("18.7 - and is visible again",
-      PageLayers.IsVisible(back, back.Shapes.Single(s => s.Id == Guid.Parse(Sh1)).LayerKey));
-Check("18.7 - the base layer cannot be removed",
-      !PageLayers.Remove(back, PageLayers.BaseKey) && back.Layers!.Count == 2);
+// 18.12 item 3. The model's original default reassigned to the base layer and
+// could not destroy work; the user ruled for Photoshop's behaviour. That makes
+// the undo load-bearing rather than a nicety, so it is proved through the REAL
+// UndoRedoManager - Push/Undo/Redo - and not by calling the action's own
+// methods.
+Check("18.12 item 3 - DeleteContent is the DEFAULT, and it is the enum's zero "
+      + "value so an unset mode cannot silently mean the other thing",
+      default(LayerRemoval) == LayerRemoval.DeleteContent);
 
-// deleting the content is available, and is never what happens by accident
-var doomed = PageLayers.Add(back, "Scratch");
-back.Texts[0].LayerKey = doomed.Key;
-PageLayers.Remove(back, doomed.Key, LayerRemoval.DeleteContent);
-Check("18.12 item 3 - LayerRemoval.DeleteContent really does delete it, so the "
-      + "safe default is a CHOICE and not the only behaviour",
-      back.Texts.Count == 0 && back.Layers!.All(l => l.Key != doomed.Key));
+var undoStack = new UndoRedoManager();
+
+// A census of the doomed layer's content, by identity and by layer key, taken
+// while it is still on the page.
+var doomedKey = 2;
+var doomedShapes = back.Shapes.Where(s => s.LayerKey == doomedKey).ToList();
+int shapesBefore = back.Shapes.Count;
+int shapeIndexBefore = back.Shapes.FindIndex(s => s.Id == Guid.Parse(Sh1));
+Check("the layer about to be deleted really has content on it",
+      doomedShapes.Count == 1 && doomedShapes[0].Id == Guid.Parse(Sh1));
+
+undoStack.Push(new RemoveLayerAction(doomedKey), back);
+Check("18.12 item 3 - deleting a layer takes the layer",
+      back.Layers!.Count == 2 && back.Layers!.All(l => l.Key != doomedKey));
+Check("18.12 item 3 - and takes its DRAWING with it, which is the ruling",
+      back.Shapes.Count == shapesBefore - 1 &&
+      back.Shapes.All(s => s.Id != Guid.Parse(Sh1)));
+
+undoStack.Undo(back);
+Check("18.12 item 3 - UNDO brings the layer back, at its own position in the "
+      + "stack",
+      back.Layers!.Count == 3 && back.Layers![2].Key == doomedKey,
+      string.Join(",", back.Layers!.Select(l => l.Key)));
+Check("18.12 item 3 - and brings the CONTENT back, not an empty shell",
+      back.Shapes.Count == shapesBefore &&
+      back.Shapes.Any(s => s.Id == Guid.Parse(Sh1)));
+Check("18.12 item 3 - every element returns with its LayerKey INTACT, so it is "
+      + "on the layer it belonged to and not dropped on the base one",
+      back.Shapes.Single(s => s.Id == Guid.Parse(Sh1)).LayerKey == doomedKey);
+Check("18.12 item 3 - and at the index it held, so z-order survives the undo",
+      back.Shapes.FindIndex(s => s.Id == Guid.Parse(Sh1)) == shapeIndexBefore,
+      $"index {back.Shapes.FindIndex(s => s.Id == Guid.Parse(Sh1))}, was {shapeIndexBefore}");
+Check("18.12 item 3 - the restored element is the SAME OBJECT, so anything "
+      + "holding a reference to it (a selection, the spatial grid) is not stale",
+      ReferenceEquals(back.Shapes.Single(s => s.Id == Guid.Parse(Sh1)), doomedShapes[0]));
+
+undoStack.Redo(back);
+Check("18.12 item 3 - redo deletes it again",
+      back.Layers!.Count == 2 && back.Shapes.Count == shapesBefore - 1);
+undoStack.Undo(back);
+Check("18.12 item 3 - and a second undo restores it again, so the action is "
+      + "re-runnable rather than single-use",
+      back.Layers!.Count == 3 && back.Shapes.Count == shapesBefore &&
+      back.Shapes.Single(s => s.Id == Guid.Parse(Sh1)).LayerKey == doomedKey);
+
+// The undo has to survive the disk, not just the session.
+LibraryStore.Save(reloaded); LibraryStore.Flush();
+var afterUndo = LibraryStore.Load().Notebooks[0].Sections[0].Pages[0];
+Check("18.12 item 3 - and the restored content survives save -> reload still on "
+      + "its own layer",
+      afterUndo.Shapes.Any(s => s.Id == Guid.Parse(Sh1)) &&
+      afterUndo.Shapes.Single(s => s.Id == Guid.Parse(Sh1)).LayerKey == doomedKey &&
+      afterUndo.Layers!.Count == 3);
+
+Check("18.7 - the base layer still cannot be removed",
+      !PageLayers.Remove(back, PageLayers.BaseKey) && back.Layers!.Count == 3);
+
+// A refused removal must not leave the action thinking it did something.
+var refused = new RemoveLayerAction(PageLayers.BaseKey);
+undoStack.Push(refused, back);
+int layersAfterRefusal = back.Layers!.Count, strokesAfterRefusal = back.Strokes.Count;
+undoStack.Undo(back);
+Check("18.7 - undoing a REFUSED deletion puts nothing back, because nothing was "
+      + "taken",
+      back.Layers!.Count == layersAfterRefusal && back.Strokes.Count == strokesAfterRefusal);
+
+// ReassignToBase is kept for the routes that are getting rid of a LAYER rather
+// than deleting a drawing.
+var keeper = PageLayers.Add(back, "Merge me");
+back.Strokes[0].LayerKey = keeper.Key;
+int strokesBefore = back.Strokes.Count;
+undoStack.Push(new RemoveLayerAction(keeper.Key, LayerRemoval.ReassignToBase), back);
+Check("18.12 item 3 - ReassignToBase is still there for merging down: the layer "
+      + "goes, the drawing stays and is visible",
+      back.Strokes.Count == strokesBefore &&
+      back.Strokes[0].LayerKey == PageLayers.BaseKey &&
+      PageLayers.IsVisible(back, back.Strokes[0].LayerKey));
+undoStack.Undo(back);
+Check("18.12 item 3 - and undoing THAT puts the content back on its old layer",
+      back.Strokes[0].LayerKey == keeper.Key &&
+      back.Layers!.Any(l => l.Key == keeper.Key));
+undoStack.Push(new RemoveLayerAction(keeper.Key, LayerRemoval.ReassignToBase), back);
 
 // ---------------------------------------------------------------------------
 // 12. REORDERING MOVES THE LIST AND REPOINTS NOTHING.
 // ---------------------------------------------------------------------------
 var keysBefore = back.Strokes.Select(s => s.LayerKey).ToList();
+var orderBefore = back.Layers!.Select(l => l.Key).ToList();     // [0, 1, 2]
 PageLayers.Move(back, 1, 0);
 Check("18.2 - a moved layer changes the order",
-      back.Layers!.Select(l => l.Key).SequenceEqual(new[] { 1, 0 }),
-      string.Join(",", back.Layers!.Select(l => l.Key)));
+      back.Layers!.Select(l => l.Key).SequenceEqual(new[] { 1, 0, 2 }),
+      $"[{string.Join(",", orderBefore)}] -> [{string.Join(",", back.Layers!.Select(l => l.Key))}]");
 Check("18.2 - and repoints no element, because order is the list and identity "
       + "is the key",
       back.Strokes.Select(s => s.LayerKey).SequenceEqual(keysBefore));
@@ -490,6 +572,18 @@ if (tp != null)
 var oplogs = Directory.GetFiles(scratch, "oplog.*.jsonl");
 Check("18.10 - the op log was written into the ISOLATED folder", oplogs.Length == 1,
       oplogs.Length == 1 ? Path.GetFileName(oplogs[0]) : $"{oplogs.Length} files");
+
+// SyncLog's per-device state used to live in %LOCALAPPDATA% unconditionally, so
+// a harness that saved rewrote the REAL user's read cursors from its own empty
+// copy - the roadmap's replay risk, arriving by the front door. It now follows
+// QUILL_DATA_FOLDER, so the fix is in SyncLog rather than in each harness.
+Check("isolation - synccursors.json was written INSIDE the isolated folder",
+      File.Exists(Path.Combine(scratch, "synccursors.json")));
+Check("isolation - and so was deviceid.txt",
+      File.Exists(Path.Combine(scratch, "deviceid.txt")));
+Check("isolation - the user's own %LOCALAPPDATA%\\Quill state was never touched, "
+      + "with no snapshot needed to make that true",
+      SameBytes(cursorPath, cursorsBefore) && SameBytes(devicePath, deviceBefore));
 if (oplogs.Length == 1)
 {
     var lines = File.ReadAllLines(oplogs[0]);
@@ -511,15 +605,19 @@ return failures > 0 ? 1 : 0;
 }
 finally
 {
-    // Put SyncLog's out-of-folder state back exactly as it was found.
+    // SyncLog now keeps its per-device state inside the data folder whenever
+    // QUILL_DATA_FOLDER is set, so this should find nothing to put back. The
+    // snapshot stays, and is checked BEFORE the restore: if the leak ever
+    // reopens, this says so instead of quietly papering over it.
+    bool cleanBefore = SameBytes(cursorPath, cursorsBefore) && SameBytes(devicePath, deviceBefore);
     RestoreOrRemove(cursorPath, cursorsBefore);
     RestoreOrRemove(devicePath, deviceBefore);
-    bool cursorsOk = SameBytes(cursorPath, cursorsBefore);
-    bool deviceOk = SameBytes(devicePath, deviceBefore);
+    bool cursorsOk = SameBytes(cursorPath, cursorsBefore) && cleanBefore;
+    bool deviceOk = SameBytes(devicePath, deviceBefore) && cleanBefore;
     Console.WriteLine((cursorsOk && deviceOk ? "PASS" : "FAIL") +
         " isolation - SyncLog's %LOCALAPPDATA%\\Quill state is byte-for-byte as it " +
-        "was found   -- synccursors " + (cursorsOk ? "restored" : "DIRTY") +
-        ", deviceid " + (deviceOk ? "restored" : "DIRTY"));
+        "was found   -- synccursors " + (cursorsOk ? "untouched" : "DIRTY") +
+        ", deviceid " + (deviceOk ? "untouched" : "DIRTY"));
     if (!cursorsOk || !deviceOk) Environment.ExitCode = 1;
     try { Directory.Delete(scratch, recursive: true); } catch { }
 }

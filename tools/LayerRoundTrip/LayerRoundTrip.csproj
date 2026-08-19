@@ -33,6 +33,11 @@
     <Compile Include="..\..\src\Quill\Models\LayerModels.cs" Link="LayerModels.cs" />
     <Compile Include="..\..\src\Quill\Services\LibraryStore.cs" Link="LibraryStore.cs" />
     <Compile Include="..\..\src\Quill\Services\SyncLog.cs" Link="SyncLog.cs" />
+    <!-- The user's ruling made deleting a layer destructive, so the deletion has
+         to be undoable and the undo has to bring the CONTENT back. That is
+         RemoveLayerAction, and it is proved through the REAL UndoRedoManager
+         rather than by calling the action's own methods. -->
+    <Compile Include="..\..\src\Quill\Services\UndoRedo.cs" Link="UndoRedo.cs" />
   </ItemGroup>
 
 </Project>
