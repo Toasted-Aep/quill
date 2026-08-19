@@ -336,6 +336,29 @@ public static class Icons
     /// Stroked, because the mark IS three lines.
     public const string Tilt = "M3 19 H21 M3 19 L17.6 8.4 M9.8 19 A6.9 6.9 0 0 0 12.9 13.2";
 
+    /// <summary>Info: the (i) mark §17.1 puts at the right of the Measurement
+    /// panel's title.
+    ///
+    /// <para>FILLED, not stroked, and that is what makes it survive its draw
+    /// size. It is drawn at 16 DIP beside a 24 DIP title, so the ring is
+    /// 2.0 grid units = 1.33 DIP = 2.7 physical px at the 200% scaling every
+    /// measurement in the reference was taken at. A stroked ring would put the
+    /// pen's own rounding on top of that and lose the counter; an annulus
+    /// punched by the even-odd rule cannot, because both edges are geometry.</para>
+    ///
+    /// <para>2.0 and not the 1.8 this was first drawn at: rasterised side by
+    /// side with <see cref="Zoom"/>, whose lens ring IS 2.0, the thinner ring
+    /// came out visibly greyer at 14 and 15 DIP while sitting in the same panel.
+    /// The two rings are the same weight because they are the same weight, not
+    /// because they were eyeballed at 240 px.</para>
+    ///
+    /// <para>The stem stops at 17.4 rather than running to the ring, so the
+    /// bowl of the counter still reads as a counter at 16 DIP instead of the
+    /// stem appearing to touch the ring and closing it up.</para></summary>
+    public const string Info =
+        "M12 1.8 a10.2 10.2 0 1 1 -0.01 0 Z M12 3.8 a8.2 8.2 0 1 0 0.01 0 Z " +
+        "M12 6.2 a1.4 1.4 0 1 1 -0.01 0 Z M10.9 10.2 H13.1 V17.4 H10.9 Z";
+
     /// Camera, for "take a photo" in the import menu.
     public const string Camera =
         "M9.2 3.4 H14.8 L16.1 5.6 H19.6 A1.7 1.7 0 0 1 21.3 7.3 V18.5 A1.7 1.7 0 0 1 19.6 20.2 " +

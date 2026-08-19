@@ -246,9 +246,17 @@ public sealed class ChromeBars
 
     private bool _on;
     private bool _fullscreen;
+    /// <summary>§17.1: TWO SEPARATE LOCKS, NOT ONE. The bar used to carry a
+    /// single padlock glyph that only ever governed zoom, which is precisely
+    /// what UI-REFERENCE §4.7 calls out — "Concepts uses two independent locks,
+    /// one per value, not a single shared lock". Neither of these is reachable
+    /// through the other, and the Measurement panel gives each its own
+    /// padlock.</summary>
     private bool _zoomLocked;
+    private bool _tiltLocked;
     private float _lockedZoom = 1f;
     private bool _reasserting;
+    private MeasurementMenu? _measure;
 
     public static ChromeBars Attach(Grid host, Host h) => new(host, h);
 
@@ -350,6 +358,9 @@ public sealed class ChromeBars
             _export?.Hide();
             // The panes belong to the bars: leaving Layers on canvas after the
             // dial is switched off would strand a panel with no way to close it.
+            // The Measurement panel is opened from a readout in this very
+            // cluster, so it is stranded by exactly the same argument.
+            _measure?.Hide();
             _layersPane?.Hide();
             _precisionPane?.Hide();
             _commentsPane?.Hide();
@@ -374,6 +385,7 @@ public sealed class ChromeBars
         SyncReadouts();
         PushInset();
         _export?.Refresh();
+        _measure?.Rebuild();
         // The panes capture their ink at build time too.
         foreach (var p in new[] { _layersPane, _precisionPane, _commentsPane })
         {
@@ -394,6 +406,13 @@ public sealed class ChromeBars
         {
             double inset = Metrics.EdgeMargin - Metrics.IconPitch / 2;
             _right.Margin = new Thickness(0, Metrics.RowTop, inset + _h.RightDockWidth(), 0);
+            // The Measurement panel hangs off this cluster, so it slides with it
+            // rather than being left behind under a docked settings panel.
+            if (_measure != null)
+            {
+                _measure.RightDockWidth = _h.RightDockWidth();
+                _measure.Reposition();
+            }
         }
         catch { }
     }
@@ -405,10 +424,13 @@ public sealed class ChromeBars
         {
             var page = _h.PageOps().Page();
             _title.Text = string.IsNullOrWhiteSpace(page?.Name) ? "Untitled page" : page!.Name;
-            _zoomText.Text = $"{Math.Round(_h.Surface().ViewZoom * 100)}%";
+            // One formatter for the bar, the panel and the hover pill, so the
+            // three can never disagree about rounding.
+            _zoomText.Text = MeasurementMenu.Percent(_h.Surface().ViewZoom);
             // Quill has no canvas rotation yet, so this is an honest constant
             // rather than a number invented to fill the slot.
-            _tiltText.Text = "0°";
+            _tiltText.Text = MeasurementMenu.Degrees(0);
+            _measure?.Sync();
         }
         catch { }
     }
@@ -788,62 +810,43 @@ public sealed class ChromeBars
     public bool CommentsOpen => _commentsPane?.IsOpen == true;
 
     // ---- zoom / tilt readout, lockable -----------------------------------
-    /// <summary>The right cluster's left half: the zoom lock, the live zoom
-    /// readout and the tilt readout. Returned as a SEQUENCE so each glyph keeps
-    /// its own measured 42 DIP slot rather than being packed into a card.
-    /// Measured order (reference 1.3): lock, "100%", "0deg", then import.</summary>
+    /// <summary>The right cluster's left half: the live zoom readout and the tilt
+    /// readout, each carrying its OWN padlock and each opening the Measurement
+    /// panel (§17.1). Returned as a SEQUENCE so each keeps its own slot rather
+    /// than being packed into a card.
+    ///
+    /// <para><b>The shared lock button is gone.</b> It was one glyph in its own
+    /// 42 DIP slot that governed zoom only, and §17.1 replaces it with two
+    /// independent locks living in the Measurement panel. What appears in the bar
+    /// is a padlock BESIDE a value, and only while that value is locked.</para>
+    ///
+    /// <para><b>THE ROW RE-LAYS OUT; IT DOES NOT OVERLAP.</b> §17.1: "Locking
+    /// tilt shifts the zoom readout sideways to make room for the lock glyph
+    /// appearing beside the tilt value." That falls out of the construction
+    /// rather than being arranged for — the padlock is a real child of the
+    /// readout's StackPanel, so it takes real width, and the whole cluster is
+    /// <see cref="HorizontalAlignment.Right"/>: widening the TILT cell therefore
+    /// pushes everything to its left, and the zoom readout is what is to its
+    /// left. Nothing is positioned absolutely and nothing can land on top of
+    /// anything else.</para></summary>
     private IEnumerable<FrameworkElement> BuildViewReadout()
     {
-        // The lock is REAL for zoom: while it is on, a stray pinch or Ctrl+wheel
-        // is snapped straight back to the locked level.
-        var lockBtn = BarButton(
-            _zoomLocked ? Icons.LockClosed : Icons.LockOpen,
-            _zoomLocked
-                ? "Zoom locked at " + Math.Round(_h.Surface().ViewZoom * 100) + "% - tap to unlock"
-                : "Lock the zoom level (tilt has nothing to lock until canvas rotation lands)",
-            ToggleLock);
-        yield return lockBtn;
-
         _zoomText = new TextBlock
         {
             FontSize = 12.5,
-            MinWidth = Metrics.ReadoutWidth,
             TextAlignment = TextAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = new SolidColorBrush(ChromeUi.Ink),
         };
-        var zoomCell = new Grid
-        {
-            Background = new SolidColorBrush(Colors.Transparent),
-            VerticalAlignment = VerticalAlignment.Center,
-            Height = Metrics.IconPitch,
-            Children = { _zoomText },
-        };
-        ToolTipService.SetToolTip(zoomCell, "Zoom - tap to return to 100%");
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(zoomCell, "Zoom level");
-        zoomCell.Tapped += (_, _) =>
-        {
-            _h.Surface().SetViewZoom(1f);
-            _lockedZoom = 1f;
-            SyncReadouts();
-        };
-        yield return zoomCell;
+        yield return ReadoutCell(_zoomText, _zoomLocked, Metrics.ReadoutWidth,
+                                 "Zoom", "Zoom — tap for the Measurement menu", 0);
 
         _tiltText = new TextBlock
         {
             FontSize = 12.5,
-            MinWidth = 34,
             TextAlignment = TextAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = new SolidColorBrush(ChromeUi.Dim),
-        };
-        var tiltCell = new Grid
-        {
-            Background = new SolidColorBrush(Colors.Transparent),
-            VerticalAlignment = VerticalAlignment.Center,
-            Height = Metrics.IconPitch,
-            Margin = new Thickness(0, 0, Metrics.IconPitch / 2, 0),
-            Children = { _tiltText },
         };
         // DEFERRED, AND SAID SO (V3 K.26). Tilt is not a readout that needs
         // filling in - it needs canvas rotation, which Quill does not have. The
@@ -853,22 +856,161 @@ public sealed class ChromeBars
         // rectangles that stop being valid the moment the canvas is turned. A
         // number here that moved while the eraser, the lasso and the text-box
         // hit-tests still assumed square would be worse than no number at all,
-        // so it stays at zero and this tooltip says why.
-        ToolTipService.SetToolTip(tiltCell,
-            "Canvas tilt is not implemented. Quill can zoom and pan but cannot rotate the canvas, and a tilt " +
-            "readout that moved without real rotation behind it would be a lie. It stays at 0 degrees.");
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(tiltCell, "Canvas tilt (not implemented)");
-        yield return tiltCell;
+        // so it stays at zero and the panel's Rotation section says why.
+        yield return ReadoutCell(_tiltText, _tiltLocked, 34,
+                                 "Canvas tilt (not implemented)",
+                                 "Canvas tilt — tap for the Measurement menu", Metrics.IconPitch / 2);
     }
 
-    private void ToggleLock()
+    /// <summary>One readout: an optional padlock, then the value, in a cell that
+    /// opens the Measurement panel and hovers the §17.1 pill.</summary>
+    private FrameworkElement ReadoutCell(TextBlock value, bool locked, double minWidth,
+                                         string automationName, string tip, double rightMargin)
     {
-        _zoomLocked = !_zoomLocked;
-        _lockedZoom = _h.Surface().ViewZoom;
-        Build();
-        _h.PageOps().Status(_zoomLocked
-            ? $"Zoom locked at {Math.Round(_lockedZoom * 100)}%."
-            : "Zoom unlocked.");
+        value.MinWidth = minWidth;
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        // Padlock BEFORE the value, matching the order §17.1 draws the hover
+        // pill in: `[lock] 10%  [lock] 0°`.
+        if (locked) row.Children.Add(Icons.Mark(Icons.LockClosed, ChromeUi.Ink, 12));
+        row.Children.Add(value);
+
+        var cell = new Grid
+        {
+            Background = new SolidColorBrush(Colors.Transparent),
+            VerticalAlignment = VerticalAlignment.Center,
+            Height = Metrics.IconPitch,
+            Margin = new Thickness(0, 0, rightMargin, 0),
+            Children = { row },
+        };
+        ToolTipService.SetToolTip(cell, HoverPill(tip));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(cell, automationName);
+        cell.Tapped += (_, e) => { Measurement.Toggle(); e.Handled = true; };
+        return cell;
+    }
+
+    /// <summary>§17.1's hover treatment: "Hover shows the two readouts as a dark
+    /// pill carrying a padlock beside each value — <c>[lock] 10%  [lock] 0°</c>".
+    ///
+    /// <para>A real <see cref="ToolTip"/> with its chrome stripped, rather than a
+    /// hand-managed hover element: the framework already owns the open delay, the
+    /// placement against the pointer and the dismissal, and re-implementing those
+    /// on a bar that rebuilds itself is how a hover element gets stranded up.
+    /// The pill is DARK on every page for the same reason ValuePopover's tool
+    /// chip is — it reads as a system label rather than as another panel — which
+    /// is also what §17.1's own word "dark" asks for.</para></summary>
+    private ToolTip HoverPill(string caption)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14 };
+        row.Children.Add(PillPair(_zoomLocked, MeasurementMenu.Percent(SafeZoom())));
+        row.Children.Add(PillPair(_tiltLocked, MeasurementMenu.Degrees(0)));
+
+        var stack = new StackPanel { Spacing = 3 };
+        stack.Children.Add(row);
+        stack.Children.Add(new TextBlock
+        {
+            Text = caption,
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromArgb(0xC0, 0xF2, 0xF2, 0xF2)),
+        });
+
+        var pill = new Border
+        {
+            Child = stack,
+            Padding = new Thickness(10, 6, 10, 6),
+            // A stadium, like the readout grounds §17.2 gives these cells.
+            CornerRadius = new CornerRadius(11),
+            Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x1A, 0x1A, 0x1A)),
+        };
+        return new ToolTip
+        {
+            Content = pill,
+            Background = new SolidColorBrush(Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+        };
+    }
+
+    private static FrameworkElement PillPair(bool locked, string value)
+    {
+        var pair = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+        var ink = Color.FromArgb(0xFF, 0xF2, 0xF2, 0xF2);
+        pair.Children.Add(Icons.Mark(locked ? Icons.LockClosed : Icons.LockOpen,
+                                     locked ? ink : Color.FromArgb(0x8C, 0xF2, 0xF2, 0xF2), 13));
+        pair.Children.Add(new TextBlock
+        {
+            Text = value,
+            FontSize = 12.5,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(ink),
+        });
+        return pair;
+    }
+
+    private float SafeZoom()
+    {
+        try { return _h.Surface().ViewZoom; } catch { return 1f; }
+    }
+
+    /// <summary>The Measurement panel (§17.1), built on first use. A session that
+    /// never taps a readout never pays for it.</summary>
+    private MeasurementMenu Measurement
+    {
+        get
+        {
+            if (_measure != null) return _measure;
+            _measure = new MeasurementMenu(_host, new MeasurementMenu.Host
+            {
+                Zoom = SafeZoom,
+                SetZoom = z =>
+                {
+                    _h.Surface().SetViewZoom(z);
+                    _lockedZoom = z;
+                    SyncReadouts();
+                },
+                ZoomLocked = () => _zoomLocked,
+                SetZoomLocked = on =>
+                {
+                    _zoomLocked = on;
+                    _lockedZoom = SafeZoom();
+                    // The BAR is what re-lays out, so the bar is what rebuilds.
+                    Build();
+                },
+                // Always 0: there is no canvas rotation to read. The panel says
+                // so rather than inventing a number.
+                Tilt = () => 0,
+                TiltLocked = () => _tiltLocked,
+                SetTiltLocked = on =>
+                {
+                    _tiltLocked = on;
+                    // §17.1's observable behaviour: the tilt padlock appearing in
+                    // the row is what shifts the zoom readout sideways.
+                    Build();
+                },
+                Status = s => { try { _h.PageOps().Status(s); } catch { } },
+                KeepOpenOver = () =>
+                {
+                    try
+                    {
+                        var o = _right.TransformToVisual(_host).TransformPoint(new Windows.Foundation.Point(0, 0));
+                        return new Windows.Foundation.Rect(o.X, o.Y, _right.ActualWidth, _right.ActualHeight);
+                    }
+                    catch { return null; }
+                },
+            });
+            // An OBSTACLE, exactly as the two clusters are (K.21) and registered
+            // exactly as they are: it is chrome the user did not place, so the
+            // movable panes route around it and the solver never moves IT — which
+            // matters, because its own position is derived from the bar's metrics
+            // and a solver that re-homed it would fight that.
+            _layout.Register("measurement", _measure.Root);
+            return _measure;
+        }
     }
 
     private bool _contentRefreshPending;
