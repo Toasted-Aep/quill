@@ -526,7 +526,7 @@ public static class Icons
     /// two quadrants inside its hole - even-odd fills them, because a point
     /// inside a quadrant inside the hole has crossed three edges.</summary>
     public const string Alpha =
-        "M2.6 2.6 H21.4 V21.4 H2.6 Z M4.4 4.4 V19.6 H19.6 V4.4 Z M4.4 4.4 H12 V12 H4.4 Z M12 12 H19.6 V19.6 H12 Z";
+        "M3.6 3.6 H20.4 V20.4 H3.6 Z M5.2 5.2 V18.8 H18.8 V5.2 Z M5.2 5.2 H12 V12 H5.2 Z M12 12 H18.8 V18.8 H12 Z";
 
     /// <summary>Stretch, the second face of the mode bar's Scale (17.9): two jambs
     /// and a double arrow between them - the width changes and the height does
@@ -568,19 +568,19 @@ public static class Icons
     /// a filled outline at the 18 DIP this menu uses, the ring's two edges are
     /// under a pixel apart and close up into a blob.</para></summary>
     public const string Lasso =
-        "M12 3.2 C17.7 3.2 21.4 6.4 21.4 10.4 C21.4 14.4 17.7 17.6 12 17.6 C6.3 17.6 2.6 14.4 2.6 10.4 C2.6 6.4 6.3 3.2 12 3.2 Z M9.4 17.2 L8.1 21.6";
+        "M12 3.4 C17.7 3.4 21.4 6.5 21.4 10.4 C21.4 14.3 17.7 17.4 12 17.4 C6.3 17.4 2.6 14.3 2.6 10.4 C2.6 6.5 6.3 3.4 12 3.4 Z M8.6 17 C8 18.8 6.6 20.1 4.4 21";
 
     /// <summary>Partial catch (17.10): a disc straddling the square's edge - any
     /// part inside counts. Stroked, so the overlap the mark IS cannot punch a
     /// hole in itself. Its twin below shares the square exactly, so the pair
     /// reads as one control in two states.</summary>
     public const string Partial =
-        "M3 3 H21 V21 H3 Z M12.6 12 A5.4 5.4 0 1 1 23.4 12 A5.4 5.4 0 1 1 12.6 12 Z";
+        "M3 4.4 H18.2 V19.6 H3 Z M14.6 12 A3.6 3.6 0 1 1 21.8 12 A3.6 3.6 0 1 1 14.6 12 Z";
 
     /// <summary>Complete catch (17.10): the same square, with the disc wholly
     /// inside it - every point of the stroke must be enclosed.</summary>
     public const string Complete =
-        "M3 3 H21 V21 H3 Z M6.2 12 A5.8 5.8 0 1 1 17.8 12 A5.8 5.8 0 1 1 6.2 12 Z";
+        "M4.4 4.4 H19.6 V19.6 H4.4 Z M8.4 12 A3.6 3.6 0 1 1 15.6 12 A3.6 3.6 0 1 1 8.4 12 Z";
 
     /// <summary>The ACTIVE layer scope (17.10), against <see cref="Layers"/>'s
     /// stack of three for ALL: one plate, alone, at the stack's own width.
