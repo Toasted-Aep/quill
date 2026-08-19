@@ -77,8 +77,21 @@ namespace Quill.Controls;
 ///
 /// <para><b>The editing bar draws NOTHING below the bubble</b> - no guides, no
 /// corner circles, no Rotate / Scale / Filter row. 11.9 asks for quick actions
-/// above the bubble and nothing else, and those four things describe a
-/// selection, which this is not.</para>
+/// above the bubble and nothing else, and those three things describe a
+/// selection, which this is not. 17.9 then says the same thing for the whole
+/// presentation - "quick actions stay above the subject, but nothing floats
+/// below it" - and moves that row to the bottom of the screen as a mode bar.
+/// <b>That move is not made here</b>; it is a separate piece of work with its
+/// own owner, and this file deliberately leaves <c>_row</c> where it is rather
+/// than half-moving it. The editing state simply never had a row to move.</para>
+///
+/// <para><b>17.12 resizes the quick actions by +80%, and nothing in this file
+/// stands in its way.</b> Every size the editing bar uses comes from
+/// <see cref="Metrics"/> - the same <c>MarkSize</c>, <c>MarkCell</c> and
+/// <c>BarHeight</c> the selection bar uses, with the label derived from
+/// <c>MarkSize</c> by a dimensionless ratio. One edit to those constants moves
+/// both bars, which is the second reason 11.9 is a mode here rather than a
+/// surface of its own with a second set of numbers.</para>
 ///
 /// <para><b>Three hit-testing traps this file is built around</b>, all of which
 /// have killed overlays in this codebase before:</para>
@@ -146,12 +159,17 @@ public sealed class SelectionChrome
         /// reads as one token rather than as an icon with a caption.</summary>
         public const double RowMarkSize = 15, RowFontSize = 12.5;
         /// <summary>The word beside a mark ON THE BAR - 11.9's "Cancel Editing".
-        /// NOT a new size decision: it is the ratio the bottom row already runs
-        /// between its word and its mark, applied to the bar's own mark size. So
-        /// if the quick actions are ever resized, the label follows them instead
-        /// of being left behind at a fixed point size beside a mark half again
-        /// as big.</summary>
-        public static double LabelSize => MarkSize * (RowFontSize / RowMarkSize);
+        ///
+        /// <para>NOT a new size decision. 0.833 is the ratio the bottom row
+        /// already runs between its word and its mark (12.5 / 15), and a ratio
+        /// is dimensionless - so it survives 17.12 scaling the quick actions by
+        /// +80% and the bottom menu by +100% without either number being touched
+        /// here. Expressed as its own constant rather than read off
+        /// <see cref="RowFontSize"/> and <see cref="RowMarkSize"/> because 17.9
+        /// moves that row off the subject entirely and to the bottom of the
+        /// screen; this must not have to move with it.</para></summary>
+        public const double LabelToMark = 0.833;
+        public static double LabelSize => MarkSize * LabelToMark;
         /// <summary>Clearance from the bounding box to the bar and to the row.
         /// Enough that neither touches a corner circle at any zoom.</summary>
         public const double Gap = 14;
