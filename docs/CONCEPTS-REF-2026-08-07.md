@@ -3420,3 +3420,348 @@ the gap further. Text starts far below where it should. Reduce the stacked
 margin — and check whether the two bars need to occupy separate rows in
 fullscreen at all, since §15.3 already moved the window controls into a hover
 strip that appears only on demand.
+
+---
+
+## 18. Layers — the data model, 2026-08-18
+
+The roadmap parks four features behind one sentence: *"Layers. The data model is
+the blocker for PSD export, per-layer visibility, selection scoping and
+per-object rows in the Objects library."* This section is that model. **There is
+no layers panel and this section does not describe one** — it describes the data,
+what happens to the pages that already exist, and the five places the four
+features attach.
+
+> **This section was written as 17 and renumbered to 18.** Commit `a2659e0` on
+> `integration` carried a message describing the Measurement menu, the bottom
+> bar and a correction pass while the 268 lines it added were this layers
+> section; `42b00ab` restored the section that message described, and this one
+> moved out of its way. Both are now in the file — §17 is the correction pass,
+> §18 is the model. See §18.1 for the seam §17.10's All/Active is built on.
+
+### 18.1 THE SCOPE SEAM — read this first if you are building the mode bar
+
+The bottom mode bar's third control is a **layer scope: All layers / Active
+layer**. It does not need the rest of this section. It needs one enum and one
+predicate, and both exist:
+
+```csharp
+public enum LayerScope { AllLayers, ActiveLayer }        // AllLayers is the zero value
+
+PageLayers.InScope(page, element.LayerKey, scope)        // "is this in scope?"
+PageLayers.CanSelect(page, element.LayerKey, scope)      // scope AND the layer is not hidden or locked
+```
+
+**`AllLayers` is deliberately the zero value**, so a default-constructed scope,
+an unset field and a stub that has never heard of layers all mean *today's
+behaviour*: everything is in scope.
+
+**On a page with one implicit layer, both scopes return true for everything.**
+That is the compatibility guarantee the mode bar can build against — a stub that
+hard-codes one layer and a finished build running a real layer list cannot
+disagree until the user actually makes a second layer. Nothing about the mode bar
+has to change when they do.
+
+**Where the current scope is stored is the mode bar's business, not this
+model's.** `LayerScope` is a tool mode — it belongs beside whatever else the mode
+bar persists, and this model deliberately neither stores it on `NotePage` nor
+mirrors it into `Library`. Passing it in as an argument is the whole interface.
+There is no second layer concept to invent and none should be invented: if
+something needs to know about layers, it asks `PageLayers`.
+
+The active layer itself is `PageLayers.Active(page)`, and it resolves — an
+`ActiveLayer` naming a layer that no longer exists comes back as the base layer
+rather than leaving the page with nowhere to draw.
+
+### 18.2 The shape of it
+
+```
+NotePage
+  Layers      List<Layer>?   bottom-first z-order.  null/empty = ONE implicit base layer
+  ActiveLayer int            the layer new ink lands on.  0 = base
+
+Layer
+  Key         int            stable identity for the life of the page.  0 = the base layer
+  Name        string         "" = derive "Layer N" from position
+  Hidden      bool           false = visible (today)
+  Opacity     float          1 = fully opaque (today), a MULTIPLIER over element opacity
+  Locked      bool           false = editable (today)
+  CreatedTicks long
+
+PenStroke / ShapeElement / TextElement
+  LayerKey    int            which layer.  0 = base.  Absent = 0.
+```
+
+Every default is today's behaviour, which is the whole trick: a page that has
+never heard of layers deserialises into a page with one visible, unlocked,
+fully-opaque layer holding everything, and does so without a single byte on
+disk changing hands.
+
+`Key` is identity; **list position is order**. There is deliberately no `Order`
+integer beside `Key`: a list is already ordered, and a second source of truth for
+the same fact is a bug waiting for the two to disagree. Reordering moves the item
+in the list and touches nothing else, because nothing else references position.
+
+### 18.3 Why the membership key is an `int` and not a `Guid`
+
+`LayerKey` appears on **every stroke, every shape and every text box in the
+library** — it is by a wide margin the most-repeated new field this model adds.
+A `Guid` serialises as 36 characters plus its property name; on a library that is
+already 53 MB and is rewritten whole on every 1.5 s autosave, that is several
+megabytes of autosave cost bought for nothing. A small int with
+`WhenWritingDefault` costs **exactly zero** for anything on the base layer, which
+is everything that exists today, and about fourteen bytes for anything that is
+not.
+
+The int is a **key, never an index**. Keys are handed out by
+`PageLayers.NextKey` and never reused within a page, so reordering or deleting a
+layer cannot silently repoint content at a different one — the exact hazard the
+`GridType` comment in `NoteModels.cs` warns about for appended enums.
+
+The cost of choosing an int is that keys are **page-scoped**: an element copied
+to another page carries a key that means something different there, and the paste
+path has to re-key it. That is a real obligation and it is written down here so
+the person who builds cross-page paste finds it. See 18.10.
+
+**`LayerKey` carries `TolerantIntConverter`** — the converter already in
+`NoteModels.cs`, used unmodified. The reason is the one recorded beside
+`Library.ColorPickerMode`: *"a shipped build wrote `"Copic"` here, and a plain
+int property makes that file undeserializable — which cost the whole library."*
+`LayerKey` is on hundreds of thousands of elements; if any future build ever
+writes a layer *name* where the key goes, a plain `int` would make **the entire
+library unloadable**. With the tolerant converter, an unreadable key reads as 0,
+the element lands on the base layer, and the user loses a layer assignment
+instead of their notes. The converter's `"copic"/"hsl"/"rgb"` name map is inert
+here because nothing ever writes those strings to this field; it is left exactly
+as it is rather than generalised, because touching it would put
+`ColorPickerMode` at risk to tidy up a case that cannot arise.
+
+### 18.4 Migration: nothing is migrated
+
+Every page that exists has content with no layer. The temptation is a load-time
+pass that walks the library, materialises a base layer on every page and stamps
+every element with its key. **That pass is the most dangerous code this feature
+could contain** — it rewrites all 53 MB on first launch, it runs before the user
+has done anything worth saving, and its failure mode is a library that has been
+half-converted.
+
+So it does not exist. The model migrates by *meaning* instead:
+
+- **`Layers` null or empty means one implicit base layer.** `PageLayers.All`
+  synthesises it on read. Nothing is written.
+- **A missing `LayerKey` deserialises to 0, which is that base layer.** Nothing
+  is written.
+- **The list is materialised lazily**, by `PageLayers.Materialise`, the first
+  time the user does something that genuinely needs a second layer. Only then
+  does a page start carrying `"Layers":[…]`, and even then the elements already
+  on it keep no `LayerKey` at all, because 0 is still right for them.
+
+A page saved by a layers-aware build and read by a build that predates layers
+therefore loses the layer *records* (System.Text.Json ignores unknown properties
+by default; they are dropped on the next save by the old build) and **loses no
+content whatsoever**, because the content never moved. `Strokes`, `Shapes` and
+`Texts` stay exactly where they have always been on `NotePage`. That is the
+second reason membership lives on the element rather than the content living
+inside the layer: a model where `Layer` owns `List<PenStroke>` reads as an empty
+page to anything that does not know about layers.
+
+### 18.5 Z-order: the one rule that keeps an existing page identical
+
+Today a page paints **all shapes, then all strokes, then the text overlay**, each
+in list order. Layers introduce a second ordering, and the two have to be
+reconciled without changing what an existing page looks like.
+
+> **Within a layer, the existing type order is preserved exactly. Across layers,
+> layer order wins.**
+
+With zero or one layer that rule is bit-identical to today's painting, which is
+what makes it safe to land the model before the renderer knows about it. The
+harness asserts it directly: for a page with no layers, `PageLayers.InOrder`
+yields exactly one bucket holding every element in exactly the order the draw
+loop walks today.
+
+`InOrder` is a single function returning, bottom layer first,
+`(Layer, Shapes, Strokes, Texts)`. It is the seam the renderer will adopt and the
+seam PSD export will iterate, so the two can never disagree about what is on top.
+
+### 18.6 What belongs to a layer, and what does not
+
+| Belongs | Does not |
+|---|---|
+| `PenStroke` | `NotePage.Background`, `Paper` |
+| `ShapeElement` (including image attachments) | the grid, and `PerspectiveDef` |
+| `TextElement` | `PageComment` |
+| | `RefFrame`, page size, `OcrText`, audio |
+
+Two of those are judgement calls rather than obvious.
+
+**Comments are not layered.** A comment is a note *about* the drawing, not part
+of it; hiding a layer must not hide the pin that says why the layer is wrong,
+and a PSD export has nowhere to put one. If comments ever need scoping they want
+an anchor to an element (`PageComment.AnchorElementId` is already reserved for
+it), not a layer of their own.
+
+**The grid and the perspective overlay are not layered**, even though §12's
+editor calls them "the grid layer" and the Precision menu says so too. They are
+page-wide guides with their own visibility and opacity controls already; giving
+them a second, competing set inside the layer list would produce two switches for
+one fact. What the reference calls a grid layer is a *menu*, not a member of this
+list.
+
+### 18.7 The fail-safe: an unknown key is visible, never hidden
+
+The failure this model has to refuse is content that exists, is intact, and
+cannot be seen. Every resolution path therefore falls **towards** visibility:
+
+- A `LayerKey` naming no layer resolves to the base layer and draws. It is
+  **not** rewritten — a build that later restores the missing layer reunites the
+  content with it, which a helpful load-time repair would have made impossible.
+- `ActiveLayer` naming no layer resolves to the base layer.
+- A garbled key read through `TolerantIntConverter` becomes 0, the base layer.
+- Deleting a layer **reassigns its content to the base layer by default**
+  (`LayerRemoval.ReassignToBase`). Deleting the content with it is available and
+  is never the default.
+- The base layer cannot be deleted. A page always has at least one layer, so
+  there is always somewhere for content to be.
+
+### 18.8 Visibility and opacity are render-time, exactly like the veil
+
+§16.7 cost this project a whole harness to establish that *"it is a RENDER-TIME
+effect and must never touch stored colour."* Layer opacity is the same shape of
+promise and it is kept the same way: `PageLayers.EffectiveOpacity` returns
+`Hidden ? 0 : Opacity`, the renderer multiplies it into the element's own alpha
+at draw time, and **nothing ever writes it back**. Hiding a layer and dropping it
+to 30% must leave every stroke's stored `Opacity` byte-for-byte as it was.
+
+`tools/LayerRoundTrip` proves precisely that, the way `tools/VeilRoundTrip`
+proves §16.7 — see 18.11.
+
+### 18.9 The five seams
+
+Named, not built. Each is one call.
+
+1. **PSD export** iterates `PageLayers.InOrder(page)` — bottom layer first, one
+   PSD layer per `Layer`, its shapes then its strokes then its texts. `Layer.Name`
+   (via `DisplayName`) is the PSD layer name; `Hidden` and `Opacity` map straight
+   onto the PSD layer flags rather than being baked into pixels.
+2. **Per-layer visibility** toggles `Layer.Hidden` and multiplies
+   `PageLayers.EffectiveOpacity` into the draw call. The renderer's existing
+   per-element loops become the body of the per-layer loop; nothing else moves.
+3. **Selection scoping** asks `PageLayers.IsEditable(page, element.LayerKey)` —
+   false when the layer is hidden or locked — and
+   `PageLayers.InActive(page, element.LayerKey)` for "is this in the active
+   layer", or `PageLayers.CanSelect(page, element.LayerKey, scope)` for both at
+   once against a **All layers / Active layer** mode (18.1, which is the form the
+   bottom mode bar wants). All are pure predicates over the page, so they compose with the
+   existing `Locked` flag rather than competing with it: an element is editable
+   when **neither** it nor its layer is locked. `SelectionSubject` is untouched —
+   layers decide *what may enter* a selection, `SelectionSubject` describes what
+   the selection *supports*, and those are different questions.
+4. **The Objects library** lists `PageLayers.Rows(page)` — one `LayerRow` per
+   object, grouped by layer, **top layer first** because that is the order a
+   layers list reads in. A row is `(Layer, Kind, Id, Label, Locked)`; the caller
+   already holds the page, so a row carries identity rather than a copy of the
+   element.
+5. **New ink** lands on `PageLayers.Active(page)`. The commit path stamps
+   `LayerKey` from it; `AssignLayerAction` (in `UndoRedo.cs`, modelled on
+   `LockMixedAction`) moves a selection between layers undoably.
+
+### 18.10 Obligations this model creates
+
+Written down because each is a place where a later change loses data quietly.
+
+- **`PenStroke.CloneWithPoints` must carry `LayerKey`.** It is how the eraser
+  fragments a stroke, how duplicate works and how the selection clone works —
+  without it, erasing through a stroke on layer 3 drops its fragments onto the
+  base layer. This is fixed as part of the model, not left to the renderer.
+- **Cross-page paste must re-key.** Keys are page-scoped (18.3).
+- **A table and its cells must share a layer.** A `ShapeElement` of kind `Table`
+  and the `TextElement`s carrying its cells (`TableId`) are one object to the
+  user and three lists to the model. Nothing stops them being assigned
+  separately today, and `LayerRemoval.DeleteContent` on a layer holding only the
+  cells would leave a table drawn with its contents gone. Whatever moves a
+  selection between layers should carry a table's cells with it — the same
+  obligation `ReflowTableCells` already discharges for geometry.
+- **`SyncLog` must carry the layer list in the page op.** Element ops serialise
+  the whole element, so `LayerKey` rides along for free — but `PageMetaJson` is a
+  hand-picked field list, and a peer that receives keys without the layers they
+  name would resolve every one of them to the base layer. `Layers` and
+  `ActiveLayer` are added to the page op and to its apply side for that reason.
+- **`Layers` is not in `LibraryStore.SettingFields`** and must never be: those
+  are library-wide settings mirrored into `settings.json`; layers are page
+  content.
+
+### 18.11 The proof
+
+`tools/LayerRoundTrip`, built the way `tools/VeilRoundTrip` is built — the
+**real** `NoteModels.cs`, the **real** `LibraryStore.cs`, `<Compile Include>`d
+straight out of `src/Quill` so the harness cannot drift into testing a copy, run
+headless against a library isolated in a temp folder by `QUILL_DATA_FOLDER`, with
+a hard abort if the resolved path is not inside it.
+
+It settles, by doing it rather than asserting it:
+
+- a page written before layers existed loads, and every element lands on a
+  visible base layer;
+- adding layers costs an untouched page **zero bytes** — the byte-for-byte
+  baseline comparison;
+- a full page (strokes, shapes, an image attachment, text, comments) survives
+  save → reload with every layer field and every `LayerKey` intact;
+- hiding a layer and setting another to 30% changes **only** the layers array —
+  no element's stored bytes move;
+- deleting a layer reassigns rather than deletes, and the content is still
+  visible afterwards;
+- an element pointing at a layer that does not exist still draws;
+- a `LayerKey` written as a **string** — the `ColorPickerMode` disaster,
+  reproduced on purpose — still loads the library;
+- `InOrder` on a page with no layers reproduces today's draw order exactly;
+- and 18.1's compatibility guarantee: on a page with one implicit layer the two
+  scopes are indistinguishable.
+
+**69 checks, all holding**, as of this section. Two of them are sharper than the
+prose above and worth naming:
+
+- *"the ONLY thing that changed is inside the layers array"*. Two saves of the
+  same library, one with a layer hidden and another at 30% and one without.
+  Strip every bracket-matched, string-aware `"Layers":[…]` out of both files and
+  what remains is **byte-identical, 4261 bytes each side**. That is 18.8 as a
+  measurement rather than a promise.
+- *"the first page op carries no layer list"*. The op log is diffed by hash, so
+  a page that has no layers must hash to exactly what it hashed to before layers
+  existed — otherwise the first save after upgrading emits one page op per page
+  in the library. It does, and the check reads the log to say so.
+
+Run: `dotnet run --project tools/LayerRoundTrip/LayerRoundTrip.csproj -c Debug`
+
+**One thing lives outside the isolation folder, and this harness puts it back.**
+`SyncLog` keeps its per-device cursors in `%LOCALAPPDATA%\Quill\synccursors.json`
+— *not* in the data folder — and `LibraryStore.Save` calls `SyncLog.OnSaved`
+unconditionally. Any harness that saves therefore rewrites the real user's cursor
+file from an empty in-memory one, resetting the read offset for every peer; per
+the roadmap's own unowned "SyncLog replay" risk, a reset cursor triggers the full
+replay that can **resurrect erased strokes**. `LayerRoundTrip` snapshots that file
+and `deviceid.txt` before its first save, restores both byte-for-byte in a
+`finally`, and checks the restore as its last line. **`tools/VeilRoundTrip` does
+not**, and neither will the next harness written to this pattern unless the
+behaviour moves into `SyncLog` itself.
+
+### 18.12 Left for the user to rule on
+
+These are decisions the model does not force, and they were left open rather than
+made quietly:
+
+1. **Blend modes.** PSD layers have them; Quill's renderer has none. No
+   `Layer.Blend` field is stored, because a field nothing implements is a lie in
+   the file. Adding it later costs nothing (`WhenWritingDefault`); it would be a
+   string, not an enum, per the `ToolSurface` precedent.
+2. **Whether hidden layers export.** Currently `Hidden` is carried into PSD as a
+   layer flag rather than dropped — the PSD keeps the content and hides it. PDF
+   and SVG export have no such flag and would have to drop it.
+3. **Deleting a layer.** Default is reassign-to-base. Photoshop deletes the
+   content. The safe default was chosen; the other is one enum value away.
+4. **A cap on layer count.** None is imposed.
+5. **Layer names are derived in English** (`"Layer 3"`) when `Name` is empty.
+   `Helpers/Loc.cs` exists; whether a derived name should be localised — and so
+   change when the UI language changes — is a product decision.
+6. **Per-notebook or per-library default layer sets.** Not modelled. Every page
+   starts with one implicit layer.

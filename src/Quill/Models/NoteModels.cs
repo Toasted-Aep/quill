@@ -71,6 +71,14 @@ public class PenStroke
     /// 53 MB library.json zero bytes and no stroke changes behaviour.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Locked { get; set; }
+    /// <summary>Which layer this stroke belongs to (CONCEPTS-REF 18). 0 is the
+    /// base layer, which is where every stroke ever saved already is, so
+    /// WhenWritingDefault makes this cost an existing 53 MB library.json exactly
+    /// zero bytes. See <see cref="Layer"/> for why it is an int and why it
+    /// carries the tolerant converter.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    [JsonConverter(typeof(TolerantIntConverter))]
+    public int LayerKey { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
     public List<float>? PressureCurve { get; set; }
 
@@ -118,9 +126,14 @@ public class PenStroke
         minX = _bx0; minY = _by0; maxX = _bx1; maxY = _by1;
     }
 
+    // LayerKey is carried deliberately. This is how the ERASER fragments a
+    // stroke, how duplicate works and how the selection clone works, so leaving
+    // it out would silently drop every fragment of an erased stroke onto the
+    // base layer - content that is intact, moved, and impossible to notice until
+    // the layer it was on is hidden (CONCEPTS-REF 18.10).
     public PenStroke CloneWithPoints(List<StrokePoint> pts) => new()
     {
-        Pen = Pen, Color = Color, Size = Size, Sens = Sens, Points = pts, CreatedTicks = CreatedTicks, PressureCurve = PressureCurve != null ? new List<float>(PressureCurve) : null
+        Pen = Pen, Color = Color, Size = Size, Sens = Sens, Points = pts, LayerKey = LayerKey, CreatedTicks = CreatedTicks, PressureCurve = PressureCurve != null ? new List<float>(PressureCurve) : null
     };
 }
 
@@ -172,6 +185,10 @@ public class ShapeElement
     /// <summary>CONCEPTS-REF 16.2's padlock — see PenStroke.Locked.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Locked { get; set; }
+    /// <summary>CONCEPTS-REF 18's layer membership — see PenStroke.LayerKey.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    [JsonConverter(typeof(TolerantIntConverter))]
+    public int LayerKey { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
 }
 
@@ -205,6 +222,10 @@ public class TextElement
     /// <summary>CONCEPTS-REF 16.2's padlock — see PenStroke.Locked.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Locked { get; set; }
+    /// <summary>CONCEPTS-REF 18's layer membership — see PenStroke.LayerKey.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    [JsonConverter(typeof(TolerantIntConverter))]
+    public int LayerKey { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
 }
 
@@ -394,6 +415,26 @@ public class NotePage
     public List<PenStroke> Strokes { get; set; } = new();
     public List<TextElement> Texts { get; set; } = new();
     public List<ShapeElement> Shapes { get; set; } = new();
+    // ---- CONCEPTS-REF 18: layers -----------------------------------------
+    // The three lists above DO NOT MOVE. Layer membership is a key ON the
+    // element (PenStroke.LayerKey and friends); a model where a Layer owned the
+    // strokes would read as an EMPTY PAGE to anything that predates layers, and
+    // would need a load-time pass over 53 MB to build.
+    //
+    // Bottom-first z-order. null or empty means ONE IMPLICIT BASE LAYER holding
+    // everything - visible, unlocked, fully opaque - which is exactly what every
+    // page written before layers already is. That is the whole of the migration:
+    // nothing is rewritten on load, the list is materialised lazily by
+    // PageLayers.Materialise the first time a second layer is actually wanted,
+    // and until then a page costs the bytes it always did.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public List<Layer>? Layers { get; set; }
+    // Which layer new ink lands on. 0 = the base layer. A key that names no
+    // layer resolves BACK to the base layer rather than leaving the page with
+    // nowhere to draw (PageLayers.Active).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    [JsonConverter(typeof(TolerantIntConverter))]
+    public int ActiveLayer { get; set; }
     // Cached handwriting recognition text for search indexing (#18).
     public string OcrText { get; set; } = "";
     // Audio recording: relative path to m4a file and UTC ticks when recording started.
