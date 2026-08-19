@@ -3304,28 +3304,87 @@ public sealed class InkSurface : UserControl
         return Color.FromArgb(c.A, Mix(c.R, VeilGrey.R, t), Mix(c.G, VeilGrey.G, t), Mix(c.B, VeilGrey.B, t));
     }
 
-    /// <summary>Whether this element is the SUBJECT and so holds full contrast.
-    /// 16.7 item 3: "The attachment itself does not fade. It is the subject."
+    /// <summary>The elements THIS veil exempts, so they hold full contrast -
+    /// 16.7 item 3, "the attachment itself does not fade. It is the subject."
+    ///
+    /// <para>A SNAPSHOT of the selection rather than a live read of it, for the
+    /// reason <see cref="CaptureVeilSubject"/> gives at length (17.13).</para>
     ///
     /// <para>WITH TWO ATTACHMENTS, both selected ones hold contrast and every
-    /// unselected one fades with the rest of the page. That falls out of asking
-    /// "is this element part of the selection?" rather than "is this element an
+    /// unselected one fades with the rest of the page. That falls out of filling
+    /// this set from the SELECTION rather than asking "is this element an
     /// image?", and it is the reading that keeps the effect meaning what it says:
     /// the page recedes behind WHAT IS BEING WORKED ON, and if the user has two
     /// attachments in hand then both of them are.</para></summary>
-    private bool IsSubject(PenStroke s) => _selectedSet.Contains(s);
-    private bool IsSubject(ShapeElement s) =>
-        ReferenceEquals(s, _activeShapeBack) || _selShapeSet.Contains(s);
-    private bool IsSubject(TextElement t) => _selTexts.Contains(t);
+    private readonly HashSet<object> _veilSubject = new(ReferenceEqualityComparer.Instance);
+
+    private bool IsSubject(PenStroke s) => _veilSubject.Contains(s);
+    private bool IsSubject(ShapeElement s) => _veilSubject.Contains(s);
+    private bool IsSubject(TextElement t) => _veilSubject.Contains(t);
+
+    /// <summary>17.13: TAKE THE EXEMPTION FROM THE SAME INSTANT AS THE VEIL.
+    ///
+    /// <para>The veil has two halves and they used to be read off two different
+    /// clocks. HOW MUCH veil is <c>_veil</c>, an animated double that takes
+    /// 190 ms up and 130 ms down and therefore lags the selection on purpose.
+    /// WHO is exempt was read from <c>_selectedSet</c>, <c>_selShapeSet</c> and
+    /// <c>_selTexts</c>, which turn over in the instant the click lands. One
+    /// <c>OnDraw</c> reads both, so on any edge where the two disagree it paints
+    /// a veil raised for one selection through an exemption belonging to
+    /// another.</para>
+    ///
+    /// <para><b>Going in, the two agreed by luck.</b> <c>_activeShape</c> assigns
+    /// its backing field before it publishes, so the subject was already exempt
+    /// on the first frame - and <c>_veil</c> starts from 0 there in any case, so
+    /// even a frame of disagreement would have shown nothing. <b>Coming out they
+    /// could not agree.</b> <see cref="PublishSelection"/> clears the selection
+    /// and only then calls <see cref="SetVeil"/>, which leaves <c>_veil</c>
+    /// sitting at 1 with NOTHING exempt: for the 130 ms of the fade-out the
+    /// attachment the veil had been raised for was painted with that veil -
+    /// fully grey on the first frame, decaying to none over the rest. That is
+    /// 17.13's "turns grey for a moment and returns", and it is exactly why
+    /// clicking INTO an attachment never showed it and clicking OUT always
+    /// did.</para>
+    ///
+    /// <para><b>Why a snapshot rather than a second exemption.</b> Another clause
+    /// on the test above would silence this one edge and leave both clocks
+    /// running, so the next thing to change the settle timing would bring it back
+    /// somewhere else. Capturing the subject where the veil level is set leaves
+    /// ONE clock. While the veil is up or rising the snapshot is refreshed from
+    /// the live selection on every publish, so swapping to a second attachment
+    /// moves the exemption in the same frame; while it is coming down the
+    /// snapshot is HELD, so the subject the veil was raised for keeps full
+    /// contrast until that veil is gone, and <see cref="VeilTick"/> releases it
+    /// at <c>_veil</c> 0 - the frame on which nothing is veiled anyway. The
+    /// selected attachment therefore never fades, not even transiently.</para>
+    ///
+    /// <para>Reference identity, not value equality: two strokes with identical
+    /// points are two subjects, and <see cref="ReferenceEqualityComparer"/> keeps
+    /// saying so even if these models ever become records.</para></summary>
+    private void CaptureVeilSubject()
+    {
+        _veilSubject.Clear();
+        foreach (var s in _selectedSet) _veilSubject.Add(s);
+        foreach (var sh in _selShapeSet) _veilSubject.Add(sh);
+        foreach (var t in _selTexts) _veilSubject.Add(t);
+        if (_activeShapeBack != null) _veilSubject.Add(_activeShapeBack);
+    }
 
     private void SetVeil(bool on)
     {
+        // 17.13: refresh WHO is exempt whenever the veil is up or heading up -
+        // including when _veilWant is already true and the early return below
+        // fires. Selecting a second attachment has to move the exemption in the
+        // same frame, and that arrives as a publish, not as a veil edge.
+        if (on) CaptureVeilSubject();
         if (_veilWant == on) return;
         _veilWant = on;
         if (ReduceMotion?.Invoke() == true)
         {
             StopVeilTick();
             _veil = on ? 1 : 0;
+            // No fade to outlive, so the subject is released here instead.
+            if (!on) _veilSubject.Clear();
             ApplyTextVeil();
             _inkCacheDirty = true;
             _canvas.Invalidate();
@@ -3376,6 +3435,11 @@ public sealed class InkSurface : UserControl
         _canvas.Invalidate();
         if (_veil != target) return;
         StopVeilTick();
+        // 17.13: the veil is fully lifted, so the selection it was raised for
+        // stops being exempt HERE rather than back on the deselect that started
+        // this fade. Holding it across the fade is the fix; releasing it on the
+        // frame where nothing is veiled anyway is what keeps that honest.
+        if (!_veilWant) _veilSubject.Clear();
         _inkCacheDirty = true;
         _canvas.Invalidate();       // the repaint that restores the page's colours
     }

@@ -398,13 +398,32 @@ def veil_dataflow():
     check("16.7 - the fade honours reduce-motion",
           "ReduceMotion" in setv)
 
-    # 16.7 item 3 / the two-attachment question
+    # 16.7 item 3 / the two-attachment question, as 17.13 leaves it.
+    #
+    # The exemption is now ONE read of a snapshot, and the snapshot is filled
+    # from the SELECTION - so "both of two selected attachments hold contrast"
+    # is still the property being pinned, and "is this an image?" is still the
+    # answer being refused. What 17.13 adds is the clock: the snapshot is taken
+    # where the veil LEVEL is set, held while the veil comes down, and released
+    # only at _veil 0, so the subject cannot be un-exempted out from under a
+    # veil that is still being applied. All three are asserted together, because
+    # any one of them alone lets the transient fade back in: a live read races,
+    # a snapshot never refreshed strands the exemption on the wrong element, and
+    # a snapshot cleared on the deselect is just the live read again.
     subj = re.search(r"private bool IsSubject\(ShapeElement s\)\s*=>([^;]+);", stripped)
     subj = subj.group(1).strip() if subj else ""
-    check("16.7 item 3 - exemption asks 'is this part of the SELECTION?', not 'is "
-          "this an image?' - which is what makes BOTH of two selected attachments "
-          "hold contrast",
-          "_selShapeSet.Contains(s)" in subj and "ShapeKind.Image" not in subj,
+    cap = strip_comments(safe_body(src, "private void CaptureVeilSubject()"))
+    setv_all = strip_comments(safe_body(src, "private void SetVeil(bool on)"))
+    tick_all = strip_comments(safe_body(src, "private void VeilTick("))
+    check("16.7 item 3 / 17.13 - the exemption is one snapshot READ, filled from "
+          "the SELECTION and not from 'is this an image?', refreshed where the "
+          "veil level is set and released only once the veil has fully lifted - "
+          "so the subject never fades, not even transiently",
+          "_veilSubject.Contains(s)" in subj and "ShapeKind.Image" not in subj and
+          "_selShapeSet" in cap and "_activeShapeBack" in cap and
+          "ShapeKind.Image" not in cap and
+          "CaptureVeilSubject();" in setv_all and
+          "_veilSubject.Clear();" in tick_all,
           " ".join(subj.split()) or "MISSING")
 
     return locals_from_veil
