@@ -43,6 +43,16 @@ public sealed class InkSurface : UserControl
     public TimeSpan? AudioPlayheadPosition { get; set; }
     public long? RecordingStartTicks { get; set; }
     public event Action? ViewChanged;
+    /// <summary>Raised when the SUBJECT's bounds move while the view holds still
+    /// - a selection being dragged or scaled, and the recompute after the drop.
+    ///
+    /// <para>Neither existing signal can carry this. <see cref="ViewChanged"/> is
+    /// about pan and zoom, and a drag changes nothing about the view;
+    /// <c>SelectionState.Changed</c> deliberately drops a publish whose rendered
+    /// properties match the last one, which a pure move's always do - same kind,
+    /// same count, same flags. So the chrome had nothing to listen to and framed
+    /// where the selection STARTED, through the drag and on past the drop.</para></summary>
+    public event Action? SubjectMoved;
     /// <summary>Raised the one time a page's CONCEPTS-REF 14.5 reference frame is
     /// captured, so the host can get it persisted. Fires at most once per page.</summary>
     public event Action? RefFrameCaptured;
@@ -1743,6 +1753,7 @@ public sealed class InkSurface : UserControl
         _selBounds = new Rect(Math.Min(nx, ax), Math.Min(ny, ay),
             _scaleBoundsOrig.Width * f, _scaleBoundsOrig.Height * f);
         _inkCacheDirty = true;
+        SubjectMoved?.Invoke();   // the chrome follows the scale
     }
 
     // Preview which stroke the object eraser would remove (#53).
@@ -2034,6 +2045,7 @@ public sealed class InkSurface : UserControl
                             Canvas.SetLeft(ui.Container, kv.Value.L + _moveDx);
                             Canvas.SetTop(ui.Container, kv.Value.T + _moveDy);
                         }
+                    SubjectMoved?.Invoke();   // the chrome follows the drag
                 }
                 else
                 {
@@ -3078,6 +3090,11 @@ public sealed class InkSurface : UserControl
         // told (16.3 / 16.9). SelectionState drops a publish that says the same
         // thing as the last one, so calling it from a hot path is free.
         PublishSelection();
+        // ...and that dropping is exactly why the chrome needs telling
+        // separately. The recompute after a DROP publishes the same kind, the
+        // same count and the same flags as before the drag, so Changed never
+        // fires and nothing would re-place the marks at their new home.
+        SubjectMoved?.Invoke();
     }
 
     private void RecomputeSelectionBoundsCore()
@@ -3129,9 +3146,30 @@ public sealed class InkSurface : UserControl
 
     /// <summary>World bounds of whatever the selection presentation should frame:
     /// the multi-selection if there is one, otherwise the active shape. Empty
-    /// when nothing is selected.</summary>
+    /// when nothing is selected.
+    ///
+    /// <para><b>A drag in flight is included.</b> A multi-selection being moved
+    /// writes nothing until the drop - its strokes, shapes and texts are
+    /// TRANSLATED at draw time by <c>_moveDx</c>/<c>_moveDy</c> while
+    /// <c>_selBounds</c> stays where the drag began - so the offset has to be
+    /// added here or the presentation frames where the selection used to be.
+    /// This predates 17.8, but 17.8 is what exposes it: the tinted rectangle it
+    /// removed was the only mark that followed a drag, and the corner circles
+    /// and the guides were already standing still behind it. The stale GUIDE is
+    /// the worse half - alignment is the only thing a guide is for, and one left
+    /// on the old bounds points at nothing that is there any more.</para>
+    ///
+    /// <para><b>The active-shape branch takes no offset, and must not.</b> A
+    /// single shape's drag writes straight through to its own X and Y as the
+    /// pointer moves (<c>_activeShape.X = _shapeOrig.X + ...</c>), so
+    /// <see cref="ShapeBounds"/> already reports where it is now; adding
+    /// <c>_moveDx</c> there would count the same movement twice. A live SCALE
+    /// needs nothing either - <c>ApplyScaleLive</c> rewrites <c>_selBounds</c>
+    /// itself on every step.</para></summary>
     public Rect SubjectBoundsWorld =>
-        HasMultiSelection && !_selBounds.IsEmpty ? _selBounds
+        HasMultiSelection && !_selBounds.IsEmpty
+            ? new Rect(_selBounds.X + _moveDx, _selBounds.Y + _moveDy,
+                       _selBounds.Width, _selBounds.Height)
         : _activeShape != null ? ShapeBounds(_activeShape)
         : Rect.Empty;
 
