@@ -110,10 +110,63 @@ public sealed class ChromeBars
         public const double TitleMaxWidth = 190;
         public const double ReadoutWidth = 52;
 
+        // ---- §17.2, the corner buttons' ground ------------------------
+        /// <summary>Diameter of a corner button's page-coloured plate, INSIDE
+        /// its measured <see cref="IconPitch"/> hit target.
+        ///
+        /// <para>Smaller than the target on purpose. The row's spacing is 0 and
+        /// the targets are 42 wide, so a plate drawn at the full target size
+        /// would leave adjacent plates exactly tangent and the cluster would read
+        /// as one continuous bar — which is the liquid-glass card §1.3's
+        /// measurement ruled out. At 34 there are 8 DIP of page between plates,
+        /// so each button reads as its own soft patch. THE HIT TARGET IS
+        /// UNCHANGED: 42 is measured, and only what is painted moves.</para></summary>
+        public const double GroundDiameter = 34;
+        /// <summary>§17.2: the zoom and tilt readouts take "a rounded-end capsule
+        /// sized to their text". Same height as the circles' diameter, so the two
+        /// shapes read as one family; the width is whatever the text needs.</summary>
+        public const double StadiumH = GroundDiameter, StadiumPadX = 10;
+
         // ---- glass mode only (ignored while GlassBars is false) ----
         public const double PanelGap = 8;
         public const double BarRadius = 17;
     }
+
+    /// <summary>§17.2'S GROUND, AND THE ONE RULE ABOUT WHAT MAY BE DRAWN ON IT.
+    ///
+    /// <para>The corner buttons take "a background that mimics the page colour,
+    /// so the button almost disappears into the page — but the page's grid and
+    /// texture do NOT continue across it, and that discontinuity is what makes
+    /// the button findable". So this is <see cref="PageTheme.Ground"/> EXACTLY,
+    /// not a raised or tinted variant of it: the plate is meant to be the same
+    /// colour as the paper, and the only thing distinguishing it is that the
+    /// grain and the grid stop at its edge. Raising it even a step would trade
+    /// the effect §17.2 describes for an ordinary button.</para>
+    ///
+    /// <para>The discontinuity needs no code. The grid and the paper texture are
+    /// painted by <see cref="InkSurface"/> into the Win2D canvas UNDERNEATH these
+    /// WinUI elements, so an opaque patch of the ground colour interrupts them by
+    /// construction. <see cref="PageTheme.Ground"/> is always fully opaque, which
+    /// is what makes that true.</para>
+    ///
+    /// <para><b>What may be drawn on it.</b> §17.4's fault was a mark whose
+    /// contrast had been tested against a NEIGHBOURING surface's token, so it
+    /// passed the test and still vanished on the ground it was actually drawn on.
+    /// The mark here is <see cref="ChromeUi.Ink"/> = <c>PageTheme.OnSurface</c>,
+    /// and the reason that is the right pairing is not that it reads well — it is
+    /// that <c>OnSurface</c> is selected by <c>IsDark</c>, which is
+    /// <c>Luminance(Ground) &lt; 0.5</c>. It is keyed to THIS ground, not to
+    /// <c>Surface</c>'s. Measured over the nine shipped papers the glyph-on-plate
+    /// ratio runs 3.66:1 (Brown Paper) to 17.96:1 (Plain White), all past the 3:1
+    /// floor non-text marks need.</para>
+    ///
+    /// <para><b>And the pairing is UNCHANGED by this section</b>, which is what
+    /// makes it safe: the glyphs already sat directly on the page. All §17.2 does
+    /// is replace page-plus-grid-plus-texture under them with a flat patch of the
+    /// same colour, so their contrast can only improve. Nothing here re-purposes
+    /// <c>Surface</c> or adds a second page-mimicking token for other surfaces to
+    /// reach for — it reads the one that already exists.</para></summary>
+    private static SolidColorBrush GroundBrush() => new(PageTheme.Ground);
 
     public sealed class Host
     {
@@ -552,6 +605,18 @@ public sealed class ChromeBars
             Height = Metrics.IconPitch,
             Background = new SolidColorBrush(Colors.Transparent),
         };
+        // §17.2's plate, added FIRST so it sits behind the mark and the
+        // underline. A circle: "every other corner button stays a circle".
+        cell.Children.Add(new Border
+        {
+            Width = Metrics.GroundDiameter,
+            Height = Metrics.GroundDiameter,
+            CornerRadius = new CornerRadius(Metrics.GroundDiameter / 2),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = GroundBrush(),
+            IsHitTestVisible = false,
+        });
         if (art != null)
         {
             art.HorizontalAlignment = HorizontalAlignment.Center;
@@ -880,13 +945,28 @@ public sealed class ChromeBars
         if (locked) row.Children.Add(Icons.Mark(Icons.LockClosed, ChromeUi.Ink, 12));
         row.Children.Add(value);
 
+        // §17.2: "The zoom and tilt readouts take a stadium shape — a rounded-end
+        // capsule sized to their text." Sized to the text because the Border
+        // wraps `row` rather than being given a width: the capsule grows when the
+        // padlock joins the row, which is the same re-layout §17.1 asks for seen
+        // from the other side.
+        var stadium = new Border
+        {
+            Child = row,
+            Height = Metrics.StadiumH,
+            Padding = new Thickness(Metrics.StadiumPadX, 0, Metrics.StadiumPadX, 0),
+            CornerRadius = new CornerRadius(Metrics.StadiumH / 2),
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = GroundBrush(),
+        };
+
         var cell = new Grid
         {
             Background = new SolidColorBrush(Colors.Transparent),
             VerticalAlignment = VerticalAlignment.Center,
             Height = Metrics.IconPitch,
             Margin = new Thickness(0, 0, rightMargin, 0),
-            Children = { row },
+            Children = { stadium },
         };
         ToolTipService.SetToolTip(cell, HoverPill(tip));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(cell, automationName);
