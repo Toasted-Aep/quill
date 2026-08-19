@@ -233,6 +233,11 @@ public static class Icons
         "Eyedropper" => Eyedropper,
         "Ruler" => Ruler,
         "Mix" => Mix,
+        // 17.10 / 17.11. Mouse is the arrow cursor the tool IS; Pan and Rotate
+        // are the two view/subject tools 17.11 adds beside the others.
+        "Mouse" => Mouse,
+        "Pan" => Pan,
+        "Rotate" => Rotate,
         _ => Pen,
     };
 
@@ -384,6 +389,16 @@ public static class Icons
     /// Chevron, for the collapsible rows. Stroked.
     public const string ChevronDown = "M5 8.5 L12 15.5 L19 8.5";
 
+    /// <summary>Back, for a bottom menu that was DESCENDED into (17.9). The same
+    /// chevron as <see cref="ChevronDown"/>, turned to point at what it returns
+    /// to, so the two read as one family rather than as two arrows. Stroked.
+    ///
+    /// <para>It is drawn only when a menu sits over another one - see
+    /// <c>BottomMenu.ShowsBack</c>. The colour picker reached from the mode
+    /// bar's Filter has it; the colour picker reached as a tool in its own right
+    /// does not, and that difference is the whole of 17.9's last clause.</para></summary>
+    public const string ChevronLeft = "M15.5 4.5 L8 12 L15.5 19.5";
+
     // ---- fullscreen chrome (CONCEPTS-REF 15.3) ---------------------------
     // Both literals below are DELIBERATELY ONE LINE EACH, however wide that
     // makes them. A C# path literal split with `+` renders BLANK if a break
@@ -505,6 +520,71 @@ public static class Icons
     /// One closed polygon, so no fill rule can break it.</summary>
     public const string Filter =
         "M 2.5 2.7 L 21.5 2.7 L 13.92 11.8 L 13.92 19.48 L 10.08 21.3 L 10.08 11.8 Z";
+
+    /// <summary>Alpha, the colour picker's bottom menu (17.9): the checkerboard
+    /// that stands for transparency in every image editor there is. A ring, then
+    /// two quadrants inside its hole - even-odd fills them, because a point
+    /// inside a quadrant inside the hole has crossed three edges.</summary>
+    public const string Alpha =
+        "M2.6 2.6 H21.4 V21.4 H2.6 Z M4.4 4.4 V19.6 H19.6 V4.4 Z M4.4 4.4 H12 V12 H4.4 Z M12 12 H19.6 V19.6 H12 Z";
+
+    /// <summary>Stretch, the second face of the mode bar's Scale (17.9): two jambs
+    /// and a double arrow between them - the width changes and the height does
+    /// not, which is the whole difference from <see cref="Scale"/>'s corner drag.
+    ///
+    /// <para><c>F1</c> (nonzero) because each head OVERLAPS the shaft. All five
+    /// subpaths are wound clockwise on the screen's y-down axes, so nonzero
+    /// unions them; even-odd would punch a notch at both joins, which is exactly
+    /// the defect 16.11 measured on the old arrowhead.</para></summary>
+    public const string Stretch =
+        "F1 M2.6 4 H4.8 V20 H2.6 Z M19.2 4 H21.4 V20 H19.2 Z M8.6 11 H15.4 V13 H8.6 Z M5.8 12 10.2 8.4 10.2 15.6 Z M18.2 12 13.8 15.6 13.8 8.4 Z";
+
+    /// <summary>The pan tool (17.11): a cross with four heads, authored as ONE
+    /// closed 24-point outline. Being a single subpath, no fill rule can break
+    /// it - the same reason <see cref="Filter"/> is one polygon.</summary>
+    public const string Pan =
+        "M12 1.6 16 6.6 13.8 6.6 13.8 10.2 17 10.2 17 8 22.4 12 17 16 17 13.8 13.8 13.8 13.8 17.4 16 17.4 12 22.4 8 17.4 10.2 17.4 10.2 13.8 7 13.8 7 16 1.6 12 7 8 7 10.2 10.2 10.2 10.2 6.6 8 6.6 Z";
+
+    /// <summary>Item picker, the mouse tool's first choice (17.10): one object and
+    /// the cursor that takes it. The square is a RING - outer outline plus a
+    /// reversed inner one, so even-odd punches the hole - and the arrow is a
+    /// third subpath placed clear of it, so the two cannot interfere. The arrow
+    /// is <see cref="Mouse"/> at 0.55, which is what keeps the mouse tool's own
+    /// mark and its first option visibly the same cursor.</summary>
+    public const string ItemPicker =
+        "M2.6 2.6 H13.4 V13.4 H2.6 Z M4.4 4.4 V11.6 H11.6 V4.4 Z M13.8 11.5 13.8 20.96 16.17 18.76 17.71 21.95 19.19 21.23 17.65 18.1 20.79 17.94 Z";
+
+    /// <summary>Lasso, the mouse tool's second choice (17.10), which 17.10 folds
+    /// into the mouse tool rather than leaving as a selection mode of its own:
+    /// the loop and its dangling tail.
+    ///
+    /// <para>STROKED, and that is not a style choice. A lasso IS a line; drawn as
+    /// a filled outline at the 18 DIP this menu uses, the ring's two edges are
+    /// under a pixel apart and close up into a blob.</para></summary>
+    public const string Lasso =
+        "M12 3.2 C17.7 3.2 21.4 6.4 21.4 10.4 C21.4 14.4 17.7 17.6 12 17.6 C6.3 17.6 2.6 14.4 2.6 10.4 C2.6 6.4 6.3 3.2 12 3.2 Z M9.4 17.2 L8.1 21.6";
+
+    /// <summary>Partial catch (17.10): a disc straddling the square's edge - any
+    /// part inside counts. Stroked, so the overlap the mark IS cannot punch a
+    /// hole in itself. Its twin below shares the square exactly, so the pair
+    /// reads as one control in two states.</summary>
+    public const string Partial =
+        "M3 3 H21 V21 H3 Z M12.6 12 A5.4 5.4 0 1 1 23.4 12 A5.4 5.4 0 1 1 12.6 12 Z";
+
+    /// <summary>Complete catch (17.10): the same square, with the disc wholly
+    /// inside it - every point of the stroke must be enclosed.</summary>
+    public const string Complete =
+        "M3 3 H21 V21 H3 Z M6.2 12 A5.8 5.8 0 1 1 17.8 12 A5.8 5.8 0 1 1 6.2 12 Z";
+
+    /// <summary>The ACTIVE layer scope (17.10), against <see cref="Layers"/>'s
+    /// stack of three for ALL: one plate, alone, at the stack's own width.
+    ///
+    /// <para>Layers do not exist yet - another branch owns that model - so this
+    /// mark is drawn from <see cref="Quill.Services.LayerScope"/>, which today
+    /// answers with one implicit layer. The mark is authored now so the seam has
+    /// nothing left to add when the model lands.</para></summary>
+    public const string LayerOne =
+        "M12 5.2 22.2 12 12 18.8 1.8 12 Z";
 
     // ---- pen stroke silhouettes (UI-SPEC-V3 K.8) -------------------------
     // A pen slot on the dial does not show the PEN — it shows THE MARK THE PEN
