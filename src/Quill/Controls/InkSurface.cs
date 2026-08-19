@@ -7484,6 +7484,7 @@ public sealed class InkSurface : UserControl
         // discarding it deletes the cell's TextElement and leaves the cell
         // untypeable forever (#cellfix)". The cell is where the bar deliberately
         // does not appear, so nothing replaces it there; nothing should.
+
         // rotate handle: drag left/right to spin the box, like image rotation (#38).
         // A real-sized hit target (the old bare 11px glyph was nearly impossible
         // to grab — misses fell through to the grip and moved the box, #11-batch2).
@@ -7494,7 +7495,11 @@ public sealed class InkSurface : UserControl
             Width = 34,
             Height = 16,
             TextAlignment = TextAlignment.Center,
-            Margin = new Thickness(0, 0, 24, 0),
+            // Was 24, which was the width of the ✕ this rotate handle used to sit
+            // to the left of. That button is gone (see above), so the reservation
+            // went with it - a 24 DIP gap held open for a control that no longer
+            // exists is exactly the stale artefact a removal leaves behind.
+            Margin = new Thickness(0, 0, 4, 0),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             Opacity = 0.75,
