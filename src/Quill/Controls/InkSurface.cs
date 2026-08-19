@@ -4109,23 +4109,28 @@ public sealed class InkSurface : UserControl
             ds.DrawRectangle(r, accent, uiScale, _dashStyle);
         }
 
-        if (HasMultiSelection && !_selBounds.IsEmpty && !ExportChromeless)
-        {
-            var r = new Rect(_selBounds.X + _moveDx, _selBounds.Y + _moveDy, _selBounds.Width, _selBounds.Height);
-            ds.FillRectangle(r, Color.FromArgb(26, Accent.R, Accent.G, Accent.B));
-            ds.DrawRectangle(r, accent, uiScale, _dashStyle);
-
-            // corner handles: drag to scale the whole selection (#54)
-            if (!_movingSel)
-            {
-                float hs = 5.5f / ViewZoom;
-                foreach (var cpt in SelCorners())
-                {
-                    ds.FillRectangle(new Rect(cpt.X - hs, cpt.Y - hs, hs * 2, hs * 2), Colors.White);
-                    ds.DrawRectangle(new Rect(cpt.X - hs, cpt.Y - hs, hs * 2, hs * 2), accent, uiScale);
-                }
-            }
-        }
+        // 17.8: THE SELECTION TINT IS GONE, and nothing replaces it here.
+        //
+        // A committed selection used to be drawn on this canvas as a 26-alpha
+        // accent wash, a dashed rectangle on its bounds, and four white corner
+        // squares. All three are removed: "only the edges remain - the corner
+        // circles and the full-canvas guides of 16.2. No tinted rectangle, no
+        // dashed box." This was the suppression offered when the selection
+        // chrome landed and deferred until the user had seen it.
+        //
+        // The marks that remain are SelectionChrome's, which is XAML over this
+        // canvas rather than Win2D in it: four hollow Ellipses on the same four
+        // corners and four full-canvas guide lines projected from the same
+        // bounds (SubjectBoundsWorld reads _selBounds for a multi-selection, so
+        // the two framed exactly the same rectangle - the squares were a second
+        // set of corner marks sitting on top of the circles that 16.2 replaced).
+        //
+        // Only the DRAWING went. #54's scale drag is untouched: TryBeginScale
+        // still hit-tests SelCorners(), and those corners are still marked -
+        // by a circle now instead of a square. The RUBBER BANDS above are also
+        // untouched, and deliberately so: the lasso and the in-flight rectangle
+        // are a gesture in progress, not a selection, and 17.8 is about what a
+        // settled selection looks like.
 
         if (!_replaying) DrawRuler(ds, bg);
 
