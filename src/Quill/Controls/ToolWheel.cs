@@ -229,17 +229,18 @@ public sealed class ToolWheel
     // 16.4: "when one is unavailable, its glyph and value move to the middle of
     // that section". The section is the same annular quadrant HoverGeometry
     // draws and Aim resolves - see the quadrant table below - so its middle is
-    // the mid-radius point on the quadrant's own midline, and the glyph and its
-    // value are stacked as ONE block centred there. Disabled the value is "-",
-    // so the split that exists to separate a mark from its number has nothing
-    // left to separate.
+    // the mid-radius point on the quadrant's own midline.
+    //
+    // 17.14 SETTLES WHAT SITS THERE. 16.4's centring "is right and the user said
+    // so"; what was still wrong is that the readout showed "-". With the dash
+    // gone the disabled state has NO value at all, so there is no stack to
+    // centre - the two offsets that balanced a 16.8 glyph over a 12.0 value line
+    // (-7.00 and +9.25) described a block that no longer exists, and keeping the
+    // glyph at -7 would leave it sitting 7 DIP high in its own section. THE
+    // GLYPH IS THE WHOLE MARK NOW, and it centres on the section's middle.
     private const double SectionR = (DotR + DiscR) / 2;             // 37.97
-    // The stack: 16.8 glyph, 2.0 gap, 12.0 value line = 30.8 tall. These two
-    // are the glyph's centre and the value's baseline anchor as offsets from
-    // the section's middle; they put the stack's own centre there to within
-    // 0.01 DIP.
-    private const double DisabledGlyphDy = -7.00;
-    private const double DisabledValueDy = 9.25;
+    // The gap between a mark and its number, wherever the two are a row.
+    private const double SetGap = 5;
     // Icons.Mark draws at the authored 24-grid scale instead of stretching the
     // geometry to the box - that stretch WAS the K.5 defect - so a mark that
     // does not fill its grid now comes out at its true size. The boxes grow to
@@ -990,17 +991,31 @@ public sealed class ToolWheel
         var sel = SelectionState.Current;
         string Read(Prop p, float? v, string suffix, float scale)
         {
-            if (!Enabled(p)) return "-";
             if (sel.Any) return v is { } n ? $"{n * scale:0.#}{suffix}" : "—";
             return "";
         }
+        // 17.14: A DISABLED READOUT SHOWS NOTHING, NOT A DASH. The "-" used to be
+        // produced inside Read, which asked Enabled itself; the guard is now
+        // enabled[] - the array Refresh has ALREADY read out of the one disabled
+        // predicate, three lines up - so removing the dash removed a call to that
+        // predicate rather than adding a second answer to the same question.
+        //
+        // The guard is also load-bearing for a second reason: ap is null whenever
+        // the active tool is not a pen, and the pen fallbacks below dereference
+        // it. Short-circuiting on enabled[] is what keeps them from being
+        // evaluated at all - the dash used to do that job by being non-empty.
         string[] read =
         {
-            Read(Prop.Size, sel.Size, " px", 1f) is { Length: > 0 } a0 ? a0
+            !enabled[0] ? ""
+                : Read(Prop.Size, sel.Size, " px", 1f) is { Length: > 0 } a0 ? a0
                 : eraser ? (lib.EraserSize <= 0 ? Loc.T("Wheel.Auto") : $"{lib.EraserSize:0} px")
                 : $"{ap!.Size:0.#} px",
-            Read(Prop.Opacity, sel.Opacity, "%", 100f) is { Length: > 0 } a1 ? a1 : $"{ap!.Opacity * 100:0}%",
-            Read(Prop.Smooth, sel.Stability, "%", 100f) is { Length: > 0 } a2 ? a2 : $"{ap!.Stabiliser * 100:0}%",
+            !enabled[1] ? ""
+                : Read(Prop.Opacity, sel.Opacity, "%", 100f) is { Length: > 0 } a1 ? a1
+                : $"{ap!.Opacity * 100:0}%",
+            !enabled[2] ? ""
+                : Read(Prop.Smooth, sel.Stability, "%", 100f) is { Length: > 0 } a2 ? a2
+                : $"{ap!.Stabiliser * 100:0}%",
         };
 
         Glyph(_sizeGlyph, Icons.Size, enabled[0] ? onSurface : muted, stroked: false);
@@ -1170,19 +1185,23 @@ public sealed class ToolWheel
     ///
     /// <para>16.4: the size row is already a centred pair, so being unavailable
     /// costs it no rearrangement - only the 2.73 DIP that separates 14.1's
-    /// Row1Y from the middle of the top section. The readout is "-" by then, so
-    /// the pair is narrow and the move is the whole of what 16.4 asks for
-    /// here.</para></summary>
+    /// Row1Y from the middle of the top section.</para>
+    ///
+    /// <para>17.14: and the readout is EMPTY by then, not "-", so the pair is
+    /// the glyph and nothing else. The 5 DIP that separates a mark from its
+    /// number has to go with the number, or the glyph would centre 2.5 DIP left
+    /// of the midline - the gap holding a place for a readout that is not
+    /// there.</para></summary>
     private void LayoutSizeRow(bool enabled)
     {
         _sizeText.Measure(new Size(200, 40));
         double tw = _sizeText.DesiredSize.Width;
-        double total = SetBox + 5 + tw;
+        double total = SetBox + (tw > 0 ? SetGap + tw : 0);
         double x = Half - total / 2;
         double y = enabled ? Row1Y : SectionMid(Prop.Size).Y;
         Canvas.SetLeft(_sizeGlyph, x);
         Canvas.SetTop(_sizeGlyph, Half + y - SetBox / 2);
-        Canvas.SetLeft(_sizeText, x + SetBox + 5);
+        Canvas.SetLeft(_sizeText, x + SetBox + SetGap);
         Canvas.SetTop(_sizeText, Half + y - ReadoutSize * 0.72);
     }
 
@@ -1517,10 +1536,13 @@ public sealed class ToolWheel
             PlaceValue(value, side * ValueX, ValueY);
             return;
         }
-        // 16.4: the pair stacks and centres in its section.
+        // 16.4 as 17.14 leaves it: the GLYPH centres in its section. The value
+        // is empty, so it is parked on the same point rather than under it - a
+        // TextBlock holding "" paints nothing, and leaving it at its enabled
+        // position would strand an invisible box out on the rim.
         var c = SectionMid(p);
-        PlaceBox(glyph, c.X, c.Y + DisabledGlyphDy, SetBox);
-        PlaceValue(value, c.X, c.Y + DisabledValueDy);
+        PlaceBox(glyph, c.X, c.Y, SetBox);
+        PlaceValue(value, c.X, c.Y);
     }
 
     private static Brush ShadowBrush()
@@ -1973,10 +1995,10 @@ public sealed class ToolWheel
     /// text disables all three and the eraser disables two.</para>
     ///
     /// <para>16.4's centred layout hangs off this one predicate, as do the muted
-    /// brush and the "-" readout: Refresh reads it once into <c>enabled[]</c>
-    /// and every consequence follows from that array. A parallel notion of
-    /// "disabled" would give the dial two disagreeing answers, and 16.4's layout
-    /// would follow only one of them.</para></summary>
+    /// brush and the BLANK readout 17.14 replaced the dash with: Refresh reads it
+    /// once into <c>enabled[]</c> and every consequence follows from that array.
+    /// A parallel notion of "disabled" would give the dial two disagreeing
+    /// answers, and 16.4's layout would follow only one of them.</para></summary>
     private bool Enabled(Prop p)
     {
         if (SelectionState.Current is { Any: true } sel)
