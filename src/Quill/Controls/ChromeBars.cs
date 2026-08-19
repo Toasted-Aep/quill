@@ -903,37 +903,53 @@ public sealed class ChromeBars
     /// on a bar that rebuilds itself is how a hover element gets stranded up.
     /// The pill is DARK on every page for the same reason ValuePopover's tool
     /// chip is — it reads as a system label rather than as another panel — which
-    /// is also what §17.1's own word "dark" asks for.</para></summary>
+    /// is also what §17.1's own word "dark" asks for.</para>
+    ///
+    /// <para><b>Filled on Opened, not at Build.</b> The zoom value moves on every
+    /// pinch and Ctrl+wheel, and those run <see cref="SyncReadouts"/> only — they
+    /// do NOT rebuild the bar, because rebuilding a cluster per wheel notch is
+    /// what <c>SyncReadouts</c> exists to avoid. A pill whose text was captured
+    /// at Build time would therefore show the zoom the user had when the bar was
+    /// last built, which on a bar that rebuilds rarely is any number at all. The
+    /// content is built each time the tip opens instead, which is the only moment
+    /// it can be read.</para></summary>
     private ToolTip HoverPill(string caption)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14 };
-        row.Children.Add(PillPair(_zoomLocked, MeasurementMenu.Percent(SafeZoom())));
-        row.Children.Add(PillPair(_tiltLocked, MeasurementMenu.Degrees(0)));
-
-        var stack = new StackPanel { Spacing = 3 };
-        stack.Children.Add(row);
-        stack.Children.Add(new TextBlock
-        {
-            Text = caption,
-            FontSize = 11,
-            Foreground = new SolidColorBrush(Color.FromArgb(0xC0, 0xF2, 0xF2, 0xF2)),
-        });
-
         var pill = new Border
         {
-            Child = stack,
             Padding = new Thickness(10, 6, 10, 6),
             // A stadium, like the readout grounds §17.2 gives these cells.
             CornerRadius = new CornerRadius(11),
             Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x1A, 0x1A, 0x1A)),
         };
-        return new ToolTip
+        var tip = new ToolTip
         {
             Content = pill,
             Background = new SolidColorBrush(Colors.Transparent),
             BorderThickness = new Thickness(0),
             Padding = new Thickness(0),
         };
+        tip.Opened += (_, _) =>
+        {
+            try
+            {
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14 };
+                row.Children.Add(PillPair(_zoomLocked, MeasurementMenu.Percent(SafeZoom())));
+                row.Children.Add(PillPair(_tiltLocked, MeasurementMenu.Degrees(0)));
+
+                var stack = new StackPanel { Spacing = 3 };
+                stack.Children.Add(row);
+                stack.Children.Add(new TextBlock
+                {
+                    Text = caption,
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.FromArgb(0xC0, 0xF2, 0xF2, 0xF2)),
+                });
+                pill.Child = stack;
+            }
+            catch { }
+        };
+        return tip;
     }
 
     private static FrameworkElement PillPair(bool locked, string value)
