@@ -249,11 +249,102 @@ def raster(polys, nonzero, size, ss=SS):
     return cov.reshape(size, ss, size, ss).mean(axis=(1, 3))
 
 
-def strip(name, data, sizes=SIZES, zoom=6):
+def subpaths(d):
+    """Every subpath, OPEN ones included, as (points, closed).
+
+    polygons() above drops any subpath with three points or fewer, because a
+    degenerate one contributes no filled area. A STROKED mark's subpaths are
+    lines - Lasso's tail is exactly two points - so stroking needs its own walk
+    that keeps them and remembers which ones Z closed.
+    """
+    d = d.strip()
+    if d[:2].upper() in ("F1", "F0"):
+        d = d[2:]
+    out, cur = [], []
+    cx = cy = sx = sy = 0.0
+    for cmd, args in tokenise(d):
+        up, rel = cmd.upper(), cmd.islower()
+        k = {"M": 2, "L": 2, "H": 1, "V": 1, "C": 6, "A": 7, "Z": 0}[up]
+        if up == "Z":
+            if len(cur) > 1:
+                out.append((cur, True))
+            cur, cx, cy = [], sx, sy
+            continue
+        for j in range(0, len(args), k):
+            a = args[j:j + k]
+            if up == "M":
+                x, y = (cx + a[0], cy + a[1]) if rel else (a[0], a[1])
+                if len(cur) > 1:
+                    out.append((cur, False))
+                cur = [(x, y)]
+                cx, cy = sx, sy = x, y
+                up = "L"
+            elif up == "L":
+                x, y = (cx + a[0], cy + a[1]) if rel else (a[0], a[1])
+                cur.append((x, y)); cx, cy = x, y
+            elif up == "H":
+                x = cx + a[0] if rel else a[0]
+                cur.append((x, cy)); cx = x
+            elif up == "V":
+                y = cy + a[0] if rel else a[0]
+                cur.append((cx, y)); cy = y
+            elif up == "C":
+                p1 = (cx + a[0], cy + a[1]) if rel else (a[0], a[1])
+                p2 = (cx + a[2], cy + a[3]) if rel else (a[2], a[3])
+                p3 = (cx + a[4], cy + a[5]) if rel else (a[4], a[5])
+                cur += bezier((cx, cy), p1, p2, p3)
+                cx, cy = p3
+            elif up == "A":
+                p1 = (cx + a[5], cy + a[6]) if rel else (a[5], a[6])
+                cur += svg_arc((cx, cy), a[0], a[1], a[2], int(a[3]) != 0, int(a[4]) != 0, p1)
+                cx, cy = p1
+    if len(cur) > 1:
+        out.append((cur, False))
+    return out
+
+
+def raster_stroke(subs, size, thickness, ss=SS):
+    """Coverage for a STROKED mark - Icons.Mark(..., stroked: true, thickness: t).
+
+    Round caps and round joins, which is what that factory sets, so a sample is
+    inked exactly when it lies within thickness/2 of the centreline. Distance to
+    a segment rather than an outline offset: with round joins the two are the
+    same figure, and this one cannot self-intersect.
+
+    Thickness is in GRID units - Mark scales the authored path and the pen
+    together - so a 2 at size 30 draws 2.5 px, not 2.
+    """
+    n = size * ss
+    k = n / 24.0
+    half = thickness / 2.0 * k
+    ys, xs = np.mgrid[0:n, 0:n]
+    px = (xs + 0.5).astype(np.float64)
+    py = (ys + 0.5).astype(np.float64)
+    best = np.full((n, n), np.inf)
+    for pts, closed in subs:
+        m = len(pts)
+        last = m if closed else m - 1
+        for i in range(last):
+            ax, ay = pts[i][0] * k, pts[i][1] * k
+            bx, by = pts[(i + 1) % m][0] * k, pts[(i + 1) % m][1] * k
+            dx, dy = bx - ax, by - ay
+            L2 = dx * dx + dy * dy
+            if L2 < 1e-12:
+                d = np.hypot(px - ax, py - ay)
+            else:
+                t = np.clip(((px - ax) * dx + (py - ay) * dy) / L2, 0.0, 1.0)
+                d = np.hypot(px - (ax + t * dx), py - (ay + t * dy))
+            np.minimum(best, d, out=best)
+    cov = (best <= half).astype(np.float32)
+    return cov.reshape(size, ss, size, ss).mean(axis=(1, 3))
+
+
+def strip(name, data, sizes=SIZES, zoom=6, stroked=False, thickness=2.0):
     polys, nonzero = polygons(data)
+    subs = subpaths(data) if stroked else None
     pads, labels = [], []
     for s in sizes:
-        c = raster(polys, nonzero, s)
+        c = raster_stroke(subs, s, thickness) if stroked else raster(polys, nonzero, s)
         one = np.clip(255.0 * (1.0 - c), 0, 255).astype(np.uint8)
         big = np.repeat(np.repeat(one, zoom, axis=0), zoom, axis=1)
         pads.append((one, big))
@@ -271,13 +362,26 @@ def strip(name, data, sizes=SIZES, zoom=6):
     p = os.path.join(OUT, name + ".png")
     Image.fromarray(sheet, "L").save(p)
     # ink coverage per size, the number that says whether a fine feature survived
-    return p, [(s, float(raster(polys, nonzero, s).sum())) for s in sizes]
+    ink = [(s, float((raster_stroke(subs, s, thickness) if stroked
+                      else raster(polys, nonzero, s)).sum())) for s in sizes]
+    return p, ink
 
 
 def main(argv):
     text = open(ICONS, "r", encoding="utf-8").read()
     table = dict(literals(text))
-    want = argv[1:]
+    argv = list(argv[1:])
+    # --stroked [thickness]: render the named marks the way Icons.Mark draws a
+    # STROKED one. Without it a mark that is a line - Lasso, Smoothness,
+    # ChevronDown - fills into a blob here and looks broken when it is not.
+    stroked = "--stroked" in argv
+    thickness = 2.0
+    if stroked:
+        i = argv.index("--stroked")
+        argv.pop(i)
+        if i < len(argv) and re.fullmatch(r"[\d.]+", argv[i]):
+            thickness = float(argv.pop(i))
+    want = argv
     if not want or want == ["--all"]:
         want = [n for n, v in table.items() if re.match(r"^\s*(?:[Ff][01]\s*)?[Mm][\s\d\-+.]", v)]
     for n in want:
@@ -285,7 +389,7 @@ def main(argv):
             print(f"  ?? no literal named {n}")
             continue
         try:
-            p, ink = strip(n, table[n])
+            p, ink = strip(n, table[n], stroked=stroked, thickness=thickness)
         except Exception as e:
             print(f"  !! {n}: {e}")
             continue

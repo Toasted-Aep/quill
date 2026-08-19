@@ -63,19 +63,29 @@ marks["ItemPicker"] = sq + " " + sq_in + " " + arrow_at(13.8, 11.5, 0.55)
 
 # --- Lasso: the loop and its dangling tail. STROKED - a lasso is a line, and a
 #     line drawn as an outline at 18 DIP closes up into a blob.
-marks["Lasso"] = ("M12 3.2 C17.7 3.2 21.4 6.4 21.4 10.4 C21.4 14.4 17.7 17.6 12 17.6 "
-                  "C6.3 17.6 2.6 14.4 2.6 10.4 C2.6 6.4 6.3 3.2 12 3.2 Z M9.4 17.2 L8.1 21.6")
+#     The tail sweeps out to the LEFT and down rather than hanging straight: a
+#     short vertical stub under a circle reads as a balloon, which is what the
+#     first cut of this mark drew.
+marks["Lasso"] = ("M12 3.4 C17.7 3.4 21.4 6.5 21.4 10.4 C21.4 14.3 17.7 17.4 12 17.4 "
+                  "C6.3 17.4 2.6 14.3 2.6 10.4 C2.6 6.5 6.3 3.4 12 3.4 Z "
+                  "M8.6 17 C8 18.8 6.6 20.1 4.4 21")
 
-# --- Partial / Complete: the same square, and a disc that straddles its edge or
-#     sits wholly within it. STROKED, so the overlap Partial IS cannot punch a
-#     hole in itself.
-marks["Partial"] = rect(3, 3, 21, 21) + " " + circle(18, 12, 5.4)
-marks["Complete"] = rect(3, 3, 21, 21) + " " + circle(12, 12, 5.8)
+# --- Partial / Complete: the SAME square in both, and a disc that straddles its
+#     edge or sits wholly within it. Same square, so the pair reads as one
+#     control in two states; each composition centred in its own grid, because
+#     Icons.Mark does not stretch and an off-centre mark sits off-centre in its
+#     cell. STROKED, so the overlap Partial IS cannot punch a hole in itself.
+#     The disc is r 3.6 in a 15.2 square, not r 4.2 in a 13.4: at 14 DIP the
+#     tighter pair left 1.5 px between two 2-unit strokes and closed into a blob.
+marks["Complete"] = rect(4.4, 4.4, 19.6, 19.6) + " " + circle(12, 12, 3.6)
+marks["Partial"] = rect(3, 4.4, 18.2, 19.6) + " " + circle(18.2, 12, 3.6)
 
 # --- Alpha: the checkerboard that stands for transparency everywhere. A ring
 #     plus two quadrants; even-odd fills the quadrants inside the ring's hole.
-marks["Alpha"] = (rect(2.6, 2.6, 21.4, 21.4) + " M4.4 4.4 V19.6 H19.6 V4.4 Z " +
-                  rect(4.4, 4.4, 12, 12) + " " + rect(12, 12, 19.6, 19.6))
+#     Drawn at 16.8 units rather than 18.8: a checkerboard is mostly ink, and at
+#     the full grid it read a third heavier than every mark beside it.
+marks["Alpha"] = (rect(3.6, 3.6, 20.4, 20.4) + " M5.2 5.2 V18.8 H18.8 V5.2 Z " +
+                  rect(5.2, 5.2, 12, 12) + " " + rect(12, 12, 18.8, 18.8))
 
 # --- Pan: one closed 24-point outline - a cross with four heads. Being ONE
 #     subpath, no fill rule can break it, which is the same reason Filter is a
