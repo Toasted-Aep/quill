@@ -41,6 +41,45 @@ namespace Quill.Controls;
 /// same sentence 16.3 applies to the dial, applied here, so a user meets one
 /// rule in the app rather than two.</para>
 ///
+/// <para><b>ONE BAR, TWO TRIGGERS (11.9 folded in here rather than beside
+/// it).</b> 11.9 asks for "quick-action buttons above the text bubble ... a
+/// Cancel Editing affordance with a red X, and a row of attach / duplicate /
+/// lock / delete marks". Those are this bar's marks, minus the flips, plus one -
+/// but they belong to a DIFFERENT STATE, and that is the whole reason this
+/// class grew a mode rather than a sibling:</para>
+///
+/// <list type="bullet">
+/// <item><b>SELECTED</b> is <see cref="SelectionState"/>, published by
+/// <c>InkSurface.PublishSelection</c> and reached only by the lasso, a click on
+/// a stroke (16.10), a paste, Select All and the table row/column selectors.
+/// Nothing puts a text box into <c>_selTexts</c> because it was tapped into, so
+/// <b>a bubble being typed in publishes no selection and this bar has never
+/// appeared for one</b>.</item>
+/// <item><b>EDITING</b> is <c>InkSurface.ActiveTextBox</c> - a RichEditBox with
+/// the caret in it. It publishes nothing, and the surface it raises today is
+/// the pinned top FormatBar.</item>
+/// </list>
+///
+/// <para><b>"Cancel Editing" is what settles which of the two 11.9 means</b>:
+/// you cannot cancel editing a box you are not editing, and a lasso-selected
+/// text box has no caret and no focus. So 11.9 is the editing state - a second
+/// trigger, not a second bar. Folding it in here rather than building a fourth
+/// floating strip buys three things a sibling class could not: the two can never
+/// be on screen at once, because one object shows one bar; the editing bar
+/// inherits <see cref="Metrics"/>, so a later resize of the quick actions moves
+/// both; and there is one plate, one mark factory and one greying rule in the
+/// app rather than two that drift.</para>
+///
+/// <para><b>Precedence: SELECTION WINS.</b> A text box can be lassoed and then
+/// tapped into, and then both states are true. The selected one is the stronger
+/// statement - it is the one carrying handles, guides and the flips - so it is
+/// the one that draws. Escape still leaves the box either way.</para>
+///
+/// <para><b>The editing bar draws NOTHING below the bubble</b> - no guides, no
+/// corner circles, no Rotate / Scale / Filter row. 11.9 asks for quick actions
+/// above the bubble and nothing else, and those four things describe a
+/// selection, which this is not.</para>
+///
 /// <para><b>Three hit-testing traps this file is built around</b>, all of which
 /// have killed overlays in this codebase before:</para>
 /// <list type="number">
@@ -70,7 +109,28 @@ public sealed class SelectionChrome
         /// the one subject with a file behind it to replace.</summary>
         public required Action ReplaceAttachment { get; init; }
         public required Func<bool> IsBlocked { get; init; }
+
+        // ---- 11.9: the same four commands, on the box being EDITED ---------
+        // Deliberately NOT the four above. Duplicate, Delete and ToggleLock all
+        // read _selected / _selShapes / _selTexts, every one of which is empty
+        // while a box is merely being typed in - so pointing the editing bar at
+        // them would give it four marks that quietly did nothing. They are also
+        // not folded into those methods as a fallback: Delete and Ctrl+D reach
+        // DeleteSelection and DuplicateSelection from the keyboard, and a
+        // fallback would turn the Delete key, pressed mid-sentence, into "throw
+        // this text box away".
+
+        /// <summary>11.9's red X. Cancels EDITING, never the text.</summary>
+        public required Action CancelEditing { get; init; }
+        public required Action DuplicateEditingText { get; init; }
+        public required Action ToggleEditingTextLock { get; init; }
+        public required Action DeleteEditingText { get; init; }
     }
+
+    /// <summary>Which of the two states is on screen. One field, because one
+    /// object draws one bar - see the class remarks for why 11.9 is a mode here
+    /// rather than a fourth floating surface.</summary>
+    private enum Mode { None, Selection, Editing }
 
     /// <summary>Every number this surface is laid out with, in one block, like
     /// <see cref="ChromeBars.Metrics"/> and <see cref="FullscreenChrome.Metrics"/>.</summary>
@@ -85,6 +145,13 @@ public sealed class SelectionChrome
         /// word beside them, and a mark that matches its label's cap height
         /// reads as one token rather than as an icon with a caption.</summary>
         public const double RowMarkSize = 15, RowFontSize = 12.5;
+        /// <summary>The word beside a mark ON THE BAR - 11.9's "Cancel Editing".
+        /// NOT a new size decision: it is the ratio the bottom row already runs
+        /// between its word and its mark, applied to the bar's own mark size. So
+        /// if the quick actions are ever resized, the label follows them instead
+        /// of being left behind at a fixed point size beside a mark half again
+        /// as big.</summary>
+        public static double LabelSize => MarkSize * (RowFontSize / RowMarkSize);
         /// <summary>Clearance from the bounding box to the bar and to the row.
         /// Enough that neither touches a corner circle at any zoom.</summary>
         public const double Gap = 14;
@@ -105,6 +172,35 @@ public sealed class SelectionChrome
         public const double EdgeInset = 8;
     }
 
+    /// <summary>11.9's red X, as a PAIR rather than a constant, and the pair is
+    /// measured rather than picked.
+    ///
+    /// <para><c>#C42B1C</c> is the red this app already carries - it is
+    /// <c>FullscreenChrome.CloseHot</c>, Windows' own close-hover red - and
+    /// reusing it beats introducing a second red. But one red cannot serve both
+    /// ends of the panel ramp. <c>PageTheme.Panel</c> runs L* 95..97.5 light and
+    /// L* 13..29 dark (section 13.1), and against the WORST case at each end the
+    /// contrast is:</para>
+    ///
+    /// <code>
+    ///                    light L*95      dark L*29
+    ///   #C42B1C            5.01            1.72     &lt;- fails on dark
+    ///   #FF6C50            2.48            3.48     &lt;- fails on light
+    /// </code>
+    ///
+    /// <para>So the light end keeps the app's red and the dark end takes the
+    /// same Lab hue and chroma lifted +22 L*, which is the smallest lift that
+    /// clears the 3:1 floor for a non-text mark against an L* 29 panel. Both
+    /// worst cases are stated because the middle of the ramp is not where a
+    /// palette fails - the ends are.</para>
+    ///
+    /// <para>Deliberately not derived from <see cref="PageTheme.Accent"/>: the
+    /// accent is the user's own choice and can be any hue, including green. A
+    /// mark 11.9 specifies as red has to be red.</para></summary>
+    private static readonly Color CancelRedLight = Color.FromArgb(0xFF, 0xC4, 0x2B, 0x1C);
+    private static readonly Color CancelRedDark = Color.FromArgb(0xFF, 0xFF, 0x6C, 0x50);
+    private static Color CancelRed => PageTheme.IsDark ? CancelRedDark : CancelRedLight;
+
     private readonly Grid _host;
     private readonly InkSurface _surface;
     private readonly Host _h;
@@ -120,7 +216,7 @@ public sealed class SelectionChrome
     private readonly StackPanel _barItems = new() { Orientation = Orientation.Horizontal, Spacing = 0 };
     private readonly StackPanel _rowItems = new() { Orientation = Orientation.Horizontal, Spacing = 10 };
 
-    private bool _shown;
+    private Mode _mode = Mode.None;
 
     public static SelectionChrome Attach(Grid host, InkSurface surface, Host h) => new(host, surface, h);
 
@@ -172,6 +268,13 @@ public sealed class SelectionChrome
         _row.SizeChanged += (_, _) => Place();
 
         SelectionState.Changed += Sync;
+        // 11.9's trigger. Which box is being edited, and where that box is, are
+        // two separate questions and neither answers the other: ActiveTextChanged
+        // fires when the caret moves to another bubble (mode, and which subject),
+        // EditingTextGeometryChanged when the bubble it is already in grows a
+        // line or is dragged (placement only).
+        _surface.ActiveTextChanged += _ => Sync();
+        _surface.EditingTextGeometryChanged += OnEditingMoved;
         _surface.ViewChanged += OnViewMoved;
         _host.SizeChanged += (_, _) => Place();
         PageTheme.Changed += Repaint;
@@ -219,6 +322,59 @@ public sealed class SelectionChrome
     }
 
     private void Build()
+    {
+        if (_mode == Mode.Editing) { BuildEditingBar(); return; }
+        BuildSelectionBar();
+    }
+
+    /// <summary>11.9's bar. THE SAME FOUR MARKS AS THE SELECTION BAR'S FIRST
+    /// GROUP, IN THE SAME ORDER, with the red X in front of them.
+    ///
+    /// <para><b>16.2's order is used, not 11.9's, and that is a decision.</b>
+    /// 11.9 lists "attach / duplicate / lock / delete"; 16.2 enumerates the same
+    /// four as "a paperclip, a padlock, a duplicate mark, a waste bin". The two
+    /// disagree on whether the padlock or the duplicate comes second. Both are
+    /// transcriptions of the reference, so one of them is a slip - and the same
+    /// four marks appearing in two different orders in one app, on two surfaces
+    /// a user reaches for the same object, is a defect whichever way it is
+    /// resolved. 16.2's is taken because it is the more recent reading and the
+    /// more careful one (a measured capture, enumerated left to right, against a
+    /// one-line item in a numbered list). Flagged in the report rather than
+    /// settled silently.</para>
+    ///
+    /// <para><b>The paperclip is present and dead</b>, on this file's existing
+    /// rule rather than a new one: only an attachment has a file behind it to
+    /// replace, and a text box is not one. 11.9 lists it, so it is drawn; it
+    /// cannot act, so it greys and says why.</para>
+    ///
+    /// <para><b>The flips are not here.</b> 11.9 does not list them, and a
+    /// mirrored text box is unreadable - which is presumably why.</para></summary>
+    private void BuildEditingBar()
+    {
+        bool locked = _surface.EditingTextLocked;
+        var ink = PageTheme.OnSurface;
+
+        _barItems.Children.Clear();
+        // STROKED, and through Icons.Mark rather than Icons.Stroked: Close IS
+        // two crossed lines, and Stretch.Uniform (which is what Icons.Stroked
+        // applies) fits the CENTRELINE to the box and then adds the pen width
+        // outside it, so the layout clips half the stroke off each end. That is
+        // the defect Icons.Mark was written to refuse. Thickness is in GRID
+        // units there, so 3 on the 24 grid is 2 DIP at MarkSize 16 and stays
+        // proportional if the marks are ever resized.
+        _barItems.Children.Add(Word(Icons.Close, "Cancel Editing", true, _h.CancelEditing, CancelRed,
+                                    stroked: true, size: Metrics.MarkSize));
+        _barItems.Children.Add(Divider());
+        _barItems.Children.Add(Mark(Icons.Paperclip, "Replace attachment", false, () => { }, ink,
+            deadTip: "Only an attachment has a file to replace"));
+        _barItems.Children.Add(Mark(locked ? Icons.LockClosed : Icons.LockOpen,
+            locked ? "Unlock" : "Lock", true, _h.ToggleEditingTextLock, ink));
+        _barItems.Children.Add(Mark(Icons.Duplicate, "Duplicate", true, _h.DuplicateEditingText, ink));
+        _barItems.Children.Add(Mark(Icons.WasteBin, "Delete", !locked, _h.DeleteEditingText, ink,
+            deadTip: "This text box is locked"));
+    }
+
+    private void BuildSelectionBar()
     {
         var s = SelectionState.Current;
         bool locked = _surface.SelectionLocked;
@@ -288,10 +444,20 @@ public sealed class SelectionChrome
         return Press(cell, tip, live, click, deadTip);
     }
 
-    private Button Word(string geometry, string label, bool live, Action click, Color ink, string? deadTip = null)
+    /// <summary>A mark with its word beside it. The bottom row's items, and
+    /// 11.9's Cancel Editing.
+    ///
+    /// <para><paramref name="stroked"/> exists for that one caller:
+    /// <see cref="Icons.Close"/> IS two crossed lines and has no outline to
+    /// fill. It is reused rather than a second X being authored, on the same
+    /// rule the padlock follows in Icons.cs - a second copy of a mark this app
+    /// already has is exactly the drift that file exists to prevent.</para></summary>
+    private Button Word(string geometry, string label, bool live, Action click, Color ink,
+                        string? deadTip = null, bool stroked = false, double? size = null)
     {
         var paint = live ? ink : PageTheme.WithAlpha(ink, 70);
-        var art = Icons.Mark(geometry, paint, Metrics.RowMarkSize);
+        double s = size ?? Metrics.RowMarkSize;
+        var art = Icons.Mark(geometry, paint, s, stroked, thickness: 3);
         art.VerticalAlignment = VerticalAlignment.Center;
         var stack = new StackPanel
         {
@@ -304,7 +470,7 @@ public sealed class SelectionChrome
         stack.Children.Add(new TextBlock
         {
             Text = label,
-            FontSize = Metrics.RowFontSize,
+            FontSize = size == null ? Metrics.RowFontSize : Metrics.LabelSize,
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = new SolidColorBrush(paint),
         });
@@ -323,12 +489,36 @@ public sealed class SelectionChrome
             Background = new SolidColorBrush(Colors.Transparent),
             BorderThickness = new Thickness(0),
             IsEnabled = live,
+            // THE TRAP THAT WOULD HAVE KILLED 11.9's BAR. A Button takes focus
+            // when it is clicked, and the subject of the editing bar IS the
+            // focused RichEditBox - so without this, pressing Duplicate would
+            // blur the box, InkSurface would clear ActiveTextBox, and the bar
+            // would vanish from under the pointer before its Click ever ran.
+            // MainWindow's FormatBar sets AllowFocusOnInteraction="False" on
+            // every one of its buttons for exactly this reason; this is that
+            // same line. Cancel Editing does its blur explicitly in the handler
+            // rather than relying on the side effect, so the one command that
+            // WANTS the box blurred does not depend on click ordering either.
+            AllowFocusOnInteraction = false,
         };
         // A disabled Button still shows a tooltip in WinUI, which is the point:
         // a control that greys should be able to say why.
         ToolTipService.SetToolTip(b, live ? tip : deadTip ?? tip);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, tip);
-        if (live) b.Click += (_, _) => click();
+        if (live)
+            b.Click += (_, _) =>
+            {
+                click();
+                // The selection bar is rebuilt by SelectionState.Changed, which
+                // every one of its commands raises. The EDITING bar has no such
+                // event - toggling the padlock changes nothing SelectionState
+                // knows about - so it re-asks here. Rebuilding a bar from inside
+                // one of its own buttons' Click is what the selected path
+                // already does (Duplicate -> ClearSelection -> PublishSelection
+                // -> Changed -> Sync -> Build), so this is the same shape, not a
+                // new risk.
+                if (_mode == Mode.Editing) Sync();
+            };
         return b;
     }
 
@@ -341,16 +531,52 @@ public sealed class SelectionChrome
     /// also what knows when it has changed, and calls this.</summary>
     public void Refresh() => Sync();
 
+    /// <summary>Which state is on screen. SELECTION WINS when both are true - a
+    /// text box can be lassoed and then tapped into, and the selected reading is
+    /// the stronger one: it is the one with handles, guides and the flips.
+    ///
+    /// <para>Blocked beats both, unchanged: the COPIC wheel covers the canvas
+    /// (9.3) and an export moves the view before capturing it, and a floating
+    /// bar must not survive either.</para></summary>
+    private Mode Wanted()
+    {
+        if (_h.IsBlocked()) return Mode.None;
+        if (SelectionState.Current.Any) return Mode.Selection;
+        // Both halves are asked. EditingText is null for a table cell and for a
+        // box that has just been torn down, and the bounds are empty until the
+        // container has been through a layout pass - a bar placed off an empty
+        // rect would land in the corner of the canvas for one frame.
+        if (_surface.EditingText != null && !_surface.EditingTextBoundsWorld.IsEmpty)
+            return Mode.Editing;
+        return Mode.None;
+    }
+
     private void Sync()
     {
-        bool want = SelectionState.Current.Any && !_h.IsBlocked();
-        if (want != _shown)
+        var want = Wanted();
+        if (want != _mode)
         {
-            _shown = want;
-            _layer.Visibility = want ? Visibility.Visible : Visibility.Collapsed;
+            _mode = want;
+            _layer.Visibility = want == Mode.None ? Visibility.Collapsed : Visibility.Visible;
+            // Everything except the bar describes a SELECTION. 11.9 asks for
+            // quick actions above the bubble and nothing else, so the guides,
+            // the corner circles and the bottom row stand down while editing
+            // rather than being drawn around a box the user is typing in.
+            var deco = want == Mode.Selection ? Visibility.Visible : Visibility.Collapsed;
+            foreach (var g in _guides) g.Visibility = deco;
+            foreach (var e in _handles) e.Visibility = deco;
+            _row.Visibility = deco;
         }
-        if (!want) return;
+        if (want == Mode.None) return;
         Build();     // lock state and subject kind decide which marks are live
+        Place();
+    }
+
+    /// <summary>The bubble being edited grew a line, or its grip was dragged.
+    /// Placement only - the subject has not changed, so nothing is rebuilt.</summary>
+    private void OnEditingMoved()
+    {
+        if (_mode != Mode.Editing) { Sync(); return; }
         Place();
     }
 
@@ -367,15 +593,19 @@ public sealed class SelectionChrome
     /// rebuild of every button on the bar.</summary>
     private void OnViewMoved()
     {
-        bool want = SelectionState.Current.Any && !_h.IsBlocked();
-        if (want != _shown) { Sync(); return; }
+        if (Wanted() != _mode) { Sync(); return; }
         Place();
     }
 
     private void Place()
     {
-        if (!_shown) return;
-        var w = _surface.SubjectBoundsWorld;
+        if (_mode == Mode.None) return;
+        // 11.9 places its bar above THE BUBBLE, which is a different rectangle
+        // from the selection's: a focused text box publishes no selection, so
+        // SubjectBoundsWorld is empty while it is being edited. Both are world
+        // rects and both go through the same WorldToScreen below, so there is
+        // still exactly one copy of the pan/zoom arithmetic.
+        var w = _mode == Mode.Editing ? _surface.EditingTextBoundsWorld : _surface.SubjectBoundsWorld;
         if (w.IsEmpty) return;
 
         double vw = _host.ActualWidth, vh = _host.ActualHeight;
@@ -385,6 +615,28 @@ public sealed class SelectionChrome
         var br = _surface.WorldToScreen(new Vector2((float)w.Right, (float)w.Bottom));
         double x0 = tl.X, y0 = tl.Y, x1 = br.X, y1 = br.Y;
         double cx = (x0 + x1) / 2;
+
+        // THE BAR, centred above the subject. The ONE piece both states share,
+        // and the only piece 11.9 asks for. Clamped inside the viewport, because
+        // a subject dragged against an edge must not push its own controls off
+        // screen - the alternative is a bar the user can see the edge of and
+        // cannot reach.
+        //
+        // THE FORMAT BAR CANNOT COLLIDE WITH THIS, and that is structural rather
+        // than lucky. MainWindow's FormatBar lives in Grid.Row 1 and this layer
+        // is hosted on CanvasArea, which is Grid.Row 2; the clamp above holds the
+        // bar EdgeInset inside the canvas area's own top edge, which is already
+        // below the format bar's bottom. So a text box dragged to the top of the
+        // page gets its quick actions tucked under the format bar rather than
+        // over it, and 15.3's fullscreen-strip collision - which is about the
+        // format bar's own top margin - is untouched by any of this.
+        double bw = _bar.ActualWidth > 0 ? _bar.ActualWidth : _bar.DesiredSize.Width;
+        double bh = _bar.ActualHeight > 0 ? _bar.ActualHeight : Metrics.BarHeight;
+        Put(_bar, Clamp(cx - bw / 2, vw - bw), Clamp(y0 - Metrics.Gap - bh, vh - bh));
+
+        // Everything below describes a SELECTION and is collapsed while editing,
+        // so there is nothing to place.
+        if (_mode != Mode.Selection) return;
 
         // THE GUIDES. Full-canvas, projected from the box: verticals at its left
         // and right running the whole viewport height, horizontals at its top and
@@ -402,14 +654,7 @@ public sealed class SelectionChrome
         Put(_handles[2], x1 - r, y1 - r);
         Put(_handles[3], x0 - r, y1 - r);
 
-        // THE BAR, centred above; THE ROW, centred below. Both clamped inside the
-        // viewport, because a selection dragged against an edge must not push its
-        // own controls off screen - the alternative is a bar the user can see the
-        // edge of and cannot reach.
-        double bw = _bar.ActualWidth > 0 ? _bar.ActualWidth : _bar.DesiredSize.Width;
-        double bh = _bar.ActualHeight > 0 ? _bar.ActualHeight : Metrics.BarHeight;
-        Put(_bar, Clamp(cx - bw / 2, vw - bw), Clamp(y0 - Metrics.Gap - bh, vh - bh));
-
+        // THE ROW, centred below.
         double rw = _row.ActualWidth > 0 ? _row.ActualWidth : _row.DesiredSize.Width;
         double rh = _row.ActualHeight > 0 ? _row.ActualHeight : 30;
         Put(_row, Clamp(cx - rw / 2, vw - rw), Clamp(y1 + Metrics.Gap, vh - rh));

@@ -7468,19 +7468,22 @@ public sealed class InkSurface : UserControl
             Opacity = 0.7,
             Visibility = Visibility.Collapsed
         };
-        var close = new Button
-        {
-            Content = "✕",
-            FontSize = 9,
-            Padding = new Thickness(0),
-            Width = 22,
-            Height = 16,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Center,
-            Background = new SolidColorBrush(Colors.Transparent),
-            BorderThickness = new Thickness(0),
-            Visibility = Visibility.Collapsed
-        };
+        // THE GRIP'S ✕ IS GONE (11.9). It was a 22 x 16 close button that
+        // DELETED the box, revealed on GotFocus and hidden on LostFocus - which
+        // is the exact visibility condition 11.9's quick-action bar now runs
+        // under, and that bar carries a waste bin for the same command with a
+        // mark that says so. Two affordances, one condition, one job.
+        //
+        // Keeping it would have been actively worse than redundant. The new bar
+        // teaches red-X = "Cancel Editing", which keeps the text; a ✕ four DIP
+        // away that throws the box away is a trap built by this change.
+        //
+        // And on a TABLE CELL it was already wrong: it pushed RemoveTextAction
+        // on the cell's own TextElement, and the LostFocus guard a few lines
+        // below records what that costs - "an empty TABLE CELL is normal -
+        // discarding it deletes the cell's TextElement and leaves the cell
+        // untypeable forever (#cellfix)". The cell is where the bar deliberately
+        // does not appear, so nothing replaces it there; nothing should.
         // rotate handle: drag left/right to spin the box, like image rotation (#38).
         // A real-sized hit target (the old bare 11px glyph was nearly impossible
         // to grab — misses fell through to the grip and moved the box, #11-batch2).
@@ -7543,7 +7546,6 @@ public sealed class InkSurface : UserControl
 
         grip.Children.Add(dots);
         grip.Children.Add(rotate);
-        grip.Children.Add(close);
         Grid.SetRow(grip, 0);
 
         var box = new RichEditBox
@@ -7783,7 +7785,6 @@ public sealed class InkSurface : UserControl
             gripBrush.Color = Color.FromArgb(60, Accent.R, Accent.G, Accent.B);
             dots.Visibility = Visibility.Visible;
             rotate.Visibility = Visibility.Visible;
-            close.Visibility = Visibility.Visible;
             rGrip.Visibility = t.TableId == null ? Visibility.Visible : Visibility.Collapsed;
         };
         box.LostFocus += (_, _) =>
@@ -7791,7 +7792,6 @@ public sealed class InkSurface : UserControl
             gripBrush.Color = Colors.Transparent;
             dots.Visibility = Visibility.Collapsed;
             rotate.Visibility = Visibility.Collapsed;
-            close.Visibility = Visibility.Collapsed;
             rGrip.Visibility = Visibility.Collapsed;
             LinkifyBox(box);   // bare URLs become real links on commit (#20-batch3)
             // release active status once focus has truly left, so the format
@@ -7823,16 +7823,6 @@ public sealed class InkSurface : UserControl
         };
         container.Children.Add(rGrip);
 
-        close.Click += (_, _) =>
-        {
-            if (_page == null) return;
-            FlushTexts();
-            PushAction(new RemoveTextAction(t), _page);
-            RebuildTextLayer();
-            ActiveTextChanged?.Invoke(null);
-            ContentChanged?.Invoke();
-        };
-
         double startX = 0, startY = 0;
         grip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
         grip.ManipulationStarted += (_, e) =>
@@ -7848,6 +7838,10 @@ public sealed class InkSurface : UserControl
             // world units (the text layer's RenderTransform maps screen->world)
             Canvas.SetLeft(container, Canvas.GetLeft(container) + e.Delta.Translation.X);
             Canvas.SetTop(container, Canvas.GetTop(container) + e.Delta.Translation.Y);
+            // 11.9: the quick actions ride above this box. A Canvas.Left change
+            // fires no SizeChanged, so the drag says so itself. The position is
+            // already set above, so the bounds this reads are the new ones.
+            RaiseEditingGeometry(box);
         };
         grip.ManipulationCompleted += (_, _) =>
         {
@@ -7859,6 +7853,13 @@ public sealed class InkSurface : UserControl
                 ContentChanged?.Invoke();
             }
         };
+
+        // 11.9: the quick-action bar is placed off this container's world rect,
+        // so it has to move when the container does. SizeChanged rather than the
+        // box's TextChanged, because AutoSizeBubble sets Width and Height and
+        // ActualWidth does not follow until layout has run - a bar placed from
+        // the pre-layout size lags the bubble by a frame on every keystroke.
+        container.SizeChanged += (_, _) => RaiseEditingGeometry(box);
 
         _textLayer.Children.Add(container);
         _textUi[t.Id] = (container, box);

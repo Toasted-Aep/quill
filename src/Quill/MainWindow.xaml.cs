@@ -754,6 +754,15 @@ public sealed partial class MainWindow : Window
             Flip = horizontal => Surface.FlipSelection(horizontal),
             Rotate = () => Surface.RotateSelectionQuarter(),
             ReplaceAttachment = () => _ = ReplaceAttachmentAsync(),
+            // 11.9's four, on the box being EDITED rather than on the selection.
+            // Separate calls on purpose - the selection ones read _selected /
+            // _selShapes / _selTexts, all empty while a bubble is merely being
+            // typed in, so pointing the editing bar at them would give it four
+            // marks that quietly did nothing.
+            CancelEditing = () => Surface.CancelTextEditing(),
+            DuplicateEditingText = () => Surface.DuplicateEditingText(),
+            ToggleEditingTextLock = () => Surface.ToggleEditingTextLock(),
+            DeleteEditingText = () => Surface.DeleteEditingText(),
             // The two states in which the selection's own controls must not be on
             // screen. The COPIC wheel reports itself as covering the whole canvas
             // (9.3) and the panel solver already pushes every other cluster out of
