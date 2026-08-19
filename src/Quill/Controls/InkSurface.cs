@@ -1173,6 +1173,14 @@ public sealed class InkSurface : UserControl
     {
         if (_page == null || _replaying) return;
         CancelPendingText(); // a fresh press dismisses any blinking caret
+        // _skipNextRightTap is a one-shot that is only ever cleared by being
+        // CONSUMED, so a gesture that arms it and then draws no RightTapped -
+        // the barrel button's, which the recogniser raises unreliably over a
+        // Win2D canvas - leaves it armed to eat somebody else's menu later.
+        // 17.7 adds a second site that arms it, so the flag is now also cleared
+        // by the next press: whatever armed it belonged to the gesture that has
+        // just ended, and cannot outlive this one.
+        _skipNextRightTap = false;
         var pp = e.GetCurrentPoint(_canvas);
         var props = pp.Properties;
         var device = e.Pointer.PointerDeviceType;
@@ -2206,6 +2214,18 @@ public sealed class InkSurface : UserControl
                         _lasso = null;
                         _rectSelect = false;
                         SelectSingleStroke(clicked);
+                        // 17.7: this click SELECTED, so it must not also open the
+                        // dropdown. The barrel button reaches here as a right-tap
+                        // and the recogniser raises RightTapped behind it, which
+                        // is where the second half of "both the quick actions and
+                        // the dropdown" came from - the break below already keeps
+                        // the release path's own menu (#44) out of it.
+                        //
+                        // Suppressed HERE, on the outcome, rather than at the
+                        // press: a barrel tap on an ALREADY selected stroke never
+                        // arms a click-select, so it still opens that selection's
+                        // menu, which is #42 and is not what 17.7 is about.
+                        _skipNextRightTap = true;
                         break;
                     }
                     if (_clickSelectDeselectsEmpty)
