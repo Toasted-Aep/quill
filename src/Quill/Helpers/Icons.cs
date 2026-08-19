@@ -535,8 +535,14 @@ public static class Icons
     /// <para><c>F1</c> (nonzero) because each head OVERLAPS the shaft. All five
     /// subpaths are wound clockwise on the screen's y-down axes, so nonzero
     /// unions them; even-odd would punch a notch at both joins, which is exactly
-    /// the defect 16.11 measured on the old arrowhead.</para></summary>
-    public const string Stretch =
+    /// the defect 16.11 measured on the old arrowhead.</para>
+    ///
+    /// <para><b>Not named <c>Stretch</c>.</b> A member of this class called
+    /// <c>Stretch</c> HIDES <c>Microsoft.UI.Xaml.Media.Stretch</c> inside it, and
+    /// the three factories at the foot of this file set <c>Stretch.Uniform</c>
+    /// and <c>Stretch.None</c> - so the mark compiled and every factory
+    /// stopped.</para></summary>
+    public const string ScaleStretch =
         "F1 M2.6 4 H4.8 V20 H2.6 Z M19.2 4 H21.4 V20 H19.2 Z M8.6 11 H15.4 V13 H8.6 Z M5.8 12 10.2 8.4 10.2 15.6 Z M18.2 12 13.8 15.6 13.8 8.4 Z";
 
     /// <summary>The pan tool (17.11): a cross with four heads, authored as ONE
