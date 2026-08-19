@@ -3237,268 +3237,186 @@ arrowhead at its true DPI, and the top bar redrawing on a live surface switch.
 
 ---
 
-## 17. Layers — the data model, 2026-08-18
+## 17. The Measurement menu, the bottom bar, and a correction pass — 2026-08-18
 
-The roadmap parks four features behind one sentence: *"Layers. The data model is
-the blocker for PSD export, per-layer visibility, selection scoping and
-per-object rows in the Objects library."* This section is that model. **There is
-no layers panel and this section does not describe one** — it describes the data,
-what happens to the pages that already exist, and the five places the four
-features attach.
+Six captures and a numbered response to the five checks. §17.1–17.5 are new
+work; §17.6–17.15 are corrections to what was just built.
 
-### 17.1 The shape of it
+### 17.1 Zoom and tilt get a Measurement menu
 
-```
-NotePage
-  Layers      List<Layer>?   bottom-first z-order.  null/empty = ONE implicit base layer
-  ActiveLayer int            the layer new ink lands on.  0 = base
+The zoom and tilt readouts in the top bar open a panel titled **Measurement**,
+with an (i) info mark at its right. Two sections:
 
-Layer
-  Key         int            stable identity for the life of the page.  0 = the base layer
-  Name        string         "" = derive "Layer N" from position
-  Hidden      bool           false = visible (today)
-  Opacity     float          1 = fully opaque (today), a MULTIPLIER over element opacity
-  Locked      bool           false = editable (today)
-  CreatedTicks long
+- **Zoom** — a magnifier mark, the live value (`10%`), and a **padlock**. Below,
+  a row of preset buttons: `10%` `100%` `250%` `1600%`, the active one filled.
+- **Rotation** — a rotate mark, the live value (`0°`), and its **own padlock**.
+  Below: `0°` `90°` `180°` `270°`, active one filled.
 
-PenStroke / ShapeElement / TextElement
-  LayerKey    int            which layer.  0 = base.  Absent = 0.
-```
+**Two separate locks, not one.** Zoom and tilt lock independently.
 
-Every default is today's behaviour, which is the whole trick: a page that has
-never heard of layers deserialises into a page with one visible, unlocked,
-fully-opaque layer holding everything, and does so without a single byte on
-disk changing hands.
+**Hover** shows the two readouts as a dark pill carrying a padlock beside each
+value — `[lock] 10%  [lock] 0°`.
 
-`Key` is identity; **list position is order**. There is deliberately no `Order`
-integer beside `Key`: a list is already ordered, and a second source of truth for
-the same fact is a bug waiting for the two to disagree. Reordering moves the item
-in the list and touches nothing else, because nothing else references position.
+**Locking tilt shifts the zoom readout sideways** to make room for the lock
+glyph appearing beside the tilt value. The row re-lays out; it does not overlap.
 
-### 17.2 Why the membership key is an `int` and not a `Guid`
+`1600%` is the ceiling of the zoom range finalised at 0.1×–16×. Read
+`InkSurface.MinZoom` / `MaxZoom` rather than repeating those numbers — they were
+consolidated from three copies at two values precisely so a fourth would not
+appear.
 
-`LayerKey` appears on **every stroke, every shape and every text box in the
-library** — it is by a wide margin the most-repeated new field this model adds.
-A `Guid` serialises as 36 characters plus its property name; on a library that is
-already 53 MB and is rewritten whole on every 1.5 s autosave, that is several
-megabytes of autosave cost bought for nothing. A small int with
-`WhenWritingDefault` costs **exactly zero** for anything on the base layer, which
-is everything that exists today, and about fourteen bytes for anything that is
-not.
+### 17.2 The corner buttons get a page-coloured ground, and zoom/tilt become stadiums
 
-The int is a **key, never an index**. Keys are handed out by
-`PageLayers.NextKey` and never reused within a page, so reordering or deleting a
-layer cannot silently repoint content at a different one — the exact hazard the
-`GridType` comment in `NoteModels.cs` warns about for appended enums.
+The top-corner buttons carry a **background that mimics the page colour**, so
+the button almost disappears into the page — **but the page's grid and texture
+do NOT continue across it**, and that discontinuity is what makes the button
+findable. A flat patch of page colour over a textured or gridded page reads as a
+soft plate rather than as chrome. Continuing the texture across it destroys the
+entire effect.
 
-The cost of choosing an int is that keys are **page-scoped**: an element copied
-to another page carries a key that means something different there, and the paste
-path has to re-key it. That is a real obligation and it is written down here so
-the person who builds cross-page paste finds it. See 17.9.
+**The zoom and tilt readouts take a stadium shape** — a rounded-end capsule
+sized to their text. Every other corner button stays a circle.
 
-**`LayerKey` carries `TolerantIntConverter`** — the converter already in
-`NoteModels.cs`, used unmodified. The reason is the one recorded beside
-`Library.ColorPickerMode`: *"a shipped build wrote `"Copic"` here, and a plain
-int property makes that file undeserializable — which cost the whole library."*
-`LayerKey` is on hundreds of thousands of elements; if any future build ever
-writes a layer *name* where the key goes, a plain `int` would make **the entire
-library unloadable**. With the tolerant converter, an unreadable key reads as 0,
-the element lands on the base layer, and the user loses a layer assignment
-instead of their notes. The converter's `"copic"/"hsl"/"rgb"` name map is inert
-here because nothing ever writes those strings to this field; it is left exactly
-as it is rather than generalised, because touching it would put
-`ColorPickerMode` at risk to tidy up a case that cannot arise.
+### 17.3 Custom colour keeps the user's colour, and reopens the wheel
 
-### 17.3 Migration: nothing is migrated
+**Custom colour in page settings must NOT mirror the current page colour.** It
+holds **the last colour the user chose**, and keeps holding it when the page
+colour changes by other means.
 
-Every page that exists has content with no layer. The temptation is a load-time
-pass that walks the library, materialises a base layer on every page and stamps
-every element with its key. **That pass is the most dangerous code this feature
-could contain** — it rewrites all 53 MB on first launch, it runs before the user
-has done anything worth saving, and its failure mode is a library that has been
-half-converted.
+**Pressing it while already selected opens the COPIC wheel** to pick a new page
+colour. So: first press applies the remembered colour, second press edits it.
+The user marked this **4 out of 5**. The press-once-apply / press-twice-edit
+pattern was asked for once before; match it exactly rather than inventing a
+second convention.
 
-So it does not exist. The model migrates by *meaning* instead:
+### 17.4 Dark mode: the dial's tools and pens must not be transparent
 
-- **`Layers` null or empty means one implicit base layer.** `PageLayers.All`
-  synthesises it on read. Nothing is written.
-- **A missing `LayerKey` deserialises to 0, which is that base layer.** Nothing
-  is written.
-- **The list is materialised lazily**, by `PageLayers.Materialise`, the first
-  time the user does something that genuinely needs a second layer. Only then
-  does a page start carrying `"Layers":[…]`, and even then the elements already
-  on it keep no `LayerKey` at all, because 0 is still right for them.
+In dark mode the tool and pen marks in the radial dial **render transparent**.
+They must instead be filled with **the page background colour, without the
+page's texture** — the same treatment §17.2 gives the corner buttons.
 
-A page saved by a layers-aware build and read by a build that predates layers
-therefore loses the layer *records* (System.Text.Json ignores unknown properties
-by default; they are dropped on the next save by the old build) and **loses no
-content whatsoever**, because the content never moved. `Strokes`, `Shapes` and
-`Texts` stay exactly where they have always been on `NotePage`. That is the
-second reason membership lives on the element rather than the content living
-inside the layer: a model where `Layer` owns `List<PenStroke>` reads as an empty
-page to anything that does not know about layers.
+Establish *why* they come out transparent before changing anything. A mark
+correct in one theme and transparent in the other usually means a colour is
+resolved from a token with no definition on that side, which §0 warns about
+directly.
 
-### 17.4 Z-order: the one rule that keeps an existing page identical
+### 17.5 The panel close and help marks fill their corner
 
-Today a page paints **all shapes, then all strokes, then the text overlay**, each
-in list order. Layers introduce a second ordering, and the two have to be
-reconciled without changing what an existing page looks like.
+A square covering the **whole corner** of the panel, with **one** corner rounded
+to follow the panel's own radius and the other three square. Not a circle, not a
+small mark floating in padding. §14.3 asked for this and overshot past the
+panel's edge onto the page; this is the shape it should have been.
 
-> **Within a layer, the existing type order is preserved exactly. Across layers,
-> layer order wins.**
+---
 
-With zero or one layer that rule is bit-identical to today's painting, which is
-what makes it safe to land the model before the renderer knows about it. The
-harness asserts it directly: for a page with no layers, `PageLayers.InOrder`
-yields exactly one bucket holding every element in exactly the order the draw
-loop walks today.
+The rest are corrections to work just built.
 
-`InOrder` is a single function returning, bottom layer first,
-`(Layer, Shapes, Strokes, Texts)`. It is the seam the renderer will adopt and the
-seam PSD export will iterate, so the two can never disagree about what is on top.
+### 17.6 A panel returns PROPORTIONALLY, not at a fixed size
 
-### 17.5 What belongs to a layer, and what does not
+The inset model restores a panel's position but keeps its clamped **size**. The
+user: *"I want the panel to return to its proportional size, so for example 100
+pixels away from bottom edge, and panel gets 50% smaller 50 pixels away now."*
 
-| Belongs | Does not |
-|---|---|
-| `PenStroke` | `NotePage.Background`, `Paper` |
-| `ShapeElement` (including image attachments) | the grid, and `PerspectiveDef` |
-| `TextElement` | `PageComment` |
-| | `RefFrame`, page size, `OcrText`, audio |
+So the remembered geometry **scales with the host** rather than being restored
+literally. A panel that sat 100 DIP from an edge sits 50 DIP from it when the
+host halves, and the size scales the same way. Store the inset **as a fraction
+of the host**, not as an absolute distance.
 
-Two of those are judgement calls rather than obvious.
+This supersedes the absolute-inset storage. **Keep the non-destructive
+clamping** — the two are compatible, and the round-trip proof must still hold.
 
-**Comments are not layered.** A comment is a note *about* the drawing, not part
-of it; hiding a layer must not hide the pin that says why the layer is wrong,
-and a PSD export has nowhere to put one. If comments ever need scoping they want
-an anchor to an element (`PageComment.AnchorElementId` is already reserved for
-it), not a layer of their own.
+### 17.7 Click on a stroke selects; click on empty opens the menu
 
-**The grid and the perspective overlay are not layered**, even though §12's
-editor calls them "the grid layer" and the Precision menu says so too. They are
-page-wide guides with their own visibility and opacity controls already; giving
-them a second, competing set inside the layer list would produce two switches for
-one fact. What the reference calls a grid layer is a *menu*, not a member of this
-list.
+Today a selection click produces **both** the quick actions and the right-click
+dropdown. The rule:
 
-### 17.6 The fail-safe: an unknown key is visible, never hidden
+- **holding selection and clicking ON a stroke** — quick actions for that
+  stroke, and **no** dropdown;
+- **clicking NOT on a stroke** — the right-click dropdown menu, as before.
 
-The failure this model has to refuse is content that exists, is intact, and
-cannot be seen. Every resolution path therefore falls **towards** visibility:
+§16.10 made the click select only when a stroke is under it, which is half of
+this. The other half is suppressing the menu in that case.
 
-- A `LayerKey` naming no layer resolves to the base layer and draws. It is
-  **not** rewritten — a build that later restores the missing layer reunites the
-  content with it, which a helpful load-time repair would have made impossible.
-- `ActiveLayer` naming no layer resolves to the base layer.
-- A garbled key read through `TolerantIntConverter` becomes 0, the base layer.
-- Deleting a layer **reassigns its content to the base layer by default**
-  (`LayerRemoval.ReassignToBase`). Deleting the content with it is available and
-  is never the default.
-- The base layer cannot be deleted. A page always has at least one layer, so
-  there is always somewhere for content to be.
+### 17.8 The selection tint goes
 
-### 17.7 Visibility and opacity are render-time, exactly like the veil
+**Remove the selection fill.** Only the edges remain — the corner circles and
+the full-canvas guides of §16.2. No tinted rectangle, no dashed box.
 
-§16.7 cost this project a whole harness to establish that *"it is a RENDER-TIME
-effect and must never touch stored colour."* Layer opacity is the same shape of
-promise and it is kept the same way: `PageLayers.EffectiveOpacity` returns
-`Hidden ? 0 : Opacity`, the renderer multiplies it into the element's own alpha
-at draw time, and **nothing ever writes it back**. Hiding a layer and dropping it
-to 30% must leave every stroke's stored `Opacity` byte-for-byte as it was.
+This is the suppression offered when the selection chrome landed and deferred
+until the user had seen it. They have now seen it.
 
-`tools/LayerRoundTrip` proves precisely that, the way `tools/VeilRoundTrip`
-proves §16.7 — see 17.10.
+### 17.9 The bottom-of-screen mode bar
 
-### 17.8 The five seams
+**Quick actions stay above the subject, but nothing floats below it.** The
+bottom row moves to the **bottom of the screen** and becomes a mode bar:
 
-Named, not built. Each is one call.
+1. **Rotate** — on/off
+2. **Scale** — on/off, and stretch
+3. **Filter** — opens the colour picker, and Alpha on/off
 
-1. **PSD export** iterates `PageLayers.InOrder(page)` — bottom layer first, one
-   PSD layer per `Layer`, its shapes then its strokes then its texts. `Layer.Name`
-   (via `DisplayName`) is the PSD layer name; `Hidden` and `Opacity` map straight
-   onto the PSD layer flags rather than being baked into pixels.
-2. **Per-layer visibility** toggles `Layer.Hidden` and multiplies
-   `PageLayers.EffectiveOpacity` into the draw call. The renderer's existing
-   per-element loops become the body of the per-layer loop; nothing else moves.
-3. **Selection scoping** asks `PageLayers.IsEditable(page, element.LayerKey)` —
-   false when the layer is hidden or locked — and
-   `PageLayers.InActive(page, element.LayerKey)` for "is this in the active
-   layer". Both are pure predicates over the page, so they compose with the
-   existing `Locked` flag rather than competing with it: an element is editable
-   when **neither** it nor its layer is locked. `SelectionSubject` is untouched —
-   layers decide *what may enter* a selection, `SelectionSubject` describes what
-   the selection *supports*, and those are different questions.
-4. **The Objects library** lists `PageLayers.Rows(page)` — one `LayerRow` per
-   object, grouped by layer, **top layer first** because that is the order a
-   layers list reads in. A row is `(Layer, Kind, Id, Label, Locked)`; the caller
-   already holds the page, so a row carries identity rather than a copy of the
-   element.
-5. **New ink** lands on `PageLayers.Active(page)`. The commit path stamps
-   `LayerKey` from it; `AssignLayerAction` (in `UndoRedo.cs`, modelled on
-   `LockMixedAction`) moves a selection between layers undoably.
+**Filter descends into the colour picker's own bottom menu.** Because it was
+reached from the mode bar, that submenu carries a **back button** returning to
+the three-part bar. Reached as a tool in its own right, the colour picker has
+**no** back button. That conditional back button is the detail most likely to be
+missed.
 
-### 17.9 Obligations this model creates
+**Bottom menus name intent with an icon and carry only essential words.** Strip
+explanatory text; the icon does the work.
 
-Written down because each is a place where a later change loses data quietly.
+### 17.10 The mouse tool
 
-- **`PenStroke.CloneWithPoints` must carry `LayerKey`.** It is how the eraser
-  fragments a stroke, how duplicate works and how the selection clone works —
-  without it, erasing through a stroke on layer 3 drops its fragments onto the
-  base layer. This is fixed as part of the model, not left to the renderer.
-- **Cross-page paste must re-key.** Keys are page-scoped (17.2).
-- **`SyncLog` must carry the layer list in the page op.** Element ops serialise
-  the whole element, so `LayerKey` rides along for free — but `PageMetaJson` is a
-  hand-picked field list, and a peer that receives keys without the layers they
-  name would resolve every one of them to the base layer. `Layers` and
-  `ActiveLayer` are added to the page op and to its apply side for that reason.
-- **`Layers` is not in `LibraryStore.SettingFields`** and must never be: those
-  are library-wide settings mirrored into `settings.json`; layers are page
-  content.
+Filter acts on the mouse tool directly, so the mouse tool has to exist. Its
+bottom menu:
 
-### 17.10 The proof
+1. **Item picker / Lasso.** When Lasso is chosen, a further control appears to
+   its right: **Partial / Complete**.
+2. **Include / Ignore** — a locked padlock and an unlocked padlock.
+3. **All / Active** — all layers, or the active layer only.
 
-`tools/LayerRoundTrip`, built the way `tools/VeilRoundTrip` is built — the
-**real** `NoteModels.cs`, the **real** `LibraryStore.cs`, `<Compile Include>`d
-straight out of `src/Quill` so the harness cannot drift into testing a copy, run
-headless against a library isolated in a temp folder by `QUILL_DATA_FOLDER`, with
-a hard abort if the resolved path is not inside it.
+The capture reads: `< | Lasso | Complete | Include | All`.
 
-It settles, by doing it rather than asserting it:
+**Lasso becomes part of the mouse tool** rather than a separate selection mode.
 
-- a page written before layers existed loads, and every element lands on a
-  visible base layer;
-- adding layers costs an untouched page **zero bytes** — the byte-for-byte
-  baseline comparison;
-- a full page (strokes, shapes, an image attachment, text, comments) survives
-  save → reload with every layer field and every `LayerKey` intact;
-- hiding a layer and setting another to 30% changes **only** the layers array —
-  no element's stored bytes move;
-- deleting a layer reassigns rather than deletes, and the content is still
-  visible afterwards;
-- an element pointing at a layer that does not exist still draws;
-- a `LayerKey` written as a **string** — the `ColorPickerMode` disaster,
-  reproduced on purpose — still loads the library;
-- `InOrder` on a page with no layers reproduces today's draw order exactly.
+All/Active is a **layer scope**, so this depends on the layer model. Use the
+seam that model defines; do not invent a competing layer concept.
 
-Run: `dotnet run --project tools/LayerRoundTrip/LayerRoundTrip.csproj -c Debug`
+### 17.11 Pan and rotate tools
 
-### 17.11 Left for the user to rule on
+Add a **pan** tool and a **rotate** tool alongside the others.
 
-These are decisions the model does not force, and they were left open rather than
-made quietly:
+### 17.12 Sizes
 
-1. **Blend modes.** PSD layers have them; Quill's renderer has none. No
-   `Layer.Blend` field is stored, because a field nothing implements is a lie in
-   the file. Adding it later costs nothing (`WhenWritingDefault`); it would be a
-   string, not an enum, per the `ToolSurface` precedent.
-2. **Whether hidden layers export.** Currently `Hidden` is carried into PSD as a
-   layer flag rather than dropped — the PSD keeps the content and hides it. PDF
-   and SVG export have no such flag and would have to drop it.
-3. **Deleting a layer.** Default is reassign-to-base. Photoshop deletes the
-   content. The safe default was chosen; the other is one enum value away.
-4. **A cap on layer count.** None is imposed.
-5. **Layer names are derived in English** (`"Layer 3"`) when `Name` is empty.
-   `Helpers/Loc.cs` exists; whether a derived name should be localised — and so
-   change when the UI language changes — is a product decision.
-6. **Per-notebook or per-library default layer sets.** Not modelled. Every page
-   starts with one implicit layer.
+- **Quick action buttons: +80%.**
+- **Bottom-of-screen menu buttons: +100%.**
+
+### 17.13 The attachment itself must not fade
+
+The page fade works, but *"the attachment also turns grey for a moment and
+returns after clicking out of it; clicking into the attachment does not do
+this."*
+
+The subject is being veiled for a frame or two before it is recognised as the
+subject — an **ordering fault, not a colour one**. The selected attachment must
+**never** fade, not even transiently. Find where the veil is applied before the
+selection state has settled and reorder it. **Do not paper over it with a second
+exemption**: that hides the race rather than removing it, and it returns the
+moment settle timing changes.
+
+### 17.14 A disabled readout shows nothing, not a dash
+
+The centring is right and the user said so. But an unavailable readout still
+shows `-`. **Remove the dash entirely** and centre the glyph in its button.
+
+There is exactly one disabled predicate in the dial and there must not become a
+second.
+
+### 17.15 Fullscreen text mode has too much margin
+
+*"in full screen text mode text appears a long way down. There's a big margin
+there still."*
+
+The format bar and the app's top bar now stack, and `FormatBarStripGap` widened
+the gap further. Text starts far below where it should. Reduce the stacked
+margin — and check whether the two bars need to occupy separate rows in
+fullscreen at all, since §15.3 already moved the window controls into a hover
+strip that appears only on demand.
