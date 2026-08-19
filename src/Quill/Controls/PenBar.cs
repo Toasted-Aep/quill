@@ -413,16 +413,27 @@ public sealed class PenBar
         // 16.9: with a stroke selected these report THAT STROKE's values. The
         // `ap!` derefs below are only reached when there is no subject, and
         // Enabled() already guarantees a pen in that case.
-        _setRows.Children.Add(SettingRow(Prop.Size, Icons.Size, false,
-            !Enabled(Prop.Size) ? "-" : SubjectRead(Prop.Size)
-                ?? (eraser ? (lib.EraserSize <= 0 ? Loc.T("Wheel.Auto") : $"{lib.EraserSize:0} px") : $"{ap!.Size:0.#} px"),
-            Enabled(Prop.Size), onSurface, muted));
-        _setRows.Children.Add(SettingRow(Prop.Opacity, Icons.Opacity, false,
-            !Enabled(Prop.Opacity) ? "-" : SubjectRead(Prop.Opacity) ?? $"{ap!.Opacity * 100:0}%",
-            Enabled(Prop.Opacity), onSurface, muted));
-        _setRows.Children.Add(SettingRow(Prop.Smooth, Icons.Smoothness, true,
-            !Enabled(Prop.Smooth) ? "-" : SubjectRead(Prop.Smooth) ?? $"{ap!.Stabiliser * 100:0}%",
-            Enabled(Prop.Smooth), onSurface, muted));
+        //
+        // 17.14: A DISABLED READOUT SHOWS NOTHING, NOT A DASH - here as well as
+        // in the dial, because this row and that disc are the same three controls
+        // on two surfaces and a dash surviving on one of them is the disagreement
+        // 16.3 spent a whole section removing. The predicate is asked ONCE per
+        // property and the answer carries both the text and the row's own state,
+        // so there is still exactly one of it; the live reading sits behind that
+        // answer rather than beside it, which is also what keeps the `ap!` derefs
+        // from being evaluated when there is no pen to read.
+        void SetRow(Prop p, string glyph, bool stroked, Func<string> live)
+        {
+            bool en = Enabled(p);
+            _setRows.Children.Add(SettingRow(p, glyph, stroked, en ? live() : "",
+                                             en, onSurface, muted));
+        }
+        SetRow(Prop.Size, Icons.Size, false, () => SubjectRead(Prop.Size)
+            ?? (eraser ? (lib.EraserSize <= 0 ? Loc.T("Wheel.Auto") : $"{lib.EraserSize:0} px") : $"{ap!.Size:0.#} px"));
+        SetRow(Prop.Opacity, Icons.Opacity, false,
+               () => SubjectRead(Prop.Opacity) ?? $"{ap!.Opacity * 100:0}%");
+        SetRow(Prop.Smooth, Icons.Smoothness, true,
+               () => SubjectRead(Prop.Smooth) ?? $"{ap!.Stabiliser * 100:0}%");
         _setRows.Children.Add(ColourRow());
 
         // ---- undo and redo ---------------------------------------------
@@ -546,14 +557,19 @@ public sealed class PenBar
         var mark = Icons.Mark(glyph, col, SetGlyph, stroked: stroked, thickness: 2.7);
         mark.HorizontalAlignment = HorizontalAlignment.Center;
         stack.Children.Add(mark);
-        stack.Children.Add(new TextBlock
-        {
-            Text = value,
-            FontSize = 9,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = new SolidColorBrush(col),
-            HorizontalAlignment = HorizontalAlignment.Center,
-        });
+        // 17.14: "centre the glyph in its button". An EMPTY TextBlock is not
+        // nothing - it still takes a full 9 DIP line and the stack's 2 DIP of
+        // spacing, and the mark would sit that much high in a row it is supposed
+        // to be centred in. No value, no line.
+        if (value.Length > 0)
+            stack.Children.Add(new TextBlock
+            {
+                Text = value,
+                FontSize = 9,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(col),
+                HorizontalAlignment = HorizontalAlignment.Center,
+            });
         var row = new Border
         {
             Child = stack,
