@@ -108,7 +108,10 @@ stretch = " ".join([
     poly([(5.8, 12), (10.2, 8.4), (10.2, 15.6)]),
     poly([(18.2, 12), (13.8, 15.6), (13.8, 8.4)]),
 ])
-marks["Stretch"] = "F1 " + stretch
+# NOT "Stretch": a member of Icons called Stretch hides Microsoft.UI.Xaml.Media.
+# Stretch inside the class, and every factory at the foot of that file sets
+# Stretch.Uniform or Stretch.None. It compiles as a mark and breaks all three.
+marks["ScaleStretch"] = "F1 " + stretch
 
 with open(OUT, "w", encoding="utf-8", newline="\n") as f:
     for k, v in marks.items():
