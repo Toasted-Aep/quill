@@ -151,6 +151,25 @@ public sealed class ToolWheel
     // long label cannot reach its neighbour's separator.
     private const double LabelW = 46;
 
+    // 17.4: the diameter of a mark's page-coloured seat.
+    //
+    // It has to cover the mark's INK, and the marks do not fill their 24 grid
+    // evenly - scratchpad/mark_holes.py measures the reach of every one of them
+    // from the box's centre and the worst is StrokeChisel at 13.53 grid units,
+    // which is 25.93 DIP across at MarkBox 23. Rounded up to 26, and the two
+    // clearances that bound it from either side, measured on the constants above
+    // rather than guessed:
+    //
+    //     inner edge  MarkR - 13 = 59.14   the colour arcs reach 59.44
+    //     outer edge  MarkR + 13 = 85.14   the size labels' line box starts 85.04
+    //     and 29.21 DIP of clear page between one seat and the next
+    //
+    // Both overlap by a fraction of a DIP, and both are harmless because the
+    // seat is added to the canvas FIRST - before the sectors, the arcs, the pop
+    // and the marks - so everything it meets is painted over it, and the hover
+    // tint still composites on top instead of being hidden underneath.
+    private const double SeatSize = 26;
+
     // §1.4 inner disc, all offsets in units of r = RingIn.
     private const double DiscR = RingIn;
     // 14.1 SUPERSEDES §1.4's row table for all three readouts.
@@ -406,6 +425,10 @@ public sealed class ToolWheel
     // ---- painted parts -------------------------------------------------
     private readonly Ellipse _shadow = new();
     private readonly Path[] _sector = new Path[Slots];
+    // 17.4: one flat, page-coloured plate per slot, UNDER the sector fill. On a
+    // dark ground section 7 takes that fill away and a mark is left sitting on
+    // the raw page - see the note on SeatSize.
+    private readonly Ellipse[] _seat = new Ellipse[Slots];
     private readonly Path[] _sep = new Path[Slots];
     private readonly Ellipse _ringEdge = new();
     private readonly Path _pop = new();            // the active sector, at 1.19 R
@@ -821,6 +844,31 @@ public sealed class ToolWheel
         // remain. The inner disc stays opaque in every case.
         var ringFill = dark ? Colors.Transparent : Mix(surface, PageTheme.Ground, 0.62);
 
+        // ---- 17.4: what is actually BEHIND a mark ------------------------
+        //
+        // THE DEFECT. On a dark ground the line above gives the ring no fill at
+        // all, so a sector mark has nothing behind it but the page - grain, grid
+        // and all - and the marks that are authored with even-odd counters show
+        // it straight through themselves: Text's bowl is 20% of the mark, the
+        // eraser's worn face 16%, Mix's lens 24%. A pen's mark is worse: it is
+        // painted at THE PEN'S OWN OPACITY (60..255 alpha, below), so on a
+        // transparent sector it composites onto the page and is literally
+        // translucent. In light mode none of this shows, because the sector
+        // underneath is opaque.
+        //
+        // Section 0's warning, exactly: the code below used to resolve the mark's
+        // seat from PageTheme.Surface - the INNER DISC's token - because the
+        // ring's own has no definition on the dark side. A colour taken from the
+        // wrong token is how a mark ends up judged against a backdrop it is not
+        // on, and the contrast test that decides whether a pen keeps its own ink
+        // was reading the disc while the mark sat on the page.
+        //
+        // THE FIX, 17.4 and 17.2 as one thing: give the mark a ground that mimics
+        // the page colour and deliberately does NOT continue the page's texture.
+        // The seat is then a real colour on both sides, and the contrast test is
+        // finally asking about the surface the mark is standing on.
+        var markSeat = dark ? PageTheme.Ground : ringFill;
+
         _shadow.Fill = ShadowBrush();
         _disc.Fill = new SolidColorBrush(surface);
         // §1.1 calls this "Outline at 40%". Read literally that is 0.14 x 0.40 =
@@ -855,6 +903,16 @@ public sealed class ToolWheel
                 : ringFill);
             _sector[i].Opacity = live ? 1 : 0;
 
+            // 17.4: the seat, in the PAGE's own flat colour. Only where the ring
+            // has no fill to seat the mark on - on a light ground the sector is
+            // already opaque and a page-coloured disc there would be a plate the
+            // reference does not have. It follows the mark's own opacity so an
+            // unassigned cell's muted + does not get a full-strength plate, and
+            // it carries no texture: that discontinuity is 17.2's whole trick,
+            // and continuing the grain across it would undo the fix.
+            _seat[i].Fill = new SolidColorBrush(PageTheme.Ground);
+            _seat[i].Opacity = dark && !act ? (live ? 1 : id.Length == 0 ? 0.45 : 0) : 0;
+
             // §1.1: separators are hairlines in Outline from 0.70 R to 1.00 R,
             // and §7 keeps them when the ring itself has gone.
             _sep[i].Stroke = new SolidColorBrush(outline);
@@ -864,8 +922,12 @@ public sealed class ToolWheel
             // On the active sector both invert to Surface against the OnSurface
             // fill - that inversion IS the pop-out's other half.
             var fg = act ? surface : onSurface;
+            // 17.4: the popped sector paints its own opaque seat in OnSurface, so
+            // it needs no plate; every other sector needs one exactly when the
+            // ring has no fill of its own.
+            var seat = act ? onSurface : markSeat;
             _mark[i].Children.Clear();
-            var art = SlotArt(id, fg, act);
+            var art = SlotArt(id, fg, act, seat);
             if (art != null) _mark[i].Children.Add(art);
 
             var pen = PenOf(id);
@@ -1213,6 +1275,20 @@ public sealed class ToolWheel
         Canvas.SetLeft(_shadow, Half - RingOut - 14);
         Canvas.SetTop(_shadow, Half - RingOut - 14 + 2);
         _wheel.Children.Add(_shadow);
+
+        // 17.4's seats go in BEFORE the sectors, which is the whole reason they
+        // work: the sector fill is transparent on a dark ground, so the seat
+        // shows through it, and the hover tint - which is painted ON the sector -
+        // composites over the seat instead of being buried under it.
+        for (int i = 0; i < Slots; i++)
+        {
+            var at = Pt(SlotMid(i), MarkR);
+            var s = new Ellipse { Width = SeatSize, Height = SeatSize, IsHitTestVisible = false };
+            Canvas.SetLeft(s, at.X - SeatSize / 2);
+            Canvas.SetTop(s, at.Y - SeatSize / 2);
+            _seat[i] = s;
+            _wheel.Children.Add(s);
+        }
 
         for (int i = 0; i < Slots; i++)
         {
@@ -2440,12 +2516,12 @@ public sealed class ToolWheel
     /// <summary>§1.3: the stroke silhouette for a sector, in the tool's OWN
     /// colour, grey for a non-drawing tool. On the active (popped) sector it
     /// inverts to Surface, because the sector beneath it is OnSurface.</summary>
-    private FrameworkElement? SlotArt(string id, Color fg, bool inverted)
+    private FrameworkElement? SlotArt(string id, Color fg, bool inverted, Color seat)
     {
         // 11.2 item 11's unassigned cell.
         if (id.Length == 0)
             return Icons.Mark(Icons.Plus, fg, MarkBox * 0.62, stroked: true, thickness: 2.2);
-        if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg, inverted);
+        if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg, inverted, seat);
         if (id.StartsWith(KindTool, StringComparison.Ordinal))
             return Icons.Mark(Icons.Tool(id[KindTool.Length..]), fg, MarkBox);
         if (id.StartsWith(KindCmd, StringComparison.Ordinal)) return CmdArt(id[KindCmd.Length..], fg, MarkBox);
@@ -2456,7 +2532,7 @@ public sealed class ToolWheel
     /// silhouette of its mark (tapered for a nib, chisel for a marker, grainy for
     /// a pencil, even and round-ended for a ballpoint), painted in the pen's own
     /// colour. Not the pen-body chip, and not a live render.</summary>
-    private static FrameworkElement? PenStrokeMark(PenPreset p, Color fg, bool inverted)
+    private static FrameworkElement? PenStrokeMark(PenPreset p, Color fg, bool inverted, Color seat)
     {
         try
         {
@@ -2464,7 +2540,15 @@ public sealed class ToolWheel
             // On the popped sector the seat is OnSurface, so the pen's own colour
             // would frequently be invisible; there the mark inverts wholesale.
             // Off it, only a genuine contrast collapse forces the fallback.
-            var seat = inverted ? PageTheme.OnSurface : PageTheme.Surface;
+            //
+            // 17.4: THE SEAT IS PASSED IN NOW. It used to be read off
+            // PageTheme.Surface - the inner disc's colour - which is not what a
+            // RING mark sits on in either theme, and on a dark ground is not even
+            // close: the ring has no fill there, so the mark sits on the page.
+            // A pen whose ink was dark but not quite as dark as the disc failed
+            // the test by a hair, kept its own ink, and vanished into a black
+            // page. Section 0 names this: a colour resolved from a token that
+            // does not describe the surface in question.
             var paint = inverted || Math.Abs(Lum(ink) - Lum(seat)) < 0.14 ? fg : ink;
             paint.A = (byte)Math.Clamp(255 * Math.Clamp(p.Opacity, 0.2f, 1f), 60, 255);
             return Icons.Mark(Icons.PenStroke(p.Pen), paint, MarkBox);
