@@ -805,7 +805,10 @@ both already correct.** What is wrong is the split between the rings.
 
 54. **Quick-action buttons above the text bubble** for text modification, per
     the screenshot: a `Cancel Editing` affordance with a red X, and a row of
-    attach / duplicate / lock / delete marks.
+    **paperclip / padlock / duplicate / waste bin** marks — §16.2's order, which
+    this originally contradicted at positions 2 and 3. §16.2 was transcribed
+    from the capture and wins; two orders for the same four marks, on two
+    surfaces reached for the same object, is a defect either way.
 
 ### 11.10 New, larger pieces
 
