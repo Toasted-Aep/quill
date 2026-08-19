@@ -66,8 +66,29 @@ public static class SyncLog
     private static string? _deviceId;
     private static readonly object _lock = new();
 
-    private static string CursorPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Quill", "synccursors.json");
+    /// <summary>Where this device's per-actor state lives. Normally
+    /// %LOCALAPPDATA%\Quill — deliberately NOT the data folder, because these
+    /// are per-machine read cursors and a synced copy of them would be wrong.
+    ///
+    /// <para><b>Under QUILL_DATA_FOLDER it moves inside the data folder, and
+    /// that is a data-safety fix rather than a convenience.</b> The variable is
+    /// how an isolated instance says "I am a test" (LibraryStore.EnvFolder's own
+    /// remarks), and LibraryStore.Save calls OnSaved unconditionally — so a
+    /// headless harness that saves used to overwrite the REAL user's
+    /// synccursors.json from its own empty in-memory copy, resetting the read
+    /// offset for every peer. The roadmap's unowned "SyncLog replay" risk names
+    /// exactly that: a lost cursor triggers a full replay that can resurrect
+    /// erased strokes. tools/VeilRoundTrip had been doing it on every run.</para>
+    ///
+    /// <para>An isolated folder is a temp folder that nothing syncs, so the
+    /// reason these files live outside the data folder does not apply there.
+    /// The real app has no QUILL_DATA_FOLDER set and is completely
+    /// unchanged.</para></summary>
+    private static string StateDir => LibraryStore.IsIsolated
+        ? LibraryStore.Dir
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Quill");
+
+    private static string CursorPath => Path.Combine(StateDir, "synccursors.json");
 
     public static string DeviceId
     {
@@ -76,7 +97,7 @@ public static class SyncLog
             if (_deviceId != null) return _deviceId;
             try
             {
-                var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Quill", "deviceid.txt");
+                var path = Path.Combine(StateDir, "deviceid.txt");
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 if (File.Exists(path)) _deviceId = File.ReadAllText(path).Trim();
                 if (string.IsNullOrEmpty(_deviceId))

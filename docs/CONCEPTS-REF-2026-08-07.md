@@ -3432,13 +3432,10 @@ no layers panel and this section does not describe one** — it describes the da
 what happens to the pages that already exist, and the five places the four
 features attach.
 
-> **This section was written as 17 and renumbered to 18.** Commit `a2659e0` on
-> `integration` carries a message describing a section 17 of *"the Measurement
-> menu, the bottom bar, and a correction pass"*, 17.1 to 17.15 — but the 268
-> lines it actually added are this layers section. Whatever that message
-> describes is **not in the file**, and the mode-bar work has been told to build
-> against a "§17.10" that does not exist here. Section 17 is therefore left free
-> for it. See 18.1 for the seam that work actually needs.
+> Written as 17 and renumbered to 18 once `42b00ab` put the correction pass into
+> section 17, where its commit message had always said it was. If you are here
+> for the mode bar's layer scope, it is 18.1 and it is the first thing in this
+> section for that reason.
 
 ### 18.1 THE SCOPE SEAM — read this first if you are building the mode bar
 
