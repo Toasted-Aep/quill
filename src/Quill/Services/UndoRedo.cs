@@ -589,18 +589,24 @@ public class RotateQuarterMixedAction : IPageAction
     private readonly List<ShapeElement> _shapes;
     private readonly List<TextElement> _texts;
     private readonly double _cx, _cy;
+    // 17.11's rotate tool turns BOTH ways. One flag rather than three clockwise
+    // turns for one anticlockwise one: three turns is three undo entries for a
+    // gesture the user made once, and the arithmetic below is already symmetric
+    // - Undo has always been the opposite turn.
+    private readonly bool _cw;
 
     public RotateQuarterMixedAction(List<PenStroke> strokes, List<ShapeElement> shapes,
-                                    List<TextElement> texts, double cx, double cy)
+                                    List<TextElement> texts, double cx, double cy,
+                                    bool clockwise = true)
     {
         _strokes = strokes; _shapes = shapes; _texts = texts;
-        _cx = cx; _cy = cy;
+        _cx = cx; _cy = cy; _cw = clockwise;
     }
 
     public string Description => "Rotate selection";
     public bool TouchesText => _texts.Count > 0;
-    public void Do(NotePage page) => Apply(true);
-    public void Undo(NotePage page) => Apply(false);
+    public void Do(NotePage page) => Apply(_cw);
+    public void Undo(NotePage page) => Apply(!_cw);
 
     private (double X, double Y) Turn(double x, double y, bool cw)
     {

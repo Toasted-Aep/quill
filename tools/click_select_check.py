@@ -133,21 +133,28 @@ def structural():
           is not None,
           "the page is walked backwards, so the last-painted stroke answers first")
 
-    # Armed wherever selection is the active modality: the Select tool, the pen
+    # Armed wherever selection is the active modality: the mouse tool, the pen
     # barrel button, and the mouse's Select mode.
+    #
+    # 17.10 RENAMED the Select tool to the MOUSE TOOL - "Lasso becomes part of
+    # the mouse tool rather than a separate selection mode" - and SetTool folds
+    # ToolType.Select into ToolType.Mouse on the way in, so the enum member
+    # survives for the tags stored in library.json while the live tool is only
+    # ever Mouse. This checker follows the name; the assertion is unchanged and
+    # so is the count.
     arms = re.findall(r"ArmClickSelect\(", src)
     check("click-to-select is armed from three modality sites",
           len(arms) == 4,   # 1 declaration + 3 call sites
-          "%d call sites (Select tool, pen barrel, MouseMode.Select)" % (len(arms) - 1))
+          "%d call sites (mouse tool, pen barrel, MouseMode.Select)" % (len(arms) - 1))
 
     pressed = safe_body(src, "private void OnPointerPressed(")
     mousepress = safe_body(src, "private void HandleMousePress(")
-    check("the Select tool arms it",
-          "ArmClickSelect(" in pressed and "case ToolType.Select:" in pressed,
-          "OnPointerPressed's Select arm")
+    check("the mouse tool arms it",
+          "ArmClickSelect(" in pressed and "case ToolType.Mouse:" in pressed,
+          "OnPointerPressed's mouse-tool arm")
     check("the pen barrel button arms it",
           pressed.count("ArmClickSelect(") == 2,
-          "barrel arm + Select-tool arm both live in OnPointerPressed")
+          "barrel arm + mouse-tool arm both live in OnPointerPressed")
     check("the mouse's Select mode arms it",
           "ArmClickSelect(" in mousepress,
           "HandleMousePress's rubber-band tail")

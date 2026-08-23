@@ -14,7 +14,19 @@ public enum PenType
 // The last three are 11.4 items 28 and 29 and 10.8: the eyedropper, the ruler
 // and Mix become SELECTABLE TOOLS, assignable to a dial sector or a pen-row
 // cell like any other, rather than living on the top bar or in the wheel.
-public enum ToolType { Pen, Eraser, Select, Text, FreeSpace, Eyedropper, Ruler, Mix }
+//
+// 17.10 and 17.11 append three more. Mouse IS the old Select tool renamed and
+// given a bottom menu - 17.10: "Lasso becomes part of the mouse tool rather than
+// a separate selection mode" - and Select is KEPT rather than renamed because a
+// dial sector or a pen-row cell in a library.json written by any earlier build
+// stores the tag "Select" by name. SetTool folds Select into Mouse on the way
+// in, so exactly one of the two is ever the live tool and nothing downstream has
+// to test for both. Pan and Rotate are 17.11's two.
+public enum ToolType { Pen, Eraser, Select, Text, FreeSpace, Eyedropper, Ruler, Mix, Mouse, Pan, Rotate }
+// 17.10's first control. Which gesture the mouse tool selects WITH: a click on
+// the thing itself, or a drag that encloses. Lasso is the value the reference
+// capture shows, and it is what the tool did before it had a name.
+public enum MousePick { Lasso, Item }
 // How the mouse behaves while the Pen tool is active. Auto = "normal mouse"
 // (click to select/focus, drag empty space to rubber-band select).
 public enum MouseMode { Auto, Grab, Select, Move }
