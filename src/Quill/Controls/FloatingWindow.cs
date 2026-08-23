@@ -138,16 +138,29 @@ public sealed class FloatingWindow
     private readonly Dictionary<int, FrameworkElement> _built = new();
     private int _active;
     /// <summary>THE STORED POSITION — AN INSET FROM THE SIDE THIS WINDOW IS
-    /// ANCHORED TO (<see cref="OpenOn"/>). Null until something chooses one, in
-    /// which case the resolver reads <see cref="EdgeGap"/> in its place.
+    /// ANCHORED TO (<see cref="OpenOn"/>), AS A FRACTION OF THE HOST'S WIDTH.
+    /// Null until a gesture chooses one, in which case the resolver reads
+    /// <see cref="EdgeGap"/> in its place.
     ///
-    /// <para>This, with <see cref="_insetTop"/> and <see cref="_wantW"/> /
+    /// <para>This, with <see cref="_fracTop"/>, <see cref="_fracW"/> /
+    /// <see cref="_fracH"/> and the tenant's requested <see cref="_wantW"/> /
     /// <see cref="_wantH"/>, is the ONLY source of truth for this window's
     /// geometry. The popup's offsets and the panel's Width / Height are DERIVED
     /// from it against the current host on every change, and are never read back
-    /// as state. That is the model the user specified: "make it so that when panel
-    /// gets resized the distance from the side they're on gets remembered, and the
-    /// panels move accordingly" (§15.4e).</para>
+    /// as state.</para>
+    ///
+    /// <para><b>§17.6: A FRACTION, NOT AN ABSOLUTE DISTANCE.</b> §15.4e stored the
+    /// inset in DIP, which restored a panel's position but not its proportions.
+    /// The user: <i>"I want the panel to return to its proportional size, so for
+    /// example 100 pixels away from bottom edge, and panel gets 50% smaller 50
+    /// pixels away now."</i> So a panel dragged to a 387 DIP gap in a 1080-wide
+    /// host is storing 387/1080, and in a 1440-wide host that resolves to 516 —
+    /// and back to exactly 387 on return. §15.4e's case B table, which held 387 in
+    /// both hosts, is SUPERSEDED here on purpose; its case A table is not, because
+    /// an untouched panel still has a null inset and still resolves to a flat
+    /// <see cref="EdgeGap"/>. A fixed 14 DIP margin is a margin, not a
+    /// proportion, and halving it on a smaller host would be a different
+    /// bug.</para>
     ///
     /// <para>An inset, and not an absolute offset to be shifted. The absolute
     /// version needed a remembered host origin to shift AGAINST (<c>_lastOrg</c>)
@@ -158,15 +171,17 @@ public sealed class FloatingWindow
     /// disagree about, and it subsumes BOTH of that fix's arms: the corner an
     /// untouched panel wants IS inset <see cref="EdgeGap"/>, so preserving the
     /// inset re-anchors it, while preserving a dragged panel's inset holds it
-    /// exactly where it was put. One rule, both behaviours.</para></summary>
-    private double? _insetSide;
+    /// where it was put — now proportionally. One rule, both behaviours.</para></summary>
+    private double? _fracSide;
 
-    /// <summary>The inset from the host's TOP — the vertical half of the pair.
-    /// Null defaults to <see cref="TopBand"/>, the band §11.6 item 42 keeps clear.
-    /// The default is resolved LATE rather than banked at first placement, so a
-    /// window nobody has moved follows that band if §11.5 item 31's thicker top
-    /// bar ever moves it.</summary>
-    private double? _insetTop;
+    /// <summary>The inset from the host's TOP as a fraction of the host's HEIGHT —
+    /// the vertical half of the pair. Null defaults to <see cref="TopBand"/>, the
+    /// band §11.6 item 42 keeps clear. The default is resolved LATE rather than
+    /// banked at first placement, so a window nobody has moved follows that band
+    /// if §11.5 item 31's thicker top bar ever moves it — and, like
+    /// <see cref="EdgeGap"/>, it is a reserved band rather than a proportion, so
+    /// the null case stays absolute.</summary>
+    private double? _fracTop;
 
     /// <summary>THE SIZE THE WINDOW WANTS, which is not always the size it has.
     ///
@@ -176,8 +191,28 @@ public sealed class FloatingWindow
     /// destructive version as an accepted limitation: "clamping into smaller
     /// windowed bounds is one-way, so a panel sized to full fullscreen height
     /// stays at the clamped size on return". Keeping the intent separate from the
-    /// render is the whole of what retires it.</para></summary>
+    /// render is the whole of what retires it.</para>
+    ///
+    /// <para>This pair is the TENANT's requested size and stays ABSOLUTE. It is
+    /// an intent expressed in DIP by the caller, not a gesture, and §15.4e rule 2
+    /// is that only a gesture writes stored geometry. A resize writes
+    /// <see cref="_fracW"/> / <see cref="_fracH"/> instead, and those win from
+    /// then on.</para></summary>
     private double _wantW, _wantH;
+
+    /// <summary>§17.6's other half: the wanted SIZE as a fraction of the host,
+    /// written by a resize gesture and null until then.
+    ///
+    /// <para>"The size scales the same way." A panel resized to 916 x 826 in a
+    /// 1440 x 900 host stores 0.6361 x 0.9178 and comes back to exactly 916 x 826
+    /// in that host — verified to the last bit, because <c>(916/1440)*1440</c>
+    /// round-trips exactly in IEEE doubles.</para>
+    ///
+    /// <para>NOTHING BUT A GESTURE WRITES THESE, which is what keeps §15.4e's
+    /// rule 4 intact: the clamp is applied to a candidate rect on its way to the
+    /// screen and never written back, so a host too small to honour the fractions
+    /// renders smaller without forgetting them.</para></summary>
+    private double? _fracW, _fracH;
 
     /// <summary>Raised when the info / help button is pressed.</summary>
     public Action? InfoRequested { get; set; }
@@ -714,11 +749,14 @@ public sealed class FloatingWindow
     /// against the CURRENT host. Nothing is shifted by a delta, nothing
     /// accumulates, and nothing is re-anchored as a special case.
     ///
-    /// <para>PURE — it reads <see cref="_insetSide"/>, <see cref="_insetTop"/>,
-    /// <see cref="_wantW"/> and <see cref="_wantH"/> and writes none of them. That
-    /// is what makes the clamping NON-DESTRUCTIVE: the window can be pulled into a
-    /// host that cannot hold it without losing the geometry it is being pulled
-    /// away from, so it returns to it exactly when the room comes back.</para>
+    /// <para>PURE — it reads <see cref="_fracSide"/>, <see cref="_fracTop"/>,
+    /// <see cref="_fracW"/> / <see cref="_fracH"/> and <see cref="_wantW"/> /
+    /// <see cref="_wantH"/> and writes none of them. That is what makes the
+    /// clamping NON-DESTRUCTIVE: the window can be pulled into a host that cannot
+    /// hold it without losing the geometry it is being pulled away from, so it
+    /// returns to it exactly when the room comes back. §17.6 changes what the
+    /// stored numbers MEAN — fractions of the host rather than DIP — and changes
+    /// nothing about that guarantee, which is why the two are compatible.</para>
     ///
     /// <para>Returns false when the host has not been measured yet. No one-shot
     /// re-try handler is needed for that (<c>FirstPlacement</c> was one): the
@@ -737,10 +775,15 @@ public sealed class FloatingWindow
         double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
         if (hostW <= 0 || hostH <= 0) return false;
 
-        (w, h) = ConstrainSize(_wantW, _wantH);
-        double side = _insetSide ?? EdgeGap;
+        // §17.6: every stored number is a FRACTION of the host, resolved against
+        // whatever host is up now. A null one is not a fraction at all — it is
+        // the reserved band (EdgeGap, TopBand) an untouched panel sits in, which
+        // is a margin rather than a proportion and so stays absolute.
+        (w, h) = ConstrainSize(_fracW is { } fw ? fw * hostW : _wantW,
+                               _fracH is { } fh ? fh * hostH : _wantH);
+        double side = _fracSide is { } fs ? fs * hostW : EdgeGap;
         left = OpenOn == Side.Left ? side : hostW - w - side;
-        top = _insetTop ?? TopBand;
+        top = _fracTop is { } ft ? ft * hostH : TopBand;
         (left, top) = ConstrainPosition(left, top, w, h);
         return true;
     }
@@ -768,9 +811,18 @@ public sealed class FloatingWindow
     /// what "the distance from the side they're on" means.
     ///
     /// <para>Measured against the width PASSED IN — the width on screen — not
-    /// against <see cref="_wantW"/>. The user set the distance they could see.</para></summary>
-    private double SideInsetOf(double left, double w)
-        => OpenOn == Side.Left ? left : _host.ActualWidth - w - left;
+    /// against <see cref="_wantW"/>. The user set the distance they could see.</para>
+    ///
+    /// <para>§17.6: returned as a FRACTION of the host's width, because that is
+    /// what is stored. Guarded against a zero-width host so a gesture arriving
+    /// before the host is measured cannot bank a NaN — which would then resolve
+    /// to NaN forever and put the window nowhere at all.</para></summary>
+    private double SideFracOf(double left, double w)
+    {
+        double hostW = _host.ActualWidth;
+        if (hostW <= 0) return EdgeGap;
+        return (OpenOn == Side.Left ? left : hostW - w - left) / hostW;
+    }
 
     /// <summary>The host moved or resized under the window — entering or leaving
     /// fullscreen being the case that matters.
@@ -821,8 +873,8 @@ public sealed class FloatingWindow
         // drag in a host with no vertical slack would otherwise bank the clamped
         // top as though the user had chosen it, losing the one they chose when
         // there was room for it: the same destruction again, by the side door.
-        if (nl != left) _insetSide = SideInsetOf(nl, w);
-        if (nt != top) _insetTop = nt;
+        if (nl != left) _fracSide = SideFracOf(nl, w);
+        if (nt != top && _host.ActualHeight > 0) _fracTop = nt / _host.ActualHeight;
         ApplyGeometry();
     }
 
@@ -980,11 +1032,13 @@ public sealed class FloatingWindow
             }
 
             // The size IS the intent here, and both arms already clamped it.
-            _wantW = w;
-            _wantH = h;
+            // §17.6 banks it as a FRACTION of the host, so the panel returns
+            // proportionally rather than at the literal DIP it was dragged to.
+            if (_host.ActualWidth > 0) _fracW = w / _host.ActualWidth;
+            if (_host.ActualHeight > 0) _fracH = h / _host.ActualHeight;
             var (nl, nt) = ConstrainPosition(left, top, w, h);
-            if (nl != left0) _insetSide = SideInsetOf(nl, w);
-            if (nt != top0) _insetTop = nt;
+            if (nl != left0) _fracSide = SideFracOf(nl, w);
+            if (nt != top0 && _host.ActualHeight > 0) _fracTop = nt / _host.ActualHeight;
             ApplyGeometry();
         };
     }
