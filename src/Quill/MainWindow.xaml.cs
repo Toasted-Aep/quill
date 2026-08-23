@@ -7576,34 +7576,46 @@ public sealed partial class MainWindow : Window
         ApplyFullscreenChrome();
     }
 
-    /// <summary>CONCEPTS-REF 15.3 item c. The clearance left between the hover
-    /// strip's band and the text format bar underneath it. A few DIPs rather than
-    /// a flush abutment: the two are computed from different roots, and a 1 DIP
-    /// rounding difference on another scale factor should not be able to make them
-    /// touch.
+    /// <summary>CONCEPTS-REF 17.15. HOW MUCH OF THE TOP BAR'S RIGHT END IS KEPT
+    /// CLEAR FOR THE HOVER STRIP — the horizontal answer that replaces §15.3 item
+    /// c's vertical one.
     ///
-    /// <para>RAISED FROM 4 TO 12, 2026-08-17. The distance that matters is not
-    /// this constant but the one from the BOTTOM OF OverStrip's hit rectangle —
-    /// <c>StripHeight + StripSlack</c> = 40 DIP — down to the format bar's first
-    /// control. At 4 that control started at <c>StripHeight</c> (34) + 4 + the
-    /// bar's own 4 DIP top padding = 42, so the clearance was TWO DIP. Two DIP is
-    /// inside layout-rounding noise: 14.3's corner target snapped from 5.747 to
-    /// 5.5 and broke a hitbox on exactly that scale of error. At 12 the first
-    /// control starts at 34 + 12 + 4 = 50 and clears the hit rectangle by 10.</para>
+    /// <para><b>What was wrong.</b> §15.3 item c kept the strip off the format
+    /// bar's controls by pushing the whole bar DOWN by
+    /// <c>StripHeight + FormatBarStripGap</c> = 34 + 12 = 46 DIP, and §16 raised
+    /// the gap from 4 to 12 which widened it further. The user: "in full screen
+    /// text mode text appears a long way down. There's a big margin there still."
+    /// They are right, and the cost was being paid on the scarce axis: in text
+    /// mode the page loses 46 DIP of height for a strip that is only ever 34 tall,
+    /// only ever covers the RIGHT 138 DIP, and is not even on screen until the
+    /// pointer asks for it.</para>
     ///
-    /// <para>Ten rather than the eight asked for, because a nominal 8 that rounds
-    /// to 7.5 has not met an 8 DIP floor, and the entire point of raising this is
-    /// to stop the answer depending on rounding. The 2 DIP of overshoot costs 2
-    /// DIP of canvas in text mode and nowhere else.</para>
+    /// <para><b>The fix, and why it still satisfies §15.3 item c.</b> The actual
+    /// requirement is "no live control may sit under the strip". The strip is
+    /// flush to the top-RIGHT, so that can be met by reserving width instead of
+    /// height — and width is the axis a horizontally scrolling toolbar has to
+    /// spare. So the vertical offset is gone entirely, and the topmost bar in
+    /// fullscreen instead carries this much extra RIGHT padding. Nothing is lost:
+    /// the bar scrolls, so every control is still reachable, and the page gets all
+    /// 46 DIP back.</para>
     ///
-    /// <para>THIS TRACKS <c>StripSlack</c>, NOT ONLY <c>StripHeight</c>. The 34 is
-    /// already read from Metrics below; the 6 DIP of slack is not, and choosing
-    /// this constant without reference to that slack is what produced the 2 DIP.
-    /// The invariant to hold if either is retuned:
-    /// <c>(StripHeight + FormatBarStripGap + bar padding) − (StripHeight +
-    /// StripSlack) ≥ 8</c>, confirmed by MEASURING where the first button row
-    /// lands, not by re-doing this arithmetic.</para></summary>
-    private const double FormatBarStripGap = 12;
+    /// <para><b>This is NOT the hover-driven optimisation §15.3 item c refused.</b>
+    /// That refusal was about moving controls WHILE the pointer reaches for them —
+    /// "it would move a row of buttons under the pointer as the user reaches for
+    /// them, which reads as broken however correct the geometry is". This
+    /// reservation is a property of being fullscreen, exactly as the old offset
+    /// was: it does not change when the strip reveals or retracts, and no control
+    /// moves under the pointer. The ruling was fixed-versus-hover, and this stays
+    /// on the fixed side of it.</para>
+    ///
+    /// <para><b>It tracks the strip rather than restating it.</b>
+    /// <c>StripWidth</c> is <c>MarkPitch * MarkCount</c> and Build asserts the
+    /// count, and <c>StripSlack</c> is included because the strip's own hit
+    /// rectangle in <c>OverStrip</c> is that much wider than the strip — which is
+    /// the slack §15.3 item c's arithmetic originally forgot and had to be
+    /// corrected for.</para></summary>
+    private static double StripReserve =>
+        FullscreenChrome.Metrics.StripWidth + FullscreenChrome.Metrics.StripSlack;
 
     /// <summary>CONCEPTS-REF 15.3 — the chrome changes SHAPE in fullscreen.
     ///
@@ -7632,33 +7644,35 @@ public sealed partial class MainWindow : Window
             _fsChrome?.SetActive(fs);
             bool fold = fs && _chromeBars?.IsVisible == true;
 
-            // CONCEPTS-REF 15.3 item c - THE FORMAT BAR MOVES OUT FROM UNDER THE
-            // STRIP, and it does so for as long as the caption row is folded
-            // rather than only while the strip is revealed.
+            // CONCEPTS-REF 17.15 - THE FORMAT BAR MOVES OUT FROM UNDER THE STRIP
+            // SIDEWAYS, NOT DOWNWARD. See StripReserve for the whole argument;
+            // the short version is that the requirement is "no live control under
+            // the strip", the strip is flush top-RIGHT, and reserving width costs
+            // a horizontally scrolling toolbar nothing while reserving height cost
+            // the page 46 DIP on the axis text needs most.
             //
-            // The bar is Grid.Row 1. Folding the caption row away is what lifts it
-            // to the screen's top edge, which is the strip's own band, so in text
-            // mode the strip covered live buttons and whether they could be
-            // reached depended on which direction the pointer arrived from.
+            // The vertical offset is therefore GONE. This is not the hover-driven
+            // optimisation 15.3 item c refused: that refusal was about controls
+            // moving WHILE the pointer reaches for them, and this reservation is a
+            // property of being fullscreen exactly as the old offset was.
             //
-            // The user ruled for a FIXED offset over the cheaper hover-driven one.
-            // Shifting the bar only while the strip is out costs no canvas at all,
-            // but it would move a row of buttons under the pointer as the user
-            // reaches for them, which reads as broken however correct the geometry
-            // is. So the offset is a property of being fullscreen, not of the
-            // strip's animation state, and the ~34 DIP of canvas it costs in text
-            // mode is a price that was knowingly paid. DO NOT make this
-            // hover-dependent again as an optimisation.
+            // WHICH bar gets the reservation is whichever one is topmost. Folded,
+            // the caption row is away and the format bar is at the screen's top
+            // edge; unfolded, the caption row is that bar and the format bar sits
+            // safely below it. Only the topmost can be under the strip, and giving
+            // both the padding would cost the unfolded case 144 DIP for nothing.
             //
-            // Taken from FullscreenChrome.Metrics.StripHeight rather than written
-            // as a literal 34: retuning the strip has to move the bar with it, and
-            // a second copy of the number is how two values that must agree stop
-            // agreeing. Costs nothing while the bar is Collapsed, because a
-            // collapsed child contributes no height to an Auto row - so the canvas
-            // only pays for this in text mode, which is the whole bargain.
-            FormatBar.Margin = fold
-                ? new Thickness(0, FullscreenChrome.Metrics.StripHeight + FormatBarStripGap, 0, 0)
-                : new Thickness(0);
+            // 17.15 also asks whether the two bars need separate ROWS in
+            // fullscreen at all. They do not, and the code already reflects it in
+            // the case that matters: with ChromeBars up the caption row is folded
+            // and there is exactly ONE bar - the 46 DIP that replaced the folded
+            // row was the entire fault, not the row. With ChromeBars down the two
+            // are not a caption row plus a toolbar but two genuine toolbars, and
+            // that top bar is then the only chrome there is, so folding it would
+            // leave a bare canvas with no way back except the keyboard.
+            FormatBar.Margin = new Thickness(0);
+            FormatBar.Padding = new Thickness(8, 4, 8 + (fold ? StripReserve : 0), 4);
+            TopBar.Padding = new Thickness(6, 1, 6 + (fs && !fold ? StripReserve : 0), 1);
 
             if (fold)
             {
