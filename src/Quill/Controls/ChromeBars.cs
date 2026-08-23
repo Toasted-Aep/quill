@@ -24,7 +24,8 @@ namespace Quill.Controls;
 /// up), then a TRANSPARENT DIVIDER, then Layers, Precision and Objects.</para>
 ///
 /// <para><b>Top-right</b>: the zoom and tilt readouts with a lock, a
-/// transparent divider, then Import, Export and Settings.</para>
+/// transparent divider, then Import, Export, Settings and Help (section 5's
+/// `?`, which raises the generated shortcut sheet).</para>
 ///
 /// <para>The "transparent divider" is literal: each bar is TWO glass panels
 /// with a real gap between them, so the page shows through the seam exactly as
@@ -136,6 +137,15 @@ public sealed class ChromeBars
         public required Action ToggleFullscreen { get; init; }
         public required Action RenamePage { get; init; }
         public required Action OpenSettings { get; init; }
+        /// <summary>CONCEPTS-REF 5's `?`, the last mark in the right cluster.
+        ///
+        /// <para>A TOGGLE, not an open, and deliberately the SAME call F1 and the
+        /// app menu's "Keyboard shortcuts" item make. The sheet it raises is
+        /// generated from the accelerators that were actually installed
+        /// (<c>MainWindow.ApplyKeyPreset</c> -> <c>BuildShortcutsSheet</c>), so
+        /// Help cannot claim a key that no longer works, and three entry points
+        /// to one surface cannot disagree about what Help is.</para></summary>
+        public required Action ToggleHelp { get; init; }
         /// <summary>DIPs of the right edge the docked settings panel is
         /// covering, or 0. The right cluster slides clear of it.</summary>
         public required Func<double> RightDockWidth { get; init; }
@@ -491,6 +501,12 @@ public sealed class ChromeBars
         right.Children.Add(BarMenuButton(Icons.Import, "Import", BuildImportMenu()));
         right.Children.Add(BarButton(Icons.Export, "Export", OpenExport));
         right.Children.Add(BarButton(Icons.Settings, "Settings", _h.OpenSettings));
+        // Section 5 closes the right cluster with Help, and 15.3 transcribes the
+        // same `?` at the end of the fullscreen cluster. It was missing from both
+        // - 15.3 was transcribing the REFERENCE, and the mark it listed had never
+        // been built here. One button serves both states, because this cluster IS
+        // both states; only the bracket and the divider are conditional.
+        right.Children.Add(BarButton(Icons.Help, "Help - keyboard shortcuts and gestures (F1)", _h.ToggleHelp));
 
         _rightRow.Children.Add(Cluster(right));
 
