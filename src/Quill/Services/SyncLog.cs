@@ -66,8 +66,29 @@ public static class SyncLog
     private static string? _deviceId;
     private static readonly object _lock = new();
 
-    private static string CursorPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Quill", "synccursors.json");
+    /// <summary>Where this device's per-actor state lives. Normally
+    /// %LOCALAPPDATA%\Quill — deliberately NOT the data folder, because these
+    /// are per-machine read cursors and a synced copy of them would be wrong.
+    ///
+    /// <para><b>Under QUILL_DATA_FOLDER it moves inside the data folder, and
+    /// that is a data-safety fix rather than a convenience.</b> The variable is
+    /// how an isolated instance says "I am a test" (LibraryStore.EnvFolder's own
+    /// remarks), and LibraryStore.Save calls OnSaved unconditionally — so a
+    /// headless harness that saves used to overwrite the REAL user's
+    /// synccursors.json from its own empty in-memory copy, resetting the read
+    /// offset for every peer. The roadmap's unowned "SyncLog replay" risk names
+    /// exactly that: a lost cursor triggers a full replay that can resurrect
+    /// erased strokes. tools/VeilRoundTrip had been doing it on every run.</para>
+    ///
+    /// <para>An isolated folder is a temp folder that nothing syncs, so the
+    /// reason these files live outside the data folder does not apply there.
+    /// The real app has no QUILL_DATA_FOLDER set and is completely
+    /// unchanged.</para></summary>
+    private static string StateDir => LibraryStore.IsIsolated
+        ? LibraryStore.Dir
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Quill");
+
+    private static string CursorPath => Path.Combine(StateDir, "synccursors.json");
 
     public static string DeviceId
     {
@@ -76,7 +97,7 @@ public static class SyncLog
             if (_deviceId != null) return _deviceId;
             try
             {
-                var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Quill", "deviceid.txt");
+                var path = Path.Combine(StateDir, "deviceid.txt");
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 if (File.Exists(path)) _deviceId = File.ReadAllText(path).Trim();
                 if (string.IsNullOrEmpty(_deviceId))
@@ -103,8 +124,25 @@ public static class SyncLog
     }
 
     // page metadata WITHOUT elements or per-device view state
-    private static string PageMetaJson(NotePage p) => JsonSerializer.Serialize(new
-    { p.Id, p.Name, p.CreatedTicks, p.Background, p.Grid, p.GridSpacing, p.PenRowVisible, p.Width, p.Height, p.AudioFile, p.AudioStartTicks }, Opts);
+    // CONCEPTS-REF 18.10. An element op serialises the WHOLE element, so
+    // LayerKey rides along for free - but this list is hand-picked, and a peer
+    // that received the keys without the layers they name would resolve every
+    // one of them to the base layer and flatten the drawing.
+    //
+    // Two shapes rather than one optional field: a page with no layers must
+    // hash to EXACTLY what it hashed to before layers existed, or the first
+    // save after upgrading emits one page op per page in the library for no
+    // reason at all.
+    //
+    // ActiveLayer is deliberately NOT here. It is per-user UI state - which
+    // layer this person is drawing on - and syncing it would make one machine's
+    // layer selection jump under the other's hand.
+    private static string PageMetaJson(NotePage p) =>
+        p.Layers is { Count: > 0 }
+            ? JsonSerializer.Serialize(new
+              { p.Id, p.Name, p.CreatedTicks, p.Background, p.Grid, p.GridSpacing, p.PenRowVisible, p.Width, p.Height, p.AudioFile, p.AudioStartTicks, p.Layers }, Opts)
+            : JsonSerializer.Serialize(new
+              { p.Id, p.Name, p.CreatedTicks, p.Background, p.Grid, p.GridSpacing, p.PenRowVisible, p.Width, p.Height, p.AudioFile, p.AudioStartTicks }, Opts);
 
     private static string NbMetaJson(Notebook n) => JsonSerializer.Serialize(new { n.Id, n.Name, n.Color, n.CoverEmoji, n.Folder }, Opts);
     private static string SecMetaJson(Section s) => JsonSerializer.Serialize(new { s.Id, s.Name }, Opts);
@@ -394,6 +432,14 @@ public static class SyncLog
                 pg.GridSpacing = meta.GridSpacing; pg.PenRowVisible = meta.PenRowVisible;
                 pg.Width = meta.Width; pg.Height = meta.Height;
                 pg.AudioFile = meta.AudioFile; pg.AudioStartTicks = meta.AudioStartTicks;
+                // CONCEPTS-REF 18.10: adopt a layer list, never CLEAR one. An op
+                // from a peer that predates layers carries no Layers at all, and
+                // copying that absence over would delete the local list while the
+                // elements kept their keys - every layer flattened into the base
+                // one by a peer that has never heard of layers. A materialised
+                // list never legitimately goes back to empty (the base layer
+                // cannot be deleted), so this can only ever be the absent case.
+                if (meta.Layers is { Count: > 0 }) pg.Layers = meta.Layers;
                 return op.Id;
             }
             case "st": case "sh": case "tx": case "cm":
