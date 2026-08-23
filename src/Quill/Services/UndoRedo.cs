@@ -467,37 +467,48 @@ public class ScaleMixedAction : IPageAction
     private readonly List<(ShapeElement S, double X, double Y, double W, double H)> _shapes;
     private readonly List<(TextElement T, double X, double Y, double W)> _texts;
     private readonly float _ax, _ay, _factor;
+    // 17.9's Scale is "on/off, and STRETCH", so the factor is per axis. The
+    // parameter is optional and defaults to the uniform case, which is why every
+    // existing caller is untouched and an old undo entry cannot change meaning.
+    private readonly float _factorY;
     public ScaleMixedAction(List<(PenStroke, float[], float[])> strokes,
                             List<(ShapeElement, double, double, double, double)> shapes,
                             List<(TextElement, double, double, double)> texts,
-                            float ax, float ay, float factor)
+                            float ax, float ay, float factor, float factorY = float.NaN)
     {
         _strokes = strokes; _shapes = shapes; _texts = texts;
         _ax = ax; _ay = ay; _factor = factor;
+        _factorY = float.IsNaN(factorY) ? factor : factorY;
     }
     public string Description => "Scale selection";
     public bool TouchesText => _texts.Count > 0;
-    public void Do(NotePage page) => Apply(_factor);
-    public void Undo(NotePage page) => Apply(1f);
-    private void Apply(float f)
+    public void Do(NotePage page) => Apply(_factor, _factorY);
+    public void Undo(NotePage page) => Apply(1f, 1f);
+    private void Apply(float f, float g)
     {
         foreach (var (s, xs, ys) in _strokes)
             for (int i = 0; i < s.Points.Count && i < xs.Length; i++)
             {
                 s.Points[i].X = _ax + (xs[i] - _ax) * f;
-                s.Points[i].Y = _ay + (ys[i] - _ay) * f;
+                s.Points[i].Y = _ay + (ys[i] - _ay) * g;
             }
         foreach (var (s, x, y, w, h) in _shapes)
         {
             s.X = _ax + (x - _ax) * f;
-            s.Y = _ay + (y - _ay) * f;
+            s.Y = _ay + (y - _ay) * g;
             s.W = w * f;
-            s.H = h * f;
+            s.H = h * g;
         }
         foreach (var (t, x, y, w) in _texts)
         {
+            // A text box reflows: it has a width and no height, so the y factor
+            // MOVES it and only the x factor resizes it. Same rule as the live
+            // drag in InkSurface.ApplyScaleLive, and it has to be, or the commit
+            // would put the box somewhere other than where the user watched it
+            // go - which is the failure the two-copies-of-the-arithmetic shape
+            // of this file makes easy and this comment exists to prevent.
             t.X = _ax + (x - _ax) * f;
-            t.Y = _ay + (y - _ay) * f;
+            t.Y = _ay + (y - _ay) * g;
             t.Width = Math.Max(60, w * f);
         }
     }

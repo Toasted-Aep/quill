@@ -134,6 +134,21 @@ public sealed class InkSurface : UserControl
     /// scope. Read by <see cref="InScopeForSelect"/> and nowhere else.</summary>
     public LayerScope SelectScope { get; set; } = LayerScope.AllLayers;
 
+    // ---- 17.9: the mode bar's two on/off modes ---------------------------
+
+    /// <summary>17.9's Scale, on. Off, a corner is a corner and the rest of the
+    /// selection box moves - which is what dragging a selection has always done.
+    /// On, the WHOLE box is a scale grip: a press picks the corner it is nearest
+    /// and drags from the one opposite. Nothing about the corner handles
+    /// changes; the mode adds a second way in, it does not take one away.</summary>
+    public bool ScaleMode { get; set; }
+
+    /// <summary>17.9's "and stretch". False scales uniformly from the radial
+    /// ratio, which is what this path did when it had one factor; true takes
+    /// each axis from its own distance to the anchor, so the aspect is
+    /// free.</summary>
+    public bool ScaleStretch { get; set; }
+
     public bool RulerMode { get; set; }
     // On-screen ruler angle in degrees (any value, not just 15° steps) (#21).
     public double RulerAngle { get; set; }
@@ -1746,7 +1761,13 @@ public sealed class InkSurface : UserControl
     // ---- selection scaling (#54): corner handles resize the whole selection ----
     private bool _scalingSel;
     private Vector2 _scaleAnchor, _scaleStartPos;
-    private float _scaleFactor = 1f;
+    // 17.9's Scale is "on/off, AND STRETCH", so the scale carries a factor PER
+    // AXIS. Uniform keeps both equal from the radial ratio, which is exactly
+    // what this path did when it had one number; stretch takes each axis from
+    // its own distance to the anchor. One pair of numbers rather than a second
+    // scale path, because a second one is how the live drag and the committed
+    // action end up disagreeing about where the selection went.
+    private float _scaleFactor = 1f, _scaleFactorY = 1f;
     private List<(PenStroke S, float[] Xs, float[] Ys)>? _scaleStrokes;
     private List<(ShapeElement S, double X, double Y, double W, double H)>? _scaleShapes;
     private List<(TextElement T, double X, double Y, double W)>? _scaleTexts;
@@ -1769,11 +1790,17 @@ public sealed class InkSurface : UserControl
         var corners = SelCorners();
         for (int i = 0; i < 4; i++)
         {
-            if (Vector2.Distance(pos, corners[i]) > Math.Max(tol, 9f / ViewZoom)) continue;
+            // 17.9's Scale MODE. Off, a corner is a corner and the rest of the
+            // box moves - today's behaviour, unchanged. On, the whole box is a
+            // scale grip: the press picks the corner it is nearest and drags
+            // from the one opposite. That is what makes Scale a mode rather than
+            // a label on a gesture that was already there.
+            if (!ScaleMode && Vector2.Distance(pos, corners[i]) > Math.Max(tol, 9f / ViewZoom)) continue;
+            if (ScaleMode && NearestCorner(pos, corners) != i) continue;
             _scalingSel = true;
             _scaleAnchor = corners[(i + 2) % 4];   // opposite corner stays put
             _scaleStartPos = pos;
-            _scaleFactor = 1f;
+            _scaleFactor = _scaleFactorY = 1f;
             _scaleBoundsOrig = _selBounds;
             _scaleStrokes = _selected
                 .Select(s => (s, s.Points.Select(p => p.X).ToArray(), s.Points.Select(p => p.Y).ToArray()))
@@ -1785,27 +1812,44 @@ public sealed class InkSurface : UserControl
         return false;
     }
 
+    private static int NearestCorner(Vector2 p, Vector2[] corners)
+    {
+        int best = 0;
+        float bd = float.MaxValue;
+        for (int i = 0; i < corners.Length; i++)
+        {
+            float d = Vector2.DistanceSquared(p, corners[i]);
+            if (d < bd) { bd = d; best = i; }
+        }
+        return best;
+    }
+
     private void ApplyScaleLive()
     {
         if (_scaleStrokes == null || _scaleShapes == null || _scaleTexts == null) return;
-        float f = _scaleFactor, ax = _scaleAnchor.X, ay = _scaleAnchor.Y;
+        float f = _scaleFactor, g = _scaleFactorY, ax = _scaleAnchor.X, ay = _scaleAnchor.Y;
         foreach (var (s, xs, ys) in _scaleStrokes)
             for (int i = 0; i < s.Points.Count && i < xs.Length; i++)
             {
                 s.Points[i].X = ax + (xs[i] - ax) * f;
-                s.Points[i].Y = ay + (ys[i] - ay) * f;
+                s.Points[i].Y = ay + (ys[i] - ay) * g;
             }
         foreach (var (s, x, y, w, h) in _scaleShapes)
         {
             s.X = ax + (x - ax) * f;
-            s.Y = ay + (y - ay) * f;
+            s.Y = ay + (y - ay) * g;
             s.W = w * f;
-            s.H = h * f;
+            s.H = h * g;
         }
         foreach (var (t, x, y, w) in _scaleTexts)
         {
             t.X = ax + (x - ax) * f;
-            t.Y = ay + (y - ay) * f;
+            t.Y = ay + (y - ay) * g;
+            // A text box has a width and no height - it reflows - so the y
+            // factor moves it and only the x factor resizes it. Stretching a
+            // paragraph vertically is not a thing the model can express, and
+            // pretending otherwise would put the box somewhere the user did not
+            // drag it.
             t.Width = Math.Max(60, w * f);
             if (_textUi.TryGetValue(t.Id, out var ui))
             {
@@ -1816,9 +1860,9 @@ public sealed class InkSurface : UserControl
         }
         // scale the visible selection box too
         double nx = ax + (_scaleBoundsOrig.X - ax) * f;
-        double ny = ay + (_scaleBoundsOrig.Y - ay) * f;
+        double ny = ay + (_scaleBoundsOrig.Y - ay) * g;
         _selBounds = new Rect(Math.Min(nx, ax), Math.Min(ny, ay),
-            _scaleBoundsOrig.Width * f, _scaleBoundsOrig.Height * f);
+            _scaleBoundsOrig.Width * f, _scaleBoundsOrig.Height * g);
         _inkCacheDirty = true;
         SubjectMoved?.Invoke();   // the chrome follows the scale
     }
@@ -2103,9 +2147,22 @@ public sealed class InkSurface : UserControl
                 }
                 else if (_scalingSel)
                 {
-                    float d0 = Vector2.Distance(_scaleStartPos, _scaleAnchor);
-                    float d1 = Vector2.Distance(pos, _scaleAnchor);
-                    _scaleFactor = Math.Clamp(d0 < 1f ? 1f : d1 / d0, 0.15f, 10f);
+                    if (ScaleStretch)
+                    {
+                        // 17.9's stretch: each axis takes its own ratio to the
+                        // anchor, so the aspect is free.
+                        float x0 = _scaleStartPos.X - _scaleAnchor.X, y0 = _scaleStartPos.Y - _scaleAnchor.Y;
+                        float x1 = pos.X - _scaleAnchor.X, y1 = pos.Y - _scaleAnchor.Y;
+                        _scaleFactor = Math.Clamp(Math.Abs(x0) < 1f ? 1f : x1 / x0, 0.15f, 10f);
+                        _scaleFactorY = Math.Clamp(Math.Abs(y0) < 1f ? 1f : y1 / y0, 0.15f, 10f);
+                    }
+                    else
+                    {
+                        float d0 = Vector2.Distance(_scaleStartPos, _scaleAnchor);
+                        float d1 = Vector2.Distance(pos, _scaleAnchor);
+                        _scaleFactor = _scaleFactorY =
+                            Math.Clamp(d0 < 1f ? 1f : d1 / d0, 0.15f, 10f);
+                    }
                     ApplyScaleLive();
                 }
                 else if (_movingSel)
@@ -2419,11 +2476,13 @@ public sealed class InkSurface : UserControl
                 }
                 if (_scalingSel)
                 {
-                    if (Math.Abs(_scaleFactor - 1f) > 0.01f && _scaleStrokes != null && _page != null)
+                    if ((Math.Abs(_scaleFactor - 1f) > 0.01f || Math.Abs(_scaleFactorY - 1f) > 0.01f)
+                        && _scaleStrokes != null && _page != null)
                     {
                         PushAction(new ScaleMixedAction(
                             _scaleStrokes, _scaleShapes!, _scaleTexts!,
-                            _scaleAnchor.X, _scaleAnchor.Y, _scaleFactor), _page, alreadyDone: true);
+                            _scaleAnchor.X, _scaleAnchor.Y, _scaleFactor, _scaleFactorY), _page,
+                            alreadyDone: true);
                         changed = true;
                     }
                     _scalingSel = false;
