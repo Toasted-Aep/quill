@@ -184,6 +184,19 @@ public static class LibraryStore
         }
     }
 
+    /// <summary>True when QUILL_DATA_FOLDER is redirecting this process, which
+    /// is this app's one signal for "an isolated instance, not the user's".
+    ///
+    /// <para>Exists so that state kept OUTSIDE the data folder can follow the
+    /// isolation too. <see cref="SyncLog"/> keeps its per-device read cursors in
+    /// %LOCALAPPDATA% on purpose, and <see cref="Save"/> writes them on every
+    /// save — so a headless harness was rewriting the real user's cursors from
+    /// its own empty copy, which is the roadmap's replay risk arriving by the
+    /// front door. Isolation that leaves one foot in the user's folder is not
+    /// isolation; the same sentence already justifies the anchor following this
+    /// variable (see <see cref="AnchorDir"/>).</para></summary>
+    public static bool IsIsolated => EnvFolder != null;
+
     // Old hidden location (from the LectureInk era) — migrated/imported once,
     // then kept as a read fallback. Deliberately NOT renamed to Quill.
     public static string LegacyDir =>

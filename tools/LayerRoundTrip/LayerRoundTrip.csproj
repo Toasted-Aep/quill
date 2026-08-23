@@ -1,17 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- CONCEPTS-REF 16.7 item 1, proved rather than asserted.
+  <!-- CONCEPTS-REF 18.11, proved rather than asserted.
 
        A HEADLESS harness that runs the REAL serialiser over the REAL models and
-       the REAL Veil function, so "select, save, deselect, reload, diff" is an
+       the REAL layer functions, so "an existing page loses nothing" is an
        experiment rather than a claim.  Nothing here is a copy: every source file
-       below is <Compile Include>d straight out of src/Quill, and Veil.g.cs is
-       EXTRACTED VERBATIM from InkSurface.cs by tools/selection_present_check.py,
-       which fails if the extraction and the source ever differ.
+       below is <Compile Include>d straight out of src/Quill.  Written to the
+       pattern tools/VeilRoundTrip set for section 16.7, for the same reason -
+       the failure mode is data loss discovered on the next reload, which is
+       exactly the kind of thing that looks perfect at the moment it is done.
 
-       net8.0-windows10.0.19041.0 rather than plain net8.0 only because
-       ColorUtil and SelectionSubject speak in Windows.UI.Color.  No WinUI, no
-       Windows App SDK, no window: this runs in a console. -->
+       net8.0-windows10.0.19041.0 to match VeilRoundTrip; nothing compiled here
+       actually needs Windows types.  No WinUI, no Windows App SDK, no window:
+       this runs in a console. -->
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -22,22 +23,21 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Quill.Tools</RootNamespace>
-    <AssemblyName>VeilRoundTrip</AssemblyName>
+    <AssemblyName>LayerRoundTrip</AssemblyName>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Program.cs" />
-    <Compile Include="Veil.g.cs" />
     <Compile Include="..\..\src\Quill\Models\NoteModels.cs" Link="NoteModels.cs" />
-    <!-- NotePage carries a List<Layer> since CONCEPTS-REF 17, so the models no
-         longer compile without it. -->
     <Compile Include="..\..\src\Quill\Models\LayerModels.cs" Link="LayerModels.cs" />
     <Compile Include="..\..\src\Quill\Services\LibraryStore.cs" Link="LibraryStore.cs" />
     <Compile Include="..\..\src\Quill\Services\SyncLog.cs" Link="SyncLog.cs" />
-    <Compile Include="..\..\src\Quill\Services\SelectionSubject.cs" Link="SelectionSubject.cs" />
-    <Compile Include="..\..\src\Quill\Helpers\Util.cs" Link="Util.cs" />
-    <Compile Include="..\..\src\Quill\Helpers\Motion.cs" Link="Motion.cs" />
+    <!-- The user's ruling made deleting a layer destructive, so the deletion has
+         to be undoable and the undo has to bring the CONTENT back. That is
+         RemoveLayerAction, and it is proved through the REAL UndoRedoManager
+         rather than by calling the action's own methods. -->
+    <Compile Include="..\..\src\Quill\Services\UndoRedo.cs" Link="UndoRedo.cs" />
   </ItemGroup>
 
 </Project>
