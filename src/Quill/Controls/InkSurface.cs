@@ -3248,6 +3248,189 @@ public sealed class InkSurface : UserControl
     }
 
     // =======================================================================
+    // THE TEXT BEING EDITED (CONCEPTS-REF 11.9)
+    //
+    // 11.9 asks for "quick-action buttons above the text bubble ... a Cancel
+    // Editing affordance with a red X, and a row of attach / duplicate / lock /
+    // delete marks". THE STATE THAT BELONGS TO IS EDITING, NOT SELECTION, and
+    // this block exists because those are two different states in this file:
+    //
+    //   SELECTED is published through SelectionState by PublishSelection above,
+    //   and is reached only by the lasso (SelectInPolygon), a click on a stroke
+    //   (SelectSingleStroke, 16.10), a paste, Select All and the table row and
+    //   column selectors. NOTHING puts a text box into _selTexts because it was
+    //   tapped into, so a box being typed in publishes no selection and
+    //   SelectionChrome never appears for it.
+    //
+    //   EDITING is ActiveTextBox - a RichEditBox with the caret in it. It raises
+    //   ActiveTextChanged, and the surface it currently brings up is the pinned
+    //   top FormatBar (MainWindow.UpdateFormatBarVisibility).
+    //
+    // "CANCEL EDITING" IS WHAT SETTLES WHICH OF THE TWO 11.9 MEANS. You cannot
+    // cancel editing a box you are not editing; a lasso-selected text box has no
+    // caret and no focus. So 11.9 is the editing state's own subject, and
+    // SelectionChrome reads it through the members below exactly as it reads
+    // SelectionLocked and SelectedAttachment for the selected state - one class,
+    // two triggers, so the two bars can never be on screen together.
+    //
+    // TABLE CELLS ARE NOT SUBJECTS. A cell's bubble has no independent existence
+    // to duplicate, lock or delete - its TextElement IS the cell, and this file
+    // already records (see the LostFocus guard, #cellfix) that removing one
+    // leaves the cell untypeable forever. Every member below reads through
+    // EditingPair, which returns null for anything carrying a TableId.
+    // =======================================================================
+
+    /// <summary>Raised when the bubble being edited changes SHAPE or POSITION -
+    /// it grew a line, or its grip was dragged. The chrome above it has to move
+    /// with it, and neither <see cref="ViewChanged"/> (pan and zoom only) nor
+    /// <see cref="ActiveTextChanged"/> (which box, not where) fires for either.
+    ///
+    /// <para>Raised from the container's own SizeChanged rather than from the
+    /// TextChanged that caused it, because AutoSizeBubble sets Width and Height
+    /// and the container's ActualWidth does not follow until layout has run. A
+    /// bar placed from the pre-layout size lags the bubble by one frame on every
+    /// keystroke, which is exactly the jitter this event exists to avoid.</para></summary>
+    public event Action? EditingTextGeometryChanged;
+
+    private void RaiseEditingGeometry(RichEditBox box)
+    {
+        if (ReferenceEquals(ActiveTextBox, box)) EditingTextGeometryChanged?.Invoke();
+    }
+
+    /// <summary>The model and the container behind <see cref="ActiveTextBox"/>,
+    /// or null when nothing is being edited or the box is a table cell.</summary>
+    private (TextElement Text, Grid Container)? EditingPair()
+    {
+        if (_page == null || ActiveTextBox == null) return null;
+        foreach (var (id, ui) in _textUi)
+        {
+            if (!ReferenceEquals(ui.Box, ActiveTextBox)) continue;
+            var t = _page.Texts.FirstOrDefault(x => x.Id == id);
+            return t is { TableId: null } ? (t, ui.Container) : null;
+        }
+        return null;
+    }
+
+    /// <summary>The free text bubble currently being edited, or null. This is
+    /// 11.9's subject.</summary>
+    public TextElement? EditingText => EditingPair()?.Text;
+
+    /// <summary>16.2's padlock, asked of the editing subject. Locked greys the
+    /// waste bin, on the same rule the selection bar follows: a control the
+    /// subject cannot act through says so rather than looking live.</summary>
+    public bool EditingTextLocked => EditingText?.Locked ?? false;
+
+    /// <summary>World bounds of the bubble being edited - what 11.9's bar is
+    /// placed "above". Read off the CONTAINER rather than off the model, because
+    /// the model carries X, Y and Width but no height: a bubble's height is
+    /// whatever its text just wrapped to.
+    ///
+    /// <para>Canvas.Left/Top and ActualWidth/Height here are all in WORLD units.
+    /// The text layer carries the pan/zoom as a RenderTransform, so its children
+    /// are laid out in world space and painted through it - which is also why
+    /// the grip's drag deltas are applied to Canvas.Left directly.</para>
+    ///
+    /// <para>A ROTATED bubble reports its unrotated box. That is the same
+    /// approximation <see cref="SubjectBoundsWorld"/> makes through ShapeBounds
+    /// for a rotated attachment, and it keeps the bar horizontal above a
+    /// tilted box rather than tilting the controls with it.</para></summary>
+    public Rect EditingTextBoundsWorld
+    {
+        get
+        {
+            if (EditingPair() is not { } p) return Rect.Empty;
+            double w = p.Container.ActualWidth, h = p.Container.ActualHeight;
+            if (w <= 0 || h <= 0) return Rect.Empty;
+            double x = Canvas.GetLeft(p.Container), y = Canvas.GetTop(p.Container);
+            if (double.IsNaN(x) || double.IsNaN(y)) return Rect.Empty;
+            return new Rect(x, y, w, h);
+        }
+    }
+
+    /// <summary>11.9's red X. IT CANCELS EDITING, NOT THE TEXT - the words stay
+    /// on the page and the caret leaves. Anything else would make a red X beside
+    /// a waste bin mean the same thing twice, and the destructive one is the bin.
+    ///
+    /// <para>The blur is done by taking focus onto this control, which is
+    /// already how <see cref="SetPendingText"/> takes focus off a RichEditBox
+    /// when the Text tool taps empty canvas - the same two lines, including
+    /// flipping IsTabStop for the call, because this control is not a tab stop
+    /// the rest of the time (see the constructor). The box's own LostFocus
+    /// handler is then what clears ActiveTextBox and raises ActiveTextChanged,
+    /// so cancelling and clicking away leave the app in one state rather than
+    /// two.</para>
+    ///
+    /// <para>An EMPTY box is removed by that same handler, exactly as it is when
+    /// the user clicks away from one. Cancelling out of a box you never typed
+    /// into leaves nothing behind, which is the existing promise.</para></summary>
+    public void CancelTextEditing()
+    {
+        if (ActiveTextBox == null) return;
+        FlushTexts();                 // commit the live RTF into the model first
+        bool tab = IsTabStop;
+        IsTabStop = true;
+        Focus(FocusState.Programmatic);
+        IsTabStop = tab;
+    }
+
+    /// <summary>11.9's duplicate, on the editing subject. Deliberately NOT
+    /// <see cref="DuplicateSelection"/>: that reads _selected / _selShapes /
+    /// _selTexts, all of which are empty while a box is merely being typed in.
+    /// The 40-unit offset is the same one it uses, so a duplicated bubble lands
+    /// where a duplicated anything else does.</summary>
+    public void DuplicateEditingText()
+    {
+        if (_page == null || EditingText is not { } t) return;
+        FlushTexts();                 // the clone must carry what has just been typed
+        const double offset = 40;
+        var clone = new TextElement
+        {
+            X = t.X + offset,
+            Y = t.Y + offset,
+            Width = t.Width,
+            WidthPinned = t.WidthPinned,
+            MaxWidth = t.MaxWidth,
+            AutoWidth = t.AutoWidth,
+            Rtf = t.Rtf,
+            Rotation = t.Rotation,
+        };
+        PushAction(new AddTextAction(clone), _page);
+        // Only the new box, never RebuildTextLayer: a full rebuild would steal
+        // focus from the box the user is still typing in, which is the same
+        // reason SpawnTextBox builds one box rather than the layer (A2).
+        BuildTextUi(clone);
+        ContentChanged?.Invoke();
+    }
+
+    /// <summary>11.9's padlock. One text, but through the SAME LockMixedAction
+    /// the selection bar pushes, so a bubble locked from the editing bar and one
+    /// locked from the selection bar are one undo step of one kind.</summary>
+    public void ToggleEditingTextLock()
+    {
+        if (_page == null || EditingText is not { } t) return;
+        PushAction(new LockMixedAction(new List<PenStroke>(), new List<ShapeElement>(),
+                                       new List<TextElement> { t }, !t.Locked), _page);
+        ContentChanged?.Invoke();
+    }
+
+    /// <summary>11.9's waste bin. Refuses while locked, which is 16.2's rule -
+    /// "a lock that stops a drag but not a delete is not a lock" - and the bar
+    /// greys the mark as well, so the refusal is visible before it is attempted.
+    ///
+    /// <para>The teardown is RemoveTextAction + RebuildTextLayer +
+    /// ActiveTextChanged(null), which is exactly what the box's own close button
+    /// used to do. That button is gone: see BuildTextUi.</para></summary>
+    public void DeleteEditingText()
+    {
+        if (_page == null || EditingText is not { } t || t.Locked) return;
+        FlushTexts();
+        PushAction(new RemoveTextAction(t), _page);
+        RebuildTextLayer();           // clears ActiveTextBox
+        ActiveTextChanged?.Invoke(null);
+        ContentChanged?.Invoke();
+    }
+
+    // =======================================================================
     // 16.7: WHILE AN ATTACHMENT IS SELECTED, THE PAGE FADES TO #8E8E8E
     //
     // "make texts the exact shade of grey shown in photo ... make them slowly
@@ -7285,19 +7468,23 @@ public sealed class InkSurface : UserControl
             Opacity = 0.7,
             Visibility = Visibility.Collapsed
         };
-        var close = new Button
-        {
-            Content = "✕",
-            FontSize = 9,
-            Padding = new Thickness(0),
-            Width = 22,
-            Height = 16,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Center,
-            Background = new SolidColorBrush(Colors.Transparent),
-            BorderThickness = new Thickness(0),
-            Visibility = Visibility.Collapsed
-        };
+        // THE GRIP'S ✕ IS GONE (11.9). It was a 22 x 16 close button that
+        // DELETED the box, revealed on GotFocus and hidden on LostFocus - which
+        // is the exact visibility condition 11.9's quick-action bar now runs
+        // under, and that bar carries a waste bin for the same command with a
+        // mark that says so. Two affordances, one condition, one job.
+        //
+        // Keeping it would have been actively worse than redundant. The new bar
+        // teaches red-X = "Cancel Editing", which keeps the text; a ✕ four DIP
+        // away that throws the box away is a trap built by this change.
+        //
+        // And on a TABLE CELL it was already wrong: it pushed RemoveTextAction
+        // on the cell's own TextElement, and the LostFocus guard a few lines
+        // below records what that costs - "an empty TABLE CELL is normal -
+        // discarding it deletes the cell's TextElement and leaves the cell
+        // untypeable forever (#cellfix)". The cell is where the bar deliberately
+        // does not appear, so nothing replaces it there; nothing should.
+
         // rotate handle: drag left/right to spin the box, like image rotation (#38).
         // A real-sized hit target (the old bare 11px glyph was nearly impossible
         // to grab — misses fell through to the grip and moved the box, #11-batch2).
@@ -7308,7 +7495,11 @@ public sealed class InkSurface : UserControl
             Width = 34,
             Height = 16,
             TextAlignment = TextAlignment.Center,
-            Margin = new Thickness(0, 0, 24, 0),
+            // Was 24, which was the width of the ✕ this rotate handle used to sit
+            // to the left of. That button is gone (see above), so the reservation
+            // went with it - a 24 DIP gap held open for a control that no longer
+            // exists is exactly the stale artefact a removal leaves behind.
+            Margin = new Thickness(0, 0, 4, 0),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             Opacity = 0.75,
@@ -7360,7 +7551,6 @@ public sealed class InkSurface : UserControl
 
         grip.Children.Add(dots);
         grip.Children.Add(rotate);
-        grip.Children.Add(close);
         Grid.SetRow(grip, 0);
 
         var box = new RichEditBox
@@ -7600,7 +7790,6 @@ public sealed class InkSurface : UserControl
             gripBrush.Color = Color.FromArgb(60, Accent.R, Accent.G, Accent.B);
             dots.Visibility = Visibility.Visible;
             rotate.Visibility = Visibility.Visible;
-            close.Visibility = Visibility.Visible;
             rGrip.Visibility = t.TableId == null ? Visibility.Visible : Visibility.Collapsed;
         };
         box.LostFocus += (_, _) =>
@@ -7608,7 +7797,6 @@ public sealed class InkSurface : UserControl
             gripBrush.Color = Colors.Transparent;
             dots.Visibility = Visibility.Collapsed;
             rotate.Visibility = Visibility.Collapsed;
-            close.Visibility = Visibility.Collapsed;
             rGrip.Visibility = Visibility.Collapsed;
             LinkifyBox(box);   // bare URLs become real links on commit (#20-batch3)
             // release active status once focus has truly left, so the format
@@ -7640,16 +7828,6 @@ public sealed class InkSurface : UserControl
         };
         container.Children.Add(rGrip);
 
-        close.Click += (_, _) =>
-        {
-            if (_page == null) return;
-            FlushTexts();
-            PushAction(new RemoveTextAction(t), _page);
-            RebuildTextLayer();
-            ActiveTextChanged?.Invoke(null);
-            ContentChanged?.Invoke();
-        };
-
         double startX = 0, startY = 0;
         grip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
         grip.ManipulationStarted += (_, e) =>
@@ -7665,6 +7843,10 @@ public sealed class InkSurface : UserControl
             // world units (the text layer's RenderTransform maps screen->world)
             Canvas.SetLeft(container, Canvas.GetLeft(container) + e.Delta.Translation.X);
             Canvas.SetTop(container, Canvas.GetTop(container) + e.Delta.Translation.Y);
+            // 11.9: the quick actions ride above this box. A Canvas.Left change
+            // fires no SizeChanged, so the drag says so itself. The position is
+            // already set above, so the bounds this reads are the new ones.
+            RaiseEditingGeometry(box);
         };
         grip.ManipulationCompleted += (_, _) =>
         {
@@ -7676,6 +7858,13 @@ public sealed class InkSurface : UserControl
                 ContentChanged?.Invoke();
             }
         };
+
+        // 11.9: the quick-action bar is placed off this container's world rect,
+        // so it has to move when the container does. SizeChanged rather than the
+        // box's TextChanged, because AutoSizeBubble sets Width and Height and
+        // ActualWidth does not follow until layout has run - a bar placed from
+        // the pre-layout size lags the bubble by a frame on every keystroke.
+        container.SizeChanged += (_, _) => RaiseEditingGeometry(box);
 
         _textLayer.Children.Add(container);
         _textUi[t.Id] = (container, box);
