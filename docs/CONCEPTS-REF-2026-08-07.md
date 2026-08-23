@@ -3387,6 +3387,72 @@ seam that model defines; do not invent a competing layer concept.
 
 Add a **pan** tool and a **rotate** tool alongside the others.
 
+### 17.11a The rotate tool — SUPERSEDES §17.11's reading
+
+§17.11 said only "add a pan tool and a rotate tool", and that was built as a
+tool that rotates the **selection** in quarter steps. **Both halves are wrong.**
+The user, correcting it directly:
+
+> *"rotate tool is to rotate page. I want every rotatable object to freely
+> rotate. and rotate tool should not rotate page by a set degree it should be
+> free too."*
+
+So there are **two** requirements, and they are separate pieces of work sharing
+one interface:
+
+1. **The rotate tool rotates the PAGE**, freely — not the selection, and not in
+   fixed increments.
+2. **Every rotatable object rotates freely** — not in quarter steps.
+
+**Note what the first one is.** No page-rotation state exists anywhere in the
+code today, and the Measurement menu's `90° / 180° / 270°` presets are
+deliberately **disabled** for exactly that reason — its own note says a preset
+that moved the readout without moving the canvas would be lying. This is the
+roadmap's "Tilt / canvas rotation" item: **62 inline screen↔canvas conversions
+and 51 axis-aligned rect sites** in a 7,180-line file, audited at 3–5 days plus
+a full input-regression pass. It is not a tool that can be added in front of
+missing machinery.
+
+#### The interface, from the user's capture
+
+On a dark page with a dot grid:
+
+- **A red line** through the pivot, spanning the full canvas width. Straight,
+  thin, at the current rotation angle — horizontal at 0°.
+- **A crosshair at the pivot**: four short strokes pointing outward from the
+  centre, with **the centre itself empty**. It reads as segmented rather than
+  solid — four ticks around a gap, not a plus sign.
+- **A red arc** crossing the line to one side of the pivot, convex away from it.
+  This is the rotation path — the distance from pivot to arc is the drag radius.
+- **The arc glows.** A soft halo outside the stroke, not a hard edge.
+- **A handle where the arc meets the line**: a filled dark centre inside a red
+  ring — a donut, not a dot — carrying its own glow. This is what is dragged.
+
+**The colour is `#BF3D38`**, given directly by the user.
+
+#### Things the implementation must decide, and say
+
+- **Where the pivot sits** — the viewport centre, the selection's centre, or
+  wherever the user puts it. The capture shows it left of centre, which suggests
+  it is placed rather than fixed.
+- **What the arc's radius is set by**, since it sets the drag's angular
+  sensitivity: a longer radius means finer control.
+- **Whether the red line is the axis or the current angle's indicator** — it
+  runs the full width in the capture, so it reads as a horizon rather than as a
+  handle arm.
+- **Whether rotation snaps at all.** The user said free, so any snap must be
+  opt-in, and 0° should not be sticky unless asked for.
+
+#### On free object rotation
+
+A `TextElement` is an axis-aligned box today and takes no rotation at all. That
+is why quarter-steps were chosen: a free drag would turn two subject kinds out
+of three and leave text sitting square on a mixed selection. **Free rotation for
+objects therefore requires making text rotatable first**, or excluding text
+explicitly and making that exclusion visible rather than silent. Do not ship a
+free rotation that silently ignores one subject kind.
+
+
 ### 17.12 Sizes
 
 - **Quick action buttons: +80%.**
