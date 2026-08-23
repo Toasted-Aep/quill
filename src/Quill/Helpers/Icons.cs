@@ -625,6 +625,27 @@ public static class Icons
     public const string Pivot =
         "M12 1.5 V7.5 M12 16.5 V22.5 M1.5 12 H7.5 M16.5 12 H22.5";
 
+    /// <summary>Level, the rotate tool's return-to-horizontal (17.11a): a flat
+    /// baseline with an arrow coming down onto it.
+    ///
+    /// <para><b>Why not an angle mark.</b> Every angle-shaped mark in this file
+    /// already means something else - <see cref="Tilt"/> is a protractor reading
+    /// an angle, <see cref="Rotate"/> is a thing turning - and a third built out
+    /// of a line and an arc would be indistinguishable from both at 15 DIP. What
+    /// this button does is bring the horizon back down to flat, and an arrow
+    /// landing on a baseline is the mark that already means exactly that.</para>
+    ///
+    /// <para><b>A SPIRIT LEVEL WAS TRIED FIRST AND IT FAILED THE RENDER.</b> A
+    /// stroked capsule with a stroked bubble inside needs more vertical room
+    /// than the 24 grid has: at 30 the bubble's stroke met the capsule's top and
+    /// bottom, and at 14, 15 and 16 the two fused into a solid lozenge that read
+    /// as a link icon. Three well-spaced strokes survive every size instead.
+    /// Run <c>python scratchpad/render_icons.py --stroked 2 Level</c>.</para>
+    ///
+    /// <para>STROKED: three open subpaths, no fill rule involved.</para></summary>
+    public const string Level =
+        "M3 19.5 H21 M12 4.5 V13.5 M7.8 9.6 L12 13.8 L16.2 9.6";
+
     /// <summary>Item picker, the mouse tool's first choice (17.10): one object and
     /// the cursor that takes it. The square is a RING - outer outline plus a
     /// reversed inner one, so even-odd punches the hole - and the arrow is a

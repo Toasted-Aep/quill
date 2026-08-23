@@ -6545,6 +6545,16 @@ public sealed partial class MainWindow : Window
                  "rotation yet, so this drives nothing and the top bar's tilt still reads 0°.",
             stroked: true, live: false));
 
+        // Beside the readout, because it is the readout's own reset - the shape
+        // 17.10 gives a control that qualifies the one to its left. It also
+        // closes a hole a free rotation opens: with Snap off there is no detent
+        // at 0, so a hand cannot land exactly on it, and the interface has to be
+        // returnable to the angle the page is ACTUALLY at.
+        items.Children.Add(BottomMenu.Cell(Icons.Level, "Level", false,
+            () => Surface.ResetPageRotation(),
+            tip: "Put the handle back on the horizontal - 0°, which is where the page is.",
+            stroked: true));
+
         items.Children.Add(BottomMenu.Divider());
 
         items.Children.Add(BottomMenu.Cell(Icons.Snap, "Snap", Surface.RotateSnap,
