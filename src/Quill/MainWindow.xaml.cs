@@ -6540,6 +6540,12 @@ public sealed partial class MainWindow : Window
         items.Children.Clear();
         foreach (var lead in _bottomMenu.Lead(BottomPage.Tool)) items.Children.Add(lead);
 
+        // Icons.Tilt and NOT Icons.Rotate, which is the opposite of the choice
+        // MeasurementMenu records beside its own rotation row - and for that
+        // note's own reason. Tilt "reads as an angle MEASUREMENT, not as a
+        // rotation", which is wrong for a row that means "this object turns" and
+        // exactly right for a cell that means "this is the number". It also
+        // keeps the dead readout from wearing the live tool's own mark.
         items.Children.Add(BottomMenu.Cell(Icons.Tilt, shown, false, () => { },
             tip: "The angle this tool is set to. The PAGE HAS NOT TURNED: Quill has no canvas " +
                  "rotation yet, so this drives nothing and the top bar's tilt still reads 0°.",
