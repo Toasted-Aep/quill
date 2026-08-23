@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- CONCEPTS-REF 17.11a requirement 2, PROVED rather than asserted.
+
+       17.11a's stated blocker was that "a TextElement is an axis-aligned box
+       that takes no rotation at all", so the rotate tool stepped in quarters.
+       TextElement has in fact carried Rotation since #20 and the sweep is now
+       free-angle. Two claims come out of that, and both have the same failure
+       mode - perfect at the moment it is made, wrong on the next reload:
+
+         1. AN ANGLE IS STATE. A double the user set by hand has to survive
+            save -> reload to the bit, and a page written before text carried an
+            angle has to keep reading as the un-turned page it is.
+         2. A FREE ANGLE IS NOT INVERTIBLE THE WAY A QUARTER TURN IS. The
+            quarter turn exchanges and negates coordinates and is exact in
+            floating point; a free angle is a sine and a cosine and is not. So
+            RotateFreeMixedAction holds the exact before-state for shapes and
+            text and turns ink back arithmetically, and "exact" and "close
+            enough" are both measured here rather than argued.
+
+       Nothing below is a copy: every source file is <Compile Include>d straight
+       out of src/Quill, so this runs the REAL models, the REAL serialiser and
+       the REAL undo action. Written to the pattern tools/VeilRoundTrip set for
+       16.7 and tools/LayerRoundTrip followed for 18, including the isolation:
+       QUILL_DATA_FOLDER is set before the first call and the run ABORTS if the
+       store resolves anywhere else.
+
+       net8.0-windows10.0.19041.0 to match its two siblings - UndoRedo.cs uses
+       Windows.Foundation.Rect, and nothing here needs a window. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Quill.Tools</RootNamespace>
+    <AssemblyName>TextRotRoundTrip</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\..\src\Quill\Models\NoteModels.cs" Link="NoteModels.cs" />
+    <Compile Include="..\..\src\Quill\Models\LayerModels.cs" Link="LayerModels.cs" />
+    <Compile Include="..\..\src\Quill\Services\LibraryStore.cs" Link="LibraryStore.cs" />
+    <Compile Include="..\..\src\Quill\Services\SyncLog.cs" Link="SyncLog.cs" />
+    <!-- The rotation under test. Proved through the REAL UndoRedoManager rather
+         than by calling the action's own Do/Undo, so the stack's behaviour on
+         undo-then-redo is measured too. -->
+    <Compile Include="..\..\src\Quill\Services\UndoRedo.cs" Link="UndoRedo.cs" />
+  </ItemGroup>
+
+</Project>

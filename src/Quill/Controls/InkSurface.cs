@@ -4714,13 +4714,14 @@ public sealed class InkSurface : UserControl
         {
             // The overlay rotates about its container centre (RenderTransformOrigin
             // 0.5,0.5); mirror that so rotated text lands where the user sees it.
-            double w = t.Width, h = 40;
-            if (_textUi.TryGetValue(t.Id, out var ui))
-            {
-                if (ui.Container.ActualWidth > 0) w = ui.Container.ActualWidth;
-                if (ui.Container.ActualHeight > 0) h = ui.Container.ActualHeight;
-            }
-            var center = new Vector2((float)(t.X + w / 2), (float)(t.Y + h / 2));
+            // One helper for the centre, shared with the selection bounds, the
+            // click probe and the free sweep - four sites that have to agree on
+            // where a box's middle is or the drawn text and the marquee around it
+            // turn about different points.
+            //
+            // Composed onto prevT, never assigned over it: CanvasVirtualControl
+            // hands this session a transform that has already placed the tile.
+            var center = TextCentreWorld(t);
             ds.Transform = Matrix3x2.CreateRotation((float)(t.Rotation * Math.PI / 180.0), center) * prevT;
         }
 
