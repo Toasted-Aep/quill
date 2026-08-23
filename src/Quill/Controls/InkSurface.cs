@@ -108,6 +108,32 @@ public sealed class InkSurface : UserControl
     /// <summary>true = a stroke is caught when it is PARTIALLY inside the lasso;
     /// false = only when every one of its points is inside.</summary>
     public bool SelectPartial { get; set; } = true;
+
+    // ---- 17.10: the rest of the mouse tool's bottom menu ------------------
+    // These three are the mouse tool's OWN state and they live here, beside
+    // SelectPartial, because that is where the option this menu's second control
+    // edits has always lived. 18.1 is explicit that where the layer scope is
+    // stored is the mode bar's business and that the layer model must not grow a
+    // second home for it, so it is a tool mode on the tool, like the other two.
+
+    /// <summary>17.10's first control. <see cref="MousePick.Lasso"/> selects by
+    /// enclosing, <see cref="MousePick.Item"/> by clicking the thing itself. The
+    /// Partial/Complete control only appears while this is Lasso, because
+    /// "partially inside" is meaningless for a click.</summary>
+    public MousePick Pick { get; set; } = MousePick.Lasso;
+
+    /// <summary>17.10's second control, drawn as a padlock: OPEN means INCLUDE
+    /// (a locked stroke is still caught), CLOSED means IGNORE (the lasso passes
+    /// over it). The capture shows Include, which is what selection did before
+    /// it could be asked.</summary>
+    public bool IgnoreLocked { get; set; }
+
+    /// <summary>17.10's third control, and the one seam into the layer model.
+    /// <c>AllLayers</c> is <see cref="LayerScope"/>'s zero value on purpose
+    /// (18.1), so an unset scope means today's behaviour: everything is in
+    /// scope. Read by <see cref="InScopeForSelect"/> and nowhere else.</summary>
+    public LayerScope SelectScope { get; set; } = LayerScope.AllLayers;
+
     public bool RulerMode { get; set; }
     // On-screen ruler angle in degrees (any value, not just 15° steps) (#21).
     public double RulerAngle { get; set; }
@@ -829,8 +855,24 @@ public sealed class InkSurface : UserControl
     // which is the "#27-batch2" failure (an equation insert moving the notes)
     // turned from an edge case into the normal path.
 
+    /// <summary>True while the MOUSE TOOL is the live tool (17.10).
+    ///
+    /// <para>Every test that used to read <c>Tool == ToolType.Select</c> reads
+    /// this instead. <see cref="SetTool"/> folds <c>Select</c> into
+    /// <c>Mouse</c>, so the property can never be <c>Select</c> and this is
+    /// simply the new spelling - but it is a named property rather than a bare
+    /// comparison because there are a dozen sites and the fold has to be
+    /// impossible to half-apply.</para></summary>
+    public bool MouseTool => Tool == ToolType.Mouse;
+
     public void SetTool(ToolType tool)
     {
+        // 17.10 folds the lasso into the MOUSE TOOL. Select is kept in the enum
+        // because a dial sector or a pen-row cell stores its tag by NAME and
+        // every library.json in existence spells it "Select" - but it is folded
+        // here, on the way in, so exactly one of the two is ever live and no
+        // downstream test has to know about both.
+        if (tool == ToolType.Select) tool = ToolType.Mouse;
         Tool = tool;
         // 11.4 item 29: the ruler IS a tool now, so the straightedge follows the
         // selection instead of a separate switch on the top bar. Selecting any
@@ -838,12 +880,16 @@ public sealed class InkSurface : UserControl
         // since it could be left on under a tool that had no use for it.
         RulerMode = tool == ToolType.Ruler;
         CancelPendingText();
-        if (tool != ToolType.Select)
+        // 17.11's rotate tool acts ON the selection, so unlike every other tool
+        // it must not clear it: choosing it in order to turn what you just
+        // lassoed would otherwise throw the lasso away first. Pan does not touch
+        // the selection either - it moves the view, not the page.
+        if (tool is not (ToolType.Mouse or ToolType.Rotate or ToolType.Pan))
         {
             ClearSelection();
             _activeShape = null;
         }
-        _textLayer.IsHitTestVisible = tool is ToolType.Text or ToolType.Select;
+        _textLayer.IsHitTestVisible = tool is ToolType.Text or ToolType.Mouse;
         _canvas.Invalidate();
     }
 
@@ -1237,7 +1283,7 @@ public sealed class InkSurface : UserControl
             _barrelStartScreen = screen;
             _skipNextRightTap = true;
             _activePointer = e.Pointer.PointerId;
-            _gestureTool = ToolType.Select;
+            _gestureTool = ToolType.Mouse;
             _canvas.CapturePointer(e.Pointer);
             bool overSel =
                 (HasMultiSelection && !_selBounds.IsEmpty && _selBounds.Contains(new Point(pos.X, pos.Y))) ||
@@ -1270,7 +1316,7 @@ public sealed class InkSurface : UserControl
             _barrelMoved = false;
             _barrelStartScreen = screen;
             _activePointer = e.Pointer.PointerId;
-            _gestureTool = ToolType.Select;
+            _gestureTool = ToolType.Mouse;
             _canvas.CapturePointer(e.Pointer);
             // Barrel press ON the current selection keeps it: a tap opens the
             // selection's context menu, a drag moves it (#42). Elsewhere it
@@ -1359,7 +1405,7 @@ public sealed class InkSurface : UserControl
                      _selBounds.Contains(new Point(pos.X, pos.Y))))
                 {
                     _activePointer = e.Pointer.PointerId;
-                    _gestureTool = ToolType.Select;
+                    _gestureTool = ToolType.Mouse;
                     _canvas.CapturePointer(e.Pointer);
                     if (!_scalingSel) BeginSelectionMove(pos);
                     e.Handled = true;
@@ -1373,7 +1419,7 @@ public sealed class InkSurface : UserControl
                     if (handle != null || onBody)
                     {
                         _activePointer = e.Pointer.PointerId;
-                        _gestureTool = ToolType.Select;
+                        _gestureTool = ToolType.Mouse;
                         _canvas.CapturePointer(e.Pointer);
                         if (handle != null)
                         {
@@ -1424,7 +1470,7 @@ public sealed class InkSurface : UserControl
                     if (TryBeginSelectionScale(pos, 10f / ViewZoom) ||
                         _selBounds.Contains(new Point(pos.X, pos.Y)))
                     {
-                        _gestureTool = ToolType.Select;
+                        _gestureTool = ToolType.Mouse;
                         if (!_scalingSel) BeginSelectionMove(pos);
                         break;
                     }
@@ -1447,7 +1493,7 @@ public sealed class InkSurface : UserControl
                         bool onBody = OnShapeBody(_activeShape, pos, tolP);
                         if (handleP != null || onBody)
                         {
-                            _gestureTool = ToolType.Select; // reuse the move/resize machinery
+                            _gestureTool = ToolType.Mouse; // reuse the move/resize machinery
                             if (handleP != null)
                             {
                                 _resizingShape = true;
@@ -1510,16 +1556,23 @@ public sealed class InkSurface : UserControl
                 EraseAt(pos, pos);
                 break;
 
-            case ToolType.Select:
+            case ToolType.Mouse:
             {
                 float tol = 10f / ViewZoom;
                 if (TryBeginShapeOrSelectionDrag(pos, tol)) break;
                 _activeShape = null;
                 ClearSelection();
-                // Square lasso reuses the rubber-band rectangle the mouse path
-                // already tracks and commits, so both shapes are one code path.
-                if (LassoSquare) { _rectSelect = true; _rectStart = pos; _rectCur = pos; }
-                else _lasso = new List<Vector2> { pos };
+                // 17.10's first control. ITEM PICKER starts no lasso at all - it
+                // is the click gesture and nothing else, so a drag across the
+                // page leaves no rubber band behind it. LASSO is what the tool
+                // has always done: square lasso reuses the rubber-band rectangle
+                // the mouse path already tracks and commits, so both shapes are
+                // one code path.
+                if (Pick == MousePick.Lasso)
+                {
+                    if (LassoSquare) { _rectSelect = true; _rectStart = pos; _rectCur = pos; }
+                    else _lasso = new List<Vector2> { pos };
+                }
                 // 16.10: selection reached as a TOOL. A drag from here still
                 // lassoes, freeform or square; a press-and-release that never
                 // moves selects the stroke under it, and on empty canvas means
@@ -1527,6 +1580,20 @@ public sealed class InkSurface : UserControl
                 ArmClickSelect(screen, pos, deselectsEmpty: true);
                 break;
             }
+
+            // 17.11. Pan reuses the mouse's own pan state rather than a second
+            // one: PanBy is already the single place the view offset moves, and
+            // a tool with its own copy is how two pans drift apart.
+            case ToolType.Pan:
+                _mousePanning = true;
+                _mousePanLast = screen;
+                break;
+
+            // 17.11. A press arms the turn; a release that never moved commits
+            // one quarter, so the tool works as a tap as well as a sweep.
+            case ToolType.Rotate:
+                BeginRotateGesture(pos);
+                break;
 
             case ToolType.FreeSpace:
                 _spacing = true;
@@ -1557,7 +1624,7 @@ public sealed class InkSurface : UserControl
             return;
         }
 
-        _gestureTool = ToolType.Select;
+        _gestureTool = ToolType.Mouse;
 
         // Grab a shape, image, or the existing selection first — Auto, Select
         // and Move all let you drag objects.
@@ -1819,6 +1886,12 @@ public sealed class InkSurface : UserControl
             var pts = s.Points;
             if (pts.Count == 0) continue;
             if (cand != null && !cand.Contains(s)) continue;
+            // 17.10's scope and padlock bind here as well as on the lasso. A
+            // click that selects and a lasso that selects are the mouse tool's
+            // two gestures, not two tools, so they cannot disagree about what is
+            // selectable - which is exactly what a second copy of this test in
+            // one of the two paths would eventually produce.
+            if (!CanCatch(s.LayerKey, s.Locked)) continue;
             float pad = reach + s.Size;
             s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
             if (p.X < bx0 - pad || p.X > bx1 + pad || p.Y < by0 - pad || p.Y > by1 + pad) continue;
@@ -1973,7 +2046,7 @@ public sealed class InkSurface : UserControl
                 }
                 break;
 
-            case ToolType.Select:
+            case ToolType.Mouse:
                 if (_rectSelect)
                 {
                     _rectCur = pos;
@@ -2051,6 +2124,13 @@ public sealed class InkSurface : UserControl
                 {
                     _lasso?.Add(pos);
                 }
+                break;
+
+            // 17.11. Pan is handled before this switch by the _mousePanning
+            // block, which is the point of reusing it; Rotate commits a quarter
+            // each time the sweep crosses one.
+            case ToolType.Rotate:
+                RotateDragTo(pos);
                 break;
 
             case ToolType.FreeSpace:
@@ -2209,7 +2289,7 @@ public sealed class InkSurface : UserControl
                 }
                 break;
             }
-            case ToolType.Select:
+            case ToolType.Mouse:
             {
                 // 16.10: a press and a release with no meaningful movement
                 // between them is a CLICK, and a click on a stroke selects that
@@ -2381,6 +2461,17 @@ public sealed class InkSurface : UserControl
                 _lasso = null;
                 break;
             }
+            // 17.11. A rotate gesture that never crossed a quarter is a TAP, and
+            // a tap turns once - so the tool answers a click the way the mode
+            // bar's Rotate does, and a sweep the way a rotate tool should.
+            case ToolType.Rotate:
+            {
+                if (_rotating && !_rotateTurned) RotateSelectionQuarter();
+                _rotating = false;
+                _rotateTurned = false;
+                changed = true;
+                break;
+            }
             case ToolType.FreeSpace:
             {
                 if (Math.Abs(_spaceDelta) > 2)
@@ -2407,6 +2498,8 @@ public sealed class InkSurface : UserControl
         _wet = null;
         _spacing = false;
         _mousePanning = false;
+        _rotating = false;
+        _rotateTurned = false;
         _shapeAdjust = false;
         _adjustShape = null;
         _movingShape = _resizingShape = false;
@@ -3028,6 +3121,27 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     // Lasso selection
     // =======================================================================
+    /// <summary>17.10's second and third controls, as one predicate: may this
+    /// element be caught by a selection right now?
+    ///
+    /// <para><b>The layer half goes through <see cref="PageLayers.CanSelect"/>
+    /// and nowhere else.</b> 18.1 asks for exactly that - "if something needs to
+    /// know about layers, it asks PageLayers" - and that predicate is already
+    /// scope AND not hidden AND not locked, so there is nothing to reimplement
+    /// here. On a page with one implicit layer it answers true for everything,
+    /// which is why the All/Active control is real rather than aspirational the
+    /// moment it is drawn.</para>
+    ///
+    /// <para>The lock half is the ELEMENT's own <c>Locked</c> flag, which is a
+    /// different thing from a locked layer and is the one the padlock control
+    /// switches: open padlock = INCLUDE, closed = IGNORE.</para></summary>
+    private bool CanCatch(int layerKey, bool elementLocked)
+    {
+        if (_page == null) return true;
+        if (IgnoreLocked && elementLocked) return false;
+        return PageLayers.CanSelect(_page, layerKey, SelectScope);
+    }
+
     private void SelectWithLasso(List<Vector2> poly)
     {
         if (_page == null) return;
@@ -3051,6 +3165,7 @@ public sealed class InkSurface : UserControl
         {
             if (s.Points.Count == 0) continue;
             if (lsCand != null && !lsCand.Contains(s)) continue;
+            if (!CanCatch(s.LayerKey, s.Locked)) continue;
             int inside = s.Points.Count(p => GeometryUtil.PointInPolygon(new Vector2(p.X, p.Y), poly));
             // Partial: any part of the stroke inside the lasso catches it.
             // Complete: the whole stroke has to be inside (UI-SPEC-V2 1.3).
@@ -3063,12 +3178,14 @@ public sealed class InkSurface : UserControl
         foreach (var sh in _page.Shapes)
         {
             if (lhCand != null && !lhCand.Contains(sh)) continue;
+            if (!CanCatch(sh.LayerKey, sh.Locked)) continue;
             var r = ShapeBounds(sh);
             var c = new Vector2((float)(r.X + r.Width / 2), (float)(r.Y + r.Height / 2));
             if (GeometryUtil.PointInPolygon(c, poly)) { _selShapes.Add(sh); _selShapeSet.Add(sh); }
         }
         foreach (var t in _page.Texts)
         {
+            if (!CanCatch(t.LayerKey, t.Locked)) continue;
             double w = 180, h = 40;
             if (_textUi.TryGetValue(t.Id, out var ui))
             {
@@ -3756,7 +3873,7 @@ public sealed class InkSurface : UserControl
     /// selection's centre - four presses return it exactly, which is why the
     /// action swaps and negates coordinates rather than multiplying by a
     /// sine.</summary>
-    public void RotateSelectionQuarter()
+    public void RotateSelectionQuarter(bool clockwise = true)
     {
         if (_page == null || AnyLocked) return;
         var b = SubjectBoundsWorld;
@@ -3764,8 +3881,67 @@ public sealed class InkSurface : UserControl
         var (s, h, t) = SelectionParts();
         if (s.Count + h.Count + t.Count == 0) return;
         FlushTexts();
-        PushAction(new RotateQuarterMixedAction(s, h, t, b.Left + b.Width / 2, b.Top + b.Height / 2), _page);
+        PushAction(new RotateQuarterMixedAction(s, h, t, b.Left + b.Width / 2, b.Top + b.Height / 2,
+                                                clockwise), _page);
         AfterSelectionTransform(t.Count > 0);
+    }
+
+    // =======================================================================
+    // 17.11: the rotate tool
+    // =======================================================================
+    //
+    // WHY QUARTER TURNS AND NOT A FREE ANGLE. A stroke is a point list and takes
+    // any angle; a ShapeElement carries a Rotation field and takes any angle;
+    // a TextElement is an axis-aligned box with a width and a height and takes
+    // NONE. A free-angle drag would therefore turn two of the three kinds of
+    // subject and silently leave the third square - which is the failure 16.9
+    // spent a section forbidding, a control that looks live and does nothing.
+    // The quarter turn is what the model can represent for every subject, so it
+    // is what the tool commits; the DRAG is still continuous, and each quarter
+    // it crosses is one action, in the direction the hand went.
+    //
+    // And not canvas rotation. That is what a rotate tool means in an app that
+    // has it, and Quill does not: the view transform is a scale and a translate,
+    // and ChromeBars' V3 K.26 note counts what turning it would cost - 62 inline
+    // screen/world conversions and 51 axis-aligned rectangles that stop being
+    // valid the moment the canvas is not square to the screen.
+    private bool _rotating;
+    // Whether the sweep has already committed a quarter. A gesture that has not
+    // is a TAP however far it travelled, and a tap turns once on release - which
+    // also rounds an 80 degree sweep to the quarter it was clearly aiming at.
+    private bool _rotateTurned;
+    private Vector2 _rotateCentre;
+    private double _rotateFromDeg;      // pointer bearing when the last quarter landed
+
+    private void BeginRotateGesture(Vector2 pos)
+    {
+        var b = SubjectBoundsWorld;
+        if (b.IsEmpty) { _rotating = false; return; }
+        _rotating = true;
+        _rotateTurned = false;
+        _rotateCentre = new Vector2((float)(b.Left + b.Width / 2), (float)(b.Top + b.Height / 2));
+        _rotateFromDeg = Bearing(pos, _rotateCentre);
+    }
+
+    /// <summary>Degrees clockwise from the +x axis, in the canvas's y-down
+    /// frame, so a growing angle is a clockwise sweep on screen.</summary>
+    private static double Bearing(Vector2 p, Vector2 centre) =>
+        Math.Atan2(p.Y - centre.Y, p.X - centre.X) * 180.0 / Math.PI;
+
+    private void RotateDragTo(Vector2 pos)
+    {
+        if (!_rotating) return;
+        // Wrapped into (-180, 180] so a sweep across the -x axis reads as a small
+        // step rather than a 350 degree jump back the other way.
+        double d = Bearing(pos, _rotateCentre) - _rotateFromDeg;
+        while (d > 180) d -= 360;
+        while (d <= -180) d += 360;
+        if (Math.Abs(d) < 90) return;
+        RotateSelectionQuarter(clockwise: d > 0);
+        _rotateTurned = true;
+        _rotateFromDeg += d > 0 ? 90 : -90;
+        while (_rotateFromDeg > 180) _rotateFromDeg -= 360;
+        while (_rotateFromDeg <= -180) _rotateFromDeg += 360;
     }
 
     /// <summary>16.2's padlock. Locking any part of a mixed selection locks all
