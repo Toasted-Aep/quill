@@ -2523,12 +2523,21 @@ public sealed class InkSurface : UserControl
             // 17.11. A rotate gesture that never crossed a quarter is a TAP, and
             // a tap turns once - so the tool answers a click the way the mode
             // bar's Rotate does, and a sweep the way a rotate tool should.
+            //
+            // 17.11a: only the SELECTION half reports a content change. A handle
+            // or pivot drag moved a number the page does not contain, so marking
+            // the document dirty for it would queue a save of nothing and put an
+            // untouched page in the "edited" state.
             case ToolType.Rotate:
             {
-                if (_rotating && !_rotateTurned) RotateSelectionQuarter();
+                if (_rotateGrab == RotateGrab.None)
+                {
+                    if (_rotating && !_rotateTurned) RotateSelectionQuarter();
+                    changed = true;
+                }
                 _rotating = false;
                 _rotateTurned = false;
-                changed = true;
+                _rotateGrab = RotateGrab.None;
                 break;
             }
             case ToolType.FreeSpace:
@@ -2559,6 +2568,7 @@ public sealed class InkSurface : UserControl
         _mousePanning = false;
         _rotating = false;
         _rotateTurned = false;
+        _rotateGrab = RotateGrab.None;
         _shapeAdjust = false;
         _adjustShape = null;
         _movingShape = _resizingShape = false;
@@ -2657,6 +2667,135 @@ public sealed class InkSurface : UserControl
         HorizontalAlignment = CanvasHorizontalAlignment.Center,
         VerticalAlignment = CanvasVerticalAlignment.Center
     };
+
+    /// <summary>17.11a's rotate interface, transcribed from the user's capture:
+    /// a red line through the pivot at the current angle, a crosshair whose
+    /// centre is EMPTY, a glowing arc crossing the line, and a donut handle where
+    /// the two meet. Colour <c>#BF3D38</c>, given directly by the user.
+    ///
+    /// <para><b>Answering 17.11a's third question: the line is the ANGLE'S
+    /// INDICATOR, not a fixed axis.</b> It is the page's own horizontal drawn
+    /// through the pivot, so at 0 degrees it is horizontal - which is exactly
+    /// what the capture shows and what 17.11a's own wording says ("at the
+    /// current rotation angle - horizontal at 0"). It runs the full width
+    /// because it is a HORIZON: it says which way the page is lying, and the
+    /// screen's own edges are the reference it is read against. That is also why
+    /// the whole assembly turns rigidly - line, ticks, arc and handle - rather
+    /// than a fixed axis with an arm swinging off it. There is one angle here
+    /// and every mark is drawn from it.</para>
+    ///
+    /// <para><b>Every size is in SCREEN PIXELS over ViewZoom.</b> The assembly is
+    /// chrome, so it keeps its physical size at 0.1x and at 16x; see the
+    /// constants block beside <see cref="PageRotationDeg"/>.</para>
+    ///
+    /// <para><b>The session's transform is COMPOSED, never assigned.</b>
+    /// <see cref="DrawRegion"/> has already put <paramref name="ds"/> into world
+    /// space on top of the CanvasVirtualControl's per-tile pre-translation, and
+    /// this method only reads that. Overwriting it is what painted every
+    /// non-origin tile displaced and clipped (#inkfix2).</para></summary>
+    private void DrawRotateInterface(CanvasDrawingSession ds, ICanvasResourceCreator rc)
+    {
+        float k = 1f / ViewZoom;                       // screen pixels -> world units
+        var pivot = RotatePivotWorld;
+        double rad = PageRotationDeg * Math.PI / 180.0;
+        var dir = new Vector2((float)Math.Cos(rad), (float)Math.Sin(rad));
+        var perp = new Vector2(-dir.Y, dir.X);
+        float r = RotateRadiusPx * k;                  // pivot to arc IS the drag radius
+        var handle = pivot + dir * r;
+
+        // ---- the line: full width, and BROKEN AT THE PIVOT ------------------
+        // 17.11a is specific that the crosshair's centre is empty - "four ticks
+        // around a gap, not a plus sign". A line drawn straight through the pivot
+        // with the crosshair laid on top would fill that gap, so the gap is cut
+        // out of the LINE and the ticks are drawn around it. Half-length is
+        // width+height rather than the diagonal: cheaper, always longer, and it
+        // only has to leave the viewport at every angle.
+        float reach = (float)((ActualWidth + ActualHeight) * k);
+        float gap = RotateCrossGapPx * k;
+        ds.DrawLine(pivot + dir * gap, pivot + dir * reach, RotateInk, RotateLineWidthPx * k);
+        ds.DrawLine(pivot - dir * gap, pivot - dir * reach, RotateInk, RotateLineWidthPx * k);
+
+        // ---- the crosshair: four short strokes pointing outward -------------
+        // Heavier than the line and starting where the line stops, so the two
+        // along the line read as the innermost SEGMENT of it rather than as more
+        // line - which is what makes the mark read as segmented.
+        float tip = (RotateCrossGapPx + RotateCrossTickPx) * k;
+        float tw = RotateCrossWidthPx * k;
+        void Tick(Vector2 d) => ds.DrawLine(pivot + d * gap, pivot + d * tip, RotateInk, tw);
+        Tick(dir);
+        Tick(-dir);
+        Tick(perp);
+        Tick(-perp);
+
+        // ---- the arc: the rotation path, convex away from the pivot ---------
+        // An arc of the circle centred ON the pivot at the drag radius, centred
+        // ON the current angle - so it crosses the line exactly at the handle and
+        // its bulge faces outward, both of which fall out of the geometry rather
+        // than being arranged for.
+        using var pb = new CanvasPathBuilder(rc);
+        double half = RotateArcHalfSpanDeg * Math.PI / 180.0;
+        pb.BeginFigure(pivot + new Vector2((float)Math.Cos(rad - half), (float)Math.Sin(rad - half)) * r);
+        pb.AddArc(pivot, r, r, (float)(rad - half), (float)(2 * half));
+        pb.EndFigure(CanvasFigureLoop.Open);
+        using var arc = CanvasGeometry.CreatePath(pb);
+
+        // ---- the glow: a SOFT halo, and why it is built here -----------------
+        // 17.11a says "a soft halo outside the stroke, not a hard edge", and
+        // neither existing piece of glow machinery can supply one HERE. The glow
+        // engine of 27e999b is XAML: it animates the stops of the chrome rims'
+        // LinearGradientBrush and has no way to reach a Win2D session. This
+        // canvas's own DrawStrokeGlow is a single wider translucent pass, which
+        // is precisely the hard edge being ruled out. What this does reuse is the
+        // effect composition DrawRegionBlurred already proves works inside a
+        // CanvasVirtualControl tile - render into an intermediate, blur, then
+        // composite - with a CanvasCommandList as the intermediate, since there
+        // is nothing on screen to capture and the marks are drawn from scratch.
+        //
+        // TWO RADII, not one: a tight bright halo hugging the stroke and a wide
+        // faint one beyond it. One pass gives a second blurry stroke; two give a
+        // falloff, which is what reads as a glow.
+        DrawRotateGlow(ds, rc, arc, handle, k, RotateGlowWidePx, RotateGlowWideAlpha);
+        DrawRotateGlow(ds, rc, arc, handle, k, RotateGlowTightPx, RotateGlowTightAlpha);
+
+        ds.DrawGeometry(arc, RotateInk, RotateArcWidthPx * k, _roundStyle);
+
+        // ---- the handle: a DONUT, not a dot ---------------------------------
+        // The fill stops at the ring's INNER edge (radius minus half the stroke
+        // width) so the dark centre meets the red rather than creeping under it
+        // and thinning the ring from the inside.
+        ds.FillCircle(handle, (RotateHandleRingPx - RotateHandleRingWidthPx / 2) * k, RotateHandleCore);
+        ds.DrawCircle(handle, RotateHandleRingPx * k, RotateInk, RotateHandleRingWidthPx * k);
+    }
+
+    /// <summary>One blurred pass of the arc and the handle ring. Kept separate so
+    /// the two radii differ in nothing but their two arguments - a copied second
+    /// pass is how the wide halo ends up a different shape from the tight one
+    /// after the next edit.</summary>
+    private void DrawRotateGlow(CanvasDrawingSession ds, ICanvasResourceCreator rc,
+                                CanvasGeometry arc, Vector2 handle, float k,
+                                float radiusPx, byte alpha)
+    {
+        var ink = Color.FromArgb(alpha, RotateInk.R, RotateInk.G, RotateInk.B);
+        using var list = new CanvasCommandList(rc);
+        using (var lds = list.CreateDrawingSession())
+        {
+            lds.DrawGeometry(arc, ink, RotateArcWidthPx * k, _roundStyle);
+            lds.DrawCircle(handle, RotateHandleRingPx * k, ink, RotateHandleRingWidthPx * k);
+        }
+        using var blur = new GaussianBlurEffect
+        {
+            Source = list,
+            // In the command list's own units, which are world units, so the
+            // halo is radiusPx SCREEN pixels once ds.Transform has scaled it.
+            BlurAmount = radiusPx * k,
+            // SOFT, where DrawRegionBlurred uses Hard. That one is suppressing a
+            // transparent fringe at a tile edge; here the spread past the
+            // source's own extent IS the halo.
+            BorderMode = EffectBorderMode.Soft,
+            Optimization = EffectOptimization.Quality,
+        };
+        ds.DrawImage(blur);
+    }
 
     /// <summary>
     /// Cleans a freshly drawn stroke so it doesn't leave a stray dot at either
@@ -3946,24 +4085,51 @@ public sealed class InkSurface : UserControl
     }
 
     // =======================================================================
-    // 17.11: the rotate tool
+    // 17.11 / 17.11a: the rotate tool
     // =======================================================================
     //
-    // WHY QUARTER TURNS AND NOT A FREE ANGLE. A stroke is a point list and takes
-    // any angle; a ShapeElement carries a Rotation field and takes any angle;
-    // a TextElement is an axis-aligned box with a width and a height and takes
-    // NONE. A free-angle drag would therefore turn two of the three kinds of
-    // subject and silently leave the third square - which is the failure 16.9
-    // spent a section forbidding, a control that looks live and does nothing.
-    // The quarter turn is what the model can represent for every subject, so it
-    // is what the tool commits; the DRAG is still continuous, and each quarter
-    // it crosses is one action, in the direction the hand went.
+    // 17.11a SUPERSEDES 17.11's reading and splits this tool into two halves
+    // that share one interface. Only one of them turns anything today, and the
+    // whole design of this block is about making that impossible to mistake.
     //
-    // And not canvas rotation. That is what a rotate tool means in an app that
-    // has it, and Quill does not: the view transform is a scale and a translate,
-    // and ChromeBars' V3 K.26 note counts what turning it would cost - 62 inline
-    // screen/world conversions and 51 axis-aligned rectangles that stop being
-    // valid the moment the canvas is not square to the screen.
+    // THE PAGE HALF (17.11a requirement 1) IS THE INTERFACE AND NOTHING ELSE.
+    // "The rotate tool rotates the PAGE, freely." No page-rotation state exists
+    // anywhere in this codebase: the view transform is a scale and a translate,
+    // and turning it is the roadmap's tilt item - 62 inline screen/world
+    // conversions and 51 axis-aligned rectangles that stop being valid the
+    // moment the canvas is not square to the screen, audited at 3-5 days plus a
+    // full input regression. So PageRotationDeg is STORED, REPORTED, AND
+    // APPLIED NOWHERE. It never reaches DrawRegion's transform; it never
+    // reaches the top bar's tilt readout, which stays at 0 because the CANVAS
+    // is still at 0; and it is not written to the page, because a rotation
+    // saved into a document that cannot honour it is a lie with a long
+    // half-life. The user asked to see and correct the interface first, and
+    // this is that interface with nothing behind it pretending otherwise.
+    //
+    // THE SELECTION HALF (17.11 as built) IS UNCHANGED AND STILL QUARTER TURNS.
+    // 17.11a's requirement 2 - every rotatable object rotates freely - is
+    // blocked on making TextElement rotatable, and 17.11a itself forbids
+    // shipping a free rotation that silently leaves one subject kind square. It
+    // is also what the mode bar's Rotate switch drives, since SelectionChrome
+    // reads Tool == ToolType.Rotate: deleting it would leave that switch dead.
+    //
+    // WHY QUARTER TURNS AND NOT A FREE ANGLE, for that half. A stroke is a point
+    // list and takes any angle; a ShapeElement carries a Rotation field and
+    // takes any angle; a TextElement is an axis-aligned box with a width and a
+    // height and takes NONE. A free-angle drag would therefore turn two of the
+    // three kinds of subject and silently leave the third square - which is the
+    // failure 16.9 spent a section forbidding, a control that looks live and
+    // does nothing. The quarter turn is what the model can represent for every
+    // subject, so it is what the tool commits; the DRAG is still continuous, and
+    // each quarter it crosses is one action, in the direction the hand went.
+    //
+    // HOW ONE TOOL CARRIES BOTH WITHOUT A MODE SWITCH: BY WHERE THE PRESS LANDS.
+    // The page half owns exactly two objects and they are the two the overlay
+    // draws - the donut handle and the pivot crosshair. A press on either is a
+    // page gesture; a press anywhere else is the selection sweep this tool has
+    // always been. Nothing is hidden behind a toggle, so there is no state in
+    // which the user cannot tell which rotation they are about to get: the two
+    // things that move the page angle are the two things that are drawn.
     private bool _rotating;
     // Whether the sweep has already committed a quarter. A gesture that has not
     // is a TAP however far it travelled, and a tap turns once on release - which
@@ -3972,8 +4138,204 @@ public sealed class InkSurface : UserControl
     private Vector2 _rotateCentre;
     private double _rotateFromDeg;      // pointer bearing when the last quarter landed
 
+    // ---- the page half: state, and the only thing that reads it is a draw --
+
+    /// <summary>17.11a's page rotation, in degrees clockwise from the page's own
+    /// horizontal, wrapped into (-180, 180].
+    ///
+    /// <para><b>NOTHING APPLIES THIS.</b> It is the value the tool's handle
+    /// drives and the value the tool's menu reports, and it reaches neither the
+    /// view transform nor the saved page. Search this file for the property: the
+    /// only readers are the overlay draw and the report. That is deliberate and
+    /// it is the whole shape of this change - see the block header.</para></summary>
+    public double PageRotationDeg { get; private set; }
+
+    /// <summary>Raised on every change, so the tool's menu can report the number
+    /// without polling. Carries the new value rather than making the listener
+    /// read it back, which is how a listener ends up one frame stale.</summary>
+    public event Action<double>? PageRotationChanged;
+
+    /// <summary>17.11a: <i>"whether rotation snaps at all. The user said free, so
+    /// any snap must be opt-in, and 0 should not be sticky unless asked for."</i>
+    ///
+    /// <para>So this is OFF by default and there is no other detent in the
+    /// gesture - not a soft one near 0, not a magnet at the quarters. With it
+    /// off, <see cref="SetPageRotation"/> stores whatever bearing the hand gave
+    /// it. With it on, every step is a multiple of
+    /// <see cref="RotateSnapStepDeg"/> INCLUDING 0, because a snap that skipped
+    /// its own zero would be a stranger rule than either choice.</para></summary>
+    public bool RotateSnap { get; set; }
+
+    /// <summary>The opt-in snap's step. 15 rather than 45 or 90: the tool is a
+    /// free rotation and the snap is an aid inside it, so the step has to be
+    /// fine enough that turning it on does not become a different tool.</summary>
+    public const double RotateSnapStepDeg = 15;
+
+    // Where the pivot is, and whether the user has put it anywhere. UNPLACED is
+    // not "at the origin" - it is "the middle of what you are looking at", which
+    // is why the getter derives it rather than storing it. The moment the user
+    // drags it, it becomes a point on the PAGE and stops following the view:
+    // the tool turns the page about a place on the page, so the pivot is world
+    // space as soon as it means anything.
+    private Vector2 _rotatePivot;
+    private bool _rotatePivotPlaced;
+
+    // 0 until a drag sets it; the getter derives the default from the viewport
+    // so a small window does not get a handle off the edge of itself.
+    private float _rotateRadiusPx;
+
+    private enum RotateGrab { None, Handle, Pivot }
+    private RotateGrab _rotateGrab;
+
+    // Every number the interface is drawn and hit-tested with, in SCREEN PIXELS.
+    // Multiplied by 1/ViewZoom at the point of use, so the assembly is the same
+    // physical size at 0.1x and at 16x. It is chrome, not content: a handle that
+    // shrank with the page would be unusable at exactly the zoom levels where
+    // turning the page is most wanted.
+    private const float RotateLineWidthPx = 1.6f;
+    private const float RotateCrossGapPx = 7f;
+    private const float RotateCrossTickPx = 7.5f;
+    private const float RotateCrossWidthPx = 2.4f;
+    private const float RotateArcWidthPx = 3.2f;
+    private const float RotateArcHalfSpanDeg = 17f;
+    private const float RotateHandleRingPx = 8.5f;
+    private const float RotateHandleRingWidthPx = 3.2f;
+    private const float RotateGlowTightPx = 4.5f;
+    private const float RotateGlowWidePx = 11f;
+    private const byte RotateGlowTightAlpha = 165;
+    private const byte RotateGlowWideAlpha = 95;
+    private const float RotateHandleReachPx = 20f;
+    private const float RotatePivotReachPx = 18f;
+    private const float RotateRadiusMinPx = 48f;
+
+    /// <summary>17.11a's colour, given directly by the user: <c>#BF3D38</c>. It
+    /// is NOT the app accent and must not follow it - every other overlay on
+    /// this canvas is drawn in the accent, and this one being fixed is what
+    /// keeps it recognisable as the rotate interface on any theme.</summary>
+    private static readonly Color RotateInk = Color.FromArgb(255, 0xBF, 0x3D, 0x38);
+
+    /// <summary>The donut's filled centre. 17.11a says "a filled dark centre
+    /// inside a red ring", and dark is taken literally rather than as the page's
+    /// ground: on the dark page of the capture it reads as a hole through the
+    /// arc, and on a light page it reads as a dark plug. Either way it is a
+    /// donut and not a dot, which is the distinction the capture makes.</summary>
+    private static readonly Color RotateHandleCore = Color.FromArgb(255, 20, 20, 19);
+
+    /// <summary>Where the pivot is, in world units.
+    ///
+    /// <para><b>Answering 17.11a's first question: the pivot is PLACED, and it
+    /// starts under the middle of the view.</b> Not the selection's centre - the
+    /// tool turns the PAGE, and a page pivot that jumped every time the
+    /// selection changed would be a pivot nobody could aim. Not a fixed viewport
+    /// centre either, because the capture shows it left of centre. Unplaced it
+    /// tracks the middle of the viewport, so choosing the tool always shows a
+    /// usable interface rather than nothing; dragging the crosshair pins it to a
+    /// point on the page, and from then on it pans and zooms with the
+    /// drawing.</para></summary>
+    public Vector2 RotatePivotWorld =>
+        _rotatePivotPlaced
+            ? _rotatePivot
+            : ToWorld(new Vector2((float)ActualWidth / 2, (float)ActualHeight / 2));
+
+    /// <summary>Pivot to arc, in screen pixels - which is to say the drag radius,
+    /// and therefore the gesture's angular sensitivity.
+    ///
+    /// <para><b>Answering 17.11a's second question: THE HAND SETS IT,
+    /// CONTINUOUSLY.</b> A handle drag takes its bearing AND its distance from
+    /// the pointer, so pulling further out mid-drag makes the rest of that same
+    /// drag finer - one degree costs more travel at a longer radius - and the
+    /// arc redraws at the radius actually in force, so the sensitivity the user
+    /// has is the sensitivity they can see. It persists after the drag, so the
+    /// next one starts with the reach they chose. Floored at
+    /// <see cref="RotateRadiusMinPx"/>: at a radius near zero a pixel of hand
+    /// movement is most of a turn, and no amount of care makes that
+    /// usable.</para></summary>
+    private float RotateRadiusPx
+    {
+        get
+        {
+            if (_rotateRadiusPx > 0) return _rotateRadiusPx;
+            double shortSide = Math.Min(ActualWidth, ActualHeight);
+            if (shortSide <= 0) shortSide = 640;   // before the first layout pass
+            return (float)Math.Max(RotateRadiusMinPx, shortSide * 0.28);
+        }
+    }
+
+    /// <summary>The donut's centre, in world units: the point on the line, at the
+    /// drag radius, in the direction of the current angle. The arc crosses the
+    /// line here, which is what makes "where the arc meets the line" a place
+    /// rather than a description.</summary>
+    private Vector2 RotateHandleWorld()
+    {
+        double r = PageRotationDeg * Math.PI / 180.0;
+        return RotatePivotWorld +
+               new Vector2((float)Math.Cos(r), (float)Math.Sin(r)) * (RotateRadiusPx / ViewZoom);
+    }
+
+    /// <summary>Store the angle and report it. The ONE place
+    /// <see cref="PageRotationDeg"/> is assigned, so the snap cannot be applied
+    /// on one route and skipped on another.</summary>
+    private void SetPageRotation(double deg)
+    {
+        if (RotateSnap) deg = Math.Round(deg / RotateSnapStepDeg) * RotateSnapStepDeg;
+        deg = WrapDegrees(deg);
+        if (Math.Abs(deg - PageRotationDeg) < 1e-6) return;
+        PageRotationDeg = deg;
+        try { PageRotationChanged?.Invoke(deg); } catch { }
+    }
+
+    /// <summary>Into (-180, 180], so a sweep across the -x axis reads as a small
+    /// step rather than a 350 degree jump back the other way.</summary>
+    private static double WrapDegrees(double deg)
+    {
+        while (deg > 180) deg -= 360;
+        while (deg <= -180) deg += 360;
+        return deg;
+    }
+
+    /// <summary>Un-place the pivot, putting it back under the middle of the view.
+    /// Published for the tool's own bottom menu; there is no second way to move
+    /// it, because the crosshair drag is the first.</summary>
+    public void ResetRotatePivot()
+    {
+        _rotatePivotPlaced = false;
+        _canvas.Invalidate();
+    }
+
+    /// <summary>Put the angle back to 0 - which, since nothing is applied, is
+    /// only ever putting the HANDLE back on the horizontal.</summary>
+    public void ResetPageRotation()
+    {
+        SetPageRotation(0);
+        _canvas.Invalidate();
+    }
+
     private void BeginRotateGesture(Vector2 pos)
     {
+        // The two drawn objects first, and in this order: the handle sits on the
+        // line at the drag radius and the pivot sits at its foot, so at the
+        // minimum radius their reaches nearly touch and the one the user is
+        // more likely to be aiming at has to win.
+        _rotateGrab = RotateGrab.None;
+        if (Vector2.Distance(pos, RotateHandleWorld()) * ViewZoom <= RotateHandleReachPx)
+        {
+            _rotateGrab = RotateGrab.Handle;
+            _rotating = false;
+            return;
+        }
+        if (Vector2.Distance(pos, RotatePivotWorld) * ViewZoom <= RotatePivotReachPx)
+        {
+            _rotateGrab = RotateGrab.Pivot;
+            // Freeze where it is NOW before the drag moves it: an unplaced pivot
+            // is derived from the view, and reading it again mid-drag after
+            // marking it placed would read the field it has not been given yet.
+            _rotatePivot = RotatePivotWorld;
+            _rotatePivotPlaced = true;
+            _rotating = false;
+            return;
+        }
+
+        // 17.11, untouched: a press anywhere else is still the selection sweep.
         var b = SubjectBoundsWorld;
         if (b.IsEmpty) { _rotating = false; return; }
         _rotating = true;
@@ -3987,8 +4349,31 @@ public sealed class InkSurface : UserControl
     private static double Bearing(Vector2 p, Vector2 centre) =>
         Math.Atan2(p.Y - centre.Y, p.X - centre.X) * 180.0 / Math.PI;
 
+    /// <summary>The handle drag: 17.11a's free page rotation, and the only
+    /// gesture in this file that moves <see cref="PageRotationDeg"/>.</summary>
+    private void RotateHandleDragTo(Vector2 pos)
+    {
+        var pivot = RotatePivotWorld;
+        float distPx = Vector2.Distance(pos, pivot) * ViewZoom;
+        // A pointer sitting on the pivot has no bearing to read. The angle is
+        // left where it was rather than taking whatever atan2 returns for a
+        // vector that is almost entirely rounding error.
+        if (distPx < 1f) return;
+        _rotateRadiusPx = Math.Max(RotateRadiusMinPx, distPx);
+        SetPageRotation(Bearing(pos, pivot));
+    }
+
     private void RotateDragTo(Vector2 pos)
     {
+        switch (_rotateGrab)
+        {
+            case RotateGrab.Handle: RotateHandleDragTo(pos); return;
+            // The pivot follows the pointer exactly. No offset from where it was
+            // grabbed: the crosshair is a point, and a point picked up 6 pixels
+            // off centre that then trails the finger by 6 pixels is a point that
+            // cannot be put anywhere precisely.
+            case RotateGrab.Pivot: _rotatePivot = pos; return;
+        }
         if (!_rotating) return;
         // Wrapped into (-180, 180] so a sweep across the -x axis reads as a small
         // step rather than a 350 degree jump back the other way.
@@ -4589,6 +4974,12 @@ public sealed class InkSurface : UserControl
         // settled selection looks like.
 
         if (!_replaying) DrawRuler(ds, bg);
+
+        // 17.11a's rotate interface. Chrome, so it is gated exactly as the shape
+        // selection above is - out of a replay, out of a chromeless export - and
+        // drawn after the ink so the assembly sits over the page it turns.
+        if (Tool == ToolType.Rotate && !_replaying && !ExportChromeless)
+            DrawRotateInterface(ds, sender);
 
         // Eraser cursor: shown for the Eraser tool, while a pen hovers with its
         // eraser button held, and during an active erase gesture.
