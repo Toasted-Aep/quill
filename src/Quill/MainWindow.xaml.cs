@@ -388,6 +388,11 @@ public sealed partial class MainWindow : Window
             if (fb is Flyout fl)
                 fl.Opened += (_, _) => { if (fl.Content is FrameworkElement root) PopIn(root, 0.9, 280); };
         }
+        // 17.3: the custom-colour button offers APPLY or EDIT depending on where
+        // the page stands, and the page can move while the flyout is shut. Asked
+        // as it opens, so it can never be showing last time's answer.
+        if (PageSettingsBtn.Flyout is Flyout pageFly)
+            pageFly.Opening += (_, _) => SyncBgCustomButton();
 
         // The veil is opaque, so pointer input cannot reach the half-built UI,
         // and no accelerators exist yet (ApplyKeyPreset runs in FinishStartup) —
@@ -6753,16 +6758,55 @@ public sealed partial class MainWindow : Window
         SetPageBackground(hex);
     }
 
+    /// <summary>§9.5 / §17.3 — press once to APPLY the remembered colour, press
+    /// again to EDIT it.
+    ///
+    /// <para>This button used to open the wheel on EVERY press, seeded with
+    /// <c>_curPage.Background</c>, and it never wrote the user's choice down.
+    /// That is 17.3's "mirrors the current page colour" in its purest form: the
+    /// control held nothing, so there was nothing to apply and no second press
+    /// to distinguish. It now reads the same remembered colour and asks the same
+    /// question the settings panel's swatch does - <see cref="PaperTextures"/>
+    /// owns both, so the two surfaces cannot drift into two conventions.</para></summary>
     private void BgCustom_Click(object sender, RoutedEventArgs e)
     {
         if (_curPage == null) return;
+        if (!PaperTextures.CustomPressEdits(_library, _curPage))
+        {
+            // FIRST press: apply what the user already chose. No wheel.
+            SetPagePaper(null, _library.CustomPageColor);
+            SyncBgCustomButton();
+            return;
+        }
         // One drag of the picker is ONE edit session: the contrast baseline is
         // taken on the first callback and held until the picker closes, so the
         // sixty callbacks in between cannot compound.
         EndContrastSession();
-        OpenColorPicker(BgCustomBtn, ColorUtil.Parse(_curPage.Background),
-            c => SetPageBackground(ColorUtil.ToHex(c)),
+        OpenColorPicker(BgCustomBtn, PaperTextures.CustomSeed(_library, _curPage),
+            c =>
+            {
+                PaperTextures.RememberCustom(_library, c);
+                SetPageBackground(ColorUtil.ToHex(c));
+                SyncBgCustomButton();
+            },
             EndContrastSession);
+    }
+
+    /// <summary>Keeps the flyout's custom-colour button telling the truth about
+    /// which of §9.5's two presses it is offering. Called wherever the page or
+    /// the remembered colour can have moved.</summary>
+    private void SyncBgCustomButton()
+    {
+        if (BgCustomBtn == null) return;
+        bool edits = PaperTextures.CustomPressEdits(_library, _curPage);
+        BgCustomBtn.Content = PaperTextures.CustomColour(_library) == null
+            ? "Custom colour…"
+            : edits ? "Custom colour — edit…" : "Custom colour";
+        ToolTipService.SetToolTip(BgCustomBtn,
+            PaperTextures.CustomColour(_library) == null
+                ? "Pick a custom page colour."
+                : edits ? "Press to edit this colour."
+                        : "Applies your custom colour. Press it again to edit it.");
     }
 
     // Applies a page background and, when the page flips between light and dark,

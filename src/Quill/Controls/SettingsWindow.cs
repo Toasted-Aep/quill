@@ -626,27 +626,30 @@ public sealed class SettingsWindow
     /// on every press. The first press selects the colour the user already set;
     /// only a press while it is ALREADY selected opens the COPIC wheel. The one
     /// exception is a custom colour that has never been set — there is nothing to
-    /// apply, so that first press opens the wheel.</para></summary>
+    /// apply, so that first press opens the wheel.</para>
+    ///
+    /// <para>§17.3: the swatch MUST NOT MIRROR THE PAGE. It used to fall back to
+    /// <c>page.Background</c> whenever nothing was stored, which is the whole
+    /// defect — a swatch showing the page always looks applied, always seeds the
+    /// wheel with what is already there, and never holds anything of the user's.
+    /// Nothing stored now means <b>no fill at all</b>: §9.9 has these circles
+    /// unfilled by default and gives a fill only to a circle whose subject IS a
+    /// colour, so an empty ring is this panel's own way of saying "not chosen
+    /// yet". The rule itself lives in <see cref="PaperTextures"/>, because the
+    /// top bar's Page settings flyout offers the same control and §17.3 asks for
+    /// one convention rather than two.</para></summary>
     private FrameworkElement BuildCustomColorCell(NotePage? page, Library lib)
     {
-        string stored = lib.CustomPageColor ?? "";
-        bool everSet = !string.IsNullOrWhiteSpace(stored);
-        var swatchColor = ColorUtil.Parse(everSet ? stored : (page?.Background ?? "#FAF9F5"));
-
-        // Selected when the page is on a plain colour that is the stored custom
-        // one — not merely "on some plain colour", or Plain White would light up
-        // two swatches at once.
-        bool selected = everSet &&
-                        string.IsNullOrEmpty(page?.Paper) &&
-                        string.Equals(page?.Background, stored, StringComparison.OrdinalIgnoreCase);
+        var stored = PaperTextures.CustomColour(lib);
+        bool selected = PaperTextures.CustomApplied(lib, page);
 
         FrameworkElement cell = null!;
         cell = Circle(SwatchD, "Custom Color", selected, () =>
         {
-            if (everSet && !selected)
+            if (!PaperTextures.CustomPressEdits(lib, page))
             {
                 // FIRST press: apply what the user already chose. No picker.
-                GroundAction(() => _h.SetPaper(null, stored));
+                GroundAction(() => _h.SetPaper(null, ColorUtil.ToHex(stored!.Value)));
                 return;
             }
             // SECOND press (or a colour never set): edit it.
@@ -660,23 +663,23 @@ public sealed class SettingsWindow
             // window down rather than just failing to open a picker.
             try
             {
-                _h.PickColor(cell, swatchColor, c =>
+                _h.PickColor(cell, PaperTextures.CustomSeed(lib, page), c =>
                 {
-                    string hex = ColorUtil.ToHex(c);
-                    lib.CustomPageColor = hex;
+                    PaperTextures.RememberCustom(lib, c);
                     GroundAction(() =>
                     {
-                        _h.SetPaper(null, hex);
+                        _h.SetPaper(null, ColorUtil.ToHex(c));
                         _h.Save();
                     });
                 });
             }
             catch { _h.Status("The colour picker could not be opened here."); }
-        }, fill: B(swatchColor));
+        }, fill: stored is { } sc ? B(sc) : null);
 
-        ToolTipService.SetToolTip(cell, everSet
-            ? (selected ? "Press again to edit this colour." : "Applies your custom colour. Press it again to edit it.")
-            : "Pick a custom page colour.");
+        ToolTipService.SetToolTip(cell, stored == null
+            ? "Pick a custom page colour."
+            : selected ? "Press again to edit this colour."
+                       : "Applies your custom colour. Press it again to edit it.");
         return cell;
     }
 
