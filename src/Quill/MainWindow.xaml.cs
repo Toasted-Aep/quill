@@ -75,6 +75,16 @@ public sealed partial class MainWindow : Window
     // is selected; this reference exists only so the window can own its lifetime
     // alongside the other two chromes.
     private SelectionChrome? _selChrome;
+    // 17.9 / 17.10. The one screen-bottom surface, and the two pages this window
+    // owns on it - the mouse tool's menu and the colour picker's. The mode bar's
+    // page belongs to the selection presentation and is published from there.
+    private BottomMenu? _bottomMenu;
+    private readonly StackPanel _toolMenuItems = BottomMenu.Items();
+    private readonly StackPanel _pickerMenuItems = BottomMenu.Items();
+    private Border? _toolMenuPlate, _pickerMenuPlate;
+    /// <summary>17.9 item 3's second half. On, a colour Filter applies keeps the
+    /// alpha it was picked with; off, it lands fully opaque.</summary>
+    private bool _filterAlpha = true;
     // Both tool surfaces subscribe to this and are dumb renderers over the same
     // state, so the linear row and the dial can never diverge (§2.2).
     private event Action? ToolUiChanged;
@@ -771,6 +781,22 @@ public sealed partial class MainWindow : Window
             DuplicateEditingText = () => Surface.DuplicateEditingText(),
             ToggleEditingTextLock = () => Surface.ToggleEditingTextLock(),
             DeleteEditingText = () => Surface.DeleteEditingText(),
+            // 17.9's mode bar. Rotate IS 17.11's rotate tool aimed at this
+            // selection - not a second implementation of turning something - so
+            // switching the mode switches the tool, and the tool is what the
+            // getter reads back. One state, so the bar and the canvas cannot
+            // disagree about whether rotation is armed.
+            RotateMode = () => Surface.Tool == ToolType.Rotate,
+            SetRotateMode = on =>
+            {
+                SelectTool(on ? "Rotate" : "Mouse");
+                _selChrome?.Repaint();
+            },
+            ScaleMode = () => Surface.ScaleMode,
+            SetScaleMode = on => { Surface.ScaleMode = on; _selChrome?.Repaint(); },
+            Stretch = () => Surface.ScaleStretch,
+            SetStretch = on => { Surface.ScaleStretch = on; _selChrome?.Repaint(); },
+            OpenFilter = OpenFilterMenu,
             // The two states in which the selection's own controls must not be on
             // screen. The COPIC wheel reports itself as covering the whole canvas
             // (9.3) and the panel solver already pushes every other cluster out of
@@ -792,6 +818,24 @@ public sealed partial class MainWindow : Window
         // Without this a selection made before the wheel opened would keep its bar
         // on screen underneath it.
         ColorPickerService.ObstacleChanged += () => _selChrome?.Refresh();
+
+        // 17.9 / 17.10. Attached to the ROOT grid, not the canvas area: this
+        // surface maps no world coordinates and it has to be able to sit above
+        // the colour picker's overlay, which is a root-grid child at z-index 150
+        // - and z-index only orders siblings. See BottomMenu's remarks for the
+        // two decisions that shape everything hanging off it: one surface rather
+        // than two, and the tool menu COVERING the mode bar rather than
+        // replacing it.
+        _bottomMenu = BottomMenu.Attach(RootGrid);
+        _toolMenuPlate = BottomMenu.Plate(_toolMenuItems);
+        _pickerMenuPlate = BottomMenu.Plate(_pickerMenuItems);
+        // Whether a page shows a back button depends on what is UNDER it, which
+        // changes without either page changing - so both rebuild on the stack
+        // rather than only when their own state moves.
+        BottomMenu.Changed += () => { BuildToolMenu(); BuildPickerMenu(); };
+        ToolUiChanged += SyncBottomMenu;
+        SelectionState.Changed += SyncBottomMenu;
+        SyncBottomMenu();
 
 
         // K.21: the Notebooks window and the radial dial join the panel solver.
@@ -6294,7 +6338,10 @@ public sealed partial class MainWindow : Window
         ApplyToolbarVisibility();   // pen-only buttons follow the active tool (#topbar)
         ToolPen.IsChecked = tag == "Pen";
         ToolText.IsChecked = tag == "Text";
-        ToolSelect.IsChecked = tag == "Select";
+        // 17.10 renamed the Select tool to the MOUSE tool and SetTool folds the
+        // one into the other, so the top bar's radio follows either spelling -
+        // an accelerator, a stored tag or a dial sector may still say "Select".
+        ToolSelect.IsChecked = tag is "Select" or "Mouse";
         ToolSpace.IsChecked = tag == "FreeSpace";
 
         var tool = Enum.Parse<ToolType>(tag);
@@ -6316,7 +6363,14 @@ public sealed partial class MainWindow : Window
                 ShowStatus("Tap anywhere on the page to add a text box.");
                 break;
             case ToolType.Select:
+            case ToolType.Mouse:
                 ShowStatus("Draw a lasso around strokes, then drag inside the box to move them. Del removes them.");
+                break;
+            case ToolType.Pan:
+                ShowStatus("Drag anywhere to move the page under the view.");
+                break;
+            case ToolType.Rotate:
+                ShowStatus("Drag around the selection to turn it, or tap it to turn a quarter.");
                 break;
             case ToolType.FreeSpace:
                 ShowStatus("Drag downwards to push everything below apart; drag up to pull together.");
@@ -6334,6 +6388,134 @@ public sealed partial class MainWindow : Window
                 break;
         }
         ToolUiChanged?.Invoke();
+    }
+
+    // =====================================================================
+    // 17.10 / 17.9: the two bottom menus this window owns
+    // =====================================================================
+    //
+    // The mode bar's page is NOT here - it belongs to the selection presentation
+    // and is published by SelectionChrome, because it appears with a selection
+    // and greys on that selection's lock. These two are the window's because
+    // neither belongs to a selection: one describes the active TOOL, the other
+    // the colour picker.
+
+    /// <summary>Publish or retract the two pages this window owns. Called
+    /// whenever the tool changes, the selection changes, or the picker opens or
+    /// closes - never from the pages' own build, so a rebuild cannot loop.</summary>
+    private void SyncBottomMenu()
+    {
+        if (_bottomMenu == null) return;
+
+        // 17.10's menu belongs to the MOUSE TOOL and to no other. A tool with
+        // nothing to configure publishes nothing, which is what lets the mode
+        // bar be the visible page while the pen is in hand.
+        if (Surface.MouseTool && _toolMenuPlate != null)
+        {
+            BuildToolMenu();
+            _bottomMenu.Publish(BottomPage.Tool, _toolMenuPlate);
+        }
+        else _bottomMenu.Retract(BottomPage.Tool);
+
+        if (ColorPickerService.IsOpen && _pickerMenuPlate != null)
+        {
+            BuildPickerMenu();
+            _bottomMenu.Publish(BottomPage.Picker, _pickerMenuPlate);
+        }
+        else _bottomMenu.Retract(BottomPage.Picker);
+    }
+
+    /// <summary>17.10's capture, in order: <c>&lt; | Lasso | Complete | Include |
+    /// All</c>.
+    ///
+    /// <para>The leading <c>&lt;</c> is not drawn here and not decided here -
+    /// <see cref="BottomMenu.Lead"/> yields it when a page sits underneath this
+    /// one, which with a selection made is the mode bar. That is why the capture
+    /// has it: the mouse menu is not a root, it is covering something.</para>
+    ///
+    /// <para>Each control is ONE cell showing its CURRENT value, which is how the
+    /// capture reads - "Lasso", not "Item picker | Lasso". Pressing it
+    /// switches.</para></summary>
+    private void BuildToolMenu()
+    {
+        if (_bottomMenu == null || !Surface.MouseTool) return;
+        var items = _toolMenuItems;
+        items.Children.Clear();
+        foreach (var lead in _bottomMenu.Lead(BottomPage.Tool)) items.Children.Add(lead);
+
+        bool lasso = Surface.Pick == MousePick.Lasso;
+        items.Children.Add(BottomMenu.Toggle(lasso,
+            Icons.ItemPicker, "Item", Icons.Lasso, "Lasso",
+            on => { Surface.Pick = on ? MousePick.Lasso : MousePick.Item; BuildToolMenu(); },
+            tip: "Click an item to select it, or draw a lasso round several",
+            strokedB: true));
+
+        // 17.10: "when Lasso is chosen, a further control appears to its right".
+        // Only then - "partially inside" has no meaning for a click, and a
+        // control that cannot apply is worse present and dead than absent.
+        if (lasso)
+            items.Children.Add(BottomMenu.Toggle(Surface.SelectPartial,
+                Icons.Complete, "Complete", Icons.Partial, "Partial",
+                on => { Surface.SelectPartial = on; BuildToolMenu(); },
+                tip: "Partial catches a stroke the lasso only crosses; complete needs all of it inside",
+                strokedA: true, strokedB: true));
+
+        // A LOCKED padlock and an UNLOCKED one, 17.10's own words. Open means
+        // include - nothing is being kept out.
+        items.Children.Add(BottomMenu.Toggle(Surface.IgnoreLocked,
+            Icons.LockOpen, "Include", Icons.LockClosed, "Ignore",
+            on => { Surface.IgnoreLocked = on; BuildToolMenu(); },
+            tip: "Whether a locked stroke can be caught by a selection"));
+
+        // The layer scope. Real, not a stub: it is passed to
+        // PageLayers.CanSelect, and on a page with one implicit layer both
+        // scopes answer true for everything (18.1).
+        items.Children.Add(BottomMenu.Toggle(Surface.SelectScope == LayerScope.ActiveLayer,
+            Icons.Layers, "All", Icons.LayerOne, "Active",
+            on => { Surface.SelectScope = on ? LayerScope.ActiveLayer : LayerScope.AllLayers; BuildToolMenu(); },
+            tip: "Select across every layer, or only the active one"));
+    }
+
+    /// <summary>The colour picker's own bottom menu (17.9).
+    ///
+    /// <para><b>The conditional back button lives in one place and it is not
+    /// here.</b> This menu asks <see cref="BottomMenu.Lead"/> the same question
+    /// every other page asks - is a page underneath me - so reached from the
+    /// mode bar's Filter it has a back button, and opened as a tool in its own
+    /// right with nothing beneath it, it does not. There is no flag saying which
+    /// way it was reached, because a flag is a thing that can be set
+    /// wrong.</para></summary>
+    private void BuildPickerMenu()
+    {
+        if (_bottomMenu == null || !ColorPickerService.IsOpen) return;
+        var items = _pickerMenuItems;
+        items.Children.Clear();
+        foreach (var lead in _bottomMenu.Lead(BottomPage.Picker)) items.Children.Add(lead);
+
+        items.Children.Add(BottomMenu.Cell(Icons.Alpha, "Alpha", _filterAlpha,
+            () => { _filterAlpha = !_filterAlpha; BuildPickerMenu(); },
+            tip: "Keep the alpha a colour was picked with, or apply it opaque"));
+    }
+
+    /// <summary>17.9 item 3. Filter opens the colour picker AND descends the
+    /// bottom menu into the picker's own - one press, both, because "descends
+    /// into" is the behaviour and opening the wheel without moving the menu
+    /// would be half of it.</summary>
+    private void OpenFilterMenu()
+    {
+        var subject = SelectionState.Current;
+        var current = subject.Ink ?? Surface.PenColor;
+        OpenColorPicker(PenRowColourBtn, current, c =>
+        {
+            var applied = _filterAlpha ? c : Color.FromArgb(255, c.R, c.G, c.B);
+            // 16.9: editing a control while a selection is up edits THE
+            // SELECTION. SetInk is null when the subject cannot be recoloured -
+            // a photograph - and then Filter changes nothing rather than
+            // silently retargeting the pen, which is the surprise 16.3 spends a
+            // paragraph on.
+            subject.SetInk?.Invoke(applied);
+        }, () => SyncBottomMenu());
+        SyncBottomMenu();
     }
 
     private void TouchDraw_Click(object sender, RoutedEventArgs e)

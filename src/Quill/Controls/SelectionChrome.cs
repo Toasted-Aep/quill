@@ -138,6 +138,28 @@ public sealed class SelectionChrome
         public required Action DuplicateEditingText { get; init; }
         public required Action ToggleEditingTextLock { get; init; }
         public required Action DeleteEditingText { get; init; }
+
+        // ---- 17.9: the mode bar -------------------------------------------
+        // Getters as well as setters, because these are MODES: the bar draws
+        // each one's current state, and a bar that only set state would have to
+        // keep a second copy of it and then disagree with the surface that acts
+        // on it. Same shape as the Measurement menu's locks.
+
+        /// <summary>17.9 item 1. On, a drag around the subject turns it and a tap
+        /// turns a quarter - which is 17.11's rotate tool, aimed at this
+        /// selection, rather than a second way to do the same thing.</summary>
+        public required Func<bool> RotateMode { get; init; }
+        public required Action<bool> SetRotateMode { get; init; }
+        /// <summary>17.9 item 2. On, the whole selection box is a scale grip.</summary>
+        public required Func<bool> ScaleMode { get; init; }
+        public required Action<bool> SetScaleMode { get; init; }
+        /// <summary>17.9 item 2's second half: uniform, or free aspect.</summary>
+        public required Func<bool> Stretch { get; init; }
+        public required Action<bool> SetStretch { get; init; }
+        /// <summary>17.9 item 3. Opens the colour picker AND descends the bottom
+        /// menu into the picker's own - which is what gives that menu its back
+        /// button, since it is then covering this one.</summary>
+        public required Action OpenFilter { get; init; }
     }
 
     /// <summary>Which of the two states is on screen. One field, because one
@@ -149,14 +171,26 @@ public sealed class SelectionChrome
     /// <see cref="ChromeBars.Metrics"/> and <see cref="FullscreenChrome.Metrics"/>.</summary>
     public static class Metrics
     {
+        /// <summary><b>17.12: quick action buttons +80%.</b> One factor, applied
+        /// to the three numbers the buttons are made of, so the ratio between
+        /// them - and everything derived from it, including
+        /// <see cref="LabelToMark"/> - is untouched by the resize.
+        ///
+        /// <para>It moves BOTH modes. 11.9's editing bar and 16.2's selection bar
+        /// are one bar with two triggers and take their sizes from here, which is
+        /// the second reason that is a mode rather than a second surface.</para></summary>
+        public const double QuickScale = 1.8;
         /// <summary>Bar marks. 16 DIP inside a 30 DIP cell - the same ratio the
         /// top bar runs (a 16 DIP mark in a 26 DIP box, section 9.6) with a
         /// little more air, because this bar floats over the drawing rather than
         /// sitting in a rule-bounded strip.</summary>
-        public const double MarkSize = 16, MarkCell = 30, BarHeight = 34;
-        /// <summary>Bottom-row marks are smaller than the bar's: they carry a
-        /// word beside them, and a mark that matches its label's cap height
-        /// reads as one token rather than as an icon with a caption.</summary>
+        public const double MarkSize = 16 * QuickScale,
+                            MarkCell = 30 * QuickScale,
+                            BarHeight = 34 * QuickScale;
+        /// <summary>What the bottom row was before 17.9 moved it to the bottom of
+        /// the screen. Kept as the origin of <see cref="LabelToMark"/> and of
+        /// <see cref="BottomMenu.Metrics"/>'s own doubling; nothing lays out
+        /// against them here any more.</summary>
         public const double RowMarkSize = 15, RowFontSize = 12.5;
         /// <summary>The word beside a mark ON THE BAR - 11.9's "Cancel Editing".
         ///
@@ -230,9 +264,17 @@ public sealed class SelectionChrome
     private readonly Rectangle[] _guides = new Rectangle[4];
     private readonly Ellipse[] _handles = new Ellipse[4];
     private readonly Border _bar;
+    /// <summary><b>17.9's mode bar, and still this presentation's row.</b> The
+    /// row was Rotate / Scale / Filter floating under the subject; 17.9 moves it
+    /// to the bottom of the SCREEN and makes its three marks modes. It is not
+    /// re-homed into another class on the way, because it still appears with a
+    /// selection, disappears with it, and greys on the same locked rule as the
+    /// bar above - it is the selection presentation's row that now lives
+    /// somewhere else. <see cref="BottomMenu"/> owns only where it goes and what
+    /// may cover it.</summary>
     private readonly Border _row;
     private readonly StackPanel _barItems = new() { Orientation = Orientation.Horizontal, Spacing = 0 };
-    private readonly StackPanel _rowItems = new() { Orientation = Orientation.Horizontal, Spacing = 10 };
+    private readonly StackPanel _rowItems = BottomMenu.Items();
 
     private Mode _mode = Mode.None;
 
@@ -278,12 +320,17 @@ public sealed class SelectionChrome
         }
 
         _bar = Plate(_barItems, Metrics.BarHeight);
-        _row = Plate(_rowItems, 0);
-        _row.Padding = new Thickness(12, 5, 12, 5);
+        // 17.9: the row is NOT added to this layer and is NOT placed by Place().
+        // It goes to the bottom of the screen, which is a different surface with
+        // a different origin - see BottomMenu, and see _row's own remarks for why
+        // it is still built here.
+        _row = BottomMenu.Plate(_rowItems);
         _layer.Children.Add(_bar);
-        _layer.Children.Add(_row);
         _bar.SizeChanged += (_, _) => Place();
-        _row.SizeChanged += (_, _) => Place();
+        // The stack changed under the row: whether it is the visible page, and
+        // whether the page above it shows a back button, are BottomMenu's answers
+        // and they change without the selection changing.
+        BottomMenu.Changed += Build;
 
         SelectionState.Changed += Sync;
         // 11.9's trigger. Which box is being edited, and where that box is, are
@@ -421,24 +468,55 @@ public sealed class SelectionChrome
         _barItems.Children.Add(Mark(Icons.FlipVertical, "Flip vertical", !locked, () => _h.Flip(false), ink,
             deadTip: "The selection is locked"));
 
-        _rowItems.Children.Clear();
-        _rowItems.Children.Add(Word(Icons.Rotate, "Rotate", !locked, _h.Rotate, ink,
-            deadTip: "The selection is locked"));
-        // SCALE AND FILTER ARE PRESENT AND DEAD, and that is a decision rather
-        // than an omission. 16.2 specifies this row's CONTENT and nowhere in
-        // section 16 says what pressing either one does. Scaling already exists
-        // as the corner drag, so a second route needs an interaction the
-        // reference does not describe; and Quill has no image filters at all, so
-        // Filter has nothing to open. Both grey on the same rule the rest of
-        // this surface follows - a control the subject cannot act through says
-        // so - rather than looking live and doing nothing, which 16.3 calls out
-        // by name as the worse of the two.
-        _rowItems.Children.Add(Word(Icons.Scale, "Scale", false, () => { }, ink,
-            deadTip: "Drag a corner handle to scale"));
-        _rowItems.Children.Add(Word(Icons.Filter, "Filter", false, () => { }, ink,
-            deadTip: "No filters yet"));
+        BuildModeBar(locked);
 
         _ = s;   // the subject drives WHICH marks are live via the flags above
+    }
+
+    /// <summary>17.9's three-part mode bar: Rotate on/off, Scale on/off and
+    /// stretch, Filter into the colour picker.
+    ///
+    /// <para><b>A mode that is on grows the control that qualifies it, to its
+    /// right.</b> Rotate on adds a quarter turn; Scale on adds uniform/stretch.
+    /// That is not invented here - it is the shape 17.10 gives the mouse tool,
+    /// where choosing Lasso makes Partial/Complete appear beside it - so the two
+    /// menus teach the same gesture rather than each teaching its own.</para>
+    ///
+    /// <para><b>No back button.</b> Not by omission: this is the bottom of the
+    /// stack, so <see cref="BottomMenu.Lead"/> yields nothing for it, and it is
+    /// asked the same question every other page is asked.</para></summary>
+    private void BuildModeBar(bool locked)
+    {
+        var menu = BottomMenu.Current;
+        _rowItems.Children.Clear();
+        if (menu == null) return;
+        foreach (var lead in menu.Lead(BottomPage.Modes)) _rowItems.Children.Add(lead);
+
+        bool rotate = _h.RotateMode();
+        _rowItems.Children.Add(BottomMenu.Cell(Icons.Rotate, "Rotate", rotate,
+            () => _h.SetRotateMode(!rotate), live: !locked,
+            tip: locked ? "The selection is locked"
+                        : "Drag around the subject to turn it; tap it to turn a quarter"));
+        if (rotate && !locked)
+            _rowItems.Children.Add(BottomMenu.Cell(Icons.UndoRound, "Quarter", false,
+                _h.Rotate, tip: "Turn a quarter, without dragging"));
+
+        bool scale = _h.ScaleMode();
+        _rowItems.Children.Add(BottomMenu.Cell(Icons.Scale, "Scale", scale,
+            () => _h.SetScaleMode(!scale), live: !locked,
+            tip: locked ? "The selection is locked"
+                        : "Drag anywhere in the box to resize it from the opposite corner"));
+        if (scale && !locked)
+        {
+            bool stretch = _h.Stretch();
+            _rowItems.Children.Add(BottomMenu.Toggle(stretch,
+                Icons.Scale, "Uniform", Icons.ScaleStretch, "Stretch",
+                on => _h.SetStretch(on),
+                tip: "Uniform keeps the aspect; stretch frees it"));
+        }
+
+        _rowItems.Children.Add(BottomMenu.Cell(Icons.Filter, "Filter", false, _h.OpenFilter,
+            tip: "Colour and alpha"));
     }
 
     private FrameworkElement Divider() => new Rectangle
@@ -589,6 +667,12 @@ public sealed class SelectionChrome
             foreach (var g in _guides) g.Visibility = deco;
             foreach (var e in _handles) e.Visibility = deco;
             _row.Visibility = deco;
+            // 17.9: and the row is PUBLISHED or RETRACTED, because it no longer
+            // lives on this layer and collapsing a plate the bottom surface is
+            // still showing would leave that surface displaying nothing rather
+            // than falling through to the page underneath.
+            if (want == Mode.Selection) BottomMenu.Current?.Publish(BottomPage.Modes, _row);
+            else BottomMenu.Current?.Retract(BottomPage.Modes);
         }
         if (want == Mode.None) return;
         Build();     // lock state and subject kind decide which marks are live
@@ -677,10 +761,10 @@ public sealed class SelectionChrome
         Put(_handles[2], x1 - r, y1 - r);
         Put(_handles[3], x0 - r, y1 - r);
 
-        // THE ROW, centred below.
-        double rw = _row.ActualWidth > 0 ? _row.ActualWidth : _row.DesiredSize.Width;
-        double rh = _row.ActualHeight > 0 ? _row.ActualHeight : 30;
-        Put(_row, Clamp(cx - rw / 2, vw - rw), Clamp(y1 + Metrics.Gap, vh - rh));
+        // NOTHING FLOATS BELOW THE SUBJECT (17.9). The row that used to be
+        // centred here is now the screen-bottom mode bar and is placed by
+        // BottomMenu against the window, not against these bounds - so there is
+        // deliberately no third use of WorldToScreen in this method.
     }
 
     private static double Clamp(double v, double max) =>
