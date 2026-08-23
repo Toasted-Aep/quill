@@ -359,8 +359,26 @@ def tools():
     code = strip_comments(ink)
     check("17.11 - pan reuses the one place the view offset moves",
           "_mousePanning = true" in strip_comments(safe_body(ink, "private void OnPointerPressed(")))
-    check("17.11 - a rotate tap turns once and a sweep turns per quarter",
-          "_rotateTurned" in code and "RotateSelectionQuarter(clockwise: d > 0)" in code)
+    # 17.11a requirement 2 REPLACED what this used to pin. The sweep was
+    # quartered because "a TextElement is an axis-aligned box that takes no
+    # rotation at all"; it has carried Rotation since #20, so the sweep is now
+    # free-angle and this pins the three facts that makes true:
+    #
+    #   1. the drag commits an ARBITRARY angle, through RotateFreeMixedAction;
+    #   2. it is ONE action for the whole gesture, not one per detent crossed -
+    #      the live turn is un-applied before the action is built, which is the
+    #      only way a single action can hold the gesture's start state without
+    #      snapshotting every stroke point at press;
+    #   3. the quarter turn SURVIVES as the mode bar's button. A free sweep that
+    #      deleted RotateSelectionQuarter would leave that switch dead, which is
+    #      the same failure the old comment here was guarding against.
+    rot_release = strip_comments(safe_body(ink, "private void CommitGesture("))
+    check("17.11a - the rotate sweep is FREE-angle, one action per gesture, and "
+          "the quarter turn survives as the mode bar's button",
+          "RotateFreeMixedAction" in code
+          and "_rotateTurnedDeg" in code
+          and "SpinRotateSubject(-total)" in rot_release
+          and "public void RotateSelectionQuarter(" in code)
     undo = strip_comments(read(UNDO))
     check("one flag rather than three clockwise turns for one anticlockwise "
           "turn - three turns is three undo entries for one gesture",
