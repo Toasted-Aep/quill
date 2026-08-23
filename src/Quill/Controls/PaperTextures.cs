@@ -134,6 +134,59 @@ public static class PaperTextures
     }
 
     // =======================================================================
+    // The custom page colour (§9.5, §17.3)
+    // =======================================================================
+    //
+    // Two surfaces offer it - the settings panel's swatch row and the top bar's
+    // Page settings flyout - and §17.3 says to "match it exactly rather than
+    // inventing a second convention", so the convention lives HERE and both
+    // read it. It is one stored colour and two questions about it.
+    //
+    // NOTHING IN THIS BLOCK MAY DERIVE THE COLOUR FROM THE PAGE. That is the
+    // defect 17.3 names: the control mirrored whatever the page happened to be,
+    // so it had nothing of the user's to apply and every press opened the wheel.
+    // The page appears below only in the "is it currently applied" question,
+    // which is about the SELECTION RING, not about the colour.
+
+    /// <summary>The colour the user last chose for a custom page background, or
+    /// null when they have never chosen one.
+    ///
+    /// <para>§17.3: it "keeps holding it when the page colour changes by other
+    /// means" - a paper, a preset, a notebook default, the theme toggle. Those
+    /// all move <c>NotePage.Background</c> and none of them touch this.</para></summary>
+    public static Color? CustomColour(Models.Library lib) =>
+        string.IsNullOrWhiteSpace(lib.CustomPageColor) ? null : ColorUtil.Parse(lib.CustomPageColor);
+
+    /// <summary>True when the page is currently ON the remembered colour, which
+    /// is what "already selected" means in §9.5's second press. Not "some plain
+    /// colour is showing" - that would light the custom swatch up whenever the
+    /// page happened to match, and Plain White would select two swatches at
+    /// once.</summary>
+    public static bool CustomApplied(Models.Library lib, Models.NotePage? page) =>
+        CustomColour(lib) != null &&
+        string.IsNullOrEmpty(page?.Paper) &&
+        string.Equals(page?.Background, lib.CustomPageColor, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>§9.5's rule as one answer: does this press APPLY the remembered
+    /// colour, or open the wheel to EDIT it? The first press applies, a press
+    /// while it is already applied edits - and a colour never set has nothing to
+    /// apply, so that one first press edits too.</summary>
+    public static bool CustomPressEdits(Models.Library lib, Models.NotePage? page) =>
+        CustomColour(lib) == null || CustomApplied(lib, page);
+
+    /// <summary>Where the wheel STARTS when it opens. The remembered colour if
+    /// there is one; otherwise the page, because a picker has to open somewhere
+    /// and the page is the most useful place to begin editing from. This is a
+    /// seed for one gesture, never what the control displays - see the block
+    /// comment.</summary>
+    public static Color CustomSeed(Models.Library lib, Models.NotePage? page) =>
+        CustomColour(lib) ?? Ground(page);
+
+    /// <summary>The one writer of the remembered colour.</summary>
+    public static void RememberCustom(Models.Library lib, Color c) =>
+        lib.CustomPageColor = ColorUtil.ToHex(c);
+
+    // =======================================================================
     // Cache
     // =======================================================================
 

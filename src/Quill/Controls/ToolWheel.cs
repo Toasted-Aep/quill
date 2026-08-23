@@ -151,6 +151,25 @@ public sealed class ToolWheel
     // long label cannot reach its neighbour's separator.
     private const double LabelW = 46;
 
+    // 17.4: the diameter of a mark's page-coloured seat.
+    //
+    // It has to cover the mark's INK, and the marks do not fill their 24 grid
+    // evenly - scratchpad/mark_holes.py measures the reach of every one of them
+    // from the box's centre and the worst is StrokeChisel at 13.53 grid units,
+    // which is 25.93 DIP across at MarkBox 23. Rounded up to 26, and the two
+    // clearances that bound it from either side, measured on the constants above
+    // rather than guessed:
+    //
+    //     inner edge  MarkR - 13 = 59.14   the colour arcs reach 59.44
+    //     outer edge  MarkR + 13 = 85.14   the size labels' line box starts 85.04
+    //     and 29.21 DIP of clear page between one seat and the next
+    //
+    // Both overlap by a fraction of a DIP, and both are harmless because the
+    // seat is added to the canvas FIRST - before the sectors, the arcs, the pop
+    // and the marks - so everything it meets is painted over it, and the hover
+    // tint still composites on top instead of being hidden underneath.
+    private const double SeatSize = 26;
+
     // §1.4 inner disc, all offsets in units of r = RingIn.
     private const double DiscR = RingIn;
     // 14.1 SUPERSEDES §1.4's row table for all three readouts.
@@ -210,17 +229,18 @@ public sealed class ToolWheel
     // 16.4: "when one is unavailable, its glyph and value move to the middle of
     // that section". The section is the same annular quadrant HoverGeometry
     // draws and Aim resolves - see the quadrant table below - so its middle is
-    // the mid-radius point on the quadrant's own midline, and the glyph and its
-    // value are stacked as ONE block centred there. Disabled the value is "-",
-    // so the split that exists to separate a mark from its number has nothing
-    // left to separate.
+    // the mid-radius point on the quadrant's own midline.
+    //
+    // 17.14 SETTLES WHAT SITS THERE. 16.4's centring "is right and the user said
+    // so"; what was still wrong is that the readout showed "-". With the dash
+    // gone the disabled state has NO value at all, so there is no stack to
+    // centre - the two offsets that balanced a 16.8 glyph over a 12.0 value line
+    // (-7.00 and +9.25) described a block that no longer exists, and keeping the
+    // glyph at -7 would leave it sitting 7 DIP high in its own section. THE
+    // GLYPH IS THE WHOLE MARK NOW, and it centres on the section's middle.
     private const double SectionR = (DotR + DiscR) / 2;             // 37.97
-    // The stack: 16.8 glyph, 2.0 gap, 12.0 value line = 30.8 tall. These two
-    // are the glyph's centre and the value's baseline anchor as offsets from
-    // the section's middle; they put the stack's own centre there to within
-    // 0.01 DIP.
-    private const double DisabledGlyphDy = -7.00;
-    private const double DisabledValueDy = 9.25;
+    // The gap between a mark and its number, wherever the two are a row.
+    private const double SetGap = 5;
     // Icons.Mark draws at the authored 24-grid scale instead of stretching the
     // geometry to the box - that stretch WAS the K.5 defect - so a mark that
     // does not fill its grid now comes out at its true size. The boxes grow to
@@ -406,6 +426,10 @@ public sealed class ToolWheel
     // ---- painted parts -------------------------------------------------
     private readonly Ellipse _shadow = new();
     private readonly Path[] _sector = new Path[Slots];
+    // 17.4: one flat, page-coloured plate per slot, UNDER the sector fill. On a
+    // dark ground section 7 takes that fill away and a mark is left sitting on
+    // the raw page - see the note on SeatSize.
+    private readonly Ellipse[] _seat = new Ellipse[Slots];
     private readonly Path[] _sep = new Path[Slots];
     private readonly Ellipse _ringEdge = new();
     private readonly Path _pop = new();            // the active sector, at 1.19 R
@@ -821,6 +845,31 @@ public sealed class ToolWheel
         // remain. The inner disc stays opaque in every case.
         var ringFill = dark ? Colors.Transparent : Mix(surface, PageTheme.Ground, 0.62);
 
+        // ---- 17.4: what is actually BEHIND a mark ------------------------
+        //
+        // THE DEFECT. On a dark ground the line above gives the ring no fill at
+        // all, so a sector mark has nothing behind it but the page - grain, grid
+        // and all - and the marks that are authored with even-odd counters show
+        // it straight through themselves: Text's bowl is 20% of the mark, the
+        // eraser's worn face 16%, Mix's lens 24%. A pen's mark is worse: it is
+        // painted at THE PEN'S OWN OPACITY (60..255 alpha, below), so on a
+        // transparent sector it composites onto the page and is literally
+        // translucent. In light mode none of this shows, because the sector
+        // underneath is opaque.
+        //
+        // Section 0's warning, exactly: the code below used to resolve the mark's
+        // seat from PageTheme.Surface - the INNER DISC's token - because the
+        // ring's own has no definition on the dark side. A colour taken from the
+        // wrong token is how a mark ends up judged against a backdrop it is not
+        // on, and the contrast test that decides whether a pen keeps its own ink
+        // was reading the disc while the mark sat on the page.
+        //
+        // THE FIX, 17.4 and 17.2 as one thing: give the mark a ground that mimics
+        // the page colour and deliberately does NOT continue the page's texture.
+        // The seat is then a real colour on both sides, and the contrast test is
+        // finally asking about the surface the mark is standing on.
+        var markSeat = dark ? PageTheme.Ground : ringFill;
+
         _shadow.Fill = ShadowBrush();
         _disc.Fill = new SolidColorBrush(surface);
         // §1.1 calls this "Outline at 40%". Read literally that is 0.14 x 0.40 =
@@ -855,6 +904,16 @@ public sealed class ToolWheel
                 : ringFill);
             _sector[i].Opacity = live ? 1 : 0;
 
+            // 17.4: the seat, in the PAGE's own flat colour. Only where the ring
+            // has no fill to seat the mark on - on a light ground the sector is
+            // already opaque and a page-coloured disc there would be a plate the
+            // reference does not have. It follows the mark's own opacity so an
+            // unassigned cell's muted + does not get a full-strength plate, and
+            // it carries no texture: that discontinuity is 17.2's whole trick,
+            // and continuing the grain across it would undo the fix.
+            _seat[i].Fill = new SolidColorBrush(PageTheme.Ground);
+            _seat[i].Opacity = dark && !act ? (live ? 1 : id.Length == 0 ? 0.45 : 0) : 0;
+
             // §1.1: separators are hairlines in Outline from 0.70 R to 1.00 R,
             // and §7 keeps them when the ring itself has gone.
             _sep[i].Stroke = new SolidColorBrush(outline);
@@ -864,8 +923,12 @@ public sealed class ToolWheel
             // On the active sector both invert to Surface against the OnSurface
             // fill - that inversion IS the pop-out's other half.
             var fg = act ? surface : onSurface;
+            // 17.4: the popped sector paints its own opaque seat in OnSurface, so
+            // it needs no plate; every other sector needs one exactly when the
+            // ring has no fill of its own.
+            var seat = act ? onSurface : markSeat;
             _mark[i].Children.Clear();
-            var art = SlotArt(id, fg, act);
+            var art = SlotArt(id, fg, act, seat);
             if (art != null) _mark[i].Children.Add(art);
 
             var pen = PenOf(id);
@@ -928,17 +991,31 @@ public sealed class ToolWheel
         var sel = SelectionState.Current;
         string Read(Prop p, float? v, string suffix, float scale)
         {
-            if (!Enabled(p)) return "-";
             if (sel.Any) return v is { } n ? $"{n * scale:0.#}{suffix}" : "—";
             return "";
         }
+        // 17.14: A DISABLED READOUT SHOWS NOTHING, NOT A DASH. The "-" used to be
+        // produced inside Read, which asked Enabled itself; the guard is now
+        // enabled[] - the array Refresh has ALREADY read out of the one disabled
+        // predicate, three lines up - so removing the dash removed a call to that
+        // predicate rather than adding a second answer to the same question.
+        //
+        // The guard is also load-bearing for a second reason: ap is null whenever
+        // the active tool is not a pen, and the pen fallbacks below dereference
+        // it. Short-circuiting on enabled[] is what keeps them from being
+        // evaluated at all - the dash used to do that job by being non-empty.
         string[] read =
         {
-            Read(Prop.Size, sel.Size, " px", 1f) is { Length: > 0 } a0 ? a0
+            !enabled[0] ? ""
+                : Read(Prop.Size, sel.Size, " px", 1f) is { Length: > 0 } a0 ? a0
                 : eraser ? (lib.EraserSize <= 0 ? Loc.T("Wheel.Auto") : $"{lib.EraserSize:0} px")
                 : $"{ap!.Size:0.#} px",
-            Read(Prop.Opacity, sel.Opacity, "%", 100f) is { Length: > 0 } a1 ? a1 : $"{ap!.Opacity * 100:0}%",
-            Read(Prop.Smooth, sel.Stability, "%", 100f) is { Length: > 0 } a2 ? a2 : $"{ap!.Stabiliser * 100:0}%",
+            !enabled[1] ? ""
+                : Read(Prop.Opacity, sel.Opacity, "%", 100f) is { Length: > 0 } a1 ? a1
+                : $"{ap!.Opacity * 100:0}%",
+            !enabled[2] ? ""
+                : Read(Prop.Smooth, sel.Stability, "%", 100f) is { Length: > 0 } a2 ? a2
+                : $"{ap!.Stabiliser * 100:0}%",
         };
 
         Glyph(_sizeGlyph, Icons.Size, enabled[0] ? onSurface : muted, stroked: false);
@@ -1108,19 +1185,23 @@ public sealed class ToolWheel
     ///
     /// <para>16.4: the size row is already a centred pair, so being unavailable
     /// costs it no rearrangement - only the 2.73 DIP that separates 14.1's
-    /// Row1Y from the middle of the top section. The readout is "-" by then, so
-    /// the pair is narrow and the move is the whole of what 16.4 asks for
-    /// here.</para></summary>
+    /// Row1Y from the middle of the top section.</para>
+    ///
+    /// <para>17.14: and the readout is EMPTY by then, not "-", so the pair is
+    /// the glyph and nothing else. The 5 DIP that separates a mark from its
+    /// number has to go with the number, or the glyph would centre 2.5 DIP left
+    /// of the midline - the gap holding a place for a readout that is not
+    /// there.</para></summary>
     private void LayoutSizeRow(bool enabled)
     {
         _sizeText.Measure(new Size(200, 40));
         double tw = _sizeText.DesiredSize.Width;
-        double total = SetBox + 5 + tw;
+        double total = SetBox + (tw > 0 ? SetGap + tw : 0);
         double x = Half - total / 2;
         double y = enabled ? Row1Y : SectionMid(Prop.Size).Y;
         Canvas.SetLeft(_sizeGlyph, x);
         Canvas.SetTop(_sizeGlyph, Half + y - SetBox / 2);
-        Canvas.SetLeft(_sizeText, x + SetBox + 5);
+        Canvas.SetLeft(_sizeText, x + SetBox + SetGap);
         Canvas.SetTop(_sizeText, Half + y - ReadoutSize * 0.72);
     }
 
@@ -1213,6 +1294,20 @@ public sealed class ToolWheel
         Canvas.SetLeft(_shadow, Half - RingOut - 14);
         Canvas.SetTop(_shadow, Half - RingOut - 14 + 2);
         _wheel.Children.Add(_shadow);
+
+        // 17.4's seats go in BEFORE the sectors, which is the whole reason they
+        // work: the sector fill is transparent on a dark ground, so the seat
+        // shows through it, and the hover tint - which is painted ON the sector -
+        // composites over the seat instead of being buried under it.
+        for (int i = 0; i < Slots; i++)
+        {
+            var at = Pt(SlotMid(i), MarkR);
+            var s = new Ellipse { Width = SeatSize, Height = SeatSize, IsHitTestVisible = false };
+            Canvas.SetLeft(s, at.X - SeatSize / 2);
+            Canvas.SetTop(s, at.Y - SeatSize / 2);
+            _seat[i] = s;
+            _wheel.Children.Add(s);
+        }
 
         for (int i = 0; i < Slots; i++)
         {
@@ -1441,10 +1536,13 @@ public sealed class ToolWheel
             PlaceValue(value, side * ValueX, ValueY);
             return;
         }
-        // 16.4: the pair stacks and centres in its section.
+        // 16.4 as 17.14 leaves it: the GLYPH centres in its section. The value
+        // is empty, so it is parked on the same point rather than under it - a
+        // TextBlock holding "" paints nothing, and leaving it at its enabled
+        // position would strand an invisible box out on the rim.
         var c = SectionMid(p);
-        PlaceBox(glyph, c.X, c.Y + DisabledGlyphDy, SetBox);
-        PlaceValue(value, c.X, c.Y + DisabledValueDy);
+        PlaceBox(glyph, c.X, c.Y, SetBox);
+        PlaceValue(value, c.X, c.Y);
     }
 
     private static Brush ShadowBrush()
@@ -1897,10 +1995,10 @@ public sealed class ToolWheel
     /// text disables all three and the eraser disables two.</para>
     ///
     /// <para>16.4's centred layout hangs off this one predicate, as do the muted
-    /// brush and the "-" readout: Refresh reads it once into <c>enabled[]</c>
-    /// and every consequence follows from that array. A parallel notion of
-    /// "disabled" would give the dial two disagreeing answers, and 16.4's layout
-    /// would follow only one of them.</para></summary>
+    /// brush and the BLANK readout 17.14 replaced the dash with: Refresh reads it
+    /// once into <c>enabled[]</c> and every consequence follows from that array.
+    /// A parallel notion of "disabled" would give the dial two disagreeing
+    /// answers, and 16.4's layout would follow only one of them.</para></summary>
     private bool Enabled(Prop p)
     {
         if (SelectionState.Current is { Any: true } sel)
@@ -2440,12 +2538,12 @@ public sealed class ToolWheel
     /// <summary>§1.3: the stroke silhouette for a sector, in the tool's OWN
     /// colour, grey for a non-drawing tool. On the active (popped) sector it
     /// inverts to Surface, because the sector beneath it is OnSurface.</summary>
-    private FrameworkElement? SlotArt(string id, Color fg, bool inverted)
+    private FrameworkElement? SlotArt(string id, Color fg, bool inverted, Color seat)
     {
         // 11.2 item 11's unassigned cell.
         if (id.Length == 0)
             return Icons.Mark(Icons.Plus, fg, MarkBox * 0.62, stroked: true, thickness: 2.2);
-        if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg, inverted);
+        if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg, inverted, seat);
         if (id.StartsWith(KindTool, StringComparison.Ordinal))
             return Icons.Mark(Icons.Tool(id[KindTool.Length..]), fg, MarkBox);
         if (id.StartsWith(KindCmd, StringComparison.Ordinal)) return CmdArt(id[KindCmd.Length..], fg, MarkBox);
@@ -2456,7 +2554,7 @@ public sealed class ToolWheel
     /// silhouette of its mark (tapered for a nib, chisel for a marker, grainy for
     /// a pencil, even and round-ended for a ballpoint), painted in the pen's own
     /// colour. Not the pen-body chip, and not a live render.</summary>
-    private static FrameworkElement? PenStrokeMark(PenPreset p, Color fg, bool inverted)
+    private static FrameworkElement? PenStrokeMark(PenPreset p, Color fg, bool inverted, Color seat)
     {
         try
         {
@@ -2464,7 +2562,15 @@ public sealed class ToolWheel
             // On the popped sector the seat is OnSurface, so the pen's own colour
             // would frequently be invisible; there the mark inverts wholesale.
             // Off it, only a genuine contrast collapse forces the fallback.
-            var seat = inverted ? PageTheme.OnSurface : PageTheme.Surface;
+            //
+            // 17.4: THE SEAT IS PASSED IN NOW. It used to be read off
+            // PageTheme.Surface - the inner disc's colour - which is not what a
+            // RING mark sits on in either theme, and on a dark ground is not even
+            // close: the ring has no fill there, so the mark sits on the page.
+            // A pen whose ink was dark but not quite as dark as the disc failed
+            // the test by a hair, kept its own ink, and vanished into a black
+            // page. Section 0 names this: a colour resolved from a token that
+            // does not describe the surface in question.
             var paint = inverted || Math.Abs(Lum(ink) - Lum(seat)) < 0.14 ? fg : ink;
             paint.A = (byte)Math.Clamp(255 * Math.Clamp(p.Opacity, 0.2f, 1f), 60, 255);
             return Icons.Mark(Icons.PenStroke(p.Pen), paint, MarkBox);
