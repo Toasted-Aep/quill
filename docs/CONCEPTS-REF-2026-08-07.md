@@ -805,7 +805,10 @@ both already correct.** What is wrong is the split between the rings.
 
 54. **Quick-action buttons above the text bubble** for text modification, per
     the screenshot: a `Cancel Editing` affordance with a red X, and a row of
-    attach / duplicate / lock / delete marks.
+    **paperclip / padlock / duplicate / waste bin** marks — §16.2's order, which
+    this originally contradicted at positions 2 and 3. §16.2 was transcribed
+    from the capture and wins; two orders for the same four marks, on two
+    surfaces reached for the same object, is a defect either way.
 
 ### 11.10 New, larger pieces
 
@@ -3432,12 +3435,10 @@ no layers panel and this section does not describe one** — it describes the da
 what happens to the pages that already exist, and the five places the four
 features attach.
 
-> **This section was written as 17 and renumbered to 18.** Commit `a2659e0` on
-> `integration` carried a message describing the Measurement menu, the bottom
-> bar and a correction pass while the 268 lines it added were this layers
-> section; `42b00ab` restored the section that message described, and this one
-> moved out of its way. Both are now in the file — §17 is the correction pass,
-> §18 is the model. See §18.1 for the seam §17.10's All/Active is built on.
+> Written as 17 and renumbered to 18 once `42b00ab` put the correction pass into
+> section 17, where its commit message had always said it was. If you are here
+> for the mode bar's layer scope, it is 18.1 and it is the first thing in this
+> section for that reason.
 
 ### 18.1 THE SCOPE SEAM — read this first if you are building the mode bar
 

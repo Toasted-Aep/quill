@@ -98,6 +98,19 @@ public sealed class FullscreenChrome
         /// <summary>Hit target per mark. Wider than tall, again like a caption
         /// button rather than like the bars' 42 DIP square slots.</summary>
         public const double MarkPitch = 46;
+        /// <summary>How many marks <see cref="Build"/> puts in the strip:
+        /// minimise, exit fullscreen, close. Build asserts against this in debug
+        /// builds, so the two cannot drift apart silently.</summary>
+        public const int MarkCount = 3;
+        /// <summary>The strip's width, DERIVED rather than written down.
+        ///
+        /// <para>§17.15 reserves this much of the top bar's right end so the
+        /// strip can never come down over a live control. That reservation and
+        /// this strip have to agree, and a second copy of "138" in MainWindow is
+        /// exactly how two numbers that must agree stop agreeing — the same
+        /// reasoning that already made the format bar read
+        /// <see cref="StripHeight"/> from here instead of writing 34.</para></summary>
+        public const double StripWidth = MarkPitch * MarkCount;
         /// <summary>15 DIP, and the exit-fullscreen mark's weights were chosen
         /// against exactly this number rather than against a large preview —
         /// see <see cref="Icons.FullscreenExit"/>.</summary>
@@ -237,6 +250,12 @@ public sealed class FullscreenChrome
         // and not a font glyph.
         _row.Children.Add(Mark(Icons.FullscreenExit, "Exit full screen", _h.ExitFullscreen));
         _row.Children.Add(Mark(Icons.Close, "Close", _h.Close, stroked: true, close: true));
+        // Metrics.StripWidth is MarkPitch * MarkCount, and §17.15's reservation in
+        // the top bar is derived from it. If a fourth mark is ever added here and
+        // the count is not moved with it, the reservation silently stops covering
+        // the strip and the strip starts landing on a live control again.
+        Debug.Assert(_row.Children.Count == Metrics.MarkCount,
+                     "FullscreenChrome.Metrics.MarkCount must match what Build() adds.");
     }
 
     private Button Mark(string geometry, string tip, Action click, bool stroked = false, bool close = false)
@@ -330,7 +349,10 @@ public sealed class FullscreenChrome
 
     private bool OverStrip(Point p)
     {
-        double w = _strip.ActualWidth > 0 ? _strip.ActualWidth : Metrics.MarkPitch * 3;
+        // Metrics.StripWidth, not a second `MarkPitch * 3`: this fallback, the
+        // strip's real width and §17.15's reservation in the top bar are three
+        // readings of one number.
+        double w = _strip.ActualWidth > 0 ? _strip.ActualWidth : Metrics.StripWidth;
         double left = _root.ActualWidth - w - Metrics.StripSlack;
         return p.X >= left && p.Y <= Metrics.StripHeight + Metrics.StripSlack;
     }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Quill.Models;
 
 namespace Quill.Services;
@@ -39,7 +40,16 @@ public static class LibraryStore
         public double WinW { get; set; }
         public double WinH { get; set; }
         public bool WinMaximized { get; set; } = true;
-        public bool StartFullscreen { get; set; } = true;
+        public bool StartMaximised { get; set; } = true;
+        /// <summary>Pre-rename key. Nullable, null-getter, never written back —
+        /// see <see cref="Library.StartFullscreen"/> for why it has to be all
+        /// three.</summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? StartFullscreen
+        {
+            get => null;
+            set { if (value is bool v) StartMaximised = v; }
+        }
     }
 
     private static AppSettings? _settings;
@@ -183,6 +193,19 @@ public static class LibraryStore
             return !string.IsNullOrWhiteSpace(f) ? f! : AnchorDir;
         }
     }
+
+    /// <summary>True when QUILL_DATA_FOLDER is redirecting this process, which
+    /// is this app's one signal for "an isolated instance, not the user's".
+    ///
+    /// <para>Exists so that state kept OUTSIDE the data folder can follow the
+    /// isolation too. <see cref="SyncLog"/> keeps its per-device read cursors in
+    /// %LOCALAPPDATA% on purpose, and <see cref="Save"/> writes them on every
+    /// save — so a headless harness was rewriting the real user's cursors from
+    /// its own empty copy, which is the roadmap's replay risk arriving by the
+    /// front door. Isolation that leaves one foot in the user's folder is not
+    /// isolation; the same sentence already justifies the anchor following this
+    /// variable (see <see cref="AnchorDir"/>).</para></summary>
+    public static bool IsIsolated => EnvFolder != null;
 
     // Old hidden location (from the LectureInk era) — migrated/imported once,
     // then kept as a read fallback. Deliberately NOT renamed to Quill.
@@ -534,7 +557,7 @@ public static class LibraryStore
     {
         "DefaultBackground", "DefaultGrid", "DefaultGridSpacing", "DefaultPaper",
         "Theme", "ThemeSource", "Language", "DefaultFont", "DefaultFontSize", "PenDock",
-        "NotebookPanelW", "NotebookPanelH", "StartFullscreen", "StartOnGallery",
+        "NotebookPanelW", "NotebookPanelH", "StartMaximised", "StartOnGallery",
         "AccentColor", "TouchMode", "Liquidness", "RecentColors", "CustomColors",
         "Palettes", "ColorUses",
         "LastEraserMode", "LastEraserStyle", "EraserSize", "GlowMode",
@@ -546,6 +569,22 @@ public static class LibraryStore
         "MeasureSystem", "MeasureUnit", "MeasureFormat", "MeasurePrecision",
         "ShowStrokeLength", "ShowSelectionScale", "CustomPageColor",
         "WinX", "WinY", "WinW", "WinH", "WinMaximized"
+    };
+
+    /// <summary>New name -> the name that key had in a settings.json written
+    /// before it was renamed. The mirror is keyed by REFLECTION NAME, so a rename
+    /// silently orphans the stored value: the new name misses, the setting falls
+    /// back to whatever library.json holds, and since the mirror exists precisely
+    /// because library.json can be a stale snapshot, that is the case where the
+    /// user's choice is lost. <see cref="Library.StartFullscreen"/>'s legacy
+    /// property covers library.json; this covers the mirror.
+    ///
+    /// <para>Read-only compatibility: <see cref="PersistSettings"/> builds a fresh
+    /// dictionary from the CURRENT names, so the old key is gone from the file
+    /// after the first save either way.</para></summary>
+    private static readonly Dictionary<string, string> RenamedSettings = new()
+    {
+        ["StartMaximised"] = "StartFullscreen",
     };
 
     private static IEnumerable<System.Reflection.PropertyInfo> SettingProps()
@@ -597,7 +636,9 @@ public static class LibraryStore
             if (stored == null) { PersistSettings(lib); return; }
             foreach (var p in SettingProps())
             {
-                if (!stored.TryGetValue(p.Name, out var el)) continue;
+                if (!stored.TryGetValue(p.Name, out var el) &&
+                    !(RenamedSettings.TryGetValue(p.Name, out var was) &&
+                      stored.TryGetValue(was, out el))) continue;
                 // a hand-edited or older settings.json must never break startup
                 try { p.SetValue(lib, JsonSerializer.Deserialize(el.GetRawText(), p.PropertyType, Opts)); }
                 catch { }
@@ -613,7 +654,7 @@ public static class LibraryStore
         var h = Settings.Ui ??= new UiHints();
         h.Theme = lib.Theme; h.OledBlack = lib.OledBlack; h.Accent = lib.AccentColor;
         h.WinX = lib.WinX; h.WinY = lib.WinY; h.WinW = lib.WinW; h.WinH = lib.WinH;
-        h.WinMaximized = lib.WinMaximized; h.StartFullscreen = lib.StartFullscreen;
+        h.WinMaximized = lib.WinMaximized; h.StartMaximised = lib.StartMaximised;
     }
 
     /// <summary>Blocks briefly until the last queued write hits disk — called
