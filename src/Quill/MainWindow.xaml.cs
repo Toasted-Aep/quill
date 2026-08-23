@@ -81,7 +81,19 @@ public sealed partial class MainWindow : Window
     private BottomMenu? _bottomMenu;
     private readonly StackPanel _toolMenuItems = BottomMenu.Items();
     private readonly StackPanel _pickerMenuItems = BottomMenu.Items();
-    private Border? _toolMenuPlate, _pickerMenuPlate;
+    private readonly StackPanel _rotateMenuItems = BottomMenu.Items();
+    private Border? _toolMenuPlate, _pickerMenuPlate, _rotateMenuPlate;
+    // Which tool's menu is currently on BottomPage.Tool. Only a CHANGE of tool
+    // reopens that page, so backing out of one tool's menu does not swallow the
+    // next tool's - and a mere selection change, which re-syncs the surface for
+    // its own reasons, does not undo the back press either.
+    private ToolType? _bottomMenuTool;
+    /// <summary>The angle the rotate menu is currently SHOWING. 17.11a's value
+    /// moves on every pointer move, and the cell reports whole degrees, so the
+    /// menu is rebuilt when the printed string changes and not before - a
+    /// rebuild per pointer event would tear down twenty live elements a
+    /// frame.</summary>
+    private string? _rotateMenuShown;
     /// <summary>17.9 item 3's second half. On, a colour Filter applies keeps the
     /// alpha it was picked with; off, it lands fully opaque.</summary>
     private bool _filterAlpha = true;
@@ -829,12 +841,17 @@ public sealed partial class MainWindow : Window
         _bottomMenu = BottomMenu.Attach(RootGrid);
         _toolMenuPlate = BottomMenu.Plate(_toolMenuItems);
         _pickerMenuPlate = BottomMenu.Plate(_pickerMenuItems);
+        _rotateMenuPlate = BottomMenu.Plate(_rotateMenuItems);
         // Whether a page shows a back button depends on what is UNDER it, which
         // changes without either page changing - so both rebuild on the stack
         // rather than only when their own state moves.
-        BottomMenu.Changed += () => { BuildToolMenu(); BuildPickerMenu(); };
+        BottomMenu.Changed += () => { BuildToolMenu(); BuildPickerMenu(); BuildRotateMenu(); };
         ToolUiChanged += SyncBottomMenu;
         SelectionState.Changed += SyncBottomMenu;
+        // 17.11a's angle moves under the hand rather than on a click, so its
+        // report is driven by the surface rather than polled. BuildRotateMenu
+        // decides for itself whether the printed value actually changed.
+        Surface.PageRotationChanged += _ => ReportRotateAngle();
         SyncBottomMenu();
 
 
@@ -6407,6 +6424,16 @@ public sealed partial class MainWindow : Window
     {
         if (_bottomMenu == null) return;
 
+        // A CHANGE of tool reopens the Tool page. Backing out of the mouse
+        // menu must not leave the next tool's menu invisible, and Retract
+        // cannot do this job - it would also throw away the plate and rebuild
+        // the stack on every selection change.
+        if (_bottomMenuTool != Surface.Tool)
+        {
+            _bottomMenuTool = Surface.Tool;
+            _bottomMenu.Reopen(BottomPage.Tool);
+        }
+
         // 17.10's menu belongs to the MOUSE TOOL and to no other. A tool with
         // nothing to configure publishes nothing, which is what lets the mode
         // bar be the visible page while the pen is in hand.
@@ -6414,6 +6441,15 @@ public sealed partial class MainWindow : Window
         {
             BuildToolMenu();
             _bottomMenu.Publish(BottomPage.Tool, _toolMenuPlate);
+        }
+        // 17.11a's rotate tool has one thing to configure - whether its free
+        // rotation snaps at all - and one thing to REPORT, which is the angle it
+        // is driving. Both belong on the tool's own page rather than in the
+        // mode bar, which describes the selection.
+        else if (Surface.Tool == ToolType.Rotate && _rotateMenuPlate != null)
+        {
+            BuildRotateMenu();
+            _bottomMenu.Publish(BottomPage.Tool, _rotateMenuPlate);
         }
         else _bottomMenu.Retract(BottomPage.Tool);
 
@@ -6474,6 +6510,64 @@ public sealed partial class MainWindow : Window
             Icons.Layers, "All", Icons.LayerOne, "Active",
             on => { Surface.SelectScope = on ? LayerScope.ActiveLayer : LayerScope.AllLayers; BuildToolMenu(); },
             tip: "Select across every layer, or only the active one"));
+    }
+
+    /// <summary>17.11a's rotate tool menu: the angle the tool is driving,
+    /// whether that drive snaps at all, and a way to put the pivot back.
+    ///
+    /// <para><b>THE ANGLE CELL IS DEAD ON PURPOSE, and it is the same refusal
+    /// MeasurementMenu makes about its own 90/180/270 chips.</b> Quill has no
+    /// canvas rotation. The number here is what the tool's HANDLE is set to, not
+    /// what the page has turned to, and today those differ by all of it. A cell
+    /// that looked live would be claiming the second; a disabled one whose
+    /// tooltip says why claims only the first. The top bar's tilt readout is
+    /// untouched and still reads 0 degrees, because the canvas is still at 0
+    /// degrees - see <see cref="ChromeBars"/>'s <c>Tilt = () =&gt; 0</c>, which
+    /// this deliberately does not wire itself into.</para>
+    ///
+    /// <para>The DRAG's route in is <see cref="ReportRotateAngle"/>, which drops
+    /// the rebuild when the printed string has not moved. This method always
+    /// rebuilds, because everything else that calls it - the stack changing
+    /// under it, the snap being switched - changes something a string comparison
+    /// cannot see.</para></summary>
+    private void BuildRotateMenu()
+    {
+        if (_bottomMenu == null || Surface.Tool != ToolType.Rotate) return;
+        string shown = MeasurementMenu.Degrees(Surface.PageRotationDeg);
+        _rotateMenuShown = shown;
+
+        var items = _rotateMenuItems;
+        items.Children.Clear();
+        foreach (var lead in _bottomMenu.Lead(BottomPage.Tool)) items.Children.Add(lead);
+
+        items.Children.Add(BottomMenu.Cell(Icons.Tilt, shown, false, () => { },
+            tip: "The angle this tool is set to. The PAGE HAS NOT TURNED: Quill has no canvas " +
+                 "rotation yet, so this drives nothing and the top bar's tilt still reads 0°.",
+            stroked: true, live: false));
+
+        items.Children.Add(BottomMenu.Divider());
+
+        items.Children.Add(BottomMenu.Cell(Icons.Snap, "Snap", Surface.RotateSnap,
+            () => { Surface.RotateSnap = !Surface.RotateSnap; BuildRotateMenu(); },
+            tip: "Off, the rotation is free and has no detent anywhere - 0° included. " +
+                 "On, it steps by 15°."));
+
+        items.Children.Add(BottomMenu.Cell(Icons.Pivot, "Pivot", false,
+            () => Surface.ResetRotatePivot(),
+            tip: "Put the pivot back under the middle of the view. Drag the crosshair on the " +
+                 "canvas to place it anywhere.",
+            stroked: true));
+    }
+
+    /// <summary>The drag's route into the report. 17.11a's angle moves on every
+    /// pointer move and the cell prints WHOLE degrees, so a rebuild per event
+    /// would tear down and rebuild twenty live elements a frame for a string
+    /// that did not change. Dropping the ones that print the same is the whole
+    /// of it - there is no timer and nothing to keep in step.</summary>
+    private void ReportRotateAngle()
+    {
+        if (MeasurementMenu.Degrees(Surface.PageRotationDeg) == _rotateMenuShown) return;
+        BuildRotateMenu();
     }
 
     /// <summary>The colour picker's own bottom menu (17.9).

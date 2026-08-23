@@ -602,6 +602,29 @@ public static class Icons
     public const string Pan =
         "M12 1.6 16 6.6 13.8 6.6 13.8 10.2 17 10.2 17 8 22.4 12 17 16 17 13.8 13.8 13.8 13.8 17.4 16 17.4 12 22.4 8 17.4 10.2 17.4 10.2 13.8 7 13.8 7 16 1.6 12 7 8 7 10.2 10.2 10.2 10.2 6.6 8 6.6 Z";
 
+    /// <summary>The rotate tool's pivot (17.11a): four short strokes pointing
+    /// outward from an EMPTY centre - "four ticks around a gap, not a plus
+    /// sign", which is the reference's own distinction and the only thing that
+    /// separates this mark from <see cref="Guide"/>'s axes or a plain cross.
+    ///
+    /// <para><b>It is the on-canvas crosshair, at the 24 grid's scale.</b> Gap
+    /// 4.5, arms 6, so the button that puts the pivot back shows the thing it
+    /// moves rather than a second idea of it.</para>
+    ///
+    /// <para><b>THE GAP IS 4.5 AND NOT 3.5 BECAUSE OF WHAT THE OFFLINE RENDER
+    /// SHOWED.</b> At 3.5 the mark is correct at 30 - the size the bottom menu
+    /// draws it - and closes into a PLUS SIGN at 14, 15 and 16, which is the one
+    /// thing this mark must never read as. Widening the gap costs nothing at the
+    /// large size and is the difference between a crosshair and a cross at the
+    /// small ones. Run <c>python scratchpad/render_icons.py --stroked 2
+    /// Pivot</c> before touching these numbers.</para>
+    ///
+    /// <para>STROKED, so the four arms are pen strokes and the centre is the
+    /// absence of one. Drawn filled it would need eight subpaths to say what
+    /// four line segments say.</para></summary>
+    public const string Pivot =
+        "M12 1.5 V7.5 M12 16.5 V22.5 M1.5 12 H7.5 M16.5 12 H22.5";
+
     /// <summary>Item picker, the mouse tool's first choice (17.10): one object and
     /// the cursor that takes it. The square is a RING - outer outline plus a
     /// reversed inner one, so even-odd punches the hole - and the arrow is a
