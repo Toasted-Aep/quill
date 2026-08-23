@@ -661,6 +661,150 @@ public class RotateQuarterMixedAction : IPageAction
     }
 }
 
+/// <summary>CONCEPTS-REF 17.11a requirement 2: <i>"I want every rotatable object
+/// to freely rotate."</i> An ARBITRARY angle about an arbitrary pivot, for a
+/// selection of any mixture of kinds.
+///
+/// <para><b>This is what the rotate tool's sweep commits now.</b> 17.11a's
+/// reason for quarter steps was that <c>TextElement</c> "is an axis-aligned box
+/// and takes no rotation at all" - which has not been true since #20: it carries
+/// <c>Rotation</c>, the Win2D path draws it, the editing overlay carries it as a
+/// RenderTransform, and its grip bar has had a free-drag rotate handle all
+/// along. So the third subject kind honours an arbitrary angle and the reason
+/// for rounding to 90 is gone. <see cref="RotateQuarterMixedAction"/> STAYS: it
+/// is what the mode bar's Rotate BUTTON commits, and a discrete quarter turn is
+/// a different thing to want than a free drag, not a degraded one.</para>
+///
+/// <para><b>Why the before-state is held for shapes and text but not for ink.</b>
+/// A free angle is a sine and a cosine, so unlike the quarter turn it is not
+/// exactly invertible in floating point. A shape or a text box is three numbers
+/// and a selection holds a handful of them, so the exact before-state is simply
+/// kept - an angle that crept a fraction of a degree per undo would eventually
+/// be a visible tilt on a box nobody touched. A stroke is thousands of points,
+/// and a copy of all of them per action would put the undo stack in the same
+/// size class as the page; ink is turned back by the opposite rotation instead,
+/// whose error is a rounding step of a float per cycle and is orders below the
+/// width of the thinnest nib at any zoom this app offers.</para></summary>
+public class RotateFreeMixedAction : IPageAction
+{
+    /// <summary>A text box and the RENDERED size it was turned about.
+    ///
+    /// <para>A text box's height is not in the model - it comes from the wrapped
+    /// content, and only the live XAML container knows it. So the caller
+    /// measures once and the action HOLDS that measurement: reading it again on
+    /// undo could give a different number (the text layer may have been rebuilt,
+    /// or the box re-wrapped) and the box would come back a few units from where
+    /// it left.</para></summary>
+    public readonly record struct SizedText(TextElement T, double W, double H);
+
+    private readonly List<PenStroke> _strokes;
+    private readonly List<ShapeElement> _shapes;
+    private readonly List<SizedText> _texts;
+    private readonly double _cx, _cy;
+    private readonly double _deg;
+    private readonly List<(double X, double Y, double Rot)> _shapeFrom = new();
+    private readonly List<(double X, double Y, double Rot)> _textFrom = new();
+
+    public RotateFreeMixedAction(List<PenStroke> strokes, List<ShapeElement> shapes,
+                                 List<SizedText> texts, double cx, double cy, double degrees)
+    {
+        _strokes = strokes; _shapes = shapes; _texts = texts;
+        _cx = cx; _cy = cy; _deg = degrees;
+        foreach (var s in _shapes) _shapeFrom.Add((s.X, s.Y, s.Rotation));
+        foreach (var e in _texts) _textFrom.Add((e.T.X, e.T.Y, e.T.Rotation));
+    }
+
+    public string Description => "Rotate selection";
+    public bool TouchesText => _texts.Count > 0;
+
+    /// <summary>The angle committed, in degrees. The drag reads it back so a
+    /// gesture that ended where it started can be dropped rather than pushed -
+    /// an undo entry for a rotation of nothing is noise in the stack.</summary>
+    public double Degrees => _deg;
+
+    private (double X, double Y) Turn(double x, double y, double cos, double sin)
+    {
+        double dx = x - _cx, dy = y - _cy;
+        return (_cx + dx * cos - dy * sin, _cy + dx * sin + dy * cos);
+    }
+
+    public void Do(NotePage page)
+    {
+        double r = _deg * Math.PI / 180.0;
+        double cos = Math.Cos(r), sin = Math.Sin(r);
+        SpinInk(cos, sin);
+        for (int i = 0; i < _shapes.Count; i++)
+        {
+            var s = _shapes[i];
+            var f = _shapeFrom[i];
+            // A shape renders as its box turned about the box's OWN centre, so a
+            // rotation about an outside pivot is exactly two things: carry the
+            // centre round the pivot, and add the angle. W and H are untouched -
+            // the quarter turn's extent swap has no meaning at 37 degrees, and
+            // the renderer would double-count it.
+            double hw = s.W / 2, hh = s.H / 2;
+            var (nx, ny) = Turn(f.X + hw, f.Y + hh, cos, sin);
+            s.X = nx - hw; s.Y = ny - hh;
+            s.Rotation = Wrap(f.Rot + _deg);
+        }
+        for (int i = 0; i < _texts.Count; i++)
+        {
+            var e = _texts[i];
+            var f = _textFrom[i];
+            // The same arithmetic, and it is only right because a text box turns
+            // about its own centre too - RenderTransformOrigin 0.5,0.5 on the
+            // container, mirrored by the Win2D path. A box that rotated about its
+            // top-left would need the CORNER carried instead of the centre.
+            double hw = e.W / 2, hh = e.H / 2;
+            var (nx, ny) = Turn(f.X + hw, f.Y + hh, cos, sin);
+            e.T.X = nx - hw; e.T.Y = ny - hh;
+            e.T.Rotation = Wrap(f.Rot + _deg);
+        }
+    }
+
+    public void Undo(NotePage page)
+    {
+        double r = -_deg * Math.PI / 180.0;
+        SpinInk(Math.Cos(r), Math.Sin(r));
+        for (int i = 0; i < _shapes.Count; i++)
+        {
+            var f = _shapeFrom[i];
+            _shapes[i].X = f.X; _shapes[i].Y = f.Y; _shapes[i].Rotation = f.Rot;
+        }
+        for (int i = 0; i < _texts.Count; i++)
+        {
+            var f = _textFrom[i];
+            _texts[i].T.X = f.X; _texts[i].T.Y = f.Y; _texts[i].T.Rotation = f.Rot;
+        }
+    }
+
+    private void SpinInk(double cos, double sin)
+    {
+        foreach (var s in _strokes)
+            foreach (var p in s.Points)
+            {
+                var (nx, ny) = Turn(p.X, p.Y, cos, sin);
+                p.X = (float)nx; p.Y = (float)ny;
+            }
+    }
+
+    /// <summary>Into (-180, 180], the same window
+    /// <c>InkSurface.WrapDegrees</c> keeps the page angle in, so a stored object
+    /// angle and a stored page angle read the same way.</summary>
+    private static double Wrap(double deg)
+    {
+        deg %= 360;
+        if (deg > 180) deg -= 360;
+        if (deg <= -180) deg += 360;
+        return deg;
+    }
+
+    public Rect? AffectedBounds(NotePage page) => ActionBounds.Union(
+        ActionBounds.Of(_strokes),
+        _shapes.Count > 0 ? ActionBounds.Union(_shapes.Select(s => (Rect?)ActionBounds.Of(s)).ToArray()) : null,
+        _texts.Count > 0 ? ActionBounds.Union(_texts.Select(e => (Rect?)ActionBounds.Of(e.T)).ToArray()) : null);
+}
+
 /// <summary>CONCEPTS-REF 16.9: "the controls stay usable and EDITING THEM EDITS
 /// THE SELECTION." The dial's size / stability / opacity / colour, written to a
 /// selection of strokes instead of to the active pen.
