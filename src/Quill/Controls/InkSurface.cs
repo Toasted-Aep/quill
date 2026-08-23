@@ -1604,8 +1604,9 @@ public sealed class InkSurface : UserControl
                 _mousePanLast = screen;
                 break;
 
-            // 17.11. A press arms the turn; a release that never moved commits
-            // one quarter, so the tool works as a tap as well as a sweep.
+            // 17.11a. A press arms the turn and captures the subject; the sweep
+            // turns it live at a free angle and the release commits one action.
+            // A press that never moves commits nothing - see CommitGesture.
             case ToolType.Rotate:
                 BeginRotateGesture(pos);
                 break;
@@ -2184,8 +2185,8 @@ public sealed class InkSurface : UserControl
                 break;
 
             // 17.11. Pan is handled before this switch by the _mousePanning
-            // block, which is the point of reusing it; Rotate commits a quarter
-            // each time the sweep crosses one.
+            // block, which is the point of reusing it; 17.11a: Rotate turns the
+            // subject live at whatever angle the hand has described so far.
             case ToolType.Rotate:
                 RotateDragTo(pos);
                 break;
@@ -2520,9 +2521,24 @@ public sealed class InkSurface : UserControl
                 _lasso = null;
                 break;
             }
-            // 17.11. A rotate gesture that never crossed a quarter is a TAP, and
-            // a tap turns once - so the tool answers a click the way the mode
-            // bar's Rotate does, and a sweep the way a rotate tool should.
+            // 17.11a requirement 2: the sweep commits ONE action for the whole
+            // gesture, at the angle the hand described.
+            //
+            // The subject has been turning live since the press, so the model is
+            // already at the end angle and the action that has to go on the stack
+            // needs the START angle to undo to. Rather than snapshot every stroke
+            // point at press - the undo stack would grow like the page - the
+            // sweep is UN-APPLIED here, the action is built against the restored
+            // state (which is where it captures the shapes' and boxes' exact
+            // before-values), and Push re-applies it. The user sees nothing: no
+            // frame is drawn between the two.
+            //
+            // A TAP NO LONGER TURNS ANYTHING. It used to turn one quarter, which
+            // made sense while the sweep was quartered too; inside a free
+            // rotation a click that jumps 90 degrees is a surprise, and 17.11a is
+            // explicit that "0 should not be sticky unless asked for". The
+            // quarter turn is still one press away - it is what the mode bar's
+            // Rotate button and 16.2's bottom row commit.
             //
             // 17.11a: only the SELECTION half reports a content change. A handle
             // or pivot drag moved a number the page does not contain, so marking
@@ -2530,13 +2546,21 @@ public sealed class InkSurface : UserControl
             // untouched page in the "edited" state.
             case ToolType.Rotate:
             {
-                if (_rotateGrab == RotateGrab.None)
+                if (_rotateGrab == RotateGrab.None && _rotating &&
+                    Math.Abs(_rotateTurnedDeg) > 1e-6 && _page != null)
                 {
-                    if (_rotating && !_rotateTurned) RotateSelectionQuarter();
+                    double total = _rotateTurnedDeg;
+                    SpinRotateSubject(-total);
+                    PushAction(new RotateFreeMixedAction(_rotateInk, _rotateShapes, _rotateTexts,
+                                                         _rotateCentre.X, _rotateCentre.Y, total), _page);
+                    AfterSelectionTransform(_rotateTexts.Count > 0);
                     changed = true;
                 }
                 _rotating = false;
-                _rotateTurned = false;
+                _rotateTurnedDeg = 0;
+                _rotateInk = new();
+                _rotateShapes = new();
+                _rotateTexts = new();
                 _rotateGrab = RotateGrab.None;
                 break;
             }
@@ -2566,8 +2590,21 @@ public sealed class InkSurface : UserControl
         _wet = null;
         _spacing = false;
         _mousePanning = false;
+        // An ABANDONED sweep - capture lost, tool switched mid-drag, a second
+        // pointer arriving - has already moved the drawing but will never reach
+        // the commit in PointerReleased. Put it back rather than leaving the page
+        // turned by a gesture that has no undo entry. On the normal path the
+        // commit has already zeroed this, so this is a no-op there.
+        if (_rotating && Math.Abs(_rotateTurnedDeg) > 1e-6)
+        {
+            SpinRotateSubject(-_rotateTurnedDeg);
+            RecomputeSelectionBoundsFrozen();
+        }
         _rotating = false;
-        _rotateTurned = false;
+        _rotateTurnedDeg = 0;
+        _rotateInk = new();
+        _rotateShapes = new();
+        _rotateTexts = new();
         _rotateGrab = RotateGrab.None;
         _shapeAdjust = false;
         _adjustShape = null;
@@ -3384,14 +3421,9 @@ public sealed class InkSurface : UserControl
         foreach (var t in _page.Texts)
         {
             if (!CanCatch(t.LayerKey, t.Locked)) continue;
-            double w = 180, h = 40;
-            if (_textUi.TryGetValue(t.Id, out var ui))
-            {
-                if (ui.Container.ActualWidth > 0) w = ui.Container.ActualWidth;
-                if (ui.Container.ActualHeight > 0) h = ui.Container.ActualHeight;
-            }
-            var c = new Vector2((float)(t.X + w / 2), (float)(t.Y + h / 2));
-            if (GeometryUtil.PointInPolygon(c, poly)) _selTexts.Add(t);
+            // The CENTRE, which a rotation about that same centre does not move -
+            // so this test is already rotation-correct and stays that way.
+            if (GeometryUtil.PointInPolygon(TextCentreWorld(t), poly)) _selTexts.Add(t);
         }
         _activeShape = null; // a multi-selection supersedes the single active shape
         RecomputeSelectionBounds();
@@ -3432,16 +3464,62 @@ public sealed class InkSurface : UserControl
         }
         foreach (var t in _selTexts)
         {
-            double w = 180, h = 40;
-            if (_textUi.TryGetValue(t.Id, out var ui))
-            {
-                if (ui.Container.ActualWidth > 0) w = ui.Container.ActualWidth;
-                if (ui.Container.ActualHeight > 0) h = ui.Container.ActualHeight;
-            }
-            Inc(t.X, t.Y); Inc(t.X + w, t.Y + h);
+            // 17.11a: a text box TURNS, so its four corners are what bound it and
+            // not its stored X/Y/W/H. Taking the unrotated box here drew a
+            // marquee that cut the corners off a tilted box and left a gap on its
+            // flat sides - and, worse, gave the rotate sweep a centre that was
+            // not the centre of what the user could see.
+            foreach (var c in TextCornersWorld(t)) Inc(c.X, c.Y);
         }
         if (minX == double.MaxValue) { _selBounds = Rect.Empty; return; }
         _selBounds = new Rect(minX - 8, minY - 8, (maxX - minX) + 16, (maxY - minY) + 16);
+    }
+
+    /// <summary>A text box's RENDERED size in world units.
+    ///
+    /// <para>The height is not in the model - it comes from the wrapped content,
+    /// so only the live XAML container knows it. The fallback is the model's own
+    /// width and the 40 every other site in this codebase assumes
+    /// (<c>MirrorMixedAction</c>, <c>RotateQuarterMixedAction</c>,
+    /// <c>ActionBounds.Of</c>), which matters before the first layout pass and
+    /// for a page being measured without a text layer at all.</para></summary>
+    private (double W, double H) TextBoxSizeWorld(TextElement t)
+    {
+        double w = Math.Max(60, t.Width), h = 40;
+        if (_textUi.TryGetValue(t.Id, out var ui))
+        {
+            if (ui.Container.ActualWidth > 0) w = ui.Container.ActualWidth;
+            if (ui.Container.ActualHeight > 0) h = ui.Container.ActualHeight;
+        }
+        return (w, h);
+    }
+
+    /// <summary>The centre a text box turns about: the container's own centre,
+    /// which is what <c>RenderTransformOrigin 0.5,0.5</c> means on the editing
+    /// overlay and what the Win2D path mirrors. Rotation does not move it, which
+    /// is why the lasso's centre test needs no rotation of its own.</summary>
+    private Vector2 TextCentreWorld(TextElement t)
+    {
+        var (w, h) = TextBoxSizeWorld(t);
+        return new Vector2((float)(t.X + w / 2), (float)(t.Y + h / 2));
+    }
+
+    /// <summary>The four corners of a text box as they are actually drawn,
+    /// turned by its own <see cref="TextElement.Rotation"/>.</summary>
+    private Vector2[] TextCornersWorld(TextElement t)
+    {
+        var (w, h) = TextBoxSizeWorld(t);
+        var c = new Vector2((float)(t.X + w / 2), (float)(t.Y + h / 2));
+        var box = new[]
+        {
+            new Vector2((float)t.X, (float)t.Y),
+            new Vector2((float)(t.X + w), (float)t.Y),
+            new Vector2((float)(t.X + w), (float)(t.Y + h)),
+            new Vector2((float)t.X, (float)(t.Y + h)),
+        };
+        if (Math.Abs(t.Rotation) < 0.01) return box;
+        for (int i = 0; i < box.Length; i++) box[i] = RotatePoint(box[i], c, t.Rotation);
+        return box;
     }
 
     // =======================================================================
@@ -4051,6 +4129,30 @@ public sealed class InkSurface : UserControl
         return (s, h, t);
     }
 
+    /// <summary>The text boxes in a selection that a ROTATION may turn: the free
+    /// ones. Table cells are dropped.
+    ///
+    /// <para><b>A cell already turns - with its table, and only with its
+    /// table.</b> LayoutTableCells recomputes a cell's X/Y from the table's
+    /// geometry and drives its container's transform from the TABLE's Rotation
+    /// on every layout pass, so a cell turned on its own is put straight back.
+    /// What was NOT put back is the cell's own <see cref="TextElement.Rotation"/>
+    /// - it survives in the model, and <c>DrawTextElement</c> reads it, so a
+    /// lassoed table that had been rotated came out of "copy as image" and the
+    /// exporters with its cell words at twice the angle of its grid while the
+    /// live canvas looked correct. Dropping cells here is what makes the stored
+    /// angle and the drawn one the same number again.</para>
+    ///
+    /// <para>Shared by the quarter turn and the free sweep deliberately: two
+    /// rotations that disagreed about what a table cell is would be exactly the
+    /// kind of second path this codebase keeps saying not to add.</para></summary>
+    private static List<TextElement> RotatableTexts(List<TextElement> texts)
+    {
+        if (texts.Count == 0) return texts;
+        var free = texts.Where(t => t.TableId == null).ToList();
+        return free.Count == texts.Count ? texts : free;
+    }
+
     /// <summary>16.2's flip-horizontal / flip-vertical. Mirrors about the
     /// selection's own centre line, so the selection lands exactly where it was
     /// and only its contents turn over.</summary>
@@ -4078,6 +4180,7 @@ public sealed class InkSurface : UserControl
         if (b.IsEmpty) return;
         var (s, h, t) = SelectionParts();
         if (s.Count + h.Count + t.Count == 0) return;
+        t = RotatableTexts(t);
         FlushTexts();
         PushAction(new RotateQuarterMixedAction(s, h, t, b.Left + b.Width / 2, b.Top + b.Height / 2,
                                                 clockwise), _page);
@@ -4106,22 +4209,31 @@ public sealed class InkSurface : UserControl
     // half-life. The user asked to see and correct the interface first, and
     // this is that interface with nothing behind it pretending otherwise.
     //
-    // THE SELECTION HALF (17.11 as built) IS UNCHANGED AND STILL QUARTER TURNS.
-    // 17.11a's requirement 2 - every rotatable object rotates freely - is
-    // blocked on making TextElement rotatable, and 17.11a itself forbids
-    // shipping a free rotation that silently leaves one subject kind square. It
-    // is also what the mode bar's Rotate switch drives, since SelectionChrome
-    // reads Tool == ToolType.Rotate: deleting it would leave that switch dead.
+    // THE SELECTION HALF NOW TURNS FREELY - 17.11a requirement 2, delivered.
     //
-    // WHY QUARTER TURNS AND NOT A FREE ANGLE, for that half. A stroke is a point
-    // list and takes any angle; a ShapeElement carries a Rotation field and
-    // takes any angle; a TextElement is an axis-aligned box with a width and a
-    // height and takes NONE. A free-angle drag would therefore turn two of the
-    // three kinds of subject and silently leave the third square - which is the
-    // failure 16.9 spent a section forbidding, a control that looks live and
-    // does nothing. The quarter turn is what the model can represent for every
-    // subject, so it is what the tool commits; the DRAG is still continuous, and
-    // each quarter it crosses is one action, in the direction the hand went.
+    // WHAT CHANGED, AND WHY IT COULD. 17.11a's stated reason for quarter steps
+    // was that "a TextElement is an axis-aligned box with a width and a height
+    // and takes NONE" of a rotation, so a free drag would turn two subject kinds
+    // out of three and leave text square. THAT PREMISE WAS ALREADY STALE WHEN IT
+    // WAS WRITTEN. TextElement has carried Rotation since #20; the Win2D path
+    // draws through it (DrawTextElement), the editing overlay applies it as a
+    // RenderTransform about the container centre, RotateActiveText drives it,
+    // the mirror negates it, the quarter turn adds to it, every clone path
+    // carries it, and the box's own grip bar has had a FREE-ANGLE drag handle on
+    // it the whole time. The audit for this change found the axis-aligned
+    // assumptions that really were left - selection bounds and the click probe,
+    // both fixed above - and no third kind that cannot take an angle. So the one
+    // reason not to ship a free rotation is gone and this is a free rotation.
+    //
+    // THE QUARTER TURN SURVIVES, AS A BUTTON AND NOT AS THE SWEEP. The mode
+    // bar's Rotate control and 16.2's bottom row both call
+    // RotateSelectionQuarter, and they still do: "turn this a quarter" is a
+    // different thing to want than "turn this to here", not a degraded version
+    // of it, and it is the one turn a hand cannot make exactly. What is gone is
+    // the quarter DETENT INSIDE THE DRAG - 17.11a says the user asked for free
+    // and that "any snap must be opt-in", so the sweep now commits the angle the
+    // hand actually described. RotateSnap, already the tool's opt-in for the
+    // page half, is that opt-in here too and steps the same 15 degrees.
     //
     // HOW ONE TOOL CARRIES BOTH WITHOUT A MODE SWITCH: BY WHERE THE PRESS LANDS.
     // The page half owns exactly two objects and they are the two the overlay
@@ -4131,12 +4243,19 @@ public sealed class InkSurface : UserControl
     // which the user cannot tell which rotation they are about to get: the two
     // things that move the page angle are the two things that are drawn.
     private bool _rotating;
-    // Whether the sweep has already committed a quarter. A gesture that has not
-    // is a TAP however far it travelled, and a tap turns once on release - which
-    // also rounds an 80 degree sweep to the quarter it was clearly aiming at.
-    private bool _rotateTurned;
+    // How far the live sweep has turned the selection, in degrees. The model is
+    // moved AS THE HAND MOVES so the user rotates the drawing rather than a
+    // preview of it; this is what the single action pushed on release is for,
+    // and what that action is handed back to un-apply before it captures the
+    // before-state it will need for undo.
+    private double _rotateTurnedDeg;
     private Vector2 _rotateCentre;
-    private double _rotateFromDeg;      // pointer bearing when the last quarter landed
+    private double _rotateFromDeg;      // pointer bearing when the sweep began
+    // The subject, captured ONCE at press. Re-reading the selection mid-drag
+    // would be re-reading a selection whose bounds this very drag is changing.
+    private List<PenStroke> _rotateInk = new();
+    private List<ShapeElement> _rotateShapes = new();
+    private List<RotateFreeMixedAction.SizedText> _rotateTexts = new();
 
     // ---- the page half: state, and the only thing that reads it is a draw --
 
@@ -4335,13 +4454,45 @@ public sealed class InkSurface : UserControl
             return;
         }
 
-        // 17.11, untouched: a press anywhere else is still the selection sweep.
+        // A press anywhere else is the selection sweep - free-angle since 17.11a
+        // requirement 2, and about the selection's own centre.
         var b = SubjectBoundsWorld;
         if (b.IsEmpty) { _rotating = false; return; }
+        if (AnyLocked) { _rotating = false; return; }   // 16.2's padlock, as every other transform honours it
+        var (s, h, t) = SelectionParts();
+        if (s.Count + h.Count + t.Count == 0) { _rotating = false; return; }
+        t = RotatableTexts(t);
+        // The typed text has to be in the model before it is turned, or a box
+        // still holding unflushed keystrokes rotates and then reverts them.
+        FlushTexts();
+        _rotateInk = s;
+        _rotateShapes = h;
+        // Measure every box ONCE, here. A text box's height is its wrapped
+        // content's, and the drag rebuilds the text layer on every frame - so a
+        // size read per frame would be read back off a container that this same
+        // gesture had just re-laid-out, and the box would creep.
+        _rotateTexts = t.Select(x =>
+        {
+            var (w, hh) = TextBoxSizeWorld(x);
+            return new RotateFreeMixedAction.SizedText(x, w, hh);
+        }).ToList();
         _rotating = true;
-        _rotateTurned = false;
+        _rotateTurnedDeg = 0;
         _rotateCentre = new Vector2((float)(b.Left + b.Width / 2), (float)(b.Top + b.Height / 2));
         _rotateFromDeg = Bearing(pos, _rotateCentre);
+    }
+
+    /// <summary>Turns the captured subject by a DELTA, in place and without
+    /// touching the undo stack. The sweep's live feedback and the un-apply that
+    /// precedes the commit are the same operation in opposite directions, so
+    /// they are the same code.</summary>
+    private void SpinRotateSubject(double deltaDeg)
+    {
+        if (_page == null || Math.Abs(deltaDeg) < 1e-9) return;
+        new RotateFreeMixedAction(_rotateInk, _rotateShapes, _rotateTexts,
+                                  _rotateCentre.X, _rotateCentre.Y, deltaDeg).Do(_page);
+        _inkCacheDirty = true;
+        _gridDirty = true;
     }
 
     /// <summary>Degrees clockwise from the +x axis, in the canvas's y-down
@@ -4376,16 +4527,36 @@ public sealed class InkSurface : UserControl
         }
         if (!_rotating) return;
         // Wrapped into (-180, 180] so a sweep across the -x axis reads as a small
-        // step rather than a 350 degree jump back the other way.
-        double d = Bearing(pos, _rotateCentre) - _rotateFromDeg;
-        while (d > 180) d -= 360;
-        while (d <= -180) d += 360;
-        if (Math.Abs(d) < 90) return;
-        RotateSelectionQuarter(clockwise: d > 0);
-        _rotateTurned = true;
-        _rotateFromDeg += d > 0 ? 90 : -90;
-        while (_rotateFromDeg > 180) _rotateFromDeg -= 360;
-        while (_rotateFromDeg <= -180) _rotateFromDeg += 360;
+        // step rather than a 350 degree jump back the other way. The bearing is
+        // re-based every frame, so a sweep can pass any number of full turns and
+        // the total accumulates instead of wrapping.
+        double d = WrapDegrees(Bearing(pos, _rotateCentre) - _rotateFromDeg);
+        if (Math.Abs(d) < 1e-6) return;
+        _rotateFromDeg = WrapDegrees(_rotateFromDeg + d);
+        // 17.11a: "the user said free, so any snap must be opt-in". Off, the
+        // subject sits at whatever angle the hand described. On, it is the same
+        // opt-in and the same 15 degree step the page half uses - the snap is a
+        // property of the TOOL, so turning it on cannot mean two different
+        // things depending on which half of the tool is being dragged.
+        double target = _rotateTurnedDeg + d;
+        if (RotateSnap) target = Math.Round(target / RotateSnapStepDeg) * RotateSnapStepDeg;
+        SpinRotateSubject(target - _rotateTurnedDeg);
+        _rotateTurnedDeg = target;
+        RecomputeSelectionBoundsFrozen();
+    }
+
+    /// <summary>Re-measures the selection marquee mid-sweep WITHOUT moving the
+    /// centre the sweep is turning about.
+    ///
+    /// <para>The bounds of a turning selection change on every frame, so
+    /// recomputing the centre from them would walk the pivot away under the
+    /// user's hand - the drawing would drift across the page while the hand went
+    /// in a circle. <see cref="_rotateCentre"/> is therefore fixed at press and
+    /// only the drawn marquee follows.</para></summary>
+    private void RecomputeSelectionBoundsFrozen()
+    {
+        RecomputeSelectionBoundsCore();
+        SubjectMoved?.Invoke();
     }
 
     /// <summary>16.2's padlock. Locking any part of a mixed selection locks all
@@ -6767,7 +6938,16 @@ public sealed class InkSurface : UserControl
         {
             double l = Canvas.GetLeft(ui.Container), tp = Canvas.GetTop(ui.Container);
             double w = ui.Container.ActualWidth, h = ui.Container.ActualHeight;
-            if (pos.X >= l && pos.X <= l + w && pos.Y >= tp && pos.Y <= tp + h)
+            // 17.11a: Canvas.Left/Top and ActualWidth/Height describe the box
+            // BEFORE its RenderTransform, so a rotated box was tested against a
+            // rectangle it is no longer sitting in - a tap inside a tilted box
+            // fell through to the canvas and started a lasso. Bring the probe
+            // into the box's own frame instead of trying to turn the box.
+            var probe = pos;
+            double rot = _page?.Texts.FirstOrDefault(x => x.Id == id)?.Rotation ?? 0;
+            if (Math.Abs(rot) > 0.01)
+                probe = RotatePoint(pos, new Vector2((float)(l + w / 2), (float)(tp + h / 2)), -rot);
+            if (probe.X >= l && probe.X <= l + w && probe.Y >= tp && probe.Y <= tp + h)
             {
                 ui.Box.Focus(FocusState.Pointer);
                 ActiveTextBox = ui.Box;
