@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
+using Quill.Helpers;
 using Quill.Services;
 using Windows.UI;
 using Path = Microsoft.UI.Xaml.Shapes.Path;
@@ -51,36 +52,40 @@ public sealed class FloatingWindow
     /// undo it for themselves and must undo exactly it.</summary>
     private const double HeadPadX = 8, HeadPadY = 6;
 
-    /// <summary>§14.3, the corner targets.
+    /// <summary>§17.5, the corner targets. The inner corner's radius is the outer
+    /// radius less the border — an inset rounded rect keeps the arc's CENTRE and
+    /// spends the inset on the radius — so this is the curve the targets follow.
     ///
-    /// <para>The inner corner's radius is the outer radius less the border - an
-    /// inset rounded rect keeps the arc's CENTRE and spends the inset on the
-    /// radius - so the curve the targets have to stay inside is this.</para></summary>
+    /// <para>FOLLOW, not avoid. That is the whole of what §17.5 changes.</para></summary>
     private const double InnerRadius = Radius - PanelBorder;
 
-    /// <summary>How far in from the panel's inner edge an axis-aligned target has
-    /// to begin to stay inside that curve: the arc's 45 degree point,
-    /// <c>r - r/sqrt2</c>. A rectangle anchored there and running inward touches
-    /// the arc at that one corner and is inside it everywhere else, so it is the
-    /// LARGEST rectangle that fits - which is what "fills its corner exactly and
-    /// stops there" comes to once the target cannot itself be curved. WinUI's
-    /// <c>UIElement.Clip</c> takes a <c>RectangleGeometry</c> and nothing else,
-    /// and a composition clip does not participate in XAML hit testing, so a
-    /// rounded target is not on offer here.</summary>
-    private static readonly double CornerInset =
-        InnerRadius * (1 - 1 / Math.Sqrt(2)) + CornerGuard;
-
-    /// <summary>Slack on top of the exact 45 degree point, because LAYOUT
-    /// ROUNDING gets the last word: it snaps the arranged rect to the display's
-    /// pixel grid, and it snapped the first build of this OUTWARD - a measured
-    /// corner at 5.5 against an arithmetic 5.747, which put a third of a DIP of
-    /// target back outside the arc. Half a DIP absorbs a snap in either
-    /// direction at any scale factor this app is run at.</summary>
-    private const double CornerGuard = 0.5;
-
-    /// <summary>A corner target's side: the panel's inner edge to the header's
-    /// inner boundary, less what the curve costs at the near end.</summary>
-    private static readonly double CornerSide = HeaderH - CornerInset;
+    /// <summary>§17.5: "A square covering the WHOLE corner of the panel, with ONE
+    /// corner rounded to follow the panel's own radius and the other three
+    /// square." So the side is the full header height — the panel's inner edge to
+    /// the header's inner boundary — with nothing subtracted.
+    ///
+    /// <para><b>What §14.3 did, and why this is not a repeat of it.</b> §14.3 was
+    /// itself a fix for a target that overshot: the button had been given
+    /// negative margins to "cover the whole corner" and they pushed a SQUARE
+    /// corner out past the panel's round one, so a press on the page just outside
+    /// the curve landed on Close. §14.3's answer was to pull the square back to
+    /// the arc's 45 degree point (<c>r − r/√2</c>, plus half a DIP of guard
+    /// against layout rounding) — the largest axis-aligned rectangle that fits
+    /// inside the curve. That stopped the overshoot and cost about 5.7 DIP on
+    /// each axis, which is why the marks then sat in a corner they no longer
+    /// filled. It was reasoned to be forced: "a composition clip does not
+    /// participate in XAML hit testing, so a rounded target is not on offer".
+    /// </para>
+    ///
+    /// <para>That premise was too strong. <c>UIElement.Clip</c> is indeed
+    /// rectangle-only, but a <see cref="Path"/>'s FILL is ordinary hit-test
+    /// geometry — a filled shape is hit inside its geometry and nowhere else. So
+    /// the target can be the exact rounded square after all: see
+    /// <see cref="CornerButton"/>, which gives the button a transparent Path of
+    /// this shape and NO background of its own. The square fills its corner and
+    /// still cannot protrude past the curve, because past the curve there is no
+    /// geometry to hit.</para></summary>
+    private static readonly double CornerSide = HeaderH;
 
     /// <summary>§11.6 item 42: "must leave a margin at the page edge".</summary>
     private const double EdgeGap = 14;
@@ -125,21 +130,37 @@ public sealed class FloatingWindow
     private readonly Grid _gripLayer;
     private readonly TextBlock _title;
     private Border? _dragPill;
+    /// <summary>The two corner marks' hosts, kept so <see cref="PaintPanel"/> can
+    /// re-ink them on a page change — see <see cref="PaintCornerMark"/>.</summary>
+    private readonly ContentControl _closeMark, _infoMark;
 
     private readonly List<(string Label, Func<FrameworkElement> Build)> _tabs = new();
     private readonly Dictionary<int, FrameworkElement> _built = new();
     private int _active;
     /// <summary>THE STORED POSITION — AN INSET FROM THE SIDE THIS WINDOW IS
-    /// ANCHORED TO (<see cref="OpenOn"/>). Null until something chooses one, in
-    /// which case the resolver reads <see cref="EdgeGap"/> in its place.
+    /// ANCHORED TO (<see cref="OpenOn"/>), AS A FRACTION OF THE HOST'S WIDTH.
+    /// Null until a gesture chooses one, in which case the resolver reads
+    /// <see cref="EdgeGap"/> in its place.
     ///
-    /// <para>This, with <see cref="_insetTop"/> and <see cref="_wantW"/> /
+    /// <para>This, with <see cref="_fracTop"/>, <see cref="_fracW"/> /
+    /// <see cref="_fracH"/> and the tenant's requested <see cref="_wantW"/> /
     /// <see cref="_wantH"/>, is the ONLY source of truth for this window's
     /// geometry. The popup's offsets and the panel's Width / Height are DERIVED
     /// from it against the current host on every change, and are never read back
-    /// as state. That is the model the user specified: "make it so that when panel
-    /// gets resized the distance from the side they're on gets remembered, and the
-    /// panels move accordingly" (§15.4e).</para>
+    /// as state.</para>
+    ///
+    /// <para><b>§17.6: A FRACTION, NOT AN ABSOLUTE DISTANCE.</b> §15.4e stored the
+    /// inset in DIP, which restored a panel's position but not its proportions.
+    /// The user: <i>"I want the panel to return to its proportional size, so for
+    /// example 100 pixels away from bottom edge, and panel gets 50% smaller 50
+    /// pixels away now."</i> So a panel dragged to a 387 DIP gap in a 1080-wide
+    /// host is storing 387/1080, and in a 1440-wide host that resolves to 516 —
+    /// and back to exactly 387 on return. §15.4e's case B table, which held 387 in
+    /// both hosts, is SUPERSEDED here on purpose; its case A table is not, because
+    /// an untouched panel still has a null inset and still resolves to a flat
+    /// <see cref="EdgeGap"/>. A fixed 14 DIP margin is a margin, not a
+    /// proportion, and halving it on a smaller host would be a different
+    /// bug.</para>
     ///
     /// <para>An inset, and not an absolute offset to be shifted. The absolute
     /// version needed a remembered host origin to shift AGAINST (<c>_lastOrg</c>)
@@ -150,15 +171,17 @@ public sealed class FloatingWindow
     /// disagree about, and it subsumes BOTH of that fix's arms: the corner an
     /// untouched panel wants IS inset <see cref="EdgeGap"/>, so preserving the
     /// inset re-anchors it, while preserving a dragged panel's inset holds it
-    /// exactly where it was put. One rule, both behaviours.</para></summary>
-    private double? _insetSide;
+    /// where it was put — now proportionally. One rule, both behaviours.</para></summary>
+    private double? _fracSide;
 
-    /// <summary>The inset from the host's TOP — the vertical half of the pair.
-    /// Null defaults to <see cref="TopBand"/>, the band §11.6 item 42 keeps clear.
-    /// The default is resolved LATE rather than banked at first placement, so a
-    /// window nobody has moved follows that band if §11.5 item 31's thicker top
-    /// bar ever moves it.</summary>
-    private double? _insetTop;
+    /// <summary>The inset from the host's TOP as a fraction of the host's HEIGHT —
+    /// the vertical half of the pair. Null defaults to <see cref="TopBand"/>, the
+    /// band §11.6 item 42 keeps clear. The default is resolved LATE rather than
+    /// banked at first placement, so a window nobody has moved follows that band
+    /// if §11.5 item 31's thicker top bar ever moves it — and, like
+    /// <see cref="EdgeGap"/>, it is a reserved band rather than a proportion, so
+    /// the null case stays absolute.</summary>
+    private double? _fracTop;
 
     /// <summary>THE SIZE THE WINDOW WANTS, which is not always the size it has.
     ///
@@ -168,8 +191,28 @@ public sealed class FloatingWindow
     /// destructive version as an accepted limitation: "clamping into smaller
     /// windowed bounds is one-way, so a panel sized to full fullscreen height
     /// stays at the clamped size on return". Keeping the intent separate from the
-    /// render is the whole of what retires it.</para></summary>
+    /// render is the whole of what retires it.</para>
+    ///
+    /// <para>This pair is the TENANT's requested size and stays ABSOLUTE. It is
+    /// an intent expressed in DIP by the caller, not a gesture, and §15.4e rule 2
+    /// is that only a gesture writes stored geometry. A resize writes
+    /// <see cref="_fracW"/> / <see cref="_fracH"/> instead, and those win from
+    /// then on.</para></summary>
     private double _wantW, _wantH;
+
+    /// <summary>§17.6's other half: the wanted SIZE as a fraction of the host,
+    /// written by a resize gesture and null until then.
+    ///
+    /// <para>"The size scales the same way." A panel resized to 916 x 826 in a
+    /// 1440 x 900 host stores 0.6361 x 0.9178 and comes back to exactly 916 x 826
+    /// in that host — verified to the last bit, because <c>(916/1440)*1440</c>
+    /// round-trips exactly in IEEE doubles.</para>
+    ///
+    /// <para>NOTHING BUT A GESTURE WRITES THESE, which is what keeps §15.4e's
+    /// rule 4 intact: the clamp is applied to a candidate rect on its way to the
+    /// screen and never written back, so a host too small to honour the fractions
+    /// renders smaller without forgetting them.</para></summary>
+    private double? _fracW, _fracH;
 
     /// <summary>Raised when the info / help button is pressed.</summary>
     public Action? InfoRequested { get; set; }
@@ -250,27 +293,28 @@ public sealed class FloatingWindow
         // ---- header: close (upper-left), drag bar (top middle), info (upper-right)
         var header = new Grid { Padding = new Thickness(HeadPadX, HeadPadY, HeadPadX, 0) };
 
-        // 14.3. Each target fills ITS OWN CORNER OF THE PANEL - panel inner edge
-        // to the header's inner boundary - and stops there.
+        // 17.5. Each target is a square filling ITS OWN WHOLE CORNER of the panel
+        // - panel inner edge to the header's inner boundary - with one corner
+        // rounded to the panel's radius and the other three square.
         //
-        // The regression this replaces: the close button was given margins of
-        // exactly the header's padding so it would "cover the whole corner". That
-        // put its top-left ON the panel's inner edge, at a point the ROUNDED
-        // CORNER has already cut away, so the square target hung out past the
-        // curve and a press on the page just outside the corner landed on Close
-        // instead. The info button had the opposite fault - inset by the padding
-        // and vertically centred, so it filled nothing and sat off its corner.
+        // The two faults this has now been through. FIRST, the close button was
+        // given margins of exactly the header's padding so it would "cover the
+        // whole corner": that put its top-left ON the panel's inner edge, at a
+        // point the ROUNDED CORNER has already cut away, so a SQUARE target hung
+        // out past the curve and a press on the page just outside the corner
+        // landed on Close. SECOND, 14.3 fixed that overshoot by pulling the
+        // square back to the arc's 45 degree point - correct, but it cost ~5.7
+        // DIP on each axis, so the marks then sat in a corner they no longer
+        // filled, which is what 17.5 is answering.
         //
-        // Both are now anchored on the corner arc's 45 degree point (CornerInset)
-        // and run to the header's boundary, and the glyphs are pinned where they
-        // already were so only the regions that respond have moved.
-        var close = CornerButton(CloseGeometry, "Close", right: false,
-                                 glyph: new Thickness(17 - CornerInset, 8 - CornerInset, 0, 0));
+        // Neither is repeated, because the target is no longer a square that has
+        // to choose between the two: it is the exact rounded-square outline, as a
+        // Path fill, which is real hit-test geometry. See CornerButton.
+        var close = CornerButton(Icons.Close, "Close", right: false, stroked: true, out _closeMark);
         close.Click += (_, _) => Hide();
         header.Children.Add(close);
 
-        var info = CornerButton(InfoGeometry, "About these settings", right: true,
-                                glyph: new Thickness(HeaderH - 30, 15 - CornerInset, 0, 0));
+        var info = CornerButton(Icons.Info, "About these settings", right: true, stroked: false, out _infoMark);
         info.Click += (_, _) => InfoRequested?.Invoke();
         header.Children.Add(info);
 
@@ -397,6 +441,12 @@ public sealed class FloatingWindow
         if (_dragPill != null)
             _dragPill.Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 0x66));
         _title.Foreground = new SolidColorBrush(PageTheme.OnSurface);
+        // The corner marks are re-inked HERE and not only at construction. They
+        // used to take their colour from a one-shot theme-dictionary fetch, so a
+        // page change repainted the ground, the title and the tab rule and left
+        // these two marks inked for the page before it.
+        PaintCornerMark(_closeMark, Icons.Close, stroked: true);
+        PaintCornerMark(_infoMark, Icons.Info, stroked: false);
         _tabRow.BorderBrush = new SolidColorBrush(PageTheme.Outline);
         try { _panel.RequestedTheme = Theme; } catch { }
     }
@@ -699,11 +749,14 @@ public sealed class FloatingWindow
     /// against the CURRENT host. Nothing is shifted by a delta, nothing
     /// accumulates, and nothing is re-anchored as a special case.
     ///
-    /// <para>PURE — it reads <see cref="_insetSide"/>, <see cref="_insetTop"/>,
-    /// <see cref="_wantW"/> and <see cref="_wantH"/> and writes none of them. That
-    /// is what makes the clamping NON-DESTRUCTIVE: the window can be pulled into a
-    /// host that cannot hold it without losing the geometry it is being pulled
-    /// away from, so it returns to it exactly when the room comes back.</para>
+    /// <para>PURE — it reads <see cref="_fracSide"/>, <see cref="_fracTop"/>,
+    /// <see cref="_fracW"/> / <see cref="_fracH"/> and <see cref="_wantW"/> /
+    /// <see cref="_wantH"/> and writes none of them. That is what makes the
+    /// clamping NON-DESTRUCTIVE: the window can be pulled into a host that cannot
+    /// hold it without losing the geometry it is being pulled away from, so it
+    /// returns to it exactly when the room comes back. §17.6 changes what the
+    /// stored numbers MEAN — fractions of the host rather than DIP — and changes
+    /// nothing about that guarantee, which is why the two are compatible.</para>
     ///
     /// <para>Returns false when the host has not been measured yet. No one-shot
     /// re-try handler is needed for that (<c>FirstPlacement</c> was one): the
@@ -722,10 +775,15 @@ public sealed class FloatingWindow
         double hostW = _host.ActualWidth, hostH = _host.ActualHeight;
         if (hostW <= 0 || hostH <= 0) return false;
 
-        (w, h) = ConstrainSize(_wantW, _wantH);
-        double side = _insetSide ?? EdgeGap;
+        // §17.6: every stored number is a FRACTION of the host, resolved against
+        // whatever host is up now. A null one is not a fraction at all — it is
+        // the reserved band (EdgeGap, TopBand) an untouched panel sits in, which
+        // is a margin rather than a proportion and so stays absolute.
+        (w, h) = ConstrainSize(_fracW is { } fw ? fw * hostW : _wantW,
+                               _fracH is { } fh ? fh * hostH : _wantH);
+        double side = _fracSide is { } fs ? fs * hostW : EdgeGap;
         left = OpenOn == Side.Left ? side : hostW - w - side;
-        top = _insetTop ?? TopBand;
+        top = _fracTop is { } ft ? ft * hostH : TopBand;
         (left, top) = ConstrainPosition(left, top, w, h);
         return true;
     }
@@ -753,9 +811,18 @@ public sealed class FloatingWindow
     /// what "the distance from the side they're on" means.
     ///
     /// <para>Measured against the width PASSED IN — the width on screen — not
-    /// against <see cref="_wantW"/>. The user set the distance they could see.</para></summary>
-    private double SideInsetOf(double left, double w)
-        => OpenOn == Side.Left ? left : _host.ActualWidth - w - left;
+    /// against <see cref="_wantW"/>. The user set the distance they could see.</para>
+    ///
+    /// <para>§17.6: returned as a FRACTION of the host's width, because that is
+    /// what is stored. Guarded against a zero-width host so a gesture arriving
+    /// before the host is measured cannot bank a NaN — which would then resolve
+    /// to NaN forever and put the window nowhere at all.</para></summary>
+    private double SideFracOf(double left, double w)
+    {
+        double hostW = _host.ActualWidth;
+        if (hostW <= 0) return EdgeGap;
+        return (OpenOn == Side.Left ? left : hostW - w - left) / hostW;
+    }
 
     /// <summary>The host moved or resized under the window — entering or leaving
     /// fullscreen being the case that matters.
@@ -806,8 +873,8 @@ public sealed class FloatingWindow
         // drag in a host with no vertical slack would otherwise bank the clamped
         // top as though the user had chosen it, losing the one they chose when
         // there was room for it: the same destruction again, by the side door.
-        if (nl != left) _insetSide = SideInsetOf(nl, w);
-        if (nt != top) _insetTop = nt;
+        if (nl != left) _fracSide = SideFracOf(nl, w);
+        if (nt != top && _host.ActualHeight > 0) _fracTop = nt / _host.ActualHeight;
         ApplyGeometry();
     }
 
@@ -965,11 +1032,13 @@ public sealed class FloatingWindow
             }
 
             // The size IS the intent here, and both arms already clamped it.
-            _wantW = w;
-            _wantH = h;
+            // §17.6 banks it as a FRACTION of the host, so the panel returns
+            // proportionally rather than at the literal DIP it was dragged to.
+            if (_host.ActualWidth > 0) _fracW = w / _host.ActualWidth;
+            if (_host.ActualHeight > 0) _fracH = h / _host.ActualHeight;
             var (nl, nt) = ConstrainPosition(left, top, w, h);
-            if (nl != left0) _insetSide = SideInsetOf(nl, w);
-            if (nt != top0) _insetTop = nt;
+            if (nl != left0) _fracSide = SideFracOf(nl, w);
+            if (nt != top0 && _host.ActualHeight > 0) _fracTop = nt / _host.ActualHeight;
             ApplyGeometry();
         };
     }
@@ -1027,68 +1096,121 @@ public sealed class FloatingWindow
         return geo!;
     }
 
-    private const string CloseGeometry = "M 4,4 L 12,12 M 12,4 L 4,12";
-    private const string InfoGeometry =
-        "M 8,1.2 A 6.8,6.8 0 1 1 7.99,1.2 Z M 8,6.9 L 8,12.2 M 8,3.7 L 8,4.9";
+    /// <summary>The size the two corner marks are DRAWN at, on
+    /// <see cref="Icons"/>' 24-unit grid.
+    ///
+    /// <para>Both marks used to be private literals in this file on a 16-unit
+    /// grid of their own — the only marks in the app not in
+    /// <see cref="Icons"/> and not on the shared grid — so they could not be
+    /// rendered by the offline checker and could drift from every other mark
+    /// without anything noticing. They are now <see cref="Icons.Close"/> and
+    /// <see cref="Icons.Info"/>.</para>
+    ///
+    /// <para><b>The move changes their drawn size, and here are the numbers.</b>
+    /// Close was 16-grid ink spanning 4..12 = 8.00 DIP with a 1.5 DIP stroke =
+    /// <b>9.50</b> DIP outer; it is now 24-grid ink spanning 5..19 = 14 units at
+    /// 16 DIP = 9.33 DIP with a 2.25-unit stroke that renders 1.50 DIP =
+    /// <b>10.83</b> DIP outer, so <b>+1.33 DIP (+14.0%)</b>. Info was a 6.8-unit
+    /// radius circle = 13.60 DIP plus a 1.5 DIP stroke = <b>15.10</b> DIP outer;
+    /// it is now a filled 10.2-unit-radius ring at 16 DIP = <b>13.60</b> DIP,
+    /// so <b>−1.50 DIP (−9.9%)</b>.</para>
+    ///
+    /// <para>The pair is what improves: 9.50 against 15.10 was a ratio of 0.63 —
+    /// a small cross beside a much larger circle, in matching corners of the same
+    /// header — and it is now 10.83 against 13.60, a ratio of 0.80. A circled
+    /// glyph reading slightly larger than a bare cross at the same nominal size
+    /// is correct; two-thirds is not.</para></summary>
+    private const double CornerMarkSize = 16;
+    /// <summary>Stroke for <see cref="Icons.Close"/> in GRID units — Icons.Mark
+    /// scales it with the mark, so 2.25 units renders 2.25 x 16/24 = 1.50 DIP,
+    /// which is exactly the weight the old 16-grid cross was stroked at.</summary>
+    private const double CornerMarkStroke = 2.25;
 
-    private static Button IconButton(string geometry, string tip)
+    /// <summary>§17.5's corner target: a square filling one whole top corner of
+    /// the panel, with ONE corner rounded to the panel's own inner radius and the
+    /// other three square.
+    ///
+    /// <para><b>The shape is the HIT REGION, not just the paint.</b> The button
+    /// carries a <see cref="Path"/> of exactly that outline with a TRANSPARENT
+    /// fill, and has <c>Background = null</c> itself. A transparent fill hit-tests
+    /// and a null background does not, so what responds is the Path's geometry and
+    /// only that — the square fills its corner and still cannot protrude past the
+    /// panel's curve, because outside the curve there is nothing to hit. That is
+    /// what lets §17.5 have the shape §14.3 could not give it without
+    /// overshooting.</para>
+    ///
+    /// <para>The hover and pressed plates come out right for free: WinUI's Button
+    /// template paints them on a ContentPresenter that takes
+    /// <c>CornerRadius</c> from a TemplateBinding, so setting the button's own
+    /// corner radius to the same one-rounded-corner shape makes the lit plate that
+    /// shape too. The Path is what bootstraps the hover — with no background there
+    /// would be nothing to enter.</para>
+    ///
+    /// <para>The margins undo the header's padding exactly, putting the target
+    /// flush against the panel's inner edge, and the side runs to the header's
+    /// inner boundary. Nothing is nudged by an eyeballed offset.</para></summary>
+    private Button CornerButton(string geometry, string tip, bool right, bool stroked, out ContentControl glyphHost)
     {
-        var p = new Path
+        double r = InnerRadius, s = CornerSide;
+        // One rounded corner, three square. Built here rather than as a literal
+        // because it is a function of the panel's radius and the header's height.
+        string outline = right
+            ? $"M 0,0 L {s - r},0 A {r},{r} 0 0 1 {s},{r} L {s},{s} L 0,{s} Z"
+            : $"M 0,{r} A {r},{r} 0 0 1 {r},0 L {s},0 L {s},{s} L 0,{s} Z";
+
+        var hit = new Path
         {
-            Data = ParseGeometry(geometry),
-            StrokeThickness = 1.5,
-            StrokeStartLineCap = PenLineCap.Round,
-            StrokeEndLineCap = PenLineCap.Round,
-            Width = 16,
-            Height = 16,
+            Data = ParseGeometry(outline),
+            // Transparent, NOT null: a null fill is invisible to hit testing and
+            // this shape IS the target.
+            Fill = new SolidColorBrush(Colors.Transparent),
             Stretch = Stretch.None,
         };
-        Bind(p, Shape.StrokeProperty, "InkBrush", theme: true);
+        glyphHost = new ContentControl
+        {
+            IsTabStop = false,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        };
+        var box = new Grid { Width = s, Height = s, Children = { hit, glyphHost } };
+
         var b = new Button
         {
-            Width = 28,
-            Height = 26,
+            Width = s,
+            Height = s,
+            MinWidth = 0,
+            MinHeight = 0,
             Padding = new Thickness(0),
-            Background = new SolidColorBrush(Colors.Transparent),
+            Background = null,
             BorderThickness = new Thickness(0),
-            VerticalAlignment = VerticalAlignment.Center,
-            Content = p,
+            CornerRadius = right ? new CornerRadius(0, r, 0, 0) : new CornerRadius(r, 0, 0, 0),
+            HorizontalAlignment = right ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Stretch,
+            Margin = right
+                ? new Thickness(0, -HeadPadY, -HeadPadX, 0)
+                : new Thickness(-HeadPadX, -HeadPadY, 0, 0),
+            Content = box,
         };
         ToolTipService.SetToolTip(b, tip);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, tip);
+        PaintCornerMark(glyphHost, geometry, stroked);
         return b;
     }
 
-    /// <summary>§14.3's corner target: an <see cref="IconButton"/> resized and
-    /// placed to fill one top corner of the panel without crossing its rounded
-    /// edge.
+    /// <summary>Re-inks a corner mark from <see cref="PageTheme"/>.
     ///
-    /// <para>The margins undo the header's padding and then step back in by
-    /// <see cref="CornerInset"/>, so the button's outer corner lands on the arc
-    /// rather than beyond it. <paramref name="glyph"/> pins the mark at the exact
-    /// offset it had before this - the region that responds is the only thing
-    /// 14.3 asks to change - which is why the content is aligned top-left rather
-    /// than centred in the new, larger box.</para>
-    ///
-    /// <para>The button keeps <see cref="IconButton"/>'s TRANSPARENT background
-    /// rather than a null one: a null Background is invisible to hit testing, and
-    /// a corner target that is not hit-testable is the same defect from the other
-    /// side.</para></summary>
-    private static Button CornerButton(string geometry, string tip, bool right, Thickness glyph)
-    {
-        var b = IconButton(geometry, tip);
-        b.Width = b.Height = CornerSide;
-        b.MinWidth = b.MinHeight = 0;
-        b.Padding = new Thickness(0);
-        b.HorizontalAlignment = right ? HorizontalAlignment.Right : HorizontalAlignment.Left;
-        b.VerticalAlignment = VerticalAlignment.Top;
-        b.HorizontalContentAlignment = HorizontalAlignment.Left;
-        b.VerticalContentAlignment = VerticalAlignment.Top;
-        b.Margin = right
-            ? new Thickness(0, CornerInset - HeadPadY, CornerInset - HeadPadX, 0)
-            : new Thickness(CornerInset - HeadPadX, CornerInset - HeadPadY, 0, 0);
-        if (b.Content is FrameworkElement mark) mark.Margin = glyph;
-        return b;
-    }
+    /// <para>Called from <see cref="PaintPanel"/> rather than only at
+    /// construction. The old marks took their stroke from a ONE-SHOT theme
+    /// dictionary fetch, which is a Brush object assigned once — so a page change
+    /// repainted the panel's ground, its title and its tab rule and left these two
+    /// marks inked for the page before it. On a light-to-dark turn that is a mark
+    /// the same colour as the plate it sits on.</para></summary>
+    private static void PaintCornerMark(ContentControl host, string geometry, bool stroked) =>
+        host.Content = Icons.Mark(geometry, PageTheme.OnSurface, CornerMarkSize,
+                                  stroked, CornerMarkStroke);
 
     /// <summary>The XamlRoot the app is showing in; the window records it so the
     /// theme lookups below can read the LIVE root element.</summary>

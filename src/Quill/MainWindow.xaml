@@ -1014,8 +1014,17 @@
             </Border>
 
             <!-- ===================== NOTEBOOK GALLERY (#16) ===================== -->
-            <!-- F1: liquid-glass shortcut cheat-sheet (#53) -->
-            <Border x:Name="ShortcutsPanel" Visibility="Collapsed" Background="{ThemeResource CardBrush}"
+            <!-- F1: liquid-glass shortcut cheat-sheet (#53), and — since CONCEPTS-REF 5 —
+                 what the top bar's `?` opens. Canvas.ZIndex 90 because of that second
+                 route: the sheet used to be reachable only by F1 and a menu item, both
+                 of which a user presses while looking at the canvas, and at the default
+                 0 it drew UNDER the dial (60), the two chrome bars (70) and the value
+                 popover (80). A centred 620-wide card and a dial docked top-left overlap
+                 on any modest window, so a Help button that put its own answer behind the
+                 dial would be worse than no button. 90 clears all three and still sits
+                 below the grid editor (95) and the fullscreen strip (150), neither of
+                 which this can be open underneath. -->
+            <Border x:Name="ShortcutsPanel" Visibility="Collapsed" Canvas.ZIndex="90" Background="{ThemeResource CardBrush}"
                     BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1.5"
                     CornerRadius="{StaticResource CardCorner}" MaxWidth="620" Padding="24,18"
                     HorizontalAlignment="Center" VerticalAlignment="Center" Tapped="Shortcuts_Close">

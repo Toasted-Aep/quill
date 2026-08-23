@@ -361,9 +361,12 @@ public sealed partial class MainWindow : Window
         }
         catch { }
 
-        // Startup experience: full screen + the notebook/section/page picker,
-        // with the last-used page already loaded behind it (#31).
-        if (_library.StartFullscreen)
+        // Startup experience: MAXIMISED + the notebook/section/page picker, with
+        // the last-used page already loaded behind it (#31). Maximised, not the
+        // fullscreen presenter — 8105f60 chose that and relabelled the toggle to
+        // say so; the field is named for what it does as of the StartMaximised
+        // rename, so this line and its setting no longer disagree.
+        if (_library.StartMaximised)
             try { if (AppWindow.Presenter is OverlappedPresenter sop) sop.Maximize(); } catch { }
         UpdateFullscreenIcon();
         // the startup picker needs notebooks, and touch mode needs the saved
@@ -388,6 +391,11 @@ public sealed partial class MainWindow : Window
             if (fb is Flyout fl)
                 fl.Opened += (_, _) => { if (fl.Content is FrameworkElement root) PopIn(root, 0.9, 280); };
         }
+        // 17.3: the custom-colour button offers APPLY or EDIT depending on where
+        // the page stands, and the page can move while the flyout is shut. Asked
+        // as it opens, so it can never be showing last time's answer.
+        if (PageSettingsBtn.Flyout is Flyout pageFly)
+            pageFly.Opening += (_, _) => SyncBgCustomButton();
 
         // The veil is opaque, so pointer input cannot reach the half-built UI,
         // and no accelerators exist yet (ApplyKeyPreset runs in FinishStartup) —
@@ -427,7 +435,7 @@ public sealed partial class MainWindow : Window
         _library.WinW = h.WinW;
         _library.WinH = h.WinH;
         _library.WinMaximized = h.WinMaximized;
-        _library.StartFullscreen = h.StartFullscreen;
+        _library.StartMaximised = h.StartMaximised;
     }
 
     private async Task BeginLibraryLoadAsync()
@@ -706,6 +714,9 @@ public sealed partial class MainWindow : Window
             ToggleFullscreen = () => Fullscreen_Click(this, new RoutedEventArgs()),
             RenamePage = () => _ = RenamePageFromTitleAsync(),
             OpenSettings = OpenSettingsWindow,
+            // Section 5's `?`. The same toggle F1 and the app menu already call,
+            // so Help is one surface with three doors rather than three surfaces.
+            ToggleHelp = ToggleShortcutsPanel,
             ImportPdf = () => ImportPdf_Click(this, new RoutedEventArgs()),
             PasteImage = () => _ = PasteImageAsync(),
             PickOpen = PickOpenFileAsync,
@@ -751,6 +762,15 @@ public sealed partial class MainWindow : Window
             Flip = horizontal => Surface.FlipSelection(horizontal),
             Rotate = () => Surface.RotateSelectionQuarter(),
             ReplaceAttachment = () => _ = ReplaceAttachmentAsync(),
+            // 11.9's four, on the box being EDITED rather than on the selection.
+            // Separate calls on purpose - the selection ones read _selected /
+            // _selShapes / _selTexts, all empty while a bubble is merely being
+            // typed in, so pointing the editing bar at them would give it four
+            // marks that quietly did nothing.
+            CancelEditing = () => Surface.CancelTextEditing(),
+            DuplicateEditingText = () => Surface.DuplicateEditingText(),
+            ToggleEditingTextLock = () => Surface.ToggleEditingTextLock(),
+            DeleteEditingText = () => Surface.DeleteEditingText(),
             // The two states in which the selection's own controls must not be on
             // screen. The COPIC wheel reports itself as covering the whole canvas
             // (9.3) and the panel solver already pushes every other cluster out of
@@ -5697,9 +5717,9 @@ public sealed partial class MainWindow : Window
 
         // ---- startup behaviour ----
         panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Startup.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
-        var fsToggle = new ToggleSwitch { Header = Loc.T("Settings.Startup.Maximised"), IsOn = _library.StartFullscreen };
-        fsToggle.Toggled += (_, _) => { _library.StartFullscreen = fsToggle.IsOn; ScheduleSave(); };
-        panel.Children.Add(fsToggle);
+        var maxToggle = new ToggleSwitch { Header = Loc.T("Settings.Startup.Maximised"), IsOn = _library.StartMaximised };
+        maxToggle.Toggled += (_, _) => { _library.StartMaximised = maxToggle.IsOn; ScheduleSave(); };
+        panel.Children.Add(maxToggle);
         var pickerToggle = new ToggleSwitch { Header = Loc.T("Settings.Startup.ShowPicker"), IsOn = _library.StartOnGallery };
         pickerToggle.Toggled += (_, _) => { _library.StartOnGallery = pickerToggle.IsOn; ScheduleSave(); };
         panel.Children.Add(pickerToggle);
@@ -6741,16 +6761,55 @@ public sealed partial class MainWindow : Window
         SetPageBackground(hex);
     }
 
+    /// <summary>§9.5 / §17.3 — press once to APPLY the remembered colour, press
+    /// again to EDIT it.
+    ///
+    /// <para>This button used to open the wheel on EVERY press, seeded with
+    /// <c>_curPage.Background</c>, and it never wrote the user's choice down.
+    /// That is 17.3's "mirrors the current page colour" in its purest form: the
+    /// control held nothing, so there was nothing to apply and no second press
+    /// to distinguish. It now reads the same remembered colour and asks the same
+    /// question the settings panel's swatch does - <see cref="PaperTextures"/>
+    /// owns both, so the two surfaces cannot drift into two conventions.</para></summary>
     private void BgCustom_Click(object sender, RoutedEventArgs e)
     {
         if (_curPage == null) return;
+        if (!PaperTextures.CustomPressEdits(_library, _curPage))
+        {
+            // FIRST press: apply what the user already chose. No wheel.
+            SetPagePaper(null, _library.CustomPageColor);
+            SyncBgCustomButton();
+            return;
+        }
         // One drag of the picker is ONE edit session: the contrast baseline is
         // taken on the first callback and held until the picker closes, so the
         // sixty callbacks in between cannot compound.
         EndContrastSession();
-        OpenColorPicker(BgCustomBtn, ColorUtil.Parse(_curPage.Background),
-            c => SetPageBackground(ColorUtil.ToHex(c)),
+        OpenColorPicker(BgCustomBtn, PaperTextures.CustomSeed(_library, _curPage),
+            c =>
+            {
+                PaperTextures.RememberCustom(_library, c);
+                SetPageBackground(ColorUtil.ToHex(c));
+                SyncBgCustomButton();
+            },
             EndContrastSession);
+    }
+
+    /// <summary>Keeps the flyout's custom-colour button telling the truth about
+    /// which of §9.5's two presses it is offering. Called wherever the page or
+    /// the remembered colour can have moved.</summary>
+    private void SyncBgCustomButton()
+    {
+        if (BgCustomBtn == null) return;
+        bool edits = PaperTextures.CustomPressEdits(_library, _curPage);
+        BgCustomBtn.Content = PaperTextures.CustomColour(_library) == null
+            ? "Custom colour…"
+            : edits ? "Custom colour — edit…" : "Custom colour";
+        ToolTipService.SetToolTip(BgCustomBtn,
+            PaperTextures.CustomColour(_library) == null
+                ? "Pick a custom page colour."
+                : edits ? "Press to edit this colour."
+                        : "Applies your custom colour. Press it again to edit it.");
     }
 
     // Applies a page background and, when the page flips between light and dark,
@@ -7517,34 +7576,46 @@ public sealed partial class MainWindow : Window
         ApplyFullscreenChrome();
     }
 
-    /// <summary>CONCEPTS-REF 15.3 item c. The clearance left between the hover
-    /// strip's band and the text format bar underneath it. A few DIPs rather than
-    /// a flush abutment: the two are computed from different roots, and a 1 DIP
-    /// rounding difference on another scale factor should not be able to make them
-    /// touch.
+    /// <summary>CONCEPTS-REF 17.15. HOW MUCH OF THE TOP BAR'S RIGHT END IS KEPT
+    /// CLEAR FOR THE HOVER STRIP — the horizontal answer that replaces §15.3 item
+    /// c's vertical one.
     ///
-    /// <para>RAISED FROM 4 TO 12, 2026-08-17. The distance that matters is not
-    /// this constant but the one from the BOTTOM OF OverStrip's hit rectangle —
-    /// <c>StripHeight + StripSlack</c> = 40 DIP — down to the format bar's first
-    /// control. At 4 that control started at <c>StripHeight</c> (34) + 4 + the
-    /// bar's own 4 DIP top padding = 42, so the clearance was TWO DIP. Two DIP is
-    /// inside layout-rounding noise: 14.3's corner target snapped from 5.747 to
-    /// 5.5 and broke a hitbox on exactly that scale of error. At 12 the first
-    /// control starts at 34 + 12 + 4 = 50 and clears the hit rectangle by 10.</para>
+    /// <para><b>What was wrong.</b> §15.3 item c kept the strip off the format
+    /// bar's controls by pushing the whole bar DOWN by
+    /// <c>StripHeight + FormatBarStripGap</c> = 34 + 12 = 46 DIP, and §16 raised
+    /// the gap from 4 to 12 which widened it further. The user: "in full screen
+    /// text mode text appears a long way down. There's a big margin there still."
+    /// They are right, and the cost was being paid on the scarce axis: in text
+    /// mode the page loses 46 DIP of height for a strip that is only ever 34 tall,
+    /// only ever covers the RIGHT 138 DIP, and is not even on screen until the
+    /// pointer asks for it.</para>
     ///
-    /// <para>Ten rather than the eight asked for, because a nominal 8 that rounds
-    /// to 7.5 has not met an 8 DIP floor, and the entire point of raising this is
-    /// to stop the answer depending on rounding. The 2 DIP of overshoot costs 2
-    /// DIP of canvas in text mode and nowhere else.</para>
+    /// <para><b>The fix, and why it still satisfies §15.3 item c.</b> The actual
+    /// requirement is "no live control may sit under the strip". The strip is
+    /// flush to the top-RIGHT, so that can be met by reserving width instead of
+    /// height — and width is the axis a horizontally scrolling toolbar has to
+    /// spare. So the vertical offset is gone entirely, and the topmost bar in
+    /// fullscreen instead carries this much extra RIGHT padding. Nothing is lost:
+    /// the bar scrolls, so every control is still reachable, and the page gets all
+    /// 46 DIP back.</para>
     ///
-    /// <para>THIS TRACKS <c>StripSlack</c>, NOT ONLY <c>StripHeight</c>. The 34 is
-    /// already read from Metrics below; the 6 DIP of slack is not, and choosing
-    /// this constant without reference to that slack is what produced the 2 DIP.
-    /// The invariant to hold if either is retuned:
-    /// <c>(StripHeight + FormatBarStripGap + bar padding) − (StripHeight +
-    /// StripSlack) ≥ 8</c>, confirmed by MEASURING where the first button row
-    /// lands, not by re-doing this arithmetic.</para></summary>
-    private const double FormatBarStripGap = 12;
+    /// <para><b>This is NOT the hover-driven optimisation §15.3 item c refused.</b>
+    /// That refusal was about moving controls WHILE the pointer reaches for them —
+    /// "it would move a row of buttons under the pointer as the user reaches for
+    /// them, which reads as broken however correct the geometry is". This
+    /// reservation is a property of being fullscreen, exactly as the old offset
+    /// was: it does not change when the strip reveals or retracts, and no control
+    /// moves under the pointer. The ruling was fixed-versus-hover, and this stays
+    /// on the fixed side of it.</para>
+    ///
+    /// <para><b>It tracks the strip rather than restating it.</b>
+    /// <c>StripWidth</c> is <c>MarkPitch * MarkCount</c> and Build asserts the
+    /// count, and <c>StripSlack</c> is included because the strip's own hit
+    /// rectangle in <c>OverStrip</c> is that much wider than the strip — which is
+    /// the slack §15.3 item c's arithmetic originally forgot and had to be
+    /// corrected for.</para></summary>
+    private static double StripReserve =>
+        FullscreenChrome.Metrics.StripWidth + FullscreenChrome.Metrics.StripSlack;
 
     /// <summary>CONCEPTS-REF 15.3 — the chrome changes SHAPE in fullscreen.
     ///
@@ -7573,33 +7644,35 @@ public sealed partial class MainWindow : Window
             _fsChrome?.SetActive(fs);
             bool fold = fs && _chromeBars?.IsVisible == true;
 
-            // CONCEPTS-REF 15.3 item c - THE FORMAT BAR MOVES OUT FROM UNDER THE
-            // STRIP, and it does so for as long as the caption row is folded
-            // rather than only while the strip is revealed.
+            // CONCEPTS-REF 17.15 - THE FORMAT BAR MOVES OUT FROM UNDER THE STRIP
+            // SIDEWAYS, NOT DOWNWARD. See StripReserve for the whole argument;
+            // the short version is that the requirement is "no live control under
+            // the strip", the strip is flush top-RIGHT, and reserving width costs
+            // a horizontally scrolling toolbar nothing while reserving height cost
+            // the page 46 DIP on the axis text needs most.
             //
-            // The bar is Grid.Row 1. Folding the caption row away is what lifts it
-            // to the screen's top edge, which is the strip's own band, so in text
-            // mode the strip covered live buttons and whether they could be
-            // reached depended on which direction the pointer arrived from.
+            // The vertical offset is therefore GONE. This is not the hover-driven
+            // optimisation 15.3 item c refused: that refusal was about controls
+            // moving WHILE the pointer reaches for them, and this reservation is a
+            // property of being fullscreen exactly as the old offset was.
             //
-            // The user ruled for a FIXED offset over the cheaper hover-driven one.
-            // Shifting the bar only while the strip is out costs no canvas at all,
-            // but it would move a row of buttons under the pointer as the user
-            // reaches for them, which reads as broken however correct the geometry
-            // is. So the offset is a property of being fullscreen, not of the
-            // strip's animation state, and the ~34 DIP of canvas it costs in text
-            // mode is a price that was knowingly paid. DO NOT make this
-            // hover-dependent again as an optimisation.
+            // WHICH bar gets the reservation is whichever one is topmost. Folded,
+            // the caption row is away and the format bar is at the screen's top
+            // edge; unfolded, the caption row is that bar and the format bar sits
+            // safely below it. Only the topmost can be under the strip, and giving
+            // both the padding would cost the unfolded case 144 DIP for nothing.
             //
-            // Taken from FullscreenChrome.Metrics.StripHeight rather than written
-            // as a literal 34: retuning the strip has to move the bar with it, and
-            // a second copy of the number is how two values that must agree stop
-            // agreeing. Costs nothing while the bar is Collapsed, because a
-            // collapsed child contributes no height to an Auto row - so the canvas
-            // only pays for this in text mode, which is the whole bargain.
-            FormatBar.Margin = fold
-                ? new Thickness(0, FullscreenChrome.Metrics.StripHeight + FormatBarStripGap, 0, 0)
-                : new Thickness(0);
+            // 17.15 also asks whether the two bars need separate ROWS in
+            // fullscreen at all. They do not, and the code already reflects it in
+            // the case that matters: with ChromeBars up the caption row is folded
+            // and there is exactly ONE bar - the 46 DIP that replaced the folded
+            // row was the entire fault, not the row. With ChromeBars down the two
+            // are not a caption row plus a toolbar but two genuine toolbars, and
+            // that top bar is then the only chrome there is, so folding it would
+            // leave a bare canvas with no way back except the keyboard.
+            FormatBar.Margin = new Thickness(0);
+            FormatBar.Padding = new Thickness(8, 4, 8 + (fold ? StripReserve : 0), 4);
+            TopBar.Padding = new Thickness(6, 1, 6 + (fs && !fold ? StripReserve : 0), 1);
 
             if (fold)
             {

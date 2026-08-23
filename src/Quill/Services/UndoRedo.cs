@@ -798,6 +798,123 @@ public class AssignLayerAction : IPageAction
     }
 }
 
+/// <summary>CONCEPTS-REF 18.12 item 3: DELETE A LAYER, AND ITS DRAWING WITH IT.
+///
+/// <para><b>This action exists because of the ruling, not beside it.</b> The
+/// model's original default reassigned a deleted layer's content to the base
+/// layer, which could not destroy work; the user ruled for Photoshop's
+/// behaviour instead, and the moment deleting a layer can destroy a drawing the
+/// deletion has to be undoable and <b>the undo has to bring the CONTENT
+/// back</b>. A <c>Layer</c> row returning empty would be worse than the old
+/// default: the user would believe their work was recoverable and find an empty
+/// shell.</para>
+///
+/// <para>So this captures the elements themselves — not copies, the very
+/// objects — together with the INDEX each held in its list, and puts them back
+/// where they were. Their <c>LayerKey</c> is never touched on the way out
+/// (<c>List.RemoveAll</c> does not modify what it removes), so every element
+/// returns still naming the layer it belonged to, and the layer it names is
+/// reinserted at its own old position in the stack. Undo therefore restores
+/// z-order and membership together rather than dropping everything on top of
+/// the base layer.</para>
+///
+/// <para>Nothing is cloned and nothing is serialised: an undo stack a hundred
+/// layer-deletes deep costs the references it already held.</para></summary>
+public class RemoveLayerAction : IPageAction
+{
+    private readonly int _key;
+    private readonly LayerRemoval _mode;
+
+    // DeleteContent: what was taken, and the index it occupied.
+    private readonly List<(int Index, PenStroke Item)> _strokes = new();
+    private readonly List<(int Index, ShapeElement Item)> _shapes = new();
+    private readonly List<(int Index, TextElement Item)> _texts = new();
+    // ReassignToBase: what was merely repointed. Their old key is _key.
+    private readonly List<PenStroke> _movedStrokes = new();
+    private readonly List<ShapeElement> _movedShapes = new();
+    private readonly List<TextElement> _movedTexts = new();
+
+    private Layer? _layer;
+    private int _layerIndex = -1;
+    private int _activeBefore;
+    private bool _applied;
+
+    public RemoveLayerAction(int layerKey, LayerRemoval mode = LayerRemoval.DeleteContent)
+    {
+        _key = layerKey;
+        _mode = mode;
+    }
+
+    public string Description => _mode == LayerRemoval.DeleteContent
+        ? "Delete layer" : "Remove layer, keep drawing";
+
+    public void Do(NotePage page)
+    {
+        _strokes.Clear(); _shapes.Clear(); _texts.Clear();
+        _movedStrokes.Clear(); _movedShapes.Clear(); _movedTexts.Clear();
+        _layer = null; _layerIndex = -1;
+        _activeBefore = page.ActiveLayer;
+
+        var ls = page.Layers;
+        if (ls != null)
+            for (int i = 0; i < ls.Count; i++)
+                if (ls[i].Key == _key) { _layer = ls[i]; _layerIndex = i; break; }
+
+        // Ascending, so Undo can insert at the same indices in the same order.
+        if (_mode == LayerRemoval.DeleteContent)
+        {
+            for (int i = 0; i < page.Strokes.Count; i++)
+                if (page.Strokes[i].LayerKey == _key) _strokes.Add((i, page.Strokes[i]));
+            for (int i = 0; i < page.Shapes.Count; i++)
+                if (page.Shapes[i].LayerKey == _key) _shapes.Add((i, page.Shapes[i]));
+            for (int i = 0; i < page.Texts.Count; i++)
+                if (page.Texts[i].LayerKey == _key) _texts.Add((i, page.Texts[i]));
+        }
+        else
+        {
+            foreach (var s in page.Strokes) if (s.LayerKey == _key) _movedStrokes.Add(s);
+            foreach (var s in page.Shapes) if (s.LayerKey == _key) _movedShapes.Add(s);
+            foreach (var t in page.Texts) if (t.LayerKey == _key) _movedTexts.Add(t);
+        }
+
+        // PageLayers refuses the base layer and refuses to empty the list. When
+        // it does, nothing was taken and Undo must not put anything back.
+        _applied = PageLayers.Remove(page, _key, _mode);
+    }
+
+    public void Undo(NotePage page)
+    {
+        if (!_applied) return;
+        var ls = PageLayers.Materialise(page);
+        if (_layer != null && ls.All(l => l.Key != _key))
+            ls.Insert(Math.Clamp(_layerIndex, 0, ls.Count), _layer);
+
+        if (_mode == LayerRemoval.DeleteContent)
+        {
+            foreach (var (i, s) in _strokes) page.Strokes.Insert(Math.Clamp(i, 0, page.Strokes.Count), s);
+            foreach (var (i, s) in _shapes) page.Shapes.Insert(Math.Clamp(i, 0, page.Shapes.Count), s);
+            foreach (var (i, t) in _texts) page.Texts.Insert(Math.Clamp(i, 0, page.Texts.Count), t);
+        }
+        else
+        {
+            foreach (var s in _movedStrokes) s.LayerKey = _key;
+            foreach (var s in _movedShapes) s.LayerKey = _key;
+            foreach (var t in _movedTexts) t.LayerKey = _key;
+        }
+        page.ActiveLayer = _activeBefore;
+    }
+
+    public Rect? AffectedBounds(NotePage page)
+    {
+        Rect? r = ActionBounds.Of(_strokes.Select(p => p.Item).Concat(_movedStrokes));
+        foreach (var s in _shapes.Select(p => p.Item).Concat(_movedShapes))
+            r = ActionBounds.Union(r, ActionBounds.Of(s));
+        foreach (var t in _texts.Select(p => p.Item).Concat(_movedTexts))
+            r = ActionBounds.Union(r, ActionBounds.Of(t));
+        return r;
+    }
+}
+
 /// <summary>CONCEPTS-REF 16.2's PAPERCLIP: swap the file behind an attachment
 /// and keep it exactly where it is.
 ///

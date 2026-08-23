@@ -73,15 +73,32 @@ public class Layer
     public override string ToString() => Name.Length > 0 ? Name : $"Layer#{Key}";
 }
 
-/// <summary>What happens to a deleted layer's content. Reassign is the default
-/// and always will be: content that is intact but invisible is the failure this
-/// model exists to refuse.</summary>
+/// <summary>What happens to a deleted layer's content.
+///
+/// <para><b>DeleteContent is the default. That is the user's ruling</b> (18.12
+/// item 3), and it replaced a reassign-to-base default this model originally
+/// chose on safety grounds. Deleting a layer deletes its drawing, Photoshop's
+/// way.</para>
+///
+/// <para><b>The ruling brings an obligation with it and the obligation is not
+/// optional.</b> Reassign could not destroy work; this can, so a layer deletion
+/// must go through the undo stack and its undo must bring back the CONTENT and
+/// not merely the row. See <c>RemoveLayerAction</c> in Services/UndoRedo.cs,
+/// which is the only thing that should be calling
+/// <see cref="PageLayers.Remove"/> from a command path — a Layer coming back
+/// empty would be worse than the old default, because the user would believe
+/// their work was recoverable and find an empty shell.</para>
+///
+/// <para>ReassignToBase is kept and is still the right answer for a route that
+/// is getting RID OF A LAYER rather than deleting a drawing — merging down, or
+/// tidying an empty structure.</para></summary>
 public enum LayerRemoval
 {
+    /// <summary>Delete the content with the layer. The user's ruling, and the
+    /// default. Undoable only through <c>RemoveLayerAction</c>.</summary>
+    DeleteContent,
     /// <summary>Move the content to the base layer. Nothing is lost.</summary>
     ReassignToBase,
-    /// <summary>Delete the content with the layer, Photoshop-style.</summary>
-    DeleteContent,
 }
 
 /// <summary>Which of a page's three content lists a row came from.</summary>
@@ -356,13 +373,18 @@ public static class PageLayers
         return layer;
     }
 
-    /// <summary>Removes a layer. Its content is REASSIGNED TO THE BASE LAYER by
-    /// default; deleting it is opt-in and never implied.
+    /// <summary>Removes a layer, DELETING ITS CONTENT WITH IT by default — the
+    /// user's ruling (18.12 item 3).
+    ///
+    /// <para><b>Call this from <c>RemoveLayerAction</c>, not from a command path
+    /// directly.</b> The default destroys drawing, so the deletion has to be
+    /// undoable and the undo has to restore the content; that action is what
+    /// makes both true. This method is the mechanism, not the command.</para>
     ///
     /// <para>Refuses to remove the base layer, and refuses to empty the list:
     /// a page must always have somewhere for content to be.</para></summary>
     public static bool Remove(NotePage page, int key,
-                              LayerRemoval mode = LayerRemoval.ReassignToBase)
+                              LayerRemoval mode = LayerRemoval.DeleteContent)
     {
         if (key == BaseKey) return false;
         var ls = page.Layers;
