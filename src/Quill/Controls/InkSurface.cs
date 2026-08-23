@@ -43,6 +43,16 @@ public sealed class InkSurface : UserControl
     public TimeSpan? AudioPlayheadPosition { get; set; }
     public long? RecordingStartTicks { get; set; }
     public event Action? ViewChanged;
+    /// <summary>Raised when the SUBJECT's bounds move while the view holds still
+    /// - a selection being dragged or scaled, and the recompute after the drop.
+    ///
+    /// <para>Neither existing signal can carry this. <see cref="ViewChanged"/> is
+    /// about pan and zoom, and a drag changes nothing about the view;
+    /// <c>SelectionState.Changed</c> deliberately drops a publish whose rendered
+    /// properties match the last one, which a pure move's always do - same kind,
+    /// same count, same flags. So the chrome had nothing to listen to and framed
+    /// where the selection STARTED, through the drag and on past the drop.</para></summary>
+    public event Action? SubjectMoved;
     /// <summary>Raised the one time a page's CONCEPTS-REF 14.5 reference frame is
     /// captured, so the host can get it persisted. Fires at most once per page.</summary>
     public event Action? RefFrameCaptured;
@@ -1173,6 +1183,14 @@ public sealed class InkSurface : UserControl
     {
         if (_page == null || _replaying) return;
         CancelPendingText(); // a fresh press dismisses any blinking caret
+        // _skipNextRightTap is a one-shot that is only ever cleared by being
+        // CONSUMED, so a gesture that arms it and then draws no RightTapped -
+        // the barrel button's, which the recogniser raises unreliably over a
+        // Win2D canvas - leaves it armed to eat somebody else's menu later.
+        // 17.7 adds a second site that arms it, so the flag is now also cleared
+        // by the next press: whatever armed it belonged to the gesture that has
+        // just ended, and cannot outlive this one.
+        _skipNextRightTap = false;
         var pp = e.GetCurrentPoint(_canvas);
         var props = pp.Properties;
         var device = e.Pointer.PointerDeviceType;
@@ -1735,6 +1753,7 @@ public sealed class InkSurface : UserControl
         _selBounds = new Rect(Math.Min(nx, ax), Math.Min(ny, ay),
             _scaleBoundsOrig.Width * f, _scaleBoundsOrig.Height * f);
         _inkCacheDirty = true;
+        SubjectMoved?.Invoke();   // the chrome follows the scale
     }
 
     // Preview which stroke the object eraser would remove (#53).
@@ -2026,6 +2045,7 @@ public sealed class InkSurface : UserControl
                             Canvas.SetLeft(ui.Container, kv.Value.L + _moveDx);
                             Canvas.SetTop(ui.Container, kv.Value.T + _moveDy);
                         }
+                    SubjectMoved?.Invoke();   // the chrome follows the drag
                 }
                 else
                 {
@@ -2206,6 +2226,18 @@ public sealed class InkSurface : UserControl
                         _lasso = null;
                         _rectSelect = false;
                         SelectSingleStroke(clicked);
+                        // 17.7: this click SELECTED, so it must not also open the
+                        // dropdown. The barrel button reaches here as a right-tap
+                        // and the recogniser raises RightTapped behind it, which
+                        // is where the second half of "both the quick actions and
+                        // the dropdown" came from - the break below already keeps
+                        // the release path's own menu (#44) out of it.
+                        //
+                        // Suppressed HERE, on the outcome, rather than at the
+                        // press: a barrel tap on an ALREADY selected stroke never
+                        // arms a click-select, so it still opens that selection's
+                        // menu, which is #42 and is not what 17.7 is about.
+                        _skipNextRightTap = true;
                         break;
                     }
                     if (_clickSelectDeselectsEmpty)
@@ -3058,6 +3090,11 @@ public sealed class InkSurface : UserControl
         // told (16.3 / 16.9). SelectionState drops a publish that says the same
         // thing as the last one, so calling it from a hot path is free.
         PublishSelection();
+        // ...and that dropping is exactly why the chrome needs telling
+        // separately. The recompute after a DROP publishes the same kind, the
+        // same count and the same flags as before the drag, so Changed never
+        // fires and nothing would re-place the marks at their new home.
+        SubjectMoved?.Invoke();
     }
 
     private void RecomputeSelectionBoundsCore()
@@ -3109,9 +3146,30 @@ public sealed class InkSurface : UserControl
 
     /// <summary>World bounds of whatever the selection presentation should frame:
     /// the multi-selection if there is one, otherwise the active shape. Empty
-    /// when nothing is selected.</summary>
+    /// when nothing is selected.
+    ///
+    /// <para><b>A drag in flight is included.</b> A multi-selection being moved
+    /// writes nothing until the drop - its strokes, shapes and texts are
+    /// TRANSLATED at draw time by <c>_moveDx</c>/<c>_moveDy</c> while
+    /// <c>_selBounds</c> stays where the drag began - so the offset has to be
+    /// added here or the presentation frames where the selection used to be.
+    /// This predates 17.8, but 17.8 is what exposes it: the tinted rectangle it
+    /// removed was the only mark that followed a drag, and the corner circles
+    /// and the guides were already standing still behind it. The stale GUIDE is
+    /// the worse half - alignment is the only thing a guide is for, and one left
+    /// on the old bounds points at nothing that is there any more.</para>
+    ///
+    /// <para><b>The active-shape branch takes no offset, and must not.</b> A
+    /// single shape's drag writes straight through to its own X and Y as the
+    /// pointer moves (<c>_activeShape.X = _shapeOrig.X + ...</c>), so
+    /// <see cref="ShapeBounds"/> already reports where it is now; adding
+    /// <c>_moveDx</c> there would count the same movement twice. A live SCALE
+    /// needs nothing either - <c>ApplyScaleLive</c> rewrites <c>_selBounds</c>
+    /// itself on every step.</para></summary>
     public Rect SubjectBoundsWorld =>
-        HasMultiSelection && !_selBounds.IsEmpty ? _selBounds
+        HasMultiSelection && !_selBounds.IsEmpty
+            ? new Rect(_selBounds.X + _moveDx, _selBounds.Y + _moveDy,
+                       _selBounds.Width, _selBounds.Height)
         : _activeShape != null ? ShapeBounds(_activeShape)
         : Rect.Empty;
 
@@ -3487,28 +3545,87 @@ public sealed class InkSurface : UserControl
         return Color.FromArgb(c.A, Mix(c.R, VeilGrey.R, t), Mix(c.G, VeilGrey.G, t), Mix(c.B, VeilGrey.B, t));
     }
 
-    /// <summary>Whether this element is the SUBJECT and so holds full contrast.
-    /// 16.7 item 3: "The attachment itself does not fade. It is the subject."
+    /// <summary>The elements THIS veil exempts, so they hold full contrast -
+    /// 16.7 item 3, "the attachment itself does not fade. It is the subject."
+    ///
+    /// <para>A SNAPSHOT of the selection rather than a live read of it, for the
+    /// reason <see cref="CaptureVeilSubject"/> gives at length (17.13).</para>
     ///
     /// <para>WITH TWO ATTACHMENTS, both selected ones hold contrast and every
-    /// unselected one fades with the rest of the page. That falls out of asking
-    /// "is this element part of the selection?" rather than "is this element an
+    /// unselected one fades with the rest of the page. That falls out of filling
+    /// this set from the SELECTION rather than asking "is this element an
     /// image?", and it is the reading that keeps the effect meaning what it says:
     /// the page recedes behind WHAT IS BEING WORKED ON, and if the user has two
     /// attachments in hand then both of them are.</para></summary>
-    private bool IsSubject(PenStroke s) => _selectedSet.Contains(s);
-    private bool IsSubject(ShapeElement s) =>
-        ReferenceEquals(s, _activeShapeBack) || _selShapeSet.Contains(s);
-    private bool IsSubject(TextElement t) => _selTexts.Contains(t);
+    private readonly HashSet<object> _veilSubject = new(ReferenceEqualityComparer.Instance);
+
+    private bool IsSubject(PenStroke s) => _veilSubject.Contains(s);
+    private bool IsSubject(ShapeElement s) => _veilSubject.Contains(s);
+    private bool IsSubject(TextElement t) => _veilSubject.Contains(t);
+
+    /// <summary>17.13: TAKE THE EXEMPTION FROM THE SAME INSTANT AS THE VEIL.
+    ///
+    /// <para>The veil has two halves and they used to be read off two different
+    /// clocks. HOW MUCH veil is <c>_veil</c>, an animated double that takes
+    /// 190 ms up and 130 ms down and therefore lags the selection on purpose.
+    /// WHO is exempt was read from <c>_selectedSet</c>, <c>_selShapeSet</c> and
+    /// <c>_selTexts</c>, which turn over in the instant the click lands. One
+    /// <c>OnDraw</c> reads both, so on any edge where the two disagree it paints
+    /// a veil raised for one selection through an exemption belonging to
+    /// another.</para>
+    ///
+    /// <para><b>Going in, the two agreed by luck.</b> <c>_activeShape</c> assigns
+    /// its backing field before it publishes, so the subject was already exempt
+    /// on the first frame - and <c>_veil</c> starts from 0 there in any case, so
+    /// even a frame of disagreement would have shown nothing. <b>Coming out they
+    /// could not agree.</b> <see cref="PublishSelection"/> clears the selection
+    /// and only then calls <see cref="SetVeil"/>, which leaves <c>_veil</c>
+    /// sitting at 1 with NOTHING exempt: for the 130 ms of the fade-out the
+    /// attachment the veil had been raised for was painted with that veil -
+    /// fully grey on the first frame, decaying to none over the rest. That is
+    /// 17.13's "turns grey for a moment and returns", and it is exactly why
+    /// clicking INTO an attachment never showed it and clicking OUT always
+    /// did.</para>
+    ///
+    /// <para><b>Why a snapshot rather than a second exemption.</b> Another clause
+    /// on the test above would silence this one edge and leave both clocks
+    /// running, so the next thing to change the settle timing would bring it back
+    /// somewhere else. Capturing the subject where the veil level is set leaves
+    /// ONE clock. While the veil is up or rising the snapshot is refreshed from
+    /// the live selection on every publish, so swapping to a second attachment
+    /// moves the exemption in the same frame; while it is coming down the
+    /// snapshot is HELD, so the subject the veil was raised for keeps full
+    /// contrast until that veil is gone, and <see cref="VeilTick"/> releases it
+    /// at <c>_veil</c> 0 - the frame on which nothing is veiled anyway. The
+    /// selected attachment therefore never fades, not even transiently.</para>
+    ///
+    /// <para>Reference identity, not value equality: two strokes with identical
+    /// points are two subjects, and <see cref="ReferenceEqualityComparer"/> keeps
+    /// saying so even if these models ever become records.</para></summary>
+    private void CaptureVeilSubject()
+    {
+        _veilSubject.Clear();
+        foreach (var s in _selectedSet) _veilSubject.Add(s);
+        foreach (var sh in _selShapeSet) _veilSubject.Add(sh);
+        foreach (var t in _selTexts) _veilSubject.Add(t);
+        if (_activeShapeBack != null) _veilSubject.Add(_activeShapeBack);
+    }
 
     private void SetVeil(bool on)
     {
+        // 17.13: refresh WHO is exempt whenever the veil is up or heading up -
+        // including when _veilWant is already true and the early return below
+        // fires. Selecting a second attachment has to move the exemption in the
+        // same frame, and that arrives as a publish, not as a veil edge.
+        if (on) CaptureVeilSubject();
         if (_veilWant == on) return;
         _veilWant = on;
         if (ReduceMotion?.Invoke() == true)
         {
             StopVeilTick();
             _veil = on ? 1 : 0;
+            // No fade to outlive, so the subject is released here instead.
+            if (!on) _veilSubject.Clear();
             ApplyTextVeil();
             _inkCacheDirty = true;
             _canvas.Invalidate();
@@ -3559,6 +3676,11 @@ public sealed class InkSurface : UserControl
         _canvas.Invalidate();
         if (_veil != target) return;
         StopVeilTick();
+        // 17.13: the veil is fully lifted, so the selection it was raised for
+        // stops being exempt HERE rather than back on the deselect that started
+        // this fade. Holding it across the fade is the fix; releasing it on the
+        // frame where nothing is veiled anyway is what keeps that honest.
+        if (!_veilWant) _veilSubject.Clear();
         _inkCacheDirty = true;
         _canvas.Invalidate();       // the repaint that restores the page's colours
     }
@@ -4208,23 +4330,28 @@ public sealed class InkSurface : UserControl
             ds.DrawRectangle(r, accent, uiScale, _dashStyle);
         }
 
-        if (HasMultiSelection && !_selBounds.IsEmpty && !ExportChromeless)
-        {
-            var r = new Rect(_selBounds.X + _moveDx, _selBounds.Y + _moveDy, _selBounds.Width, _selBounds.Height);
-            ds.FillRectangle(r, Color.FromArgb(26, Accent.R, Accent.G, Accent.B));
-            ds.DrawRectangle(r, accent, uiScale, _dashStyle);
-
-            // corner handles: drag to scale the whole selection (#54)
-            if (!_movingSel)
-            {
-                float hs = 5.5f / ViewZoom;
-                foreach (var cpt in SelCorners())
-                {
-                    ds.FillRectangle(new Rect(cpt.X - hs, cpt.Y - hs, hs * 2, hs * 2), Colors.White);
-                    ds.DrawRectangle(new Rect(cpt.X - hs, cpt.Y - hs, hs * 2, hs * 2), accent, uiScale);
-                }
-            }
-        }
+        // 17.8: THE SELECTION TINT IS GONE, and nothing replaces it here.
+        //
+        // A committed selection used to be drawn on this canvas as a 26-alpha
+        // accent wash, a dashed rectangle on its bounds, and four white corner
+        // squares. All three are removed: "only the edges remain - the corner
+        // circles and the full-canvas guides of 16.2. No tinted rectangle, no
+        // dashed box." This was the suppression offered when the selection
+        // chrome landed and deferred until the user had seen it.
+        //
+        // The marks that remain are SelectionChrome's, which is XAML over this
+        // canvas rather than Win2D in it: four hollow Ellipses on the same four
+        // corners and four full-canvas guide lines projected from the same
+        // bounds (SubjectBoundsWorld reads _selBounds for a multi-selection, so
+        // the two framed exactly the same rectangle - the squares were a second
+        // set of corner marks sitting on top of the circles that 16.2 replaced).
+        //
+        // Only the DRAWING went. #54's scale drag is untouched: TryBeginScale
+        // still hit-tests SelCorners(), and those corners are still marked -
+        // by a circle now instead of a square. The RUBBER BANDS above are also
+        // untouched, and deliberately so: the lasso and the in-flight rectangle
+        // are a gesture in progress, not a selection, and 17.8 is about what a
+        // settled selection looks like.
 
         if (!_replaying) DrawRuler(ds, bg);
 

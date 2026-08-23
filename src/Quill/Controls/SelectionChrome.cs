@@ -294,6 +294,11 @@ public sealed class SelectionChrome
         _surface.ActiveTextChanged += _ => Sync();
         _surface.EditingTextGeometryChanged += OnEditingMoved;
         _surface.ViewChanged += OnViewMoved;
+        // The subject can move while the view holds still - a drag, a live
+        // scale, and the recompute after the drop. Place() rather than Sync():
+        // WHAT is selected has not changed, only where it is, so re-running the
+        // blocked check and rebuilding the bar's buttons would be waste.
+        _surface.SubjectMoved += Place;
         _host.SizeChanged += (_, _) => Place();
         PageTheme.Changed += Repaint;
 

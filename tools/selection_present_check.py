@@ -398,14 +398,79 @@ def veil_dataflow():
     check("16.7 - the fade honours reduce-motion",
           "ReduceMotion" in setv)
 
-    # 16.7 item 3 / the two-attachment question
+    # 16.7 item 3 / the two-attachment question, as 17.13 leaves it.
+    #
+    # The exemption is now ONE read of a snapshot, and the snapshot is filled
+    # from the SELECTION - so "both of two selected attachments hold contrast"
+    # is still the property pinned here, and "is this an image?" is still the
+    # answer refused. The ORDERING that keeps the subject exempt for as long as
+    # the veil lasts is a separate question and gets its own assertion below.
     subj = re.search(r"private bool IsSubject\(ShapeElement s\)\s*=>([^;]+);", stripped)
     subj = subj.group(1).strip() if subj else ""
+    cap = strip_comments(safe_body(src, "private void CaptureVeilSubject()"))
     check("16.7 item 3 - exemption asks 'is this part of the SELECTION?', not 'is "
           "this an image?' - which is what makes BOTH of two selected attachments "
           "hold contrast",
-          "_selShapeSet.Contains(s)" in subj and "ShapeKind.Image" not in subj,
+          "_veilSubject.Contains(s)" in subj and "ShapeKind.Image" not in subj and
+          "_selShapeSet" in cap and "_activeShapeBack" in cap and
+          "ShapeKind.Image" not in cap,
           " ".join(subj.split()) or "MISSING")
+
+    # =======================================================================
+    # 17.13 - THE ATTACHMENT ITSELF MUST NOT FADE, NOT EVEN TRANSIENTLY
+    # =======================================================================
+    # The reported defect: "the attachment also turns grey for a moment and
+    # returns after clicking out of it; clicking into the attachment does not do
+    # this." An ordering fault, not a colour one.
+    #
+    # The veil has two halves. HOW MUCH is _veil, animated, 190 ms up and 130 ms
+    # down, and so LAGGING the selection on purpose. WHO is exempt used to be
+    # read live from the selection sets, which turn over in the instant the
+    # click lands. One OnDraw reads both, so on the way OUT - selection cleared,
+    # _veil still at 1 - the attachment the veil had been raised FOR was painted
+    # with it for the length of the fade.
+    #
+    # Three clauses, because any one alone lets the transient back in:
+    #
+    #   ONE CLOCK. Every IsSubject overload reads the snapshot and nothing else.
+    #   A single surviving live read is a second clock and the race is back.
+    #
+    #   CAPTURED WHERE THE LEVEL IS SET. CaptureVeilSubject is called from
+    #   SetVeil, so the exemption and the veil level can never be taken from
+    #   different moments. (Called on the way UP only, so a publish that merely
+    #   swaps attachments still moves the exemption in the same frame.)
+    #
+    #   RELEASED AT _veil 0, NEVER ON THE DESELECT. VeilTick drops the snapshot
+    #   when the fade reaches its target; PublishSelection and ClearSelection
+    #   must not touch it. Clearing it on the deselect is precisely the old
+    #   behaviour rewritten, and is the tempting "tidy-up" that would reintroduce
+    #   the bug, so it is pinned as an absence rather than left to review.
+    setv_all = strip_comments(safe_body(src, "private void SetVeil(bool on)"))
+    tick_all = strip_comments(safe_body(src, "private void VeilTick("))
+    pub_all = strip_comments(safe_body(src, "private void PublishSelection()"))
+    clear_all = strip_comments(safe_body(src, "public void ClearSelection()"))
+    reads = re.findall(r"private bool IsSubject\([^)]*\)\s*=>([^;]+);", stripped)
+    one_clock = len(reads) == 3 and all(
+        "_veilSubject.Contains(" in r and
+        not any(live in r for live in ("_selectedSet", "_selShapeSet", "_selTexts",
+                                       "_activeShapeBack"))
+        for r in reads)
+    check("17.13 - the exemption runs off ONE clock: every IsSubject reads the "
+          "snapshot, the snapshot is captured where the veil LEVEL is set, and it "
+          "is released when the veil reaches 0 - never on the deselect, which is "
+          "what made the subject grey for a moment on the way out",
+          one_clock and
+          "CaptureVeilSubject();" in setv_all and
+          "_veilSubject.Clear();" in tick_all and
+          "_veilSubject" not in pub_all and
+          "_veilSubject" not in clear_all,
+          "%d/3 overloads on the snapshot; captured in SetVeil=%s; released in "
+          "VeilTick=%s; untouched by PublishSelection=%s, ClearSelection=%s"
+          % (sum(1 for r in reads if "_veilSubject.Contains(" in r),
+             "CaptureVeilSubject();" in setv_all,
+             "_veilSubject.Clear();" in tick_all,
+             "_veilSubject" not in pub_all,
+             "_veilSubject" not in clear_all))
 
     return locals_from_veil
 
