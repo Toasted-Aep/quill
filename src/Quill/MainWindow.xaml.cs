@@ -6566,9 +6566,23 @@ public sealed partial class MainWindow : Window
     /// of it - there is no timer and nothing to keep in step.</summary>
     private void ReportRotateAngle()
     {
+        // 17.11a, THE ONE MOMENT A USER IS ACTUALLY LIKELY TO BE MISLED: the
+        // handle has moved and the page has not. The dead cell and its tooltip
+        // are there to be read, and this is the instant nobody reads them - so
+        // it is said out loud, ONCE per session, at the first turn rather than
+        // every time the tool is picked up. A line on every selection would be
+        // noise, and noise is not honesty.
+        if (!_saidRotationIsInterfaceOnly && Math.Abs(Surface.PageRotationDeg) > 0.5)
+        {
+            _saidRotationIsInterfaceOnly = true;
+            ShowStatus("Rotate is an interface preview: the handle turns, the page does not. " +
+                       "Canvas rotation is not implemented yet, so the tilt readout stays at 0°.");
+        }
         if (MeasurementMenu.Degrees(Surface.PageRotationDeg) == _rotateMenuShown) return;
         BuildRotateMenu();
     }
+
+    private bool _saidRotationIsInterfaceOnly;
 
     /// <summary>The colour picker's own bottom menu (17.9).
     ///
