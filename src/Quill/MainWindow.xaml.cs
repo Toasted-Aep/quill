@@ -361,9 +361,12 @@ public sealed partial class MainWindow : Window
         }
         catch { }
 
-        // Startup experience: full screen + the notebook/section/page picker,
-        // with the last-used page already loaded behind it (#31).
-        if (_library.StartFullscreen)
+        // Startup experience: MAXIMISED + the notebook/section/page picker, with
+        // the last-used page already loaded behind it (#31). Maximised, not the
+        // fullscreen presenter — 8105f60 chose that and relabelled the toggle to
+        // say so; the field is named for what it does as of the StartMaximised
+        // rename, so this line and its setting no longer disagree.
+        if (_library.StartMaximised)
             try { if (AppWindow.Presenter is OverlappedPresenter sop) sop.Maximize(); } catch { }
         UpdateFullscreenIcon();
         // the startup picker needs notebooks, and touch mode needs the saved
@@ -432,7 +435,7 @@ public sealed partial class MainWindow : Window
         _library.WinW = h.WinW;
         _library.WinH = h.WinH;
         _library.WinMaximized = h.WinMaximized;
-        _library.StartFullscreen = h.StartFullscreen;
+        _library.StartMaximised = h.StartMaximised;
     }
 
     private async Task BeginLibraryLoadAsync()
@@ -5714,9 +5717,9 @@ public sealed partial class MainWindow : Window
 
         // ---- startup behaviour ----
         panel.Children.Add(new TextBlock { Text = Loc.T("Settings.Startup.Header"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 15, Margin = new Thickness(0, 10, 0, 0) });
-        var fsToggle = new ToggleSwitch { Header = Loc.T("Settings.Startup.Maximised"), IsOn = _library.StartFullscreen };
-        fsToggle.Toggled += (_, _) => { _library.StartFullscreen = fsToggle.IsOn; ScheduleSave(); };
-        panel.Children.Add(fsToggle);
+        var maxToggle = new ToggleSwitch { Header = Loc.T("Settings.Startup.Maximised"), IsOn = _library.StartMaximised };
+        maxToggle.Toggled += (_, _) => { _library.StartMaximised = maxToggle.IsOn; ScheduleSave(); };
+        panel.Children.Add(maxToggle);
         var pickerToggle = new ToggleSwitch { Header = Loc.T("Settings.Startup.ShowPicker"), IsOn = _library.StartOnGallery };
         pickerToggle.Toggled += (_, _) => { _library.StartOnGallery = pickerToggle.IsOn; ScheduleSave(); };
         panel.Children.Add(pickerToggle);

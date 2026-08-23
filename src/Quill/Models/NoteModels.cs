@@ -532,8 +532,30 @@ public class Library
     public double NotebookPanelH { get; set; }
     // Last page the user worked on — restored (and offered as "Continue") at startup.
     public Guid? LastPageId { get; set; }
-    // Startup behaviour: launch full screen with the notebook picker shown.
-    public bool StartFullscreen { get; set; } = true;
+    // Startup behaviour: launch MAXIMISED, with the notebook picker shown.
+    // Maximised and not the fullscreen presenter: 8105f60 made that choice
+    // deliberately and relabelled the toggle "Start maximised" to match. Only
+    // the field name lagged, and it read as a promise of a fullscreen this has
+    // not done since — hence StartMaximised.
+    public bool StartMaximised { get; set; } = true;
+    /// <summary>The pre-rename key, so a library written before the rename keeps
+    /// the user's choice.
+    ///
+    /// <para>NULLABLE because the default is <c>true</c>: a plain bool cannot tell
+    /// "this file predates the rename and said false" from "this key is simply
+    /// absent", and reading absence as false would switch the setting off for
+    /// everyone at once.</para>
+    ///
+    /// <para>The getter is always null and null is not written, so the old key
+    /// leaves library.json on the first save after the rename and this property
+    /// is read-only in practice. Same shape in
+    /// <see cref="Quill.Services.LibraryStore.UiHints"/>.</para></summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? StartFullscreen
+    {
+        get => null;
+        set { if (value is bool v) StartMaximised = v; }
+    }
     public bool StartOnGallery { get; set; } = true;
     // Accent colour for glows, highlights and buttons (#33).
     public string AccentColor { get; set; } = "#D97757";
