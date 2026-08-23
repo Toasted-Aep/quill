@@ -860,8 +860,13 @@ public sealed class BrushesWindow
 
     private static readonly ToolDef[] ToolCells =
     {
-        new("Selection", "Select", null, Icons.Select, false,
-            "Drag a lasso around strokes to move, scale or delete them."),
+        // 17.10. The old Selection tool, renamed: the lasso is now one of the
+        // mouse tool's two ways of selecting rather than a mode beside it, and
+        // the screen-bottom menu is where the rest of its options live. The tag
+        // moves to "Mouse" with it - a slot in an older library.json still says
+        // "Select", and InkSurface.SetTool folds that spelling into this one.
+        new("Mouse", "Mouse", null, Icons.Mouse, false,
+            "Click a stroke to select it, or draw a lasso around several."),
         new("Text", "Text", null, Icons.Text, false,
             "Place a text box and type into it."),
         new("Add space", "FreeSpace", null, Icons.FreeSpace, false,
@@ -883,6 +888,13 @@ public sealed class BrushesWindow
             "A straightedge to draw along. Twist with two fingers to tilt it, or click the angle bubble to type an exact one."),
         new("Mix", "Mix", null, Icons.Mix, false,
             "Tap a colour on the page to mix it into your ink. Tap bare paper and the ink thins instead, like adding water."),
+        // 17.11's two, added here for the same reason as those three: this row is
+        // what makes a tool assignable to a dial sector or a pen-row cell, so it
+        // is where "alongside the others" actually happens.
+        new("Pan", "Pan", null, Icons.Pan, false,
+            "Drag anywhere to move the page under the view."),
+        new("Rotate", "Rotate", null, Icons.Rotate, false,
+            "Drag around the selection to turn it, or tap it to turn a quarter."),
     };
 
     private FrameworkElement ToolCell(ToolDef t)

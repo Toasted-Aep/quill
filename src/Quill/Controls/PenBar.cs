@@ -725,7 +725,10 @@ public sealed class PenBar
         return id[5..] switch
         {
             "Text" => "ToolText",
-            "Select" => "ToolSelect",
+            // 17.10 renamed the Select tool to Mouse. Both spellings map here:
+            // a cell stored by an older build still says "tool:Select", and
+            // InkSurface.SetTool folds the one into the other.
+            "Select" or "Mouse" => "ToolSelect",
             "FreeSpace" => "ToolSpace",
             _ => null,
         };
