@@ -2931,7 +2931,18 @@ which is precisely the case §15.2 said must not be forced into a grammar.
 horizon.** Nor are the pairs symmetric about the frame centre: `2 Point` and
 `3 Point` centre on 0.5000 and 0.4999, but `Side Ultrawide` centres on **0.392**.
 
-Given (1), (2) and (3) together, the honest instruction for Quill is that these
+**4. `2 Point` and `1/2 Narrow` DO NOT render identically. §15.1 is wrong on
+this.** §15.1 states that a previous pass "found them rendering identically" and
+reasons from that to "`2 Point` *is* the centred default, and `1/2 Narrow` names
+that same geometry explicitly". Captured back to back under one frozen viewport,
+the two frames differ in **415,927 pixels, 8% of the frame**. They are not the
+same grid and not near it: `2 Point` is the centred pair at 0.2570 / 0.7430 with
+its horizon across the middle of the frame, while `1/2 Narrow` is a ground plane
+seen close up with both points and the horizon off-frame entirely. Keeping both
+entries is still correct — Concepts ships both — but they must be built as **two
+different grids**, and any build that aliases one to the other is wrong.
+
+Given (1), (2), (3) and (4) together, the honest instruction for Quill is that these
 are **19 individually measured configurations, not a parameterisation** — each
 preset stores its own horizon height and its own two or three points. That is
 also the shape §15.1's ruling already forced: mirror Concepts exactly, no cross
