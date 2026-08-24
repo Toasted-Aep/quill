@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- CONCEPTS-REF 17.11a.1's last bullet, PROVED rather than asserted.
+
+       That bullet said PdfExporter and HtmlSvgExporter ignore Rotation "for
+       shapes exactly as much as for text". Half of that was wrong, and the half
+       that was right is what this tool now pins:
+
+         - STROKED SHAPES were never square. InkSurface.FlattenShape has turned
+           every point list about ShapeCenter since the vector exporter's first
+           commit, so a rotated rectangle reaches the emitter as four corners
+           that are already where they belong. Grepping the exporter for
+           "Rotation" finds nothing because there is nothing for it to do.
+         - TEXT AND IMAGES could not be flattened that way - glyphs and pixels
+           are placed by a matrix, not by their corners - so both really did
+           export square, and both are fixed together.
+
+       Two claims come out of that, and both have the same failure mode: right
+       in the eye, wrong in the arithmetic.
+
+         1. A TURN IS A TURN, NOT A NEAR-TURN. World y runs down and PDF y runs
+            up, so the matrix is the world one with its angle negated - a sign
+            that reads as correct either way in a code review and is only
+            settled by recovering the angle back out of the emitted bytes.
+         2. ONE BOX IS SEVERAL RECORDS. A text box is flattened per wrapped
+            line, and every line has to turn about the box's ONE centre. Give
+            each line its own and the box fans open instead of turning - which
+            still looks like "text rotates" in a screenshot. The rigidity check
+            below is written so that it FAILS on the fanned version, and that
+            failure is demonstrated rather than trusted.
+
+       Nothing below is a copy: the emitters are <Compile Include>d straight out
+       of src/Quill, so this measures the REAL PDF bytes and the REAL SVG
+       markup. Written to the pattern tools/VeilRoundTrip set for 16.7 and
+       tools/LayerRoundTrip and tools/TextRotRoundTrip followed after it.
+
+       No isolation block, and that is deliberate: unlike its three siblings this
+       tool never touches LibraryStore, so it has no library to be isolated from.
+       It builds vector pages in memory and reads back what the emitters wrote.
+
+       net8.0-windows10.0.19041.0 to match its siblings. Nothing here needs a
+       window - the two emitters and FontSubsetter are plain BCL, which is the
+       reason the export layer can be measured at all. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Quill.Tools</RootNamespace>
+    <AssemblyName>ExportRotRoundTrip</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <!-- The two emitters under test, and the font resolver PdfExporter calls. -->
+    <Compile Include="..\..\src\Quill\Services\PdfExporter.cs" Link="PdfExporter.cs" />
+    <Compile Include="..\..\src\Quill\Services\HtmlSvgExporter.cs" Link="HtmlSvgExporter.cs" />
+    <Compile Include="..\..\src\Quill\Services\FontSubsetter.cs" Link="FontSubsetter.cs" />
+  </ItemGroup>
+
+</Project>

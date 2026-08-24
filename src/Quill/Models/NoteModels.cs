@@ -143,9 +143,22 @@ public class PenStroke
     // it out would silently drop every fragment of an erased stroke onto the
     // base layer - content that is intact, moved, and impossible to notice until
     // the layer it was on is hidden (CONCEPTS-REF 18.10).
+    //
+    // Opacity and Locked are carried for the same reason, and were not always:
+    // erasing through a stroke drawn at 40% opacity used to hand back fragments
+    // at 100%, so a rub across a highlight DARKENED what survived it, and every
+    // fragment of a locked stroke came back unlocked. Both are the 18.10 failure
+    // in miniature - a copy that looks like the original until it is looked at.
+    //
+    // The rule is now the same for all three element types and it is one rule:
+    // a copy carries EVERY field but the Id, and Points here because the caller
+    // is supplying them. tools/CloneRoundTrip walks the model by reflection and
+    // fails if a field is added and forgotten.
     public PenStroke CloneWithPoints(List<StrokePoint> pts) => new()
     {
-        Pen = Pen, Color = Color, Size = Size, Sens = Sens, Points = pts, LayerKey = LayerKey, CreatedTicks = CreatedTicks, PressureCurve = PressureCurve != null ? new List<float>(PressureCurve) : null
+        Pen = Pen, Color = Color, Size = Size, Sens = Sens, Opacity = Opacity, Points = pts,
+        Locked = Locked, LayerKey = LayerKey, CreatedTicks = CreatedTicks,
+        PressureCurve = PressureCurve != null ? new List<float>(PressureCurve) : null
     };
 }
 
@@ -202,6 +215,35 @@ public class ShapeElement
     [JsonConverter(typeof(TolerantIntConverter))]
     public int LayerKey { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
+
+    // PenStroke.CloneWithPoints' rule, for shapes: a copy carries EVERY field
+    // except the Id, which is the one thing that makes it a new element.
+    //
+    // The reason it is one method rather than an initialiser list at each copy
+    // site is that a dropped field is INVISIBLE at the moment the copy is made.
+    // A duplicate that lost its LayerKey sits exactly where it was drawn, on the
+    // base layer, and stays intact and unnoticed until the layer it should have
+    // been on is hidden (CONCEPTS-REF 18.10). Locked, Pen, Opacity, the equation
+    // source and the axis labels all fail the same quiet way - the copy looks
+    // right, and is wrong.
+    //
+    // tools/CloneRoundTrip serialises a fully-populated element against its clone
+    // and demands they match but for the Id, so a field added to this class and
+    // forgotten here FAILS A TEST rather than shipping.
+    public ShapeElement Clone() => new()
+    {
+        Kind = Kind, X = X, Y = Y, W = W, H = H,
+        Color = Color, Size = Size, Pen = Pen, Opacity = Opacity,
+        ImagePath = ImagePath, EquationLatex = EquationLatex,
+        AxisLabelX = AxisLabelX, AxisLabelY = AxisLabelY, AxisLabelZ = AxisLabelZ,
+        Rotation = Rotation,
+        TRows = TRows, TCols = TCols,
+        TColW = TColW != null ? new List<double>(TColW) : null,
+        TRowH = TRowH != null ? new List<double>(TRowH) : null,
+        FillColor = FillColor, BorderColor = BorderColor, BorderWidth = BorderWidth,
+        MergeColSpan = MergeColSpan, MergeRowSpan = MergeRowSpan, HeaderRow = HeaderRow,
+        Locked = Locked, LayerKey = LayerKey, CreatedTicks = CreatedTicks
+    };
 }
 
 public class TextElement
@@ -239,6 +281,43 @@ public class TextElement
     [JsonConverter(typeof(TolerantIntConverter))]
     public int LayerKey { get; set; }
     public long CreatedTicks { get; set; } = DateTime.UtcNow.Ticks;
+
+    // Every field but the Id, for the reason ShapeElement.Clone spells out. The
+    // padlock and the layer key are the two that go wrong silently.
+    public TextElement Clone() => new()
+    {
+        X = X, Y = Y, Width = Width, WidthPinned = WidthPinned, MaxWidth = MaxWidth,
+        AutoWidth = AutoWidth, Rtf = Rtf, Rotation = Rotation,
+        TableId = TableId, TableRow = TableRow, TableCol = TableCol,
+        FillColor = FillColor, BorderColor = BorderColor, BorderWidth = BorderWidth,
+        CellColSpan = CellColSpan, CellRowSpan = CellRowSpan,
+        Locked = Locked, LayerKey = LayerKey, CreatedTicks = CreatedTicks
+    };
+
+    // The same copy with its CELL IDENTITY cut - and nothing else dropped: the
+    // words, the angle, the padlock, the layer and the cell's own fill and border
+    // all come along.
+    //
+    // TableId is the ONE field a copy must not carry blindly, and it is the
+    // reverse of the LayerKey case: carrying it is what does the damage. A table
+    // lays its cells out by walking the page's texts for a matching TableId and
+    // OVERWRITING X/Y/Width from the grid (InkSurface.ReflowTableCells), so a copy
+    // that kept the id would not stay where it was put - the original table's next
+    // reflow would drag it back into the slot it came from, on top of the cell
+    // already there. Row, column and the merge spans go with it, because a box
+    // that is in no table has no row, no column and nothing to span.
+    //
+    // A copy that IS meant to stay a cell - the one case being a table duplicated
+    // together with its cells - takes Clone() and is re-linked to the new table's
+    // id by ElementClone.Duplicate. That is the only route that may set TableId.
+    public TextElement CloneAsFreeBox()
+    {
+        var c = Clone();
+        c.TableId = null;
+        c.TableRow = c.TableCol = 0;
+        c.CellColSpan = c.CellRowSpan = 1;
+        return c;
+    }
 }
 
 public class PenPreset

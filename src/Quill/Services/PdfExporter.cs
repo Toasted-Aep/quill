@@ -8,12 +8,30 @@ public record PdfPageImage(int PixelWidth, int PixelHeight, byte[] Bgra8Pixels);
 // ---- vector export primitives (phase 2/3) ----
 public record PdfVectorPath(List<(float X, float Y)> Points, string Color, float Width, bool Closed, float Alpha);
 public record PdfVectorDot(float X, float Y, float R, string Color);
-public record PdfVectorImage(double X, double Y, double W, double H, int PixW, int PixH, byte[] Bgra8);
+// ---- the rotation a record has to carry (CONCEPTS-REF 17.11a.1) ----
+//
+// Angle is degrees clockwise, CentreX/CentreY the WORLD point the subject turns
+// about - the same pair the canvas draws with.
+//
+// A PATH needs neither, and that is not an oversight: InkSurface.FlattenShape
+// turns its points about ShapeCenter before they ever reach a record, so a
+// rotated rectangle arrives here as four already-turned corners. Text and
+// images cannot be flattened that way - glyphs and pixels are placed by a
+// matrix, not by their corners - so for those two the angle has to survive all
+// the way to the emitter.
+public record PdfVectorImage(double X, double Y, double W, double H, int PixW, int PixH, byte[] Bgra8,
+                             double Angle = 0, double CentreX = 0, double CentreY = 0);
 public record PdfVectorTextRun(string Text, float Size, string Font, bool Bold, bool Italic);
 // One visual line. Text/Size/Font mirror the first run so older single-format
 // consumers keep working; Runs carries the per-run formatting the emitters use.
+//
+// The centre is CARRIED, not derived, because one text box becomes SEVERAL of
+// these records - one per wrapped line - and all of them turn about the box's
+// one shared centre. A record that worked out a centre of its own would fan the
+// lines out around their individual midpoints instead of turning the box.
 public record PdfVectorText(float X, float Y, float Size, string Color, string Text, string Font,
-                            List<PdfVectorTextRun>? Runs = null);
+                            List<PdfVectorTextRun>? Runs = null,
+                            double Angle = 0, double CentreX = 0, double CentreY = 0);
 public record PdfVectorPage(double Width, double Height, double OffsetX, double OffsetY, string Background,
                             List<PdfVectorPath> Paths, List<PdfVectorDot> Dots,
                             List<PdfVectorImage> Images, List<PdfVectorText> Texts);
@@ -285,7 +303,27 @@ public static class PdfExporter
             for (int j = 0; j < pg.Images.Count; j++)
             {
                 var im = pg.Images[j];
-                sb.Append($"q {Num(im.W * k)} 0 0 {Num(im.H * k)} {X(im.X)} {Y(im.Y + im.H)} cm /Im{j} Do Q\n");
+                // The image XObject fills the unit square, so the cm matrix IS the
+                // placement: its first column is where (1,0) lands, its second
+                // where (0,1) does. Unturned that is [W 0 0 H]; turned, each column
+                // is that edge rotated, and the translation is the bottom-left
+                // corner turned about the shape's centre.
+                var a0 = TurnWorld(im.X, im.Y + im.H, im.CentreX, im.CentreY, im.Angle);
+                if (Math.Abs(im.Angle) < 0.01)
+                {
+                    sb.Append($"q {Num(im.W * k)} 0 0 {Num(im.H * k)} {X(a0.X)} {Y(a0.Y)} cm /Im{j} Do Q\n");
+                }
+                else
+                {
+                    // World y runs down and PDF y runs up, so the flip that maps one
+                    // to the other negates the angle: a clockwise turn on the canvas
+                    // is [cos sin; -sin cos] here. Same negation as the text matrix.
+                    double r = im.Angle * Math.PI / 180.0;
+                    double cos = Math.Cos(r), sin = Math.Sin(r);
+                    sb.Append($"q {Num(im.W * k * cos)} {Num(im.W * k * -sin)} " +
+                              $"{Num(im.H * k * sin)} {Num(im.H * k * cos)} " +
+                              $"{X(a0.X)} {Y(a0.Y)} cm /Im{j} Do Q\n");
+                }
             }
 
             foreach (var p in pg.Paths)
@@ -311,9 +349,29 @@ public static class PdfExporter
                 // One BT block per line with Tm set once: each Tj advances the text
                 // matrix by its own string's width, so runs of differing size follow
                 // one another correctly without us measuring anything.
+                //
+                // Tm's first column is the direction the line RUNS in, so putting
+                // the angle here turns the baseline itself - every Tj after it
+                // advances along the tilted line, and the run flow above is
+                // untouched. The anchor is this line's own baseline start, turned
+                // about the box's shared centre; the direction is the same for
+                // every line of the box, which is what makes the box turn rigidly
+                // rather than each line pivoting where it happens to sit.
+                var anchor = TurnWorld(t.X, t.Y, t.CentreX, t.CentreY, t.Angle);
                 sb.Append("BT ").Append(Rgb(t.Color, "rg")).Append(' ')
-                  .Append(Rgb(t.Color, "RG")).Append(' ')
-                  .Append($"1 0 0 1 {X(t.X)} {Y(t.Y)} Tm\n");
+                  .Append(Rgb(t.Color, "RG")).Append(' ');
+                if (Math.Abs(t.Angle) < 0.01)
+                {
+                    sb.Append($"1 0 0 1 {X(anchor.X)} {Y(anchor.Y)} Tm\n");
+                }
+                else
+                {
+                    // Negated for the y-flip, exactly as the image matrix above.
+                    double r = t.Angle * Math.PI / 180.0;
+                    sb.Append($"{NumM(Math.Cos(r))} {NumM(-Math.Sin(r))} " +
+                              $"{NumM(Math.Sin(r))} {NumM(Math.Cos(r))} " +
+                              $"{X(anchor.X)} {Y(anchor.Y)} Tm\n");
+                }
 
                 bool boldOn = false;
                 foreach (var r in runs)
@@ -404,6 +462,24 @@ public static class PdfExporter
     }
 
     private static string Num(double d) => d.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    // Num's two decimals are plenty for a coordinate in points; they are NOT
+    // enough for a matrix entry of unit magnitude, where a rounded sine is a
+    // visibly wrong angle rather than a sub-pixel shift.
+    private static string NumM(double d) => d.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>Turns a world point about a world centre, clockwise, in degrees -
+    /// the same arithmetic as <c>InkSurface.RotatePoint</c>. The anchor is turned
+    /// in WORLD space and only then mapped to PDF, so the export lands where the
+    /// canvas drew it instead of deriving a second answer in another space.</summary>
+    private static (double X, double Y) TurnWorld(double px, double py, double cx, double cy, double deg)
+    {
+        if (Math.Abs(deg) < 0.01) return (px, py);
+        double r = deg * Math.PI / 180.0;
+        double cos = Math.Cos(r), sin = Math.Sin(r);
+        double dx = px - cx, dy = py - cy;
+        return (cx + dx * cos - dy * sin, cy + dx * sin + dy * cos);
+    }
 
     private static byte[] BgraToRgb(byte[] bgra)
     {

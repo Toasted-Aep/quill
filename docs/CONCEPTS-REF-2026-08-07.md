@@ -3516,14 +3516,60 @@ difference matters:
      **No cell's `TextElement` is removed by any of this** — `#cellfix` records
      that removing one leaves the cell untypeable forever, and dropping a cell
      from a rotation list is not removing it from the page.
-- **Not true anywhere, for any kind, and still isn't.** `PdfExporter` and
-  `HtmlSvgExporter` ignore `Rotation` — **for shapes exactly as much as for
-  text**. A text box is flattened to per-line `PdfVectorText` records at
-  `InkSurface.cs:7995` and that record carries no angle. Fixing it means
-  threading an angle through the vector intermediate and emitting a PDF text
-  matrix / SVG `transform`, **for both kinds at once**: doing it for text alone
-  would recreate precisely the "one kind honoured, another not" failure the
-  surviving sentence above forbids.
+- **Not true anywhere, for any kind — and half of THAT was wrong as well.**
+  What this bullet said was:
+
+  > `PdfExporter` and `HtmlSvgExporter` ignore `Rotation` — **for shapes exactly
+  > as much as for text**. A text box is flattened to per-line `PdfVectorText`
+  > records at `InkSurface.cs:7995` and that record carries no angle. Fixing it
+  > means threading an angle through the vector intermediate and emitting a PDF
+  > text matrix / SVG `transform`, **for both kinds at once**.
+
+  **The text half was right. The shapes half was not** — and it is quoted rather
+  than quietly fixed for §15.1's reason and for this section's own. This is the
+  *second* claim in §17.11a to be made from an absence instead of from the code,
+  and both were produced by the shape of the audit rather than by the evidence.
+  The first read the selection chrome and generalised to the model. This one
+  grepped the exporters for "Rotation", found nothing, and generalised to the
+  export.
+
+  **A stroked shape has never exported square.** `InkSurface.FlattenShape` turns
+  every point list about `ShapeCenter` before it becomes a `PdfVectorPath`, and
+  has done since the vector exporter's first commit (`38558c8`, 2026-07-05). The
+  emitters say nothing about rotation because **a path needs nothing said**: a
+  rotated rectangle arrives as four corners already in the right place. Grepping
+  a file for a word is a test of vocabulary, not of behaviour.
+
+  **What genuinely exported square was text and IMAGE shapes.** Those are the two
+  that cannot be pre-flattened — glyphs and pixels are placed by a *matrix*, not
+  by their corners. So the "both kinds at once" instruction was right and its
+  second kind was the **image**, not the polygon: text alone would have left a
+  rotated photo as the one subject still sitting square.
+
+- **CLOSED 2026-08-24.** `PdfVectorText` and `PdfVectorImage` now carry `Angle`
+  and the centre they turn about, appended with defaults so every existing call
+  site emits the bytes it always did. The PDF gets a real text matrix in place of
+  `1 0 0 1 tx ty Tm` and a turned `cm` for images — the angle **negated**, because
+  world y runs down and PDF y runs up — and the SVG gets
+  `transform="rotate(a cx cy)"` with **no** negation, its user space being y-down
+  like the canvas. Text stays selectable and an image stays one `<image>`.
+
+  **The centre is carried, not derived**, and that is the whole subtlety: one box
+  becomes several records, one per wrapped line, so `BuildVectorPageAsync` takes
+  `TextCentreWorld` **once, outside the line loop** — the same helper the
+  renderer, the selection bounds, the click probe and the sweep already share,
+  rather than a fifth answer. Per-record centres would leave every line pivoting
+  on its own start: the lines tilt, the box never moves, and a screenshot still
+  looks like rotated text.
+
+  Proved by **`tools/ExportRotRoundTrip`** — 37 checks against the real emitters,
+  in the pattern its three siblings set. The angle is recovered back *out* of the
+  inflated PDF content stream rather than asserted into it; the matrix is measured
+  orthonormal with determinant +1; an un-turned page is compared **byte for byte**
+  against one built through the pre-change constructor; and the shared-centre
+  check is then run against a deliberately per-line-centred box to show it
+  **fails** there instead of passing everything. Byte-level proof only — like the
+  rest of this section, it was not watched on screen.
 
 **So requirement 2 was the whole job, and it was not blocked.** What this change
 built is the free-angle rotation itself — `RotateFreeMixedAction`, and a sweep
