@@ -2818,15 +2818,141 @@ the record of how it was found:**
   and which is how Concepts exposes a hand-placed configuration. The rewritten
   §15.1 carries it.
 
-**Still to do: steps 4 to 7 — the measurement.** The viewport is frozen and the
-scratch drawing is in place, but each preset has not yet been captured to its own
-PNG and no horizon or vanishing point has been measured, so **no spread /
-position / `Below` constants are derived here and none should be inferred from
-this section.** What is above is step 3 and step 3 only. When the measurement is
-run, the sweep is **19 named presets across three lists**, not 27 in one, and the
-per-list grouping is itself a variable: whether `1/4 Wide` in the 2-Point list and
-`1/4 Wide` in the 3-Point list place their shared points identically is one of the
-things the numbers will answer.
+**Steps 4 to 7 were run on 2026-08-24. Results in §15.5a below.** The sweep
+captured all 19 named presets under one frozen fullscreen viewport. Six presets
+are measured to a number; the rest are NOT, for a reason that is itself a
+finding, and no constant has been invented to cover the gap.
+
+### 15.5a The measurement run — 2026-08-24
+
+**Setup, established rather than assumed.**
+
+- Concepts was found **maximised, not fullscreen** — window rect `-13,-13
+  2906x1826`, which is what a maximised window looks like here and reads as
+  "nearly fullscreen" to anything sloppier than an exact test. It was put
+  genuinely fullscreen (`0,0 2880x1800`) **before** the scratch page was made.
+- The page open in Concepts was **`Drawing`, dated 24 Aug** — not the
+  `Drawing 7` scratch page of the 17th. It was left alone, as was `Drawing 5`.
+  A new page, **`Drawing 8`**, was created from the gallery while fullscreen, so
+  the reference frame §14.5 stores on first paint is the fullscreen one.
+  100% zoom, 0° tilt, never panned or zoomed for the whole sweep. Nothing deleted.
+- **The top bar OVERLAYS the canvas; it does not shrink it.** Two independent
+  checks agree. The page's dot lattice runs at a constant 36 px pitch from y=24
+  straight through the bar band, phase unbroken; and `1 Point` — whose single
+  vanishing point is by definition the centre of the frame — measures
+  `x=0.4998, y=0.4995`. Had the 88 px bar shrunk the canvas, that centre would
+  sit at y=0.524. **So every denominator below is the full 2880x1800.**
+- **The viewport survives a grid-type switch.** `1 Point` was captured, the sweep
+  ran through 2-Point and 3-Point, and `1 Point` was then re-selected and
+  re-captured: the two PNGs are **bit-identical, 0 of 5,184,000 pixels differ**.
+  Fractions from the three lists are therefore directly comparable.
+- Every capture carries a companion crop of the preset strip showing the chosen
+  entry ringed and bold, so each PNG is provably labelled. All 19 are correct.
+
+**The fractions.** Horizon `y` and each vanishing point `x`, as fractions of the
+frame. `n` is the number of detected lines converging on that point — the
+measure of how well determined it is. `dot` marks a point confirmed by the
+handle dot Concepts draws, within 8 px of the fan's convergence.
+
+| list | preset | horizon y | VP x (n) | VP x (n) | third point |
+|---|---|---|---|---|---|
+| 1-Point | `1 Point` | **0.4989** | **0.4998** (112) `dot` | — | — |
+| 2-Point | `2 Point` | **0.4989** | **0.2570** (68) | **0.7430** (72) | — |
+| 2-Point | `Side Ultrawide` | **0.4989** | **0.0839** (55) `dot` | **0.7009** (73) | — |
+| 2-Point | `1/4 Wide` | **0.2822** | **0.1918** (67) | **1.5112** (22) | — |
+| 3-Point | `3 Point` | **0.8322** | **0.2221** (31) | **0.7777** (49) `dot` | **0.5004** @ y **0.1657** (59) |
+| 3-Point | `1/4 Wide` | **0.2211** | **-0.2695** (38) | **1.0207** (80) | — |
+
+Horizon tilt on every row above is **0.03° to 0.23°, i.e. level**. `Side`
+presets do produce points outside `[0,1]`, as §15.2 predicted: `1/4 Wide`
+reaches `1.5112` and `-0.2695`.
+
+**The other thirteen presets are not measured, and the reason matters.** Every
+`Narrow` preset, and several `Wide` and `Below` ones, put **both vanishing
+points and the horizon outside the frame**. `1/2 Narrow` renders as a ground
+plane seen close up: about a dozen near-parallel lines, no horizon, no
+convergence anywhere on screen. There is no honest number to extract from that
+capture — the fit is under-determined, and every estimator tried on it
+(2-D clustering, crossing-the-horizon, unconstrained RANSAC, and a
+level-constrained fit) returned a different answer, several of them physically
+impossible tilted horizons. **They are left blank rather than filled with a
+plausible-looking decimal.**
+
+**What the next run must do**, and it is a small job: repeat the sweep at a
+zoomed-OUT viewport so the off-frame points come into view, and recover the
+frame-relative fractions by calibrating against the presets measured here. At
+100% the viewport IS the stored frame, so `2 Point`'s points at 0.2570 / 0.7430
+and its horizon at 0.4989 are three known landmarks; measuring those same
+landmarks in the zoomed frame gives the scale and offset that convert every
+other measurement back into frame fractions. That calibration is what makes a
+zoomed capture legitimate despite §15.2's freeze rule — the rule exists so that
+captures are comparable, and an explicitly measured mapping restores exactly that.
+
+### 15.5b What the numbers already settle — and what they refute
+
+**1. `Narrow` and `Ultrawide` mean the OPPOSITE of what "spread" suggests.**
+§15.1 glosses the axis as "how far apart the two points sit along the horizon"
+without saying which way the words run, and the natural reading — narrow means
+close together — is **backwards**. Measured separations:
+
+| preset | separation |
+|---|---|
+| `Side Ultrawide` (2-Point) | **0.617** |
+| `3 Point` | 0.556 |
+| `2 Point` | 0.486 |
+| `1/4 Wide` (3-Point) | **1.290** |
+| `1/4 Wide` (2-Point) | **1.319** |
+| every `Narrow` | far wider still — both points off-frame entirely |
+
+The ordering is `Ultrawide` < `Wide` < `Narrow`. This is the photographic
+reading, not a spatial one: these are **angles of view**. An ultrawide lens
+converges hard and pulls its vanishing points in close; a narrow, long lens
+barely converges and throws them far apart. **A build that reads `Narrow` as
+"points close together" will render every one of these presets inverted.**
+
+**2. A shared name does NOT mean shared geometry across lists.** §15.1 left this
+open. `1/4 Wide` exists in both the 2-Point and the 3-Point list and **they are
+different grids**: horizon 0.2822 vs 0.2211, points 0.1918 / 1.5112 vs
+-0.2695 / 1.0207. Read the lists to know what exists, and measure per list to
+know what it does — do not share one definition between the two.
+
+**3. THE THREE AXES ARE NOT SEPARABLE. Do not build the grammar.** §15.2 step 7
+asked for a spread constant, a position offset and a `Below` rule, and said to
+say so plainly if they do not separate. **They do not.** The horizon does not
+sit still while the position and spread names move the points along it:
+
+- `2 Point` and `Side Ultrawide` share horizon 0.4989 — but `1/4 Wide` in the
+  same 2-Point list sits at **0.2822**, and it carries no `Below`.
+- In the 3-Point list, `3 Point` is at **0.8322** and `1/4 Wide` at **0.2211**.
+
+So a position/spread name changes the horizon height as well as the points,
+which is precisely the case §15.2 said must not be forced into a grammar.
+**`Below` is not the horizon axis; it is one of several things that move the
+horizon.** Nor are the pairs symmetric about the frame centre: `2 Point` and
+`3 Point` centre on 0.5000 and 0.4999, but `Side Ultrawide` centres on **0.392**.
+
+**4. `2 Point` and `1/2 Narrow` DO NOT render identically. §15.1 is wrong on
+this.** §15.1 states that a previous pass "found them rendering identically" and
+reasons from that to "`2 Point` *is* the centred default, and `1/2 Narrow` names
+that same geometry explicitly". Captured back to back under one frozen viewport,
+the two frames differ in **415,927 pixels, 8% of the frame**. They are not the
+same grid and not near it: `2 Point` is the centred pair at 0.2570 / 0.7430 with
+its horizon across the middle of the frame, while `1/2 Narrow` is a ground plane
+seen close up with both points and the horizon off-frame entirely. Keeping both
+entries is still correct — Concepts ships both — but they must be built as **two
+different grids**, and any build that aliases one to the other is wrong.
+
+Given (1), (2), (3) and (4) together, the honest instruction for Quill is that these
+are **19 individually measured configurations, not a parameterisation** — each
+preset stores its own horizon height and its own two or three points. That is
+also the shape §15.1's ruling already forced: mirror Concepts exactly, no cross
+product. The measurement now says the same thing about the numbers that the
+enumeration said about the names.
+
+**The harness lives in `tools/vpsweep/` and the measurer in `tools/measure_vp.py`,
+both committed.** Captures for all 19 presets, the `No Grid` differencing
+baseline, the per-preset strip crops and a contact sheet are in the scratchpad at
+`…/5d0bc6f7-2eaf-4e19-afbf-f5efd33b5de9/scratchpad/vpsweep/`.
 
 
 ---
