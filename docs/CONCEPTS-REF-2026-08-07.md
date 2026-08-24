@@ -3443,14 +3443,123 @@ On a dark page with a dot grid:
 - **Whether rotation snaps at all.** The user said free, so any snap must be
   opt-in, and 0° should not be sticky unless asked for.
 
-#### On free object rotation
+#### On free object rotation — CORRECTED 2026-08-24
 
-A `TextElement` is an axis-aligned box today and takes no rotation at all. That
-is why quarter-steps were chosen: a free drag would turn two subject kinds out
-of three and leave text sitting square on a mixed selection. **Free rotation for
-objects therefore requires making text rotatable first**, or excluding text
-explicitly and making that exclusion visible rather than silent. Do not ship a
-free rotation that silently ignores one subject kind.
+**What this section said before was:**
+
+> A `TextElement` is an axis-aligned box today and takes no rotation at all.
+> That is why quarter-steps were chosen: a free drag would turn two subject
+> kinds out of three and leave text sitting square on a mixed selection. **Free
+> rotation for objects therefore requires making text rotatable first**, or
+> excluding text explicitly and making that exclusion visible rather than
+> silent. Do not ship a free rotation that silently ignores one subject kind.
+
+**THAT WAS WRONG, AND IT WAS MY ERROR.** I transcribed it from another agent's
+report and wrote it into this reference as fact. It is quoted in full above
+rather than quietly deleted, for §15.1's reason: it was specific enough to build
+from, it is the kind of claim a reader re-derives from the same evidence, and it
+had already been copied once — into `InkSurface.cs`'s own rotate-tool block
+comment, where it sat restated as fact directly above the code that disproved it.
+Anyone auditing the code found the claim, not the field.
+
+**The last sentence stands and always did.** *Do not ship a free rotation that
+silently ignores one subject kind.* Everything before it is the part that was
+false.
+
+**`TextElement` has carried a `Rotation` field since #20, and it was not a dead
+field.** The audit this section asked for found the angle already honoured in
+nine places:
+
+| Site | What it already did with the angle |
+| --- | --- |
+| `NoteModels.cs` `TextElement.Rotation` | degrees, plain-serialised — it has always persisted |
+| `InkSurface.DrawTextElement` | rotates the Win2D draw about the box's centre |
+| `InkSurface.SpawnTextBox` | puts a `RotateTransform` on the editing container |
+| the grip bar's `⟳` handle | **a free-angle drag, no snap, since #38** |
+| `InkSurface.RotateActiveText` | drives it by a delta |
+| `MirrorMixedAction` | negates it on a flip |
+| `RotateQuarterMixedAction` | adds ±90 to it |
+| `CloneText` / `DuplicateSelection` / `CloneTableCells` | all three carry it |
+| `SelectWithLasso` | catches by the box's **centre**, which a rotation does not move |
+
+**How the wrong claim survived being obviously checkable.** The free-angle text
+handle is on the **editing overlay's grip bar**, not on the selection chrome. An
+audit that asks *what can the SELECTION do to a text box* sees only the quarter
+turn and concludes correctly that the selection cannot turn text freely — and
+then generalises that to the model, which does not follow. The generalisation was
+written here, then copied into the code comment, and after that every reader met
+it twice and the field never once.
+
+#### 17.11a.1 What the ruling actually needed, and what it did not
+
+**The user's ruling — "make text rotatable" — was already MOSTLY TRUE when they
+made it, and they made it on my false premise.** Stated precisely, because the
+difference matters:
+
+- **Already true.** A text box could be turned to any angle, by hand, on the
+  canvas, and the angle rendered, persisted, cloned, mirrored and quarter-turned.
+- **Not true, in three places that assumed the box was square** — the real work
+  this change had to do:
+  1. **Selection bounds.** `RecomputeSelectionBoundsCore` took the stored
+     `X/Y/W/H`, so a tilted box got a marquee that clipped its corners — and gave
+     the rotate sweep a centre that was not the centre of what the user could
+     see.
+  2. **Hit-testing.** `FocusTextAt` tested the pointer against `Canvas.Left/Top`
+     and `ActualWidth/Height`, which describe the box **before** its
+     `RenderTransform`. A rotated box therefore had a phantom hit region where it
+     no longer was, and a real one the probe refused.
+  3. **The table cell.** A lassoed cell had its own `Rotation` bumped by a
+     selection rotation, while its live container is driven by the **table's**
+     rotation. The canvas looked right and *copy as image* came out with the cell
+     words at twice the angle of the grid. Cells ride their table and are now
+     excluded from a selection rotation, by one predicate both rotations share.
+     **No cell's `TextElement` is removed by any of this** — `#cellfix` records
+     that removing one leaves the cell untypeable forever, and dropping a cell
+     from a rotation list is not removing it from the page.
+- **Not true anywhere, for any kind, and still isn't.** `PdfExporter` and
+  `HtmlSvgExporter` ignore `Rotation` — **for shapes exactly as much as for
+  text**. A text box is flattened to per-line `PdfVectorText` records at
+  `InkSurface.cs:7995` and that record carries no angle. Fixing it means
+  threading an angle through the vector intermediate and emitting a PDF text
+  matrix / SVG `transform`, **for both kinds at once**: doing it for text alone
+  would recreate precisely the "one kind honoured, another not" failure the
+  surviving sentence above forbids.
+
+**So requirement 2 was the whole job, and it was not blocked.** What this change
+built is the free-angle rotation itself — `RotateFreeMixedAction`, and a sweep
+that commits one action for the whole gesture at the angle the hand described —
+plus the three fixes above. It did not have to make text rotatable, because text
+already was.
+
+**Editing a rotated box happens IN the rotated box. This is a stated decision.**
+There is no un-rotate on entry and no reapply on commit. WinUI transforms pointer
+input through `RenderTransform`, so the caret, drag-selection and the format bar
+all act on the element where it is drawn; fix 2 above is what makes the app's own
+probe agree with XAML's hit-test instead of fighting it. *The fallback, if a
+rotated caret ever proves unusable in practice, is to edit un-rotated and reapply
+the angle on commit — but that is a change to make deliberately, not one to
+discover.* **Not verified on screen** (see the note at the end of this section).
+
+**The quarter turn SURVIVES, as a button and not as the sweep's detent.** The
+mode bar's Rotate control and §16.2's bottom row still commit
+`RotateSelectionQuarter`: *turn this a quarter* is a different thing to want than
+*turn this to here*, and it is the one turn a hand cannot make exactly. What is
+gone is the 90° detent inside the drag, and the tap that used to turn 90° —
+inside a free rotation a click that jumps a quarter is a surprise, and this
+section already says 0° must not be sticky unless asked for. `RotateSnap`, the
+tool's existing opt-in, governs **both** halves of the tool at the same 15° step.
+
+Proved rather than asserted by **`tools/TextRotRoundTrip`** — the real models,
+the real store and the real undo manager, isolated by `QUILL_DATA_FOLDER` with a
+hard abort if the store resolves outside it, to the pattern `tools/VeilRoundTrip`
+and `tools/LayerRoundTrip` set. 24 checks, including a free angle surviving
+save → reload compared **bit for bit** rather than by tolerance.
+
+**Unverified on screen.** Nothing in this change was watched running: the user
+was at the machine. What is proved is the model, the store, the undo stack and
+the source-level rules the eight checkers pin. What is *not* proved is how a
+caret behaves inside a box at 37°, how the sweep feels against a real hand, and
+whether the marquee round a tilted box reads correctly at low zoom.
 
 
 ### 17.12 Sizes

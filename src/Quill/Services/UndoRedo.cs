@@ -667,8 +667,9 @@ public class RotateQuarterMixedAction : IPageAction
 ///
 /// <para><b>This is what the rotate tool's sweep commits now.</b> 17.11a's
 /// reason for quarter steps was that <c>TextElement</c> "is an axis-aligned box
-/// and takes no rotation at all" - which has not been true since #20: it carries
-/// <c>Rotation</c>, the Win2D path draws it, the editing overlay carries it as a
+/// and takes no rotation at all" - a claim that was false when it was written
+/// and is corrected in CONCEPTS-REF 17.11a.1. The field has been there since
+/// #20: the Win2D path draws it, the editing overlay carries it as a
 /// RenderTransform, and its grip bar has had a free-drag rotate handle all
 /// along. So the third subject kind honours an arbitrary angle and the reason
 /// for rounding to 90 is gone. <see cref="RotateQuarterMixedAction"/> STAYS: it
