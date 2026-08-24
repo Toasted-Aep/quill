@@ -213,3 +213,34 @@ function VP-AssertFullscreen([IntPtr]$h) {
   if (-not $ok) { throw "ABORT: Concepts is not fullscreen - rect=$($r[0]),$($r[1]) $($r[2])x$($r[3]), need 0,0 $([Q]::SW)x$([Q]::SH)" }
   return $true
 }
+
+# --------------------------------------------------------------------------
+# FIX 2026-08-24 (4): the idle gate CANNOT be used between steps of a running
+# sweep. GetLastInputInfo counts injected input too, so once we start clicking
+# our own SendInput calls hold idle near zero for ever - the gate then fires
+# on us, not on the user. Idle is a START-OF-RUN gate only.
+#
+# Across separate driver invocations the real check is the handover: each call
+# ends by recording where it parked the cursor, and the next call refuses to
+# inject if the cursor is no longer there. That detects a user who touched the
+# machine BETWEEN our calls, which is exactly the window VP-Guard cannot see
+# because its datum is re-armed at the top of every process.
+# --------------------------------------------------------------------------
+$script:CURFILE = "$script:VPS\vpsweep\last_cursor.txt"
+
+function VP-SaveHandover {
+  New-Item -ItemType Directory -Path (Split-Path $script:CURFILE) -Force | Out-Null
+  "$([Q]::Cx()),$([Q]::Cy())" | Set-Content -Path $script:CURFILE -Encoding ascii
+}
+
+function VP-CheckHandover([int]$tol = 6) {
+  if (-not (Test-Path $script:CURFILE)) { return "no handover on record - first call" }
+  $p = (Get-Content $script:CURFILE -Raw).Trim() -split ','
+  $dx = [Math]::Abs([Q]::Cx() - [int]$p[0]); $dy = [Math]::Abs([Q]::Cy() - [int]$p[1])
+  if ($dx -gt $tol -or $dy -gt $tol) {
+    throw "STAND DOWN: cursor was parked at $($p -join ',') and is now at $([Q]::Cursor()) - the user has taken the machine back"
+  }
+  $t = [Q]::FgTitle()
+  if ($t -notlike "*Concepts*") { throw "STAND DOWN: foreground is '$t', not Concepts - something else took focus between calls" }
+  return "handover OK at $($p -join ',')"
+}
