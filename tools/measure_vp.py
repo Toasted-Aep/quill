@@ -507,6 +507,59 @@ def ransac_vps(lines, shape, tol_px=6.0, tol_ang=0.35, min_inliers=6,
     return merged
 
 
+def fit_level_horizon(lines, shape, tol_px=6.0, tol_ang=0.35,
+                      lo=-5.0, hi=6.0, coarse=12.0):
+    """Fit a LEVEL horizon and its two vanishing points together.
+
+    Needed because half the presets put no horizon and no convergence inside
+    the frame - every `Narrow` preset is a ground plane seen close up, a dozen
+    near-parallel lines and nothing else. Unconstrained RANSAC has too little
+    to hold on to there and returns a tilted, physically impossible answer.
+
+    The constraint that rescues it is measured, not assumed: on every preset
+    whose horizon IS in frame, the fitted tilt came out at essentially zero, so
+    Concepts draws every preset's horizon level. Fixing tilt at zero leaves
+    three parameters - the horizon's height and the two points' x - which a
+    dozen lines determine comfortably.
+
+    Sweeps the horizon height, and at each height scores how many lines are
+    genuinely concurrent at the two best crossing points.
+    """
+    h, w = shape
+    cx, cy = 0.5 * w, 0.5 * h
+
+    def score_at(y):
+        groups = cluster_crossings(crossings(lines, y), shape, min_lines=3)
+        total, picks = 0, []
+        for g in groups[:2]:
+            t = _tolerance(g["x"], y, cx, cy, tol_px, tol_ang)
+            inl = [k for k in range(len(lines)) if _perp(lines[k], g["x"], y) <= t]
+            if len(inl) >= 3:
+                total += len(inl)
+                picks.append({"x": g["x"], "n": len(inl), "lines": inl})
+        return total, picks
+
+    best = (-1, None, [])
+    y = lo * h
+    while y <= hi * h:
+        s, picks = score_at(y)
+        if s > best[0] and len(picks) >= 2:
+            best = (s, y, picks)
+        y += coarse
+    if best[1] is None:
+        return None
+    # refine around the coarse optimum
+    y0 = best[1]
+    y = y0 - coarse
+    while y <= y0 + coarse:
+        s, picks = score_at(y)
+        if s > best[0] and len(picks) >= 2:
+            best = (s, y, picks)
+        y += 1.0
+    return {"y": best[1], "score": best[0],
+            "vps": sorted(best[2], key=lambda p: p["x"])}
+
+
 def horizon_pair(points, shape, max_tilt_deg=3.0):
     """Which of the found points share a horizon.
 
@@ -662,6 +715,17 @@ def measure(frame_path, baseline_path=None, frame_rect=None, verbose=False):
     pts = ransac_vps(lines, shape)
     pair = horizon_pair(pts, shape)
 
+    # If the unconstrained points do not present a level pair, the geometry is
+    # under-determined in this frame - fall back to the level-horizon fit.
+    level = None
+    if pair is None or scan is None:
+        level = fit_level_horizon(lines, shape)
+    if pair is None and level is not None and len(level["vps"]) >= 2:
+        pair = ({"x": level["vps"][0]["x"], "y": level["y"],
+                 "n": level["vps"][0]["n"], "votes": 0, "lines": level["vps"][0]["lines"]},
+                {"x": level["vps"][1]["x"], "y": level["y"],
+                 "n": level["vps"][1]["n"], "votes": 0, "lines": level["vps"][1]["lines"]})
+
     # The horizon. The drawn rule, when Concepts put one in frame, is the
     # authority; otherwise the vanishing points define it.
     hy_free = 0.5 * (pair[0]["y"] + pair[1]["y"]) if pair else None
@@ -684,7 +748,15 @@ def measure(frame_path, baseline_path=None, frame_rect=None, verbose=False):
         tilt = round(min(abs(t), 180.0 - abs(t)), 3)
 
     keep = sorted(pair, key=lambda p: p["x"]) if pair else (pts[:1] if pts else [])
-    others = [p for p in pts if p not in keep]
+    # Never report the same point twice. Proximity, not object identity - a fan
+    # can survive as two RANSAC passes that the merge missed, and listing it
+    # once as a vanishing point and again as an off-horizon one would invent a
+    # third point that is not there.
+    def _same(a, b):
+        t = _tolerance(a["x"], a["y"], 0.5 * w, 0.5 * h, 6.0, 0.35)
+        return math.hypot(a["x"] - b["x"], a["y"] - b["y"]) <= max(3 * t, 24.0)
+
+    others = [p for p in pts if not any(_same(p, k) for k in keep)]
 
     def dot_near(cx, cy):
         if not dots:
@@ -721,6 +793,12 @@ def measure(frame_path, baseline_path=None, frame_rect=None, verbose=False):
         "horizon_from_vps": round(hy_free, 1) if hy_free is not None else None,
         "horizon_agreement_px": agree,
         "horizon_tilt_deg": tilt,
+        "level_fit": ({"y": round(level["y"], 1),
+                       "y_frac": round(level["y"] / fh, 5),
+                       "score": level["score"],
+                       "vps_x_frac": [round(v["x"] / fw, 5) for v in level["vps"]],
+                       "vps_nlines": [v["n"] for v in level["vps"]]}
+                      if level else None),
         "hough_rule_rejected": hough_rule,
         "vps": [{
             "x_px": round(f["x"], 1),
