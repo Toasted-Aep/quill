@@ -870,6 +870,48 @@ public sealed class ToolWheel
         // finally asking about the surface the mark is standing on.
         var markSeat = dark ? PageTheme.Ground : ringFill;
 
+        // The hover tint, and why it is no longer ONE expression.
+        //
+        // It was Mix(ringFill, onSurface, dark ? 0.10 : 0.07) on both sides. On
+        // the dark side the line above leaves the ring with no fill, and Mix -
+        // alone among this file's copies of it - interpolates the ALPHA channel
+        // too, so that mix ran from Colors.Transparent, i.e. from ARGB(0,0,0,0).
+        // A tenth of the way toward a WHITE ink starting at a transparent BLACK
+        // is ARGB(26,24,24,24): the ink's alpha carried on Transparent's own
+        // primaries. The sector went DARKER under the pointer on exactly the
+        // pages whose ink is white.
+        //
+        // Measured over the page, through the shadow the ring sits on
+        // (scratchpad/hover_wash.py). In L*, because a percentage of luminance
+        // says nothing on a page whose luminance is 0.003, the hover step was:
+        //
+        //     light grounds   -4.75 .. -5.28   the cue the reference has
+        //     Blueprint       -3.23            visible, but the wrong way
+        //     Brown Paper     -3.37            visible, but the wrong way
+        //     Darkprint       -0.53            under one L*, i.e. nothing
+        //     pinned dark     +0.30            under one L*, i.e. nothing
+        //     OLED black      +0.55            #000000 -> #020202
+        //
+        // That is section 0's warning in its other form: ringFill has NO COLOUR
+        // on this side of the theme, so a value derived from it is not the
+        // ring's colour, it is Transparent's.
+        //
+        // Where the ring has no fill of its own, the tint is carried on the
+        // INK's colour at the same weight instead - 26/255 = 10.2%, which is
+        // what the dark branch already asked for, and the same wash _hoverPlate
+        // uses for the disc's five controls and ChromeUi.Wash for a selected
+        // chip. An alpha wash composites onto whatever the transparent ring is
+        // really showing, which is the page, so it needs no opinion about what
+        // that is. The same five grounds now measure +5.36, +5.48, +9.90, +10.62
+        // and +8.76 L* - a lift, of the light side's own size or better, on
+        // every one of them. OLED black goes #000000 -> #191919.
+        //
+        // THE LIGHT BRANCH IS UNTOUCHED. ringFill is opaque there, the mix never
+        // saw a transparent operand, and light mode measures the same -4.75 to
+        // -5.28 L* it did before.
+        var hoverFill = dark ? PageTheme.WithAlpha(onSurface, 26)
+                             : Mix(ringFill, onSurface, 0.07);
+
         _shadow.Fill = ShadowBrush();
         _disc.Fill = new SolidColorBrush(surface);
         // §1.1 calls this "Outline at 40%". Read literally that is 0.14 x 0.40 =
@@ -900,7 +942,7 @@ public sealed class ToolWheel
             // redrawn by _pop at 1.19 R, on top of everything.
             _sector[i].Fill = new SolidColorBrush(
                 act ? Colors.Transparent
-                : hover ? Mix(ringFill, onSurface, dark ? 0.10 : 0.07)
+                : hover ? hoverFill
                 : ringFill);
             _sector[i].Opacity = live ? 1 : 0;
 
