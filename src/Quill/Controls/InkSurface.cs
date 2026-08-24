@@ -7981,8 +7981,14 @@ public sealed class InkSurface : UserControl
             {
                 CanvasBitmap? bmp = _bitmaps.TryGetValue(sh.ImagePath, out var cached) ? cached : null;
                 bmp ??= await CanvasBitmap.LoadAsync(_canvas, sh.ImagePath);
+                // An image is the one shape kind FlattenShape cannot pre-turn — it
+                // has no points to turn — so it carries its angle instead. The
+                // centre comes from ShapeCenter, the same helper DrawShape rotates
+                // about, so the export agrees with the canvas by construction.
+                var ic = ShapeCenter(sh);
                 images.Add(new PdfVectorImage(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H),
-                    (int)bmp.SizeInPixels.Width, (int)bmp.SizeInPixels.Height, bmp.GetPixelBytes()));
+                    (int)bmp.SizeInPixels.Width, (int)bmp.SizeInPixels.Height, bmp.GetPixelBytes(),
+                    sh.Rotation, ic.X, ic.Y));
             }
             catch { /* unreadable image: skip, ink still exports */ }
         }
@@ -7995,6 +8001,12 @@ public sealed class InkSurface : UserControl
             var visual = WrapRunLines(logical, Math.Max(60, t.Width) - 8);
             float prevSize = 16f;
             double baseline = t.Y + 16;
+            // ONCE, outside the line loop. TextCentreWorld is the single answer the
+            // renderer, the selection bounds, the click probe and the rotate sweep
+            // all take for where a box's middle is; the exporter takes it too
+            // rather than becoming a fifth. Taking it per line would give each line
+            // its own pivot and fan the box open instead of turning it.
+            var tc = TextCentreWorld(t);
             for (int li = 0; li < visual.Count; li++)
             {
                 var line = visual[li];
@@ -8005,7 +8017,8 @@ public sealed class InkSurface : UserControl
                 if (line.Count == 0) continue;
                 texts.Add(new PdfVectorText(
                     (float)(t.X + 4), (float)baseline,
-                    size, inkHex, string.Concat(line.Select(r => r.Text)), line[0].Font, line));
+                    size, inkHex, string.Concat(line.Select(r => r.Text)), line[0].Font, line,
+                    t.Rotation, tc.X, tc.Y));
             }
         }
 
