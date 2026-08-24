@@ -1,0 +1,1802 @@
+[
+  {
+    "file": "1-Point - 1 Point.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 898.0,
+    "horizon_frac": 0.49887,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 897.9666209419296,
+      "count": 2880,
+      "span": 1.0
+    },
+    "horizon_from_vps": 898.8,
+    "horizon_agreement_px": 0.8,
+    "horizon_tilt_deg": 0.035,
+    "level_fit": null,
+    "hough_rule_rejected": {
+      "y": 899.7667924596226,
+      "votes": 2357,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": 1439.5,
+        "y_px": 899.2,
+        "x_frac": 0.49983,
+        "y_frac": 0.49954,
+        "nlines": 112,
+        "votes": 82541,
+        "in_frame": true,
+        "dot": {
+          "x_px": 1439.5,
+          "y_px": 903.4,
+          "dist_px": 4.2,
+          "px": 10
+        }
+      },
+      {
+        "x_px": 2753.8,
+        "y_px": 898.4,
+        "x_frac": 0.95619,
+        "y_frac": 0.49909,
+        "nlines": 20,
+        "votes": 6496,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2809.8,
+          "y_px": 9.6,
+          "dist_px": 890.5,
+          "px": 110
+        }
+      }
+    ],
+    "vps_off_horizon": [],
+    "dots_on_horizon": [
+      {
+        "x_px": 1439.5,
+        "y_px": 903.4,
+        "x_frac": 0.49983,
+        "px": 10
+      }
+    ],
+    "nlines": 200,
+    "list": "1-Point",
+    "preset": "1 Point",
+    "trusted": true,
+    "dot_confirmed": 1
+  },
+  {
+    "file": "2-Point - 2 Point.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 898.0,
+    "horizon_frac": 0.49889,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 897.9944572748268,
+      "count": 2880,
+      "span": 1.0
+    },
+    "horizon_from_vps": 898.4,
+    "horizon_agreement_px": 0.4,
+    "horizon_tilt_deg": 0.014,
+    "level_fit": null,
+    "hough_rule_rejected": {
+      "y": 899.7667924596226,
+      "votes": 1557,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": 740.2,
+        "y_px": 898.5,
+        "x_frac": 0.25702,
+        "y_frac": 0.49919,
+        "nlines": 68,
+        "votes": 36961,
+        "in_frame": true,
+        "dot": {
+          "x_px": 816.7,
+          "y_px": 1107.9,
+          "dist_px": 222.9,
+          "px": 7
+        }
+      },
+      {
+        "x_px": 2139.9,
+        "y_px": 898.2,
+        "x_frac": 0.74301,
+        "y_frac": 0.499,
+        "nlines": 72,
+        "votes": 40567,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2271.7,
+          "y_px": 640.0,
+          "dist_px": 290.0,
+          "px": 102
+        }
+      }
+    ],
+    "vps_off_horizon": [],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "2-Point",
+    "preset": "2 Point",
+    "trusted": true,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "2-Point - 1_2 Narrow.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 458.0,
+    "horizon_frac": 0.25444,
+    "horizon_source": "vanishing points (rule off-frame)",
+    "horizon_scan": null,
+    "horizon_from_vps": 458.0,
+    "horizon_agreement_px": null,
+    "horizon_tilt_deg": 0.0,
+    "level_fit": {
+      "y": 458.0,
+      "y_frac": 0.25444,
+      "score": 37,
+      "vps_x_frac": [
+        0.27649,
+        0.97243
+      ],
+      "vps_nlines": [
+        7,
+        30
+      ]
+    },
+    "hough_rule_rejected": null,
+    "vps": [
+      {
+        "x_px": 796.3,
+        "y_px": 458.0,
+        "x_frac": 0.27649,
+        "y_frac": 0.25444,
+        "nlines": 7,
+        "votes": 0,
+        "in_frame": true,
+        "dot": {
+          "x_px": 412.3,
+          "y_px": 9.6,
+          "dist_px": 590.4,
+          "px": 77
+        }
+      },
+      {
+        "x_px": 2800.6,
+        "y_px": 458.0,
+        "x_frac": 0.97243,
+        "y_frac": 0.25444,
+        "nlines": 30,
+        "votes": 0,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2869.6,
+          "y_px": 56.8,
+          "dist_px": 407.0,
+          "px": 65
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": -685.8,
+        "y_px": -1223.2,
+        "x_frac": -0.23814,
+        "y_frac": -0.67958,
+        "nlines": 21,
+        "in_frame": false,
+        "dot": {
+          "x_px": 21.8,
+          "y_px": 9.6,
+          "dist_px": 1421.5,
+          "px": 69
+        }
+      },
+      {
+        "x_px": -616.2,
+        "y_px": -1368.9,
+        "x_frac": -0.21395,
+        "y_frac": -0.76049,
+        "nlines": 21,
+        "in_frame": false,
+        "dot": {
+          "x_px": 21.8,
+          "y_px": 9.6,
+          "dist_px": 1518.9,
+          "px": 69
+        }
+      },
+      {
+        "x_px": 2875.9,
+        "y_px": 992.2,
+        "x_frac": 0.99857,
+        "y_frac": 0.55123,
+        "nlines": 18,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2869.6,
+          "y_px": 56.8,
+          "dist_px": 935.4,
+          "px": 65
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "2-Point",
+    "preset": "1/2 Narrow",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "2-Point - 1_4 Narrow.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": -263.0,
+    "horizon_frac": -0.14611,
+    "horizon_source": "vanishing points (rule off-frame)",
+    "horizon_scan": null,
+    "horizon_from_vps": -263.0,
+    "horizon_agreement_px": null,
+    "horizon_tilt_deg": 0.0,
+    "level_fit": {
+      "y": -263.0,
+      "y_frac": -0.14611,
+      "score": 30,
+      "vps_x_frac": [
+        -1.24729,
+        1.80443
+      ],
+      "vps_nlines": [
+        12,
+        18
+      ]
+    },
+    "hough_rule_rejected": {
+      "y": 127.76733301695415,
+      "votes": 266,
+      "dev_deg": 0.1666666666666714
+    },
+    "vps": [
+      {
+        "x_px": -3592.2,
+        "y_px": -263.0,
+        "x_frac": -1.24729,
+        "y_frac": -0.14611,
+        "nlines": 12,
+        "votes": 0,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2874.4,
+          "y_px": 1794.4,
+          "dist_px": 6786.1,
+          "px": 48
+        }
+      },
+      {
+        "x_px": 5196.8,
+        "y_px": -263.0,
+        "x_frac": 1.80443,
+        "y_frac": -0.14611,
+        "nlines": 18,
+        "votes": 0,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2874.4,
+          "y_px": 1794.4,
+          "dist_px": 3102.6,
+          "px": 48
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 2783.6,
+        "y_px": 220.7,
+        "x_frac": 0.96653,
+        "y_frac": 0.1226,
+        "nlines": 31,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2874.4,
+          "y_px": 1794.4,
+          "dist_px": 1576.4,
+          "px": 48
+        }
+      },
+      {
+        "x_px": 2882.9,
+        "y_px": 863.8,
+        "x_frac": 1.00099,
+        "y_frac": 0.47987,
+        "nlines": 24,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2874.4,
+          "y_px": 1794.4,
+          "dist_px": 930.7,
+          "px": 48
+        }
+      },
+      {
+        "x_px": 2795.1,
+        "y_px": 1498.9,
+        "x_frac": 0.97052,
+        "y_frac": 0.8327,
+        "nlines": 22,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2874.4,
+          "y_px": 1794.4,
+          "dist_px": 306.0,
+          "px": 48
+        }
+      },
+      {
+        "x_px": 4742.4,
+        "y_px": -131.8,
+        "x_frac": 1.64665,
+        "y_frac": -0.07324,
+        "nlines": 14,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2874.4,
+          "y_px": 1794.4,
+          "dist_px": 2683.2,
+          "px": 48
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "2-Point",
+    "preset": "1/4 Narrow",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "2-Point - Side Narrow.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 1608.0,
+    "horizon_frac": 0.89333,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 1608.0,
+      "count": 2880,
+      "span": 1.0
+    },
+    "horizon_from_vps": 1587.4,
+    "horizon_agreement_px": 20.6,
+    "horizon_tilt_deg": 1.205,
+    "level_fit": null,
+    "hough_rule_rejected": {
+      "y": 1607.7667924596226,
+      "votes": 5729,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": 2798.0,
+        "y_px": 1608.1,
+        "x_frac": 0.97154,
+        "y_frac": 0.8934,
+        "nlines": 21,
+        "votes": 14654,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2869.6,
+          "y_px": 79.1,
+          "dist_px": 1530.7,
+          "px": 77
+        }
+      },
+      {
+        "x_px": 4772.0,
+        "y_px": 1566.6,
+        "x_frac": 1.65694,
+        "y_frac": 0.87033,
+        "nlines": 30,
+        "votes": 12768,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2869.6,
+          "y_px": 79.1,
+          "dist_px": 2414.9,
+          "px": 77
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 4771.8,
+        "y_px": 1648.3,
+        "x_frac": 1.65687,
+        "y_frac": 0.91572,
+        "nlines": 28,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2869.6,
+          "y_px": 79.1,
+          "dist_px": 2465.9,
+          "px": 77
+        }
+      },
+      {
+        "x_px": 2785.2,
+        "y_px": 1297.0,
+        "x_frac": 0.96709,
+        "y_frac": 0.72055,
+        "nlines": 19,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2869.6,
+          "y_px": 79.1,
+          "dist_px": 1220.8,
+          "px": 77
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "2-Point",
+    "preset": "Side Narrow",
+    "trusted": true,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "2-Point - 1_2 Wide.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": -480.5,
+    "horizon_frac": -0.26695,
+    "horizon_source": "vanishing points (rule off-frame)",
+    "horizon_scan": null,
+    "horizon_from_vps": -480.5,
+    "horizon_agreement_px": null,
+    "horizon_tilt_deg": 0.767,
+    "level_fit": {
+      "y": -491.0,
+      "y_frac": -0.27278,
+      "score": 41,
+      "vps_x_frac": [
+        -0.52468,
+        0.96884
+      ],
+      "vps_nlines": [
+        14,
+        27
+      ]
+    },
+    "hough_rule_rejected": null,
+    "vps": [
+      {
+        "x_px": -1412.2,
+        "y_px": -508.5,
+        "x_frac": -0.49034,
+        "y_frac": -0.28249,
+        "nlines": 18,
+        "votes": 5274,
+        "in_frame": false,
+        "dot": {
+          "x_px": 9.6,
+          "y_px": 491.2,
+          "dist_px": 1738.1,
+          "px": 72
+        }
+      },
+      {
+        "x_px": 2764.3,
+        "y_px": -452.5,
+        "x_frac": 0.95984,
+        "y_frac": -0.25142,
+        "nlines": 54,
+        "votes": 50349,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2583.0,
+          "y_px": 9.4,
+          "dist_px": 496.3,
+          "px": 65
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": -1331.0,
+        "y_px": -335.6,
+        "x_frac": -0.46214,
+        "y_frac": -0.18643,
+        "nlines": 19,
+        "in_frame": false,
+        "dot": {
+          "x_px": 9.6,
+          "y_px": 491.2,
+          "dist_px": 1575.0,
+          "px": 72
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "2-Point",
+    "preset": "1/2 Wide",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "2-Point - 1_4 Wide.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 508.0,
+    "horizon_frac": 0.28222,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 507.9970152966049,
+      "count": 2677,
+      "span": 1.0
+    },
+    "horizon_from_vps": 511.2,
+    "horizon_agreement_px": 3.2,
+    "horizon_tilt_deg": 0.088,
+    "level_fit": null,
+    "hough_rule_rejected": {
+      "y": 509.7667924596226,
+      "votes": 2276,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": 552.5,
+        "y_px": 508.3,
+        "x_frac": 0.19183,
+        "y_frac": 0.28238,
+        "nlines": 67,
+        "votes": 53974,
+        "in_frame": true,
+        "dot": {
+          "x_px": 687.5,
+          "y_px": 312.4,
+          "dist_px": 237.9,
+          "px": 15
+        }
+      },
+      {
+        "x_px": 4352.3,
+        "y_px": 514.1,
+        "x_frac": 1.51122,
+        "y_frac": 0.28563,
+        "nlines": 22,
+        "votes": 19329,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2375.7,
+          "y_px": 1797.7,
+          "dist_px": 2356.8,
+          "px": 19
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 576.0,
+        "y_px": 492.9,
+        "x_frac": 0.19999,
+        "y_frac": 0.27386,
+        "nlines": 25,
+        "in_frame": true,
+        "dot": {
+          "x_px": 687.5,
+          "y_px": 312.4,
+          "dist_px": 212.2,
+          "px": 15
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "2-Point",
+    "preset": "1/4 Wide",
+    "trusted": true,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "2-Point - Side Wide.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 1108.0,
+    "horizon_frac": 0.61555,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 1107.997225433526,
+      "count": 2880,
+      "span": 1.0
+    },
+    "horizon_from_vps": 1111.0,
+    "horizon_agreement_px": 3.0,
+    "horizon_tilt_deg": 0.0,
+    "level_fit": {
+      "y": 1111.0,
+      "y_frac": 0.61722,
+      "score": 90,
+      "vps_x_frac": [
+        -0.74551,
+        0.71527
+      ],
+      "vps_nlines": [
+        9,
+        81
+      ]
+    },
+    "hough_rule_rejected": {
+      "y": 1109.7667924596226,
+      "votes": 2377,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": -2147.1,
+        "y_px": 1111.0,
+        "x_frac": -0.74551,
+        "y_frac": 0.61722,
+        "nlines": 9,
+        "votes": 0,
+        "in_frame": false,
+        "dot": {
+          "x_px": 9.2,
+          "y_px": 64.8,
+          "dist_px": 2396.7,
+          "px": 63
+        }
+      },
+      {
+        "x_px": 2060.0,
+        "y_px": 1111.0,
+        "x_frac": 0.71527,
+        "y_frac": 0.61722,
+        "nlines": 81,
+        "votes": 0,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2124.0,
+          "y_px": 871.0,
+          "dist_px": 248.4,
+          "px": 119
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 2547.4,
+        "y_px": 863.5,
+        "x_frac": 0.88451,
+        "y_frac": 0.47974,
+        "nlines": 15,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2370.3,
+          "y_px": 857.8,
+          "dist_px": 177.1,
+          "px": 131
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "2-Point",
+    "preset": "Side Wide",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "2-Point - 1_2 Wide Below.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 2219.8,
+    "horizon_frac": 1.23322,
+    "horizon_source": "vanishing points (rule off-frame)",
+    "horizon_scan": null,
+    "horizon_from_vps": 2219.8,
+    "horizon_agreement_px": null,
+    "horizon_tilt_deg": 1.662,
+    "level_fit": {
+      "y": 2141.0,
+      "y_frac": 1.18944,
+      "score": 71,
+      "vps_x_frac": [
+        -0.49161,
+        0.95489
+      ],
+      "vps_nlines": [
+        10,
+        61
+      ]
+    },
+    "hough_rule_rejected": null,
+    "vps": [
+      {
+        "x_px": -1537.9,
+        "y_px": 2282.1,
+        "x_frac": -0.53399,
+        "y_frac": 1.26784,
+        "nlines": 16,
+        "votes": 4707,
+        "in_frame": false,
+        "dot": {
+          "x_px": 1.3,
+          "y_px": 1425.3,
+          "dist_px": 1761.6,
+          "px": 11
+        }
+      },
+      {
+        "x_px": 2758.6,
+        "y_px": 2157.5,
+        "x_frac": 0.95785,
+        "y_frac": 1.19859,
+        "nlines": 97,
+        "votes": 66845,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2653.7,
+          "y_px": 1509.9,
+          "dist_px": 656.0,
+          "px": 7
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": -1428.2,
+        "y_px": 2083.7,
+        "x_frac": -0.49589,
+        "y_frac": 1.15763,
+        "nlines": 17,
+        "in_frame": false,
+        "dot": {
+          "x_px": 1.3,
+          "y_px": 1425.3,
+          "dist_px": 1573.8,
+          "px": 11
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "2-Point",
+    "preset": "1/2 Wide Below",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "2-Point - Side Ultrawide.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 898.0,
+    "horizon_frac": 0.49889,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 897.9944572748268,
+      "count": 2880,
+      "span": 1.0
+    },
+    "horizon_from_vps": 900.8,
+    "horizon_agreement_px": 2.8,
+    "horizon_tilt_deg": 0.162,
+    "level_fit": null,
+    "hough_rule_rejected": {
+      "y": 899.7667924596226,
+      "votes": 1625,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": 241.7,
+        "y_px": 903.3,
+        "x_frac": 0.08392,
+        "y_frac": 0.50185,
+        "nlines": 55,
+        "votes": 30785,
+        "in_frame": true,
+        "dot": {
+          "x_px": 239.5,
+          "y_px": 903.4,
+          "dist_px": 2.2,
+          "px": 10
+        }
+      },
+      {
+        "x_px": 2018.7,
+        "y_px": 898.3,
+        "x_frac": 0.70092,
+        "y_frac": 0.49905,
+        "nlines": 73,
+        "votes": 43349,
+        "in_frame": true,
+        "dot": {
+          "x_px": 1935.4,
+          "y_px": 815.4,
+          "dist_px": 117.5,
+          "px": 27
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 2852.4,
+        "y_px": 764.4,
+        "x_frac": 0.99043,
+        "y_frac": 0.42465,
+        "nlines": 12,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2463.3,
+          "y_px": 1019.3,
+          "dist_px": 465.2,
+          "px": 9
+        }
+      }
+    ],
+    "dots_on_horizon": [
+      {
+        "x_px": 239.5,
+        "y_px": 903.4,
+        "x_frac": 0.08316,
+        "px": 10
+      }
+    ],
+    "nlines": 200,
+    "list": "2-Point",
+    "preset": "Side Ultrawide",
+    "trusted": true,
+    "dot_confirmed": 1
+  },
+  {
+    "file": "3-Point - 3 Point.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 1498.0,
+    "horizon_frac": 0.8322,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 1497.9619329838158,
+      "count": 2880,
+      "span": 1.0
+    },
+    "horizon_from_vps": 1498.3,
+    "horizon_agreement_px": 0.4,
+    "horizon_tilt_deg": 0.031,
+    "level_fit": null,
+    "hough_rule_rejected": {
+      "y": 1499.7667924596226,
+      "votes": 1105,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": 639.6,
+        "y_px": 1497.9,
+        "x_frac": 0.22207,
+        "y_frac": 0.83217,
+        "nlines": 31,
+        "votes": 18006,
+        "in_frame": true,
+        "dot": {
+          "x_px": 586.8,
+          "y_px": 1603.1,
+          "dist_px": 117.7,
+          "px": 87
+        }
+      },
+      {
+        "x_px": 2239.9,
+        "y_px": 1498.8,
+        "x_frac": 0.77774,
+        "y_frac": 0.83265,
+        "nlines": 49,
+        "votes": 23244,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2239.5,
+          "y_px": 1503.4,
+          "dist_px": 4.6,
+          "px": 10
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 1441.2,
+        "y_px": 298.3,
+        "x_frac": 0.5004,
+        "y_frac": 0.1657,
+        "nlines": 59,
+        "in_frame": true,
+        "dot": {
+          "x_px": 1439.5,
+          "y_px": 299.5,
+          "dist_px": 2.1,
+          "px": 76
+        }
+      }
+    ],
+    "dots_on_horizon": [
+      {
+        "x_px": 2239.5,
+        "y_px": 1503.4,
+        "x_frac": 0.7776,
+        "px": 10
+      }
+    ],
+    "nlines": 200,
+    "list": "3-Point",
+    "preset": "3 Point",
+    "trusted": true,
+    "dot_confirmed": 2
+  },
+  {
+    "file": "3-Point - 3_4 Narrow.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 1757.2,
+    "horizon_frac": 0.9762,
+    "horizon_source": "vanishing points (rule off-frame)",
+    "horizon_scan": null,
+    "horizon_from_vps": 1757.2,
+    "horizon_agreement_px": null,
+    "horizon_tilt_deg": 2.673,
+    "level_fit": {
+      "y": -2772.0,
+      "y_frac": -1.54,
+      "score": 21,
+      "vps_x_frac": [
+        -1.04533,
+        1.83854
+      ],
+      "vps_nlines": [
+        11,
+        10
+      ]
+    },
+    "hough_rule_rejected": null,
+    "vps": [
+      {
+        "x_px": 176.3,
+        "y_px": 1811.6,
+        "x_frac": 0.06121,
+        "y_frac": 1.00645,
+        "nlines": 17,
+        "votes": 8213,
+        "in_frame": false,
+        "dot": {
+          "x_px": 11.2,
+          "y_px": 1590.4,
+          "dist_px": 276.0,
+          "px": 90
+        }
+      },
+      {
+        "x_px": 2507.9,
+        "y_px": 1702.7,
+        "x_frac": 0.87081,
+        "y_frac": 0.94596,
+        "nlines": 17,
+        "votes": 10673,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2437.0,
+          "y_px": 1453.0,
+          "dist_px": 259.6,
+          "px": 21
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 2407.8,
+        "y_px": 130.0,
+        "x_frac": 0.83605,
+        "y_frac": 0.07221,
+        "nlines": 21,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2529.4,
+          "y_px": 9.6,
+          "dist_px": 171.1,
+          "px": 99
+        }
+      },
+      {
+        "x_px": 2713.0,
+        "y_px": 1022.9,
+        "x_frac": 0.94201,
+        "y_frac": 0.56826,
+        "nlines": 19,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2437.0,
+          "y_px": 1453.0,
+          "dist_px": 511.1,
+          "px": 21
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "3-Point",
+    "preset": "3/4 Narrow",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "3-Point - 1_2 Narrow.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 231.0,
+    "horizon_frac": 0.12833,
+    "horizon_source": "vanishing points (rule off-frame)",
+    "horizon_scan": null,
+    "horizon_from_vps": 231.0,
+    "horizon_agreement_px": null,
+    "horizon_tilt_deg": 0.0,
+    "level_fit": {
+      "y": 231.0,
+      "y_frac": 0.12833,
+      "score": 33,
+      "vps_x_frac": [
+        0.29834,
+        0.96345
+      ],
+      "vps_nlines": [
+        9,
+        24
+      ]
+    },
+    "hough_rule_rejected": null,
+    "vps": [
+      {
+        "x_px": 859.2,
+        "y_px": 231.0,
+        "x_frac": 0.29834,
+        "y_frac": 0.12833,
+        "nlines": 9,
+        "votes": 0,
+        "in_frame": true,
+        "dot": {
+          "x_px": 563.1,
+          "y_px": 39.3,
+          "dist_px": 352.7,
+          "px": 70
+        }
+      },
+      {
+        "x_px": 2774.7,
+        "y_px": 231.0,
+        "x_frac": 0.96345,
+        "y_frac": 0.12833,
+        "nlines": 24,
+        "votes": 0,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2603.1,
+          "y_px": 733.8,
+          "dist_px": 531.3,
+          "px": 9
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 2665.7,
+        "y_px": 765.0,
+        "x_frac": 0.92561,
+        "y_frac": 0.42499,
+        "nlines": 23,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2603.1,
+          "y_px": 733.8,
+          "dist_px": 70.0,
+          "px": 9
+        }
+      },
+      {
+        "x_px": 2610.2,
+        "y_px": 1368.0,
+        "x_frac": 0.9063,
+        "y_frac": 0.75998,
+        "nlines": 19,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2239.8,
+          "y_px": 1792.2,
+          "dist_px": 563.2,
+          "px": 70
+        }
+      },
+      {
+        "x_px": 2210.1,
+        "y_px": 1767.2,
+        "x_frac": 0.76739,
+        "y_frac": 0.98179,
+        "nlines": 15,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2239.8,
+          "y_px": 1792.2,
+          "dist_px": 38.8,
+          "px": 70
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "3-Point",
+    "preset": "1/2 Narrow",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "3-Point - 3_4 Wide.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": -609.9,
+    "horizon_frac": -0.33882,
+    "horizon_source": "vanishing points (rule off-frame)",
+    "horizon_scan": null,
+    "horizon_from_vps": -609.9,
+    "horizon_agreement_px": null,
+    "horizon_tilt_deg": 0.79,
+    "level_fit": {
+      "y": -576.0,
+      "y_frac": -0.32,
+      "score": 39,
+      "vps_x_frac": [
+        -0.05165,
+        1.22221
+      ],
+      "vps_nlines": [
+        20,
+        19
+      ]
+    },
+    "hough_rule_rejected": null,
+    "vps": [
+      {
+        "x_px": -204.6,
+        "y_px": -584.0,
+        "x_frac": -0.07103,
+        "y_frac": -0.32447,
+        "nlines": 26,
+        "votes": 11259,
+        "in_frame": false,
+        "dot": {
+          "x_px": 53.7,
+          "y_px": 9.2,
+          "dist_px": 647.0,
+          "px": 86
+        }
+      },
+      {
+        "x_px": 3541.1,
+        "y_px": -635.7,
+        "x_frac": 1.22956,
+        "y_frac": -0.35317,
+        "nlines": 18,
+        "votes": 5898,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2869.4,
+          "y_px": 69.6,
+          "dist_px": 974.0,
+          "px": 99
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": -153.3,
+        "y_px": -614.4,
+        "x_frac": -0.05324,
+        "y_frac": -0.34132,
+        "nlines": 24,
+        "in_frame": false,
+        "dot": {
+          "x_px": 53.7,
+          "y_px": 9.2,
+          "dist_px": 657.0,
+          "px": 86
+        }
+      },
+      {
+        "x_px": 3539.1,
+        "y_px": -587.4,
+        "x_frac": 1.22886,
+        "y_frac": -0.32631,
+        "nlines": 22,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2869.4,
+          "y_px": 69.6,
+          "dist_px": 938.1,
+          "px": 99
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "3-Point",
+    "preset": "3/4 Wide",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "3-Point - 1_4 Wide.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 398.0,
+    "horizon_frac": 0.22111,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 397.99599741768884,
+      "count": 2578,
+      "span": 1.0
+    },
+    "horizon_from_vps": 390.5,
+    "horizon_agreement_px": 7.5,
+    "horizon_tilt_deg": 0.23,
+    "level_fit": null,
+    "hough_rule_rejected": {
+      "y": 399.7667924596226,
+      "votes": 2427,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": -776.1,
+        "y_px": 383.0,
+        "x_frac": -0.26949,
+        "y_frac": 0.21279,
+        "nlines": 38,
+        "votes": 27756,
+        "in_frame": false,
+        "dot": {
+          "x_px": 10.2,
+          "y_px": 103.7,
+          "dist_px": 834.5,
+          "px": 70
+        }
+      },
+      {
+        "x_px": 2939.5,
+        "y_px": 397.9,
+        "x_frac": 1.02067,
+        "y_frac": 0.22108,
+        "nlines": 80,
+        "votes": 51278,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2870.2,
+          "y_px": 263.6,
+          "dist_px": 151.2,
+          "px": 127
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 2484.9,
+        "y_px": 564.1,
+        "x_frac": 0.86281,
+        "y_frac": 0.31338,
+        "nlines": 12,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2487.0,
+          "y_px": 227.7,
+          "dist_px": 336.4,
+          "px": 10
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "3-Point",
+    "preset": "1/4 Wide",
+    "trusted": true,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "3-Point - Side Wide Below.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 1518.0,
+    "horizon_frac": 0.84333,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 1517.9920396862021,
+      "count": 2880,
+      "span": 1.0
+    },
+    "horizon_from_vps": 1508.5,
+    "horizon_agreement_px": 9.5,
+    "horizon_tilt_deg": 0.266,
+    "level_fit": null,
+    "hough_rule_rejected": {
+      "y": 1519.7667924596226,
+      "votes": 2461,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": 123.2,
+        "y_px": 1500.1,
+        "x_frac": 0.04277,
+        "y_frac": 0.83338,
+        "nlines": 17,
+        "votes": 5807,
+        "in_frame": true,
+        "dot": {
+          "x_px": 6.8,
+          "y_px": 1315.0,
+          "dist_px": 218.6,
+          "px": 79
+        }
+      },
+      {
+        "x_px": 3744.1,
+        "y_px": 1516.9,
+        "x_frac": 1.30003,
+        "y_frac": 0.84273,
+        "nlines": 38,
+        "votes": 26925,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2832.5,
+          "y_px": 1377.0,
+          "dist_px": 922.3,
+          "px": 6
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 144.3,
+        "y_px": 1528.8,
+        "x_frac": 0.05009,
+        "y_frac": 0.84933,
+        "nlines": 64,
+        "in_frame": true,
+        "dot": {
+          "x_px": 6.8,
+          "y_px": 1315.0,
+          "dist_px": 254.2,
+          "px": 79
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "3-Point",
+    "preset": "Side Wide Below",
+    "trusted": true,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "3-Point - 1_4 Wide Below.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 1398.0,
+    "horizon_frac": 0.77666,
+    "horizon_source": "row-scan",
+    "horizon_scan": {
+      "y": 1397.9948024948026,
+      "count": 2880,
+      "span": 1.0
+    },
+    "horizon_from_vps": 1414.1,
+    "horizon_agreement_px": 16.1,
+    "horizon_tilt_deg": 0.437,
+    "level_fit": null,
+    "hough_rule_rejected": {
+      "y": 1399.7667924596226,
+      "votes": 2861,
+      "dev_deg": 0.0
+    },
+    "vps": [
+      {
+        "x_px": -1154.4,
+        "y_px": 1430.1,
+        "x_frac": -0.40082,
+        "y_frac": 0.79449,
+        "nlines": 14,
+        "votes": 5149,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2.5,
+          "y_px": 1583.3,
+          "dist_px": 1166.9,
+          "px": 15
+        }
+      },
+      {
+        "x_px": 3039.0,
+        "y_px": 1398.1,
+        "x_frac": 1.05521,
+        "y_frac": 0.77672,
+        "nlines": 94,
+        "votes": 60067,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2874.8,
+          "y_px": 1196.2,
+          "dist_px": 260.2,
+          "px": 45
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": -1082.3,
+        "y_px": 1352.6,
+        "x_frac": -0.3758,
+        "y_frac": 0.75145,
+        "nlines": 15,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2.5,
+          "y_px": 1583.3,
+          "dist_px": 1109.0,
+          "px": 15
+        }
+      },
+      {
+        "x_px": 2365.1,
+        "y_px": 1217.3,
+        "x_frac": 0.82121,
+        "y_frac": 0.67627,
+        "nlines": 11,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2526.7,
+          "y_px": 1204.8,
+          "dist_px": 162.1,
+          "px": 10
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "3-Point",
+    "preset": "1/4 Wide Below",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "3-Point - 3_4 Ultrawide Below.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 2388.0,
+    "horizon_frac": 1.32667,
+    "horizon_source": "vanishing points (rule off-frame)",
+    "horizon_scan": null,
+    "horizon_from_vps": 2388.0,
+    "horizon_agreement_px": null,
+    "horizon_tilt_deg": 0.0,
+    "level_fit": {
+      "y": 2388.0,
+      "y_frac": 1.32667,
+      "score": 58,
+      "vps_x_frac": [
+        -0.08804,
+        1.08659
+      ],
+      "vps_nlines": [
+        19,
+        39
+      ]
+    },
+    "hough_rule_rejected": null,
+    "vps": [
+      {
+        "x_px": -253.6,
+        "y_px": 2388.0,
+        "x_frac": -0.08804,
+        "y_frac": 1.32667,
+        "nlines": 19,
+        "votes": 0,
+        "in_frame": false,
+        "dot": {
+          "x_px": 205.3,
+          "y_px": 1100.0,
+          "dist_px": 1367.3,
+          "px": 113
+        }
+      },
+      {
+        "x_px": 3129.4,
+        "y_px": 2388.0,
+        "x_frac": 1.08659,
+        "y_frac": 1.32667,
+        "nlines": 39,
+        "votes": 0,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2731.5,
+          "y_px": 875.0,
+          "dist_px": 1564.4,
+          "px": 6
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 1425.9,
+        "y_px": -807.2,
+        "x_frac": 0.49512,
+        "y_frac": -0.44846,
+        "nlines": 43,
+        "in_frame": false,
+        "dot": {
+          "x_px": 1665.4,
+          "y_px": 13.5,
+          "dist_px": 854.9,
+          "px": 194
+        }
+      },
+      {
+        "x_px": 3165.1,
+        "y_px": 2439.4,
+        "x_frac": 1.09898,
+        "y_frac": 1.35522,
+        "nlines": 21,
+        "in_frame": false,
+        "dot": {
+          "x_px": 2731.5,
+          "y_px": 875.0,
+          "dist_px": 1623.4,
+          "px": 6
+        }
+      }
+    ],
+    "dots_on_horizon": [],
+    "nlines": 200,
+    "list": "3-Point",
+    "preset": "3/4 Ultrawide Below",
+    "trusted": false,
+    "dot_confirmed": 0
+  },
+  {
+    "file": "3-Point - 3_4 Ultrawide.png",
+    "image": [
+      2880,
+      1800
+    ],
+    "frame": [
+      2880,
+      1800
+    ],
+    "horizon_px": 1597.0,
+    "horizon_frac": 0.88722,
+    "horizon_source": "vanishing points (rule off-frame)",
+    "horizon_scan": null,
+    "horizon_from_vps": 1597.0,
+    "horizon_agreement_px": null,
+    "horizon_tilt_deg": 0.0,
+    "level_fit": {
+      "y": 1597.0,
+      "y_frac": 0.88722,
+      "score": 69,
+      "vps_x_frac": [
+        0.42644,
+        0.4999
+      ],
+      "vps_nlines": [
+        11,
+        58
+      ]
+    },
+    "hough_rule_rejected": {
+      "y": 1541.7733153857068,
+      "votes": 219,
+      "dev_deg": 0.1666666666666714
+    },
+    "vps": [
+      {
+        "x_px": 1228.2,
+        "y_px": 1597.0,
+        "x_frac": 0.42644,
+        "y_frac": 0.88722,
+        "nlines": 11,
+        "votes": 0,
+        "in_frame": true,
+        "dot": {
+          "x_px": 1214.8,
+          "y_px": 1623.3,
+          "dist_px": 29.5,
+          "px": 77
+        }
+      },
+      {
+        "x_px": 1439.7,
+        "y_px": 1597.0,
+        "x_frac": 0.4999,
+        "y_frac": 0.88722,
+        "nlines": 58,
+        "votes": 0,
+        "in_frame": true,
+        "dot": {
+          "x_px": 1439.5,
+          "y_px": 1599.5,
+          "dist_px": 2.5,
+          "px": 76
+        }
+      }
+    ],
+    "vps_off_horizon": [
+      {
+        "x_px": 2845.5,
+        "y_px": 1675.2,
+        "x_frac": 0.98804,
+        "y_frac": 0.93069,
+        "nlines": 18,
+        "in_frame": true,
+        "dot": {
+          "x_px": 2836.2,
+          "y_px": 1671.8,
+          "dist_px": 10.0,
+          "px": 6
+        }
+      },
+      {
+        "x_px": -489.2,
+        "y_px": -1022.9,
+        "x_frac": -0.16987,
+        "y_frac": -0.56826,
+        "nlines": 15,
+        "in_frame": false,
+        "dot": {
+          "x_px": 54.3,
+          "y_px": 9.7,
+          "dist_px": 1166.9,
+          "px": 68
+        }
+      }
+    ],
+    "dots_on_horizon": [
+      {
+        "x_px": 1439.5,
+        "y_px": 1599.5,
+        "x_frac": 0.49983,
+        "px": 76
+      },
+      {
+        "x_px": 1646.9,
+        "y_px": 1606.0,
+        "x_frac": 0.57184,
+        "px": 10
+      }
+    ],
+    "nlines": 200,
+    "list": "3-Point",
+    "preset": "3/4 Ultrawide",
+    "trusted": false,
+    "dot_confirmed": 1
+  }
+]
