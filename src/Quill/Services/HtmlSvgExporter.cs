@@ -43,6 +43,16 @@ public static class HtmlSvgExporter
         string X(double wx) => N(wx - pg.OffsetX);
         string Y(double wy) => N(wy - pg.OffsetY);
 
+        // SVG's user space runs y-down, the same way the canvas does, so a
+        // clockwise angle needs no negation here - unlike the PDF matrix, which
+        // has a y-flip to undo. rotate(a cx cy) about the subject's own centre is
+        // the whole of it, and it leaves the element's own x/y alone: text stays
+        // selectable and an image stays one <image>, both simply turned.
+        string Turn(double angle, double cx, double cy) =>
+            Math.Abs(angle) < 0.01
+                ? ""
+                : " transform=\"rotate(" + N(angle) + ' ' + X(cx) + ' ' + Y(cy) + ")\"";
+
         foreach (var im in pg.Images)
         {
             try
@@ -50,7 +60,8 @@ public static class HtmlSvgExporter
                 var png = MiniPng.FromBgra(im.Bgra8, im.PixW, im.PixH);
                 sb.Append("<image x=\"").Append(X(im.X)).Append("\" y=\"").Append(Y(im.Y))
                   .Append("\" width=\"").Append(N(im.W)).Append("\" height=\"").Append(N(im.H))
-                  .Append("\" href=\"data:image/png;base64,").Append(Convert.ToBase64String(png)).Append("\"/>");
+                  .Append('"').Append(Turn(im.Angle, im.CentreX, im.CentreY))
+                  .Append(" href=\"data:image/png;base64,").Append(Convert.ToBase64String(png)).Append("\"/>");
             }
             catch { /* an unencodable image must not sink the whole export */ }
         }
@@ -84,8 +95,15 @@ public static class HtmlSvgExporter
             // Bare tspans (no x/y of their own) flow from the parent's anchor, so
             // the renderer advances mixed-size runs for us. xml:space keeps the
             // spaces that fall on a run boundary from being collapsed away.
+            //
+            // The turn goes on the <text>, not on the tspans: the transform takes
+            // the anchor with it, so the bare tspans keep flowing from it exactly
+            // as they did. Every line of one box names the box's shared centre, so
+            // the lines turn together instead of each pivoting on itself.
             sb.Append("<text x=\"").Append(X(t.X)).Append("\" y=\"").Append(Y(t.Y))
-              .Append("\" fill=\"").Append(Esc(t.Color)).Append("\" xml:space=\"preserve\">");
+              .Append("\" fill=\"").Append(Esc(t.Color)).Append('"')
+              .Append(Turn(t.Angle, t.CentreX, t.CentreY))
+              .Append(" xml:space=\"preserve\">");
             foreach (var run in runs)
             {
                 if (run.Text.Length == 0) continue;
