@@ -22,3 +22,7 @@ scratchpad/*.png
 scratchpad/*.txt
 scratchpad/_Icons_*.cs
 scratchpad/__pycache__/
+
+# Python bytecode from the tools/ checkers
+__pycache__/
+*.pyc
