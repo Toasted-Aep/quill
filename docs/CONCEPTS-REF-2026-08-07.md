@@ -3987,3 +3987,101 @@ made quietly:
    change when the UI language changes — is a product decision.
 6. **Per-notebook or per-library default layer sets.** Not modelled. Every page
    starts with one implicit layer.
+
+---
+
+## 19. The page tray, the dial's glow, and the readouts that follow a selection — 2026-08-24
+
+One capture: a dark page with a multi-page PDF's page tray open, and the top bar
+showing `154%` beside a **locked** padlock, then `0°`, then download, upload,
+gear and help.
+
+### 19.1 A selected dial cell glows its own colour
+
+*"whenever a cell is selected in the radial dial it glows the colour of the pen
+/ tool and not just white."*
+
+The selection glow currently reads white for every cell. It must instead carry
+**the colour of the pen or tool in that cell**, so which cell is live and what
+it will draw with are one fact rather than two.
+
+*"and whenever a colour isn't selectable for a tool it gets displayed white."*
+
+So white stops being the default and becomes **meaningful**: it is what a cell
+shows when its tool has no colour to report. That is the same capability rule
+§16.3 established for the greyed dial — a subject that lacks a property does not
+fake one — and it is why the two halves belong in one section. Do not implement
+the glow without the white case; a glow that is always coloured makes white
+impossible, and a white that means nothing makes the glow ambiguous.
+
+Note this sits directly on §17.4's fix: on a dark ground the ring has no fill,
+so a glow drawn there composites onto the page. Read what `markSeat` does before
+adding a second colour to that same spot.
+
+### 19.2 The readouts follow the selection
+
+*"whenever an attachment / shape is selected the zoom level display is replaced
+with a width and height display and the tilt display becomes the tilt display of
+the selected attachment."*
+
+So the top bar's two readouts are **contextual**:
+
+| nothing selected | attachment or shape selected |
+|---|---|
+| zoom `154%` | the subject's **width × height** |
+| page tilt `0°` | the **subject's own** tilt |
+
+Two consequences to get right:
+
+- **The tilt readout changes subject, not just value.** It stops reporting the
+  page and starts reporting the selection. §17.11a's rotate tool reports page
+  rotation and is deliberately honest that the page has not turned; a readout
+  that silently swaps which thing it describes must not inherit that
+  disclaimer, and must not lose it either. Say which it is showing.
+- **The Measurement menu opens from these readouts** (§17.1). Decide and report
+  what it offers when the readouts are describing a selection rather than the
+  page — a Zoom section over a width/height readout would be describing
+  something the readout no longer names.
+
+### 19.3 A multi-page import opens a page tray
+
+*"whenever a pdf or attachment is imported (multipage), a floating panel opens
+up (that is hidable with a right arrow) that shows all the pages of the
+attachment and when you click a page, it gets pasted but it doesn't get removed
+from the side panel."*
+
+From the capture:
+
+- A **floating panel** on the page, dark, with **`PDF`** as its title at the
+  left and a **✕** at the right.
+- Below, a **vertical scrolling column of page thumbnails** — each page rendered
+  white on the dark ground, with its **number centred beneath it** (`1`, `2`,
+  `3`, …).
+- **Hidable with a right arrow**, so it collapses to an edge rather than
+  closing outright.
+
+**Clicking a page pastes it onto the canvas and leaves it in the tray.** The
+tray is a source, not a queue: the same page can be placed more than once, and
+placing every page must not empty it. That is the sentence the user wrote most
+explicitly, so it is the one most worth a test.
+
+Worth deciding rather than assuming: what the title says for a non-PDF
+multi-page import, and whether the tray survives a page switch or belongs to the
+document that opened it.
+
+### 19.4 Point erasers are broken, and the styles category must follow the mode
+
+*"point erasers and options are broken, remove point eraser styles category if
+stroke eraser is selected."*
+
+Two things, and the first is a defect report rather than a design change:
+
+1. **The point eraser and its options do not work.** Find out what is actually
+   broken before changing the UI around it — a category hidden in front of a
+   broken control leaves the control broken.
+2. **When the stroke eraser is selected, the point-eraser styles category must
+   not be shown at all.** Styles that belong to the other mode are not merely
+   inapplicable; offering them is what makes the mode ambiguous.
+
+The same capability principle as §19.1 and §16.3: what is shown follows what the
+current subject actually supports.
