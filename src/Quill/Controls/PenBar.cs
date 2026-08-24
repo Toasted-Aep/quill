@@ -56,6 +56,12 @@ public sealed class PenBar
     private const double LabelSize = 10;        // §2 "the size label in 13 DIP beneath"
     private const double RuleH = 2;             // §2 the active cell's rule
     private const double Radius = 12;
+    /// <summary>How far the ACTIVE cell's fill is carried from Surface toward
+    /// OnSurface on a dark ground - 9.1's "filled, lighter cell". Named because
+    /// TWO places need it and they must not drift: the fill itself, and the
+    /// contrast test that decides whether the mark on that fill keeps the pen's
+    /// own colour. See <see cref="SeatFor"/>.</summary>
+    private const double ActiveFill = 0.16;
 
     // §2.1 the attached settings popover.
     private const double SetW = 62;
@@ -472,7 +478,7 @@ public sealed class PenBar
 
         var stack = new StackPanel { Spacing = 0, VerticalAlignment = VerticalAlignment.Center };
 
-        var art = Art(id, pen, onSurface);
+        var art = Art(id, pen, onSurface, SeatFor(filled));
         if (art != null)
         {
             art.HorizontalAlignment = HorizontalAlignment.Center;
@@ -507,9 +513,7 @@ public sealed class PenBar
         {
             CornerRadius = new CornerRadius(Radius - 4),
             Margin = new Thickness(3, 2, 3, 2),
-            Background = new SolidColorBrush(filled
-                ? Mix(PageTheme.Surface, PageTheme.OnSurface, 0.16)
-                : Colors.Transparent),
+            Background = new SolidColorBrush(filled ? SeatFor(true) : Colors.Transparent),
         });
         body.Children.Add(stack);
         if (filled)
@@ -734,7 +738,23 @@ public sealed class PenBar
         };
     }
 
-    private FrameworkElement? Art(string id, PenPreset? pen, Color fg)
+    /// <summary>What a cell's mark is actually standing on.
+    ///
+    /// <para>Almost always the bar's own fill: a cell has no background of its
+    /// own. The exception is 9.1's active cell on a DARK ground, which is filled
+    /// <see cref="ActiveFill"/> of the way from Surface to OnSurface because a
+    /// hairline rule has nothing to separate itself from there.</para>
+    ///
+    /// <para>This exists because <see cref="Art"/> used to measure every mark
+    /// against <c>PageTheme.Surface</c> flat, including the one mark that is not
+    /// on it - section 0's fault in the form where the neighbouring surface is
+    /// the one every OTHER cell does sit on. The filled cell has no token of its
+    /// own on the light side, because it is not filled there at all, and that is
+    /// exactly the shape of hole the contract warns about.</para></summary>
+    private static Color SeatFor(bool filled) =>
+        filled ? Mix(PageTheme.Surface, PageTheme.OnSurface, ActiveFill) : PageTheme.Surface;
+
+    private FrameworkElement? Art(string id, PenPreset? pen, Color fg, Color seat)
     {
         try
         {
@@ -742,9 +762,19 @@ public sealed class PenBar
             {
                 // The same stroke silhouette the dial draws, in the pen's own
                 // colour, falling back only when the contrast genuinely collapses
-                // against the bar's Surface fill.
+                // against THE CELL'S OWN SEAT - which is the bar's Surface fill
+                // for every cell but the filled one.
+                //
+                // Measured (scratchpad/seat_mismatch.py): tested against Surface
+                // flat, the filled cell let an ink through with as little as 11%
+                // of the 0.14 separation this very line demands - on OLED black a
+                // #505050 pen cleared the test against Surface at 1.73:1 and then
+                // sat on its actual seat at 1.07:1. Darkprint measured 1.16:1, a
+                // pinned dark ground 1.10:1. Passing the seat in closes the hole
+                // rather than widening the threshold, so no mark that reads today
+                // stops reading.
                 var ink = ColorUtil.Parse(pen.Color);
-                var paint = Math.Abs(Lum(ink) - Lum(PageTheme.Surface)) < 0.14 ? fg : ink;
+                var paint = Math.Abs(Lum(ink) - Lum(seat)) < 0.14 ? fg : ink;
                 paint.A = (byte)Math.Clamp(255 * Math.Clamp(pen.Opacity, 0.2f, 1f), 60, 255);
                 return Icons.Mark(Icons.PenStroke(pen.Pen), paint, MarkBox);
             }
