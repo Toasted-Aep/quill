@@ -4211,19 +4211,29 @@ public sealed class InkSurface : UserControl
     //
     // THE SELECTION HALF NOW TURNS FREELY - 17.11a requirement 2, delivered.
     //
-    // WHAT CHANGED, AND WHY IT COULD. 17.11a's stated reason for quarter steps
-    // was that "a TextElement is an axis-aligned box with a width and a height
-    // and takes NONE" of a rotation, so a free drag would turn two subject kinds
-    // out of three and leave text square. THAT PREMISE WAS ALREADY STALE WHEN IT
-    // WAS WRITTEN. TextElement has carried Rotation since #20; the Win2D path
-    // draws through it (DrawTextElement), the editing overlay applies it as a
-    // RenderTransform about the container centre, RotateActiveText drives it,
-    // the mirror negates it, the quarter turn adds to it, every clone path
-    // carries it, and the box's own grip bar has had a FREE-ANGLE drag handle on
-    // it the whole time. The audit for this change found the axis-aligned
-    // assumptions that really were left - selection bounds and the click probe,
-    // both fixed above - and no third kind that cannot take an angle. So the one
-    // reason not to ship a free rotation is gone and this is a free rotation.
+    // WHAT CHANGED, AND WHY IT COULD. The comment that used to stand here said
+    // quarter turns were forced because "a TextElement is an axis-aligned box
+    // with a width and a height and takes NONE" of a rotation, so a free drag
+    // would turn two subject kinds out of three and leave text square.
+    //
+    // THAT WAS FALSE, AND THIS COMMENT IS HOW IT SPREAD. It was written in
+    // 17.11a from an agent's report, copied down here as prose, and after that
+    // every reader of this file met the claim restated as fact directly above
+    // the code that disproves it - while the field itself, twelve hundred lines
+    // away in NoteModels.cs, was never the thing anyone checked. The full
+    // correction, and the reason the wrong version is kept visible rather than
+    // deleted, is CONCEPTS-REF 17.11a.1.
+    //
+    // TextElement has carried Rotation since #20; the Win2D path draws through
+    // it (DrawTextElement), the editing overlay applies it as a RenderTransform
+    // about the container centre, RotateActiveText drives it, the mirror negates
+    // it, the quarter turn adds to it, every clone path carries it, and the
+    // box's own grip bar has had a FREE-ANGLE drag handle on it the whole time.
+    // The audit for this change found the assumptions that really were left -
+    // selection bounds, the click probe and the table cell, all three fixed - and
+    // no subject kind that cannot take an angle. Export honours no rotation for
+    // ANY kind and still does not; that is 17.11a.1's last bullet, not this
+    // tool's business.
     //
     // THE QUARTER TURN SURVIVES, AS A BUTTON AND NOT AS THE SWEEP. The mode
     // bar's Rotate control and 16.2's bottom row both call

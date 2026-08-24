@@ -6563,10 +6563,14 @@ public sealed partial class MainWindow : Window
 
         items.Children.Add(BottomMenu.Divider());
 
+        // One switch for BOTH halves of the tool. 17.11a's snap is opt-in and a
+        // property of the tool, so it would be a stranger rule for it to hold
+        // for the handle and not for the sweep - and there is no state in which
+        // "Snap: on" means only half of what it says.
         items.Children.Add(BottomMenu.Cell(Icons.Snap, "Snap", Surface.RotateSnap,
             () => { Surface.RotateSnap = !Surface.RotateSnap; BuildRotateMenu(); },
             tip: "Off, the rotation is free and has no detent anywhere - 0° included. " +
-                 "On, it steps by 15°."));
+                 "On, it steps by 15°. Applies to both the handle and a drag on the selection."));
 
         items.Children.Add(BottomMenu.Cell(Icons.Pivot, "Pivot", false,
             () => Surface.ResetRotatePivot(),
