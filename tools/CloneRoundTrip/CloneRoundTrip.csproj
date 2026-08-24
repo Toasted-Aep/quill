@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The clone paths, PROVED rather than asserted.
+
+       Five copy sites in InkSurface each wrote their own initialiser list, and
+       between them they dropped the pen, the opacity, the padlock, the equation
+       source, the axis labels, every table cell's styling and - the dangerous one
+       - the LAYER KEY. A copy that loses its layer is intact, correctly placed and
+       silently wrong: nothing looks off until the layer it belonged to is hidden
+       and the copy stays on screen (CONCEPTS-REF 18.10).
+
+       That is a failure mode you cannot see by looking, which is exactly the kind
+       this repo settles by measurement. So the rule now lives on the models -
+       PenStroke.CloneWithPoints, ShapeElement.Clone, TextElement.Clone and
+       Models/ElementClone.cs - and this harness runs THE REAL ONES over the REAL
+       serialiser. Nothing here is a re-typed copy of the app's logic; every source
+       file below is <Compile Include>d straight out of src/Quill.
+
+       The completeness checks walk each model BY REFLECTION, so a field added to
+       PenStroke, ShapeElement or TextElement and forgotten in its clone fails this
+       test rather than shipping. That is the whole point: a sixth copy path cannot
+       reintroduce the omission, because there is no sixth list to forget.
+
+       Written to the pattern tools/LayerRoundTrip and tools/VeilRoundTrip set, and
+       isolated the same way. No WinUI, no window: this runs in a console. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Quill.Tools</RootNamespace>
+    <AssemblyName>CloneRoundTrip</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\..\src\Quill\Models\NoteModels.cs" Link="NoteModels.cs" />
+    <!-- The subject: the set-level rule that duplicate runs. -->
+    <Compile Include="..\..\src\Quill\Models\ElementClone.cs" Link="ElementClone.cs" />
+    <!-- PageLayers.IsVisible, so "the copy is hidden with its layer" is checked
+         against the real visibility function rather than an int comparison. -->
+    <Compile Include="..\..\src\Quill\Models\LayerModels.cs" Link="LayerModels.cs" />
+    <Compile Include="..\..\src\Quill\Services\LibraryStore.cs" Link="LibraryStore.cs" />
+    <Compile Include="..\..\src\Quill\Services\SyncLog.cs" Link="SyncLog.cs" />
+  </ItemGroup>
+
+</Project>

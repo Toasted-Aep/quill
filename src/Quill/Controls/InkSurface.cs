@@ -1059,109 +1059,25 @@ public sealed class InkSurface : UserControl
         ContentChanged?.Invoke();
     }
 
-    // Duplicating a table shape must also duplicate its cell text bubbles,
-    // re-linked to the clone's id (#55).
-    private void CloneTableCells(ShapeElement source, ShapeElement clone, float offset, List<TextElement> into)
-    {
-        if (_page == null || source.Kind != ShapeKind.Table) return;
-        foreach (var cell in _page.Texts)
-        {
-            if (cell.TableId != source.Id) continue;
-            into.Add(new TextElement
-            {
-                X = cell.X + offset,
-                Y = cell.Y + offset,
-                Width = cell.Width,
-                Rtf = cell.Rtf,
-                Rotation = cell.Rotation,
-                TableId = clone.Id,
-                TableRow = cell.TableRow,
-                TableCol = cell.TableCol
-            });
-        }
-    }
-
     public void DuplicateSelection()
     {
         if (_page == null) return;
         FlushTexts();
 
-        var clonedStrokes = new List<PenStroke>();
-        var clonedShapes = new List<ShapeElement>();
-        var clonedTexts = new List<TextElement>();
+        const float offset = 40f;
 
-        float offset = 40f;
-
-        if (_activeShape != null)
-        {
-            var shape = _activeShape;
-            var clone = new ShapeElement
-            {
-                Kind = shape.Kind,
-                X = shape.X + offset,
-                Y = shape.Y + offset,
-                W = shape.W,
-                H = shape.H,
-                Color = shape.Color,
-                Size = shape.Size,
-                ImagePath = shape.ImagePath,
-                Rotation = shape.Rotation,
-                TRows = shape.TRows,
-                TCols = shape.TCols,
-                TColW = shape.TColW != null ? new List<double>(shape.TColW) : null,
-                TRowH = shape.TRowH != null ? new List<double>(shape.TRowH) : null
-            };
-            clonedShapes.Add(clone);
-            CloneTableCells(shape, clone, offset, clonedTexts);   // tables bring their cells (#55)
-        }
-        else if (HasMultiSelection)
-        {
-            foreach (var stroke in _selected)
-            {
-                var pts = stroke.Points.Select(p => new StrokePoint(p.X + offset, p.Y + offset, p.Pressure)).ToList();
-                clonedStrokes.Add(stroke.CloneWithPoints(pts));
-            }
-            foreach (var shape in _selShapes)
-            {
-                var clone = new ShapeElement
-                {
-                    Kind = shape.Kind,
-                    X = shape.X + offset,
-                    Y = shape.Y + offset,
-                    W = shape.W,
-                    H = shape.H,
-                    Color = shape.Color,
-                    Size = shape.Size,
-                    ImagePath = shape.ImagePath,
-                    Rotation = shape.Rotation,
-                    TRows = shape.TRows,
-                    TCols = shape.TCols,
-                    TColW = shape.TColW != null ? new List<double>(shape.TColW) : null,
-                    TRowH = shape.TRowH != null ? new List<double>(shape.TRowH) : null
-                };
-                clonedShapes.Add(clone);
-                CloneTableCells(shape, clone, offset, clonedTexts);   // tables bring their cells (#55)
-            }
-            foreach (var text in _selTexts)
-            {
-                var clone = new TextElement
-                {
-                    X = text.X + offset,
-                    Y = text.Y + offset,
-                    Width = text.Width,
-                    Rtf = text.Rtf,
-                    Rotation = text.Rotation,
-                    TableId = text.TableId,
-                    TableRow = text.TableRow,
-                    TableCol = text.TableCol
-                };
-                clonedTexts.Add(clone);
-            }
-        }
-        else
-        {
-            return;
-        }
+        // One rule for both branches, and it lives on the models
+        // (Models/ElementClone.cs) so it can be proved headlessly rather than
+        // asserted: tools/CloneRoundTrip runs this exact function. What used to be
+        // here was two hand-written initialiser lists that had drifted apart, and
+        // between them they dropped the padlock, the layer key, the pen, the
+        // opacity and every table cell's styling.
+        var (clonedStrokes, clonedShapes, clonedTexts) = _activeShape != null
+            ? ElementClone.Duplicate(Array.Empty<PenStroke>(), new[] { _activeShape },
+                                     Array.Empty<TextElement>(), _page.Texts, offset)
+            : HasMultiSelection
+                ? ElementClone.Duplicate(_selected, _selShapes, _selTexts, _page.Texts, offset)
+                : (new List<PenStroke>(), new List<ShapeElement>(), new List<TextElement>());
 
         if (clonedStrokes.Count > 0 || clonedShapes.Count > 0 || clonedTexts.Count > 0)
         {
@@ -3834,17 +3750,14 @@ public sealed class InkSurface : UserControl
         if (_page == null || EditingText is not { } t) return;
         FlushTexts();                 // the clone must carry what has just been typed
         const double offset = 40;
-        var clone = new TextElement
-        {
-            X = t.X + offset,
-            Y = t.Y + offset,
-            Width = t.Width,
-            WidthPinned = t.WidthPinned,
-            MaxWidth = t.MaxWidth,
-            AutoWidth = t.AutoWidth,
-            Rtf = t.Rtf,
-            Rotation = t.Rotation,
-        };
+        // The sixth clone path, and it dropped the same two things the other five
+        // did: the padlock and the LAYER (CONCEPTS-REF 18.10). CloneAsFreeBox
+        // rather than Clone because EditingPair never hands back a table cell -
+        // so today the two are the same copy, and if that filter ever changes,
+        // duplicating mid-type still cannot stack a ghost cell on the original.
+        var clone = t.CloneAsFreeBox();
+        clone.X += offset;
+        clone.Y += offset;
         PushAction(new AddTextAction(clone), _page);
         // Only the new box, never RebuildTextLayer: a full rebuild would steal
         // focus from the box the user is still typing in, which is the same
@@ -4602,24 +4515,27 @@ public sealed class InkSurface : UserControl
     private static PenStroke CloneStroke(PenStroke s) =>
         s.CloneWithPoints(s.Points.Select(p => new StrokePoint(p.X, p.Y, p.Pressure)).ToList());
 
-    private static ShapeElement CloneShape(ShapeElement s) => new()
-    {
-        Kind = s.Kind, X = s.X, Y = s.Y, W = s.W, H = s.H,
-        Color = s.Color, Size = s.Size, ImagePath = s.ImagePath, Rotation = s.Rotation,
-        // Preserve table geometry and styling so clipboard copy/paste of a table
-        // keeps its grid (mirrors DuplicateSelection). Without these a pasted
-        // table collapsed to an empty 0x0 grid.
-        TRows = s.TRows, TCols = s.TCols,
-        TColW = s.TColW != null ? new List<double>(s.TColW) : null,
-        TRowH = s.TRowH != null ? new List<double>(s.TRowH) : null,
-        FillColor = s.FillColor, BorderColor = s.BorderColor, BorderWidth = s.BorderWidth,
-        MergeColSpan = s.MergeColSpan, MergeRowSpan = s.MergeRowSpan, HeaderRow = s.HeaderRow
-    };
+    // The whole element but its Id, table geometry and styling included, so a
+    // pasted table keeps its grid rather than collapsing to an empty 0x0 one -
+    // and, since the copy goes through the model's own clone, so do the pen, the
+    // opacity, the padlock, the LAYER, the equation source and the axis labels
+    // that this list used to leave behind.
+    private static ShapeElement CloneShape(ShapeElement s) => s.Clone();
 
-    private static TextElement CloneText(TextElement t) => new()
-    {
-        X = t.X, Y = t.Y, Width = t.Width, Rtf = t.Rtf, Rotation = t.Rotation
-    };
+    /// <summary>The clipboard's text copy, DETACHED from its table.
+    ///
+    /// <para>Everything the box is made of comes along - the words, the width, the
+    /// angle, the padlock, the layer, its own fill and border. The one thing that
+    /// does not is its cell membership, and that is a decision rather than an
+    /// omission: the shape copy beside it is a NEW table with a NEW id, nothing
+    /// re-links cells to it, and a bubble that went on naming the table it was
+    /// copied FROM would be dragged back into that table's grid by its next
+    /// reflow - out of the paste, on top of the cell it came from. Pasting a cell
+    /// as a free box is the honest outcome of what the clipboard can carry.</para>
+    ///
+    /// <para>A copy that keeps its cell identity needs the table copied WITH it and
+    /// re-linked, which is <see cref="ElementClone.Duplicate"/>'s job.</para></summary>
+    private static TextElement CloneText(TextElement t) => t.CloneAsFreeBox();
 
     /// <summary>Copies the current multi-selection (strokes, shapes, text) or active shape.</summary>
     public void CopySelection()
@@ -7981,8 +7897,14 @@ public sealed class InkSurface : UserControl
             {
                 CanvasBitmap? bmp = _bitmaps.TryGetValue(sh.ImagePath, out var cached) ? cached : null;
                 bmp ??= await CanvasBitmap.LoadAsync(_canvas, sh.ImagePath);
+                // An image is the one shape kind FlattenShape cannot pre-turn — it
+                // has no points to turn — so it carries its angle instead. The
+                // centre comes from ShapeCenter, the same helper DrawShape rotates
+                // about, so the export agrees with the canvas by construction.
+                var ic = ShapeCenter(sh);
                 images.Add(new PdfVectorImage(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H),
-                    (int)bmp.SizeInPixels.Width, (int)bmp.SizeInPixels.Height, bmp.GetPixelBytes()));
+                    (int)bmp.SizeInPixels.Width, (int)bmp.SizeInPixels.Height, bmp.GetPixelBytes(),
+                    sh.Rotation, ic.X, ic.Y));
             }
             catch { /* unreadable image: skip, ink still exports */ }
         }
@@ -7995,6 +7917,12 @@ public sealed class InkSurface : UserControl
             var visual = WrapRunLines(logical, Math.Max(60, t.Width) - 8);
             float prevSize = 16f;
             double baseline = t.Y + 16;
+            // ONCE, outside the line loop. TextCentreWorld is the single answer the
+            // renderer, the selection bounds, the click probe and the rotate sweep
+            // all take for where a box's middle is; the exporter takes it too
+            // rather than becoming a fifth. Taking it per line would give each line
+            // its own pivot and fan the box open instead of turning it.
+            var tc = TextCentreWorld(t);
             for (int li = 0; li < visual.Count; li++)
             {
                 var line = visual[li];
@@ -8005,7 +7933,8 @@ public sealed class InkSurface : UserControl
                 if (line.Count == 0) continue;
                 texts.Add(new PdfVectorText(
                     (float)(t.X + 4), (float)baseline,
-                    size, inkHex, string.Concat(line.Select(r => r.Text)), line[0].Font, line));
+                    size, inkHex, string.Concat(line.Select(r => r.Text)), line[0].Font, line,
+                    t.Rotation, tc.X, tc.Y));
             }
         }
 
