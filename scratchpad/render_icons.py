@@ -381,6 +381,15 @@ def main(argv):
         argv.pop(i)
         if i < len(argv) and re.fullmatch(r"[\d.]+", argv[i]):
             thickness = float(argv.pop(i))
+    # --sizes 17,21: the sizes a mark is drawn at RIGHT NOW, which is the only
+    # question this file answers. SIZES below is a default, not a list of the
+    # sizes that exist - 17.16 alone moves the bottom menu's mark to 21 DIP and
+    # the quick actions' to 17.28, and neither was in it.
+    sizes = SIZES
+    if "--sizes" in argv:
+        i = argv.index("--sizes")
+        argv.pop(i)
+        sizes = [int(round(float(s))) for s in argv.pop(i).split(",")]
     want = argv
     if not want or want == ["--all"]:
         want = [n for n, v in table.items() if re.match(r"^\s*(?:[Ff][01]\s*)?[Mm][\s\d\-+.]", v)]
@@ -389,7 +398,7 @@ def main(argv):
             print(f"  ?? no literal named {n}")
             continue
         try:
-            p, ink = strip(n, table[n], stroked=stroked, thickness=thickness)
+            p, ink = strip(n, table[n], sizes=sizes, stroked=stroked, thickness=thickness)
         except Exception as e:
             print(f"  !! {n}: {e}")
             continue
