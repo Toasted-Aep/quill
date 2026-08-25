@@ -104,23 +104,48 @@ public sealed class BottomMenu
     /// <see cref="SelectionChrome.Metrics"/> and <see cref="ChromeBars.Metrics"/>.</summary>
     public static class Metrics
     {
-        /// <summary>17.12: <b>bottom-of-screen menu buttons +100%</b>, taken off
-        /// the row 17.9 moved down here. That row drew a 15 DIP mark beside a
-        /// 12.5 DIP word in a 30 DIP cell, so doubling is 30, 25 and 60 - the
-        /// whole button, not the mark alone, or the extra hundred per cent
-        /// lands in padding and the target the user presses barely moves.</summary>
-        public const double Scale = 2.0;
+        /// <summary>17.16: <b>the bottom bar is 30% smaller</b> - 2.0 x 0.70,
+        /// applied to the SAME one constant 17.12 set, so every mark, pitch and
+        /// target moves together rather than the glyph shrinking inside an
+        /// unchanged button.
+        ///
+        /// <para>It still multiplies the row 17.9 moved down here - a 15 DIP
+        /// mark beside a 12.5 DIP word in a 30 DIP cell - so the whole button
+        /// resizes and not the mark alone. 17.12's +100% was seen on screen and
+        /// was too big; this is that decision revised, not a second knob.</para>
+        /// </summary>
+        public const double Scale = 1.40;
         public const double MarkSize = 15 * Scale;
         public const double FontSize = 12.5 * Scale;
-        public const double CellHeight = 30 * Scale;
 
-        /// <summary>Mark to word, and cell to cell. Both doubled from the row's
-        /// own 6 and 10.</summary>
+        /// <summary>17.16 change 1, the half of it that is arithmetic. The 5 the
+        /// plate used to hold above and below a cell is not deleted, it MOVES
+        /// into the cell: 30 + 5 + 5. So the plate stands exactly as tall as it
+        /// would have with the old inset - it is 30% smaller because
+        /// <see cref="Scale"/> says so and for no other reason - and the cell now
+        /// reaches both of its edges. Fold it the other way and change 1 would
+        /// quietly take a further 25% off a bar the user asked to shrink by
+        /// exactly 30.</summary>
+        public const double CellRise = 5;
+        public const double CellHeight = (30 + 2 * CellRise) * Scale;
+
+        /// <summary>Mark to word, and cell to cell - the row's own 6 and 10, on
+        /// the one factor.</summary>
         public const double MarkToWord = 6 * Scale, CellGap = 10 * Scale;
 
-        /// <summary>The plate's own inset, doubled from the row's 12/5.</summary>
+        /// <summary>The plate's own inset, off the row's 12/5 - and the vertical
+        /// half is now ZERO.
+        ///
+        /// <para><b>17.16: "the fill runs to the panel's own bounds, top and
+        /// bottom."</b> A selected cell takes an accent wash, and while the plate
+        /// held 5 above and below it that wash stopped short, leaving a margin of
+        /// panel showing all round - a button floating inside a bar. With the
+        /// inset gone the cell is exactly as tall as the plate's content box and
+        /// the wash reaches both edges, so it reads as a filled SEGMENT of the
+        /// bar. The plate's own <see cref="CornerRadius"/> is untouched: it is
+        /// the INNER inset being removed, not the bar's shape.</para></summary>
         public static readonly Thickness Padding =
-            new(12 * Scale, 5 * Scale, 12 * Scale, 5 * Scale);
+            new(12 * Scale, 0, 12 * Scale, 0);
         /// <summary>Inside a cell, around the mark and its word.</summary>
         public static readonly Thickness CellPadding =
             new(4 * Scale, 4 * Scale, 4 * Scale, 4 * Scale);
@@ -308,7 +333,8 @@ public sealed class BottomMenu
     }
 
     // =====================================================================
-    // The cells (17.12: +100%, and 17.9: an icon and only essential words)
+    // The cells (17.16's sizes and its edge-to-edge fill, and 17.9: an icon
+    // and only essential words)
     // =====================================================================
 
     /// <summary>The standard plate. Every page uses it, so a page cannot end up

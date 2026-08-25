@@ -171,15 +171,21 @@ public sealed class SelectionChrome
     /// <see cref="ChromeBars.Metrics"/> and <see cref="FullscreenChrome.Metrics"/>.</summary>
     public static class Metrics
     {
-        /// <summary><b>17.12: quick action buttons +80%.</b> One factor, applied
-        /// to the three numbers the buttons are made of, so the ratio between
-        /// them - and everything derived from it, including
+        /// <summary><b>17.16: the quick actions are 40% smaller</b> - 1.8 x 0.60.
+        /// One factor, applied to the three numbers the buttons are made of, so
+        /// the ratio between them - and everything derived from it, including
         /// <see cref="LabelToMark"/> - is untouched by the resize.
         ///
         /// <para>It moves BOTH modes. 11.9's editing bar and 16.2's selection bar
         /// are one bar with two triggers and take their sizes from here, which is
-        /// the second reason that is a mode rather than a second surface.</para></summary>
-        public const double QuickScale = 1.8;
+        /// the second reason that is a mode rather than a second surface. 17.16
+        /// says so in as many words - "it drives both quick-action modes, which
+        /// is why it exists as one number; do not split it".</para>
+        ///
+        /// <para>1.08 is close to unscaled, so the marks were re-rendered at the
+        /// 17.28 DIP this now asks for rather than assumed to survive it - the
+        /// lesson 11.23 paid for.</para></summary>
+        public const double QuickScale = 1.08;
         /// <summary>Bar marks. 16 DIP inside a 30 DIP cell - the same ratio the
         /// top bar runs (a 16 DIP mark in a 26 DIP box, section 9.6) with a
         /// little more air, because this bar floats over the drawing rather than
@@ -196,9 +202,9 @@ public sealed class SelectionChrome
         ///
         /// <para>NOT a new size decision. 0.833 is the ratio the bottom row
         /// already runs between its word and its mark (12.5 / 15), and a ratio
-        /// is dimensionless - so it survives 17.12 scaling the quick actions by
-        /// +80% and the bottom menu by +100% without either number being touched
-        /// here. Expressed as its own constant rather than read off
+        /// is dimensionless - so it survived 17.12 scaling the quick actions by
+        /// +80% and the bottom menu by +100%, and 17.16 scaling both back down,
+        /// without either number being touched here. Expressed as its own constant rather than read off
         /// <see cref="RowFontSize"/> and <see cref="RowMarkSize"/> because 17.9
         /// moves that row off the subject entirely and to the bottom of the
         /// screen; this must not have to move with it.</para></summary>

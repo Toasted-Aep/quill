@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CONCEPTS-REF 17.9 / 17.10 / 17.11 / 17.12 acceptance check: THE SCREEN-BOTTOM
+"""CONCEPTS-REF 17.9 / 17.10 / 17.11 / 17.12 / 17.16 acceptance check: THE SCREEN-BOTTOM
 MODE BAR AND THE MOUSE TOOL.
 
 Written the way tools/click_select_check.py and tools/selection_present_check.py
@@ -391,31 +391,45 @@ def tools():
 
 
 # ===========================================================================
-# 7. THE SIZES (17.12)
+# 7. THE SIZES, AND THE SELECTED FILL (17.16, WHICH SUPERSEDES 17.12)
 # ===========================================================================
+# These six were pinned at 17.12's numbers - QuickScale 1.8, Scale 2.0. Seen on
+# screen both were too big, and 17.16 revises them: "make the bottom bar and
+# quick actions that open up after selection smaller by 30 and 40 percent
+# respectively", plus "I want the margins on the selection gone". So the
+# assertions move with the reference, which is the thing this file checks
+# against - a checker that outlives the section it was written for is pinning
+# history rather than intent.
 
 def sizes():
     chrome = strip_comments(read(CHROME))
     menu = strip_comments(read(MENU))
 
-    check("17.12 - quick action buttons +80%, as ONE factor",
-          re.search(r"QuickScale\s*=\s*1\.8\b", chrome) is not None)
+    check("17.16 - the quick actions are 40% smaller: 1.8 x 0.60, as ONE factor",
+          re.search(r"QuickScale\s*=\s*1\.08\b", chrome) is not None)
     check("and applied to the numbers the button is made of, so the ratios "
           "between them survive the resize",
           re.search(r"MarkSize\s*=\s*16\s*\*\s*QuickScale", chrome) is not None
           and re.search(r"MarkCell\s*=\s*30\s*\*\s*QuickScale", chrome) is not None
           and re.search(r"BarHeight\s*=\s*34\s*\*\s*QuickScale", chrome) is not None)
-    check("17.12 - it moves BOTH quick-action modes, because 11.9 is a mode on "
-          "this bar and not a second surface with its own numbers",
-          "Metrics.MarkSize" in chrome and "LabelToMark" in chrome)
+    check("17.16 - one number moves BOTH quick-action modes and is NOT split: "
+          "11.9 is a mode on this bar, not a second surface with its own sizes",
+          "Metrics.MarkSize" in chrome and "LabelToMark" in chrome
+          and len(re.findall(r"QuickScale\s*=\s*[\d.]", chrome)) == 1)
 
-    check("17.12 - bottom-of-screen menu buttons +100%, as ONE factor",
-          re.search(r"Scale\s*=\s*2\.0\b", menu) is not None)
-    check("and taken off the row 17.9 moved down here - 15 DIP mark, 12.5 word, "
-          "30 cell - so the whole button doubles rather than the mark alone",
+    check("17.16 - the bottom bar is 30% smaller: 2.0 x 0.70, as ONE factor",
+          re.search(r"Scale\s*=\s*1\.40\b", menu) is not None)
+    check("17.16 - the selected fill reaches the panel's top and bottom: the "
+          "plate's vertical inset is ZERO and its 5 + 5 is folded INTO the cell, "
+          "so the chip is a filled segment of the bar and the bar's own height "
+          "still comes from Scale alone",
           re.search(r"MarkSize\s*=\s*15\s*\*\s*Scale", menu) is not None
           and re.search(r"FontSize\s*=\s*12\.5\s*\*\s*Scale", menu) is not None
-          and re.search(r"CellHeight\s*=\s*30\s*\*\s*Scale", menu) is not None)
+          and re.search(r"CellRise\s*=\s*5\b", menu) is not None
+          and re.search(r"CellHeight\s*=\s*\(\s*30\s*\+\s*2\s*\*\s*CellRise\s*\)\s*\*\s*Scale",
+                        menu) is not None
+          and re.search(r"Padding\s*=\s*new\(\s*12\s*\*\s*Scale,\s*0,\s*12\s*\*\s*Scale,\s*0\s*\)",
+                        menu) is not None)
     # 15 and 12.5 are the row's own numbers, still named where they came from.
     check("the row's original numbers are still recorded where they came from",
           re.search(r"RowMarkSize\s*=\s*15,\s*RowFontSize\s*=\s*12\.5", chrome) is not None)
