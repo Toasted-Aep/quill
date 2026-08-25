@@ -1,6 +1,6 @@
 {
- "note": "PROPOSAL ONLY - not calibrated the way the existing 316 were.",
- "source": "meodai extractedColor; the calibration source has no entry for these codes",
+ "note": "ACCEPTED BY THE USER. Concepts calibration, not the wheel's own - median 35.9 RGB units from copicColors.js, 0.62 of a marker step.",
+ "source": "Concepts' own table (TopHatch.Concepts.dll), proved to be what its COPIC wheel renders; copicColors.js has no entry for these codes",
  "before_max_rings": 17,
  "after_max_rings": 17,
  "additions": [
@@ -15,8 +15,8 @@
     40.0
    ],
    "index": 2,
-   "hex": "bed1e6",
-   "source": "meodai.extractedColor",
+   "hex": "b3dae4",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -30,8 +30,8 @@
     60.0
    ],
    "index": 1,
-   "hex": "9dbbdc",
-   "source": "meodai.extractedColor",
+   "hex": "8bbfd3",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -45,8 +45,8 @@
     40.0
    ],
    "index": 1,
-   "hex": "80a2ce",
-   "source": "meodai.extractedColor",
+   "hex": "64a6c2",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -60,8 +60,8 @@
     60.0
    ],
    "index": 0,
-   "hex": "456795",
-   "source": "meodai.extractedColor",
+   "hex": "49768f",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -75,8 +75,8 @@
     40.0
    ],
    "index": 0,
-   "hex": "344668",
-   "source": "meodai.extractedColor",
+   "hex": "445465",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -90,8 +90,8 @@
     90.0
    ],
    "index": 7,
-   "hex": "ecfef8",
-   "source": "meodai.extractedColor",
+   "hex": "eaf9f0",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -105,8 +105,8 @@
     80.0
    ],
    "index": 7,
-   "hex": "d8fef7",
-   "source": "meodai.extractedColor",
+   "hex": "dbf7f1",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -120,8 +120,8 @@
     70.0
    ],
    "index": 7,
-   "hex": "91f2f8",
-   "source": "meodai.extractedColor",
+   "hex": "85e6ea",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -135,8 +135,8 @@
     90.0
    ],
    "index": 6,
-   "hex": "72daef",
-   "source": "meodai.extractedColor",
+   "hex": "4cd9e8",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -150,8 +150,8 @@
     80.0
    ],
    "index": 6,
-   "hex": "3baac0",
-   "source": "meodai.extractedColor",
+   "hex": "00bacb",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -165,8 +165,8 @@
     70.0
    ],
    "index": 6,
-   "hex": "218d9d",
-   "source": "meodai.extractedColor",
+   "hex": "00939f",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -180,8 +180,8 @@
     90.0
    ],
    "index": 5,
-   "hex": "1d8088",
-   "source": "meodai.extractedColor",
+   "hex": "00878e",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -195,8 +195,8 @@
     80.0
    ],
    "index": 5,
-   "hex": "defdf2",
-   "source": "meodai.extractedColor",
+   "hex": "d7f3e3",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -210,8 +210,8 @@
     70.0
    ],
    "index": 5,
-   "hex": "d2fcf0",
-   "source": "meodai.extractedColor",
+   "hex": "c2f2de",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -225,8 +225,8 @@
     90.0
    ],
    "index": 4,
-   "hex": "70d6c1",
-   "source": "meodai.extractedColor",
+   "hex": "3ed1b9",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -240,8 +240,8 @@
     80.0
    ],
    "index": 4,
-   "hex": "39ac8f",
-   "source": "meodai.extractedColor",
+   "hex": "00bfa4",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -255,8 +255,8 @@
     70.0
    ],
    "index": 4,
-   "hex": "41847b",
-   "source": "meodai.extractedColor",
+   "hex": "408784",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -270,8 +270,8 @@
     70.0
    ],
    "index": 3,
-   "hex": "89e2c5",
-   "source": "meodai.extractedColor",
+   "hex": "7bdec1",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -285,8 +285,8 @@
     10.0
    ],
    "index": 8,
-   "hex": "b6a4d3",
-   "source": "meodai.extractedColor",
+   "hex": "a4a2c3",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -300,8 +300,8 @@
     10.0
    ],
    "index": 7,
-   "hex": "7c82d3",
-   "source": "meodai.extractedColor",
+   "hex": "6a88c2",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -315,8 +315,8 @@
     130.0
    ],
    "index": 0,
-   "hex": "235938",
-   "source": "meodai.extractedColor",
+   "hex": "456150",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -330,8 +330,8 @@
     120.0
    ],
    "index": 3,
-   "hex": "e3f8c2",
-   "source": "meodai.extractedColor",
+   "hex": "e8edbe",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -345,8 +345,8 @@
     120.0
    ],
    "index": 2,
-   "hex": "a9c476",
-   "source": "meodai.extractedColor",
+   "hex": "abbc7e",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -360,8 +360,8 @@
     120.0
    ],
    "index": 1,
-   "hex": "7b8256",
-   "source": "meodai.extractedColor",
+   "hex": "83926c",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -375,8 +375,8 @@
     120.0
    ],
    "index": 0,
-   "hex": "819760",
-   "source": "meodai.extractedColor",
+   "hex": "83946a",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -390,8 +390,8 @@
     -80.0
    ],
    "index": 8,
-   "hex": "feba92",
-   "source": "meodai.extractedColor",
+   "hex": "ffac8f",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -405,8 +405,8 @@
     -70.0
    ],
    "index": 7,
-   "hex": "f74929",
-   "source": "meodai.extractedColor",
+   "hex": "ed5d47",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -420,8 +420,8 @@
     -80.0
    ],
    "index": 4,
-   "hex": "fedbc4",
-   "source": "meodai.extractedColor",
+   "hex": "ffd7c9",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -435,8 +435,8 @@
     -40.0
    ],
    "index": 1,
-   "hex": "febbc2",
-   "source": "meodai.extractedColor",
+   "hex": "ffbcce",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -450,8 +450,8 @@
     -50.0
    ],
    "index": 2,
-   "hex": "fbb4bf",
-   "source": "meodai.extractedColor",
+   "hex": "f4abb4",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -465,8 +465,8 @@
     -30.0
    ],
    "index": 7,
-   "hex": "f286ad",
-   "source": "meodai.extractedColor",
+   "hex": "dd7c9c",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -480,8 +480,8 @@
     -40.0
    ],
    "index": 0,
-   "hex": "feb9a8",
-   "source": "meodai.extractedColor",
+   "hex": "ffa79b",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -495,8 +495,8 @@
     -50.0
    ],
    "index": 1,
-   "hex": "dbb8d5",
-   "source": "meodai.extractedColor",
+   "hex": "f9c9de",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -510,8 +510,8 @@
     -30.0
    ],
    "index": 6,
-   "hex": "cc78ab",
-   "source": "meodai.extractedColor",
+   "hex": "e485b6",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -525,8 +525,8 @@
     -50.0
    ],
    "index": 0,
-   "hex": "cd9cc1",
-   "source": "meodai.extractedColor",
+   "hex": "e8afd8",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -540,8 +540,8 @@
     -30.0
    ],
    "index": 5,
-   "hex": "8c4477",
-   "source": "meodai.extractedColor",
+   "hex": "a95c8d",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -555,8 +555,8 @@
     -30.0
    ],
    "index": 4,
-   "hex": "550e2a",
-   "source": "meodai.extractedColor",
+   "hex": "81494a",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -570,8 +570,8 @@
     -30.0
    ],
    "index": 3,
-   "hex": "f4e1ec",
-   "source": "meodai.extractedColor",
+   "hex": "f3d8db",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -585,8 +585,8 @@
     -30.0
    ],
    "index": 2,
-   "hex": "deb5c6",
-   "source": "meodai.extractedColor",
+   "hex": "e0b0bc",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -600,8 +600,8 @@
     -30.0
    ],
    "index": 1,
-   "hex": "bd8da2",
-   "source": "meodai.extractedColor",
+   "hex": "bc8797",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -615,8 +615,8 @@
     -30.0
    ],
    "index": 0,
-   "hex": "391a26",
-   "source": "meodai.extractedColor",
+   "hex": "614d4f",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -630,8 +630,8 @@
     190.0
    ],
    "index": 1,
-   "hex": "fed995",
-   "source": "meodai.extractedColor",
+   "hex": "ffd58f",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -645,8 +645,8 @@
     150.0
    ],
    "index": 7,
-   "hex": "97ea5b",
-   "source": "meodai.extractedColor",
+   "hex": "90d94b",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -660,8 +660,8 @@
     140.0
    ],
    "index": 7,
-   "hex": "c1d29e",
-   "source": "meodai.extractedColor",
+   "hex": "d6deb0",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -675,8 +675,8 @@
     260.0
    ],
    "index": 5,
-   "hex": "feb358",
-   "source": "meodai.extractedColor",
+   "hex": "ffa457",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -690,8 +690,8 @@
     250.0
    ],
    "index": 5,
-   "hex": "fd9938",
-   "source": "meodai.extractedColor",
+   "hex": "ff9048",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -705,8 +705,8 @@
     260.0
    ],
    "index": 3,
-   "hex": "fee3a5",
-   "source": "meodai.extractedColor",
+   "hex": "ffdcae",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -720,8 +720,8 @@
     250.0
    ],
    "index": 3,
-   "hex": "fed16e",
-   "source": "meodai.extractedColor",
+   "hex": "ffc675",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   },
   {
@@ -735,8 +735,8 @@
     250.0
    ],
    "index": 1,
-   "hex": "fec194",
-   "source": "meodai.extractedColor",
+   "hex": "ffc4a3",
+   "source": "concepts.dll",
    "calibrated_like_the_316": false
   }
  ],
@@ -761,7 +761,7 @@
     ],
     [
      "R30",
-     "fedbc4"
+     "ffd7c9"
     ],
     [
      "R29",
@@ -777,7 +777,7 @@
     ],
     [
      "R02",
-     "feba92"
+     "ffac8f"
     ]
    ],
    [
@@ -811,7 +811,7 @@
     ],
     [
      "R05",
-     "f74929"
+     "ed5d47"
     ]
    ],
    [
@@ -873,15 +873,15 @@
    [
     [
      "RV63",
-     "cd9cc1"
+     "e8afd8"
     ],
     [
      "RV52",
-     "dbb8d5"
+     "f9c9de"
     ],
     [
      "RV32",
-     "fbb4bf"
+     "f4abb4"
     ],
     [
      "RV29",
@@ -915,11 +915,11 @@
    [
     [
      "RV42",
-     "feb9a8"
+     "ffa79b"
     ],
     [
      "RV21",
-     "febbc2"
+     "ffbcce"
     ],
     [
      "RV19",
@@ -957,35 +957,35 @@
    [
     [
      "RV99",
-     "391a26"
+     "614d4f"
     ],
     [
      "RV95",
-     "bd8da2"
+     "bc8797"
     ],
     [
      "RV93",
-     "deb5c6"
+     "e0b0bc"
     ],
     [
      "RV91",
-     "f4e1ec"
+     "f3d8db"
     ],
     [
      "RV69",
-     "550e2a"
+     "81494a"
     ],
     [
      "RV66",
-     "8c4477"
+     "a95c8d"
     ],
     [
      "RV55",
-     "cc78ab"
+     "e485b6"
     ],
     [
      "RV34",
-     "f286ad"
+     "dd7c9c"
     ],
     [
      "RV09",
@@ -1105,11 +1105,11 @@
     ],
     [
      "BV13",
-     "7c82d3"
+     "6a88c2"
     ],
     [
      "BV11",
-     "b6a4d3"
+     "a4a2c3"
     ]
    ],
    [
@@ -1205,15 +1205,15 @@
    [
     [
      "B99",
-     "344668"
+     "445465"
     ],
     [
      "B95",
-     "80a2ce"
+     "64a6c2"
     ],
     [
      "B91",
-     "bed1e6"
+     "b3dae4"
     ],
     [
      "B18",
@@ -1261,11 +1261,11 @@
    [
     [
      "B97",
-     "456795"
+     "49768f"
     ],
     [
      "B93",
-     "9dbbdc"
+     "8bbfd3"
     ],
     [
      "B39",
@@ -1301,23 +1301,23 @@
     ],
     [
      "BG23",
-     "89e2c5"
+     "7bdec1"
     ],
     [
      "BG18",
-     "41847b"
+     "408784"
     ],
     [
      "BG11",
-     "d2fcf0"
+     "c2f2de"
     ],
     [
      "BG07",
-     "218d9d"
+     "00939f"
     ],
     [
      "BG01",
-     "91f2f8"
+     "85e6ea"
     ],
     [
      "B06",
@@ -1343,19 +1343,19 @@
     ],
     [
      "BG15",
-     "39ac8f"
+     "00bfa4"
     ],
     [
      "BG10",
-     "defdf2"
+     "d7f3e3"
     ],
     [
      "BG05",
-     "3baac0"
+     "00bacb"
     ],
     [
      "BG000",
-     "d8fef7"
+     "dbf7f1"
     ],
     [
      "B05",
@@ -1381,19 +1381,19 @@
     ],
     [
      "BG13",
-     "70d6c1"
+     "3ed1b9"
     ],
     [
      "BG09",
-     "1d8088"
+     "00878e"
     ],
     [
      "BG02",
-     "72daef"
+     "4cd9e8"
     ],
     [
      "BG0000",
-     "ecfef8"
+     "eaf9f0"
     ],
     [
      "B04",
@@ -1485,19 +1485,19 @@
    [
     [
      "G94",
-     "819760"
+     "83946a"
     ],
     [
      "G85",
-     "7b8256"
+     "83926c"
     ],
     [
      "G82",
-     "a9c476"
+     "abbc7e"
     ],
     [
      "G40",
-     "e3f8c2"
+     "e8edbe"
     ],
     [
      "G19",
@@ -1523,7 +1523,7 @@
    [
     [
      "G29",
-     "235938"
+     "456150"
     ],
     [
      "G09",
@@ -1591,7 +1591,7 @@
     ],
     [
      "YG61",
-     "c1d29e"
+     "d6deb0"
     ]
    ],
    [
@@ -1625,7 +1625,7 @@
     ],
     [
      "YG06",
-     "97ea5b"
+     "90d94b"
     ]
    ],
    [
@@ -1735,7 +1735,7 @@
     ],
     [
      "Y32",
-     "fed995"
+     "ffd58f"
     ],
     [
      "Y26",
@@ -1983,7 +1983,7 @@
     ],
     [
      "YR61",
-     "fec194"
+     "ffc4a3"
     ],
     [
      "YR27",
@@ -1991,7 +1991,7 @@
     ],
     [
      "YR21",
-     "fed16e"
+     "ffc675"
     ],
     [
      "YR18",
@@ -1999,7 +1999,7 @@
     ],
     [
      "YR14",
-     "fd9938"
+     "ff9048"
     ],
     [
      "YR09",
@@ -2021,7 +2021,7 @@
     ],
     [
      "YR20",
-     "fee3a5"
+     "ffdcae"
     ],
     [
      "YR16",
@@ -2029,7 +2029,7 @@
     ],
     [
      "YR12",
-     "feb358"
+     "ffa457"
     ],
     [
      "YR07",
