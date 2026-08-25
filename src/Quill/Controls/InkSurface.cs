@@ -3846,7 +3846,7 @@ public sealed class InkSurface : UserControl
     private Color Veil(Color c, bool exempt = false)
     {
         if (exempt || !Veiling) return c;
-        double t = Motion.Ease(_veil);
+        double t = Motion.FadeEase(_veil);
         static byte Mix(byte a, byte b, double k) => (byte)Math.Clamp(a + (b - a) * k, 0, 255);
         return Color.FromArgb(c.A, Mix(c.R, VeilGrey.R, t), Mix(c.G, VeilGrey.G, t), Mix(c.B, VeilGrey.B, t));
     }
@@ -4011,7 +4011,7 @@ public sealed class InkSurface : UserControl
     private void ApplyTextVeil()
     {
         if (_page == null) return;
-        double t = Motion.Ease(_veil);
+        double t = Motion.FadeEase(_veil);
         foreach (var (id, ui) in _textUi)
         {
             var model = _page.Texts.FirstOrDefault(x => x.Id == id);
@@ -6566,7 +6566,7 @@ public sealed class InkSurface : UserControl
                 // bitmap is untouched; only this frame is.
                 if (veil && Veiling)
                     ds.FillRectangle(r, Color.FromArgb(
-                        (byte)Math.Clamp(255 * Motion.Ease(_veil), 0, 255),
+                        (byte)Math.Clamp(255 * Motion.FadeEase(_veil), 0, 255),
                         VeilGrey.R, VeilGrey.G, VeilGrey.B));
                 break;
             }
