@@ -43,7 +43,7 @@ public sealed class RealVeil
     private Color Veil(Color c, bool exempt = false)
     {
         if (exempt || !Veiling) return c;
-        double t = Motion.Ease(_veil);
+        double t = Motion.FadeEase(_veil);
         static byte Mix(byte a, byte b, double k) => (byte)Math.Clamp(a + (b - a) * k, 0, 255);
         return Color.FromArgb(c.A, Mix(c.R, VeilGrey.R, t), Mix(c.G, VeilGrey.G, t), Mix(c.B, VeilGrey.B, t));
     }

@@ -16,7 +16,9 @@
 //                               by tools/selection_present_check.py, which fails
 //                               if the extraction ever stops matching)
 //   * the real easing          (src/Quill/Helpers/Motion.cs - 190 / 130 on the
-//                               (0.12,0.9) -> (0.2,1.0) curve)
+//                               page fade's own (0.4,0.3) -> (0.6,0.7) curve.
+//                               NOT the menu curve: see Motion.FadeEase, and
+//                               section 4b below, which measures the difference)
 //
 // The one thing it cannot be is the app: InkSurface is a WinUI control and Win2D
 // wants a device, so the DRAW CALL is stood in for by the statement the draw path
@@ -195,6 +197,83 @@ Check("16.7 - ALPHA is never touched, so a translucent stroke does not go opaque
 Check("16.7 item 3 - the attachment itself does not fade",
       attachmentDrawn == ColorUtil.Parse(attachment.Color),
       $"#{attachmentDrawn.R:X2}{attachmentDrawn.G:X2}{attachmentDrawn.B:X2}");
+
+// ---------------------------------------------------------------------------
+// 4b. THE SHAPE OF THE FADE, measured the way a visual pass measures it.
+//
+// A visual pass on the built app read the grey off captured frames and found
+// the fade was not a fade: on the menu curve it was 84 % of the way to grey a
+// quarter of the way through the 190 ms in, and on the 130 ms out it had given
+// back only 3.4 % of the page's colour at the halfway mark. The curve moved to
+// Motion.FadeEase because of it, and this is the assertion that keeps it moved.
+//
+// It is measured in the SAME UNITS the pass used - the drawn 8-bit channel, not
+// the easing function - so this is the number a re-capture should reproduce. The
+// veil level is linear in wall time (Motion.Step divides elapsed by duration and
+// nothing else), so driving the level to 0.25 IS the quarter-mark frame.
+//
+// PERCENTAGE COMPLETE means what it means in each direction: on the way in, how
+// far the ink has travelled toward #8E8E8E; on the way out, how much of the
+// ink's own colour has come back. The out direction runs the level DOWN, so its
+// quarter mark is level 0.75.
+// ---------------------------------------------------------------------------
+static double PctToGrey(RealVeil v, string hex, double level)
+{
+    v.Drive(level, false);
+    var src = ColorUtil.Parse(hex);
+    var got = v.Apply(src, false);
+    // Measure along the channel with the most 8-bit room between the ink and the
+    // veil grey; a channel that already starts near #8E has no distance to read.
+    var pairs = new[] { (src.R, got.R), (src.G, got.G), (src.B, got.B) };
+    int widest = 0;
+    double pct = 0;
+    foreach (var (from, now) in pairs)
+    {
+        int span = 0x8E - from;
+        if (Math.Abs(span) <= Math.Abs(widest)) continue;
+        widest = span;
+        pct = (now - from) / (double)span;
+    }
+    return widest == 0 ? double.NaN : pct * 100;
+}
+
+// #141413 is Quill's own dark ink and is the furthest of the six from the veil
+// grey, so it is the one an 8-bit channel measures most finely.
+const string MeasureInk = "#141413";
+var shapeProbe = new RealVeil();
+double inQ = PctToGrey(shapeProbe, MeasureInk, 0.25);
+double inH = PctToGrey(shapeProbe, MeasureInk, 0.50);
+double inT = PctToGrey(shapeProbe, MeasureInk, 0.75);
+// out: level runs 1 -> 0, and "complete" is colour RETURNED.
+double outQ = 100 - PctToGrey(shapeProbe, MeasureInk, 0.75);
+double outH = 100 - PctToGrey(shapeProbe, MeasureInk, 0.50);
+double outT = 100 - PctToGrey(shapeProbe, MeasureInk, 0.25);
+// The first frame the compositor can possibly show, at 60 Hz into the 190 ms in.
+double firstFrame = PctToGrey(shapeProbe, MeasureInk, 16.7 / 190.0);
+
+Check("16.7 - the fade is EVEN going in: quarter, half and three quarters land "
+      + "near 25 / 50 / 75, not near the menu curve's 84 / 97 / 99",
+      Math.Abs(inQ - 25) <= 8 && Math.Abs(inH - 50) <= 8 && Math.Abs(inT - 75) <= 8,
+      $"{inQ:F1}% / {inH:F1}% / {inT:F1}%");
+Check("16.7 - the fade is EVEN coming back: the halfway frame has returned about "
+      + "half the colour, not the 3.4 % the menu curve returned",
+      Math.Abs(outQ - 25) <= 8 && Math.Abs(outH - 50) <= 8 && Math.Abs(outT - 75) <= 8,
+      $"{outQ:F1}% / {outH:F1}% / {outT:F1}%");
+Check("16.7 - in and out are the SAME motion run backwards, so the fade reads the "
+      + "same whichever way it is going",
+      Math.Abs(inQ - outQ) < 1.5 && Math.Abs(inH - outH) < 1.5 && Math.Abs(inT - outT) < 1.5,
+      $"in {inQ:F1}/{inH:F1}/{inT:F1} vs out {outQ:F1}/{outH:F1}/{outT:F1}");
+Check("16.7 - the fade STARTS from the page's own colour: the first frame a 60 Hz "
+      + "compositor can show is a few percent grey, not the menu curve's 73 %",
+      firstFrame < 15, $"{firstFrame:F1}% on the first rendered frame");
+Check("16.7 - and the fade still uses the app's own 190 / 130, so only the shape "
+      + "changed and not the tempo",
+      Motion.OpenMs == 190 && Motion.CloseMs == 130,
+      $"{Motion.OpenMs} ms in, {Motion.CloseMs} ms out");
+Check("16.7 - the MENU curve is left alone: flyouts still get their near-vertical "
+      + "rise, which is what they are for",
+      Motion.Ease(0.25) > 0.8 && Motion.FadeEase(0.25) < 0.3,
+      $"Ease(.25) = {Motion.Ease(0.25):F3}, FadeEase(.25) = {Motion.FadeEase(0.25):F3}");
 
 // ---------------------------------------------------------------------------
 // 5. SAVE WHILE FADED. This is the frame the promise is about.

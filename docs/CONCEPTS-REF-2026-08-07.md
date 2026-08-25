@@ -3443,10 +3443,25 @@ Three things this must get right:
    This is the one way to turn a visual nicety into data loss.
 2. **It animates.** The user was explicit: *"slowly turn grey not instantly"*.
    Use Quill's own motion rather than inventing a duration - `MenuAnim.cs` runs
-   190 ms out and 130 ms back on a `(0.12, 0.9) -> (0.2, 1.0)` curve, and the
-   fullscreen strip already borrows it. Fade back on deselect too; a
-   one-directional fade would leave the page grey until something forced a
-   repaint.
+   190 ms out and 130 ms back, and the fullscreen strip already borrows it. Fade
+   back on deselect too; a one-directional fade would leave the page grey until
+   something forced a repaint.
+   **The DURATIONS are Quill's; the CURVE is this effect's own, and that is a
+   correction.** This section first said to borrow the menu curve
+   `(0.12, 0.9) -> (0.2, 1.0)` as well. A visual pass on the built app measured
+   what that does to a colour and it is not a fade: **84 % of the way to grey a
+   quarter of the way through the 190 ms in**, 73 % on the first frame a 60 Hz
+   compositor could show, and on the 130 ms out only **3.4 % of the page's own
+   colour back at the halfway mark** before it snapped home in the last ~20 ms.
+   That is correct behaviour for the curve - a menu curve is built to be open
+   before you look at it - and wrong for this. The user's ruling on being shown
+   the measurement: **slow and even in both directions, at the same 190 / 130.**
+   So the fade reads `Motion.FadeEase`, `(0.4, 0.3) -> (0.6, 0.7)`: symmetric,
+   never far off the diagonal, measured at **22 / 50 / 77 %** in and
+   **23 / 50 / 78 %** out at the quarter, half and three-quarter marks against
+   linear's 25 / 50 / 75. `Motion.Ease` is untouched - menus and flyouts want the
+   snap and still get it. `tools/VeilRoundTrip` section 4b measures all of this
+   off the drawn 8-bit channel, so it is a measurement rather than a claim.
 3. **The attachment itself does not fade.** It is the subject. In the capture
    it holds full contrast while the ink around it is grey.
 

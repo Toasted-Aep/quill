@@ -11,6 +11,15 @@ namespace Quill.Helpers;
 /// file needed them - <see cref="Controls.FullscreenChrome"/> did, and
 /// CONCEPTS-REF 16.7 asks for the same curve again for the page fade. A third
 /// copy is drift, so this is the copy and both callers read it.</para>
+///
+/// <para><b>The DURATIONS are shared; the CURVES are not, any more.</b> 190 / 130
+/// is the app's tempo and everything keeps it. But a curve is chosen for what it
+/// drives: a menu wants to be open before you look at it, and a page fade wants
+/// to be watched. So <see cref="Ease"/> stays the menu curve, verbatim, and the
+/// page fade reads <see cref="FadeEase"/> — which is what a visual pass measuring
+/// the fade actually asked for. Nothing that opens or closes should reach for the
+/// second one, and nothing that changes a colour over time should reach for the
+/// first.</para>
 /// </summary>
 public static class Motion
 {
@@ -35,11 +44,49 @@ public static class Motion
     /// stays continuous across the turn only if the same easing maps t in both
     /// directions. Two curves would make Ease(t) jump at the moment of
     /// reversal.</para></summary>
-    public static double Ease(double t)
+    public static double Ease(double t) => Bezier(t, 0.12, 0.9, 0.2, 1.0);
+
+    /// <summary>The page fade's curve — cubic-bezier (0.4, 0.3) to (0.6, 0.7).
+    /// NOT <see cref="Ease"/>, and the difference is the whole point.
+    ///
+    /// <para><b>Why the menu curve was wrong here.</b> (0.12, 0.9) rises almost
+    /// vertically out of zero: it is built to make a flyout feel already-open by
+    /// the time the eye finds it. Driving a COLOUR with it does the same thing to
+    /// the colour, and measurement said so — 84 % of the way to grey a quarter of
+    /// the way through the 190 ms in, and on the 130 ms out only 3.4 % of the
+    /// page's own colour back at the halfway mark, the rest arriving in a snap
+    /// over the last ~20 ms. Both directions read as an instant change with a
+    /// long dead tail, which is the opposite of "slowly turn grey".</para>
+    ///
+    /// <para><b>What this one is.</b> Symmetric about (0.5, 0.5) and never far
+    /// from the diagonal: 22 % / 50 % / 78 % at the quarter, half and three
+    /// quarter marks, against linear's 25 / 50 / 75. So the grey arrives and
+    /// leaves at a rate the eye reads as steady, while the two control points
+    /// still take the corners off the start and the stop so it does not begin or
+    /// end with a jolt. The DURATIONS are unchanged — this is 190 ms in and
+    /// 130 ms out, same as everything else; only the shape between them moved.
+    /// </para>
+    ///
+    /// <para><b>Symmetry is load-bearing, for the same reason
+    /// <see cref="Ease"/> is used in both directions.</b> The fade reverses
+    /// mid-flight whenever a selection is dropped before it finishes, and the
+    /// thing being animated is a single scalar that walks toward 1 or toward 0.
+    /// One curve mapping that scalar keeps the colour continuous across the turn;
+    /// a curve that was also symmetric makes the in and the out read as the same
+    /// motion run backwards, which is what "even in both directions" asks
+    /// for.</para></summary>
+    public static double FadeEase(double t) => Bezier(t, 0.4, 0.3, 0.6, 0.7);
+
+    /// <summary>The solver both curves above share.
+    ///
+    /// <para>BISECTION, because a cubic Bezier's x is not invertible in closed
+    /// form; 18 halvings resolve x to about 4e-6, which is far under a pixel of
+    /// anything this drives and far under one step of an 8-bit colour channel,
+    /// which is what CONCEPTS-REF 16.7's page fade uses it for.</para></summary>
+    private static double Bezier(double t, double x1, double y1, double x2, double y2)
     {
         if (t <= 0) return 0;
         if (t >= 1) return 1;
-        const double X1 = 0.12, Y1 = 0.9, X2 = 0.2, Y2 = 1.0;
         static double Bez(double u, double p1, double p2)
         {
             double m = 1 - u;
@@ -49,9 +96,9 @@ public static class Motion
         for (int i = 0; i < 18; i++)
         {
             u = (lo + hi) / 2;
-            if (Bez(u, X1, X2) < t) lo = u; else hi = u;
+            if (Bez(u, x1, x2) < t) lo = u; else hi = u;
         }
-        return Bez(u, Y1, Y2);
+        return Bez(u, y1, y2);
     }
 
     /// <summary>One frame of a hand-pumped tween: move <paramref name="t"/>
