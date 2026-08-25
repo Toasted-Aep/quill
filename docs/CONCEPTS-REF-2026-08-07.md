@@ -3014,6 +3014,15 @@ reads a spurious 2.15° there against 0.014° at 100%. The **drawn horizon** is
 the right probe — it spans all 2880 px at `span=1.00` in every one of the 18
 frames, which bounds any shear below `1/2880`.
 
+**The zoom is exactly reversible, which is a fourth check on the pure-scale
+finding.** After the sweep the viewport was wheeled back — 24 clicks up at the
+same `(1440, 900)` — and the readout returned to `100% 0°`. Comparing that
+frame against the 2026-08-24 100% capture of the preset then showing
+(3-Point `3/4 Ultrawide`): outside the radial dial, the top bar and the bottom
+mode bar, which held different states between the two runs, **63 pixels of
+4.4 million differ**. A scale that composes to the identity over 48 wheel
+steps has no hidden translation in it.
+
 **THE CONTROL. Leave one preset out, fit on the rest, predict the one held
 out.** This is stronger than fitting on one preset and asserting the rest, and
 it avoids resting the table on the worst-conditioned pair in it — `2 Point`'s
