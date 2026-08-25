@@ -81,17 +81,45 @@ own readout tracked live (−18° at half sweep, −42° at drop) and the page d
 not turn. The status line says so out loud: "Rotate is an interface preview:
 the handle turns, the page does not."
 
+**6. Click to select (§16.10 / §17.7) — half PASS, half needs a pen.**
+Requires **Mouse Mode = Select** (Settings ▸ Interaction). `ArmClickSelect` is
+called from the Select tool, the pen barrel and `MouseMode.Select`, and **Auto
+is deliberately excluded** (InkSurface.cs:1601) — in Auto a click means title /
+date / text box / fresh caret, so the test does nothing there. In Select mode a
+click straight onto a stroke **selects that one stroke with no dropdown**:
+tight hollow circles, full-canvas guides, the bar above, ink keeps its own
+colour. Correct. A click on empty canvas **clears the selection and shows no
+dropdown** — which matches the code (`deselectsEmpty: false` leaves the mouse
+modes "their title/date/caret click"); the context menu the brief expects
+belongs to the **barrel-button** path (InkSurface.cs:1271), which SendInput
+cannot produce. That half needs a real pen, or a right-tap probe.
+**The 8 px slop was NOT measured** — the run stood down mid-test (below).
+`ClickSlopPx = 8f`, `ClickHitPadPx = 10f`, both in DIP, so **16 and 20 physical
+px** at this 2x display. To finish: press on a stroke and travel 10 physical px
+(inside slop, must still select), then 30 (outside, must rubber-band instead).
+`scratchpad/slop.ps1` has `SlopDrag` and a right-click helper ready.
+
+## Why this run stopped
+
+The user took the machine back. `Q-Ensure` refused to inject with **Task View**
+in the foreground, and the cursor had moved from where I parked it (2250,1420)
+to (1710,1757) with `Idle()` at 0 s. That is a real intervention, not a cursor
+glyph, so no further input was injected. Quill (pid 45784) was left **running**
+on Physics 1 ▸ 030726 ▸ Study with three test strokes on it, Mouse Mode =
+**Select**, Touch draw **off**, zoom 100 %. The scratch library is the only
+thing that was written.
+
 ## Not reached
 
-Items 5 (panel round trip §17.6) and 6 (click-to-select slop §16.10/§17.7), and
-the whole "then, in any order" list: §17.15, §17.2, §17.4, §17.14/§16.5, §17.3,
-§17.9–§17.12, the tilted caret, §16.8, the fullscreen format-bar clearance, and
-the COPIC wheel's 358 codes.
+Item 5 (panel round trip §17.6) and the whole "then, in any order" list:
+§17.15, §17.2, §17.4, §17.14/§16.5, §17.3, §17.9–§17.12, the tilted caret,
+§16.8, the fullscreen format-bar clearance, and the COPIC wheel's 358 codes.
 
-For item 6, note `MouseMode.Select` is required — `ArmClickSelect` is called
-from the Select tool, the pen barrel, and `MouseMode.Select`, and **Auto is
-deliberately excluded** (InkSurface.cs:1601). `ClickSlopPx = 8f` screen px,
-`ClickHitPadPx = 10f`; at this 2x display that is 16 physical px of slop.
+Note `9d54593` landed **during** this run and adds §17.16, which supersedes
+§17.12 and changes the bottom bar's sizes and its selection fill. It is a spec
+commit only — no source changed, so the 00:42 binary still matches everything
+tested above — but the bottom mode bar observed here is the pre-§17.16 one, and
+§17.9–§17.12 should be judged against §17.16 once it is built.
 
 ## Machine notes
 
