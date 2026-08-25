@@ -838,6 +838,15 @@ are missing.** The Sketch range is 358 markers; the wheel holds 316, so roughly
 the existing 316 — **no interpolated swatches, no invented families, nothing
 that is not a marker you could buy.** Every added cell must carry its true code.
 
+> **Corrected 2026-08-25 — see §11.27.** The counts here are wrong: the wheel
+> held **309** real Sketch codes, not 316, so **49** were absent rather than
+> "roughly 42". The eight fluorescent accents were never missing. And
+> "calibrated by the same method as the existing 316" turned out to be
+> impossible — that method was the user's own hand-assembled `copicColors.js`,
+> which has no entry for any absent code, and no external source reproduces it.
+> The user was shown the measurement and chose to add the 49 from Concepts'
+> table regardless, accepting a different calibration.
+
 The approval gate stands: **produce a before/after image of the wheel and get
 the user's approval before committing.**
 
@@ -1369,6 +1378,129 @@ where there is no last page.
 Still open, deliberately untouched: `Library.Theme` defaulting to `"Dark"` is
 what makes the defaults collide into `#0F0E10` in the first place. Changing it
 would alter first-run appearance for genuinely new users, so it was left alone.
+
+### 11.27 The 49 absent Sketch codes — added from Concepts, 2026-08-25
+
+§11.11 asked for the genuinely missing Sketch codes to be added **"calibrated
+by the same method as the existing 316."** That proved impossible. The
+measurement that proves it is below; the user saw it and ruled to add them
+anyway, from a different source. **The resulting seam is deliberate and
+accepted. Do not "fix" it.**
+
+**The counts §11.11 used were wrong**, which is why its arithmetic never worked
+out. Correct figures, before → after:
+
+| | before | after |
+|---|---|---|
+| entries in `CopicPalette.cs` | 321 | **370** |
+| markers (excl. `White`, `Black`) | 319 | 368 |
+| **real Sketch codes** | **309** | **358 — the complete range** |
+| invented codes retained | 10 | 10 |
+
+So the gap was **49, not "roughly 42"**, and it is now **closed entirely**: no
+official Sketch code is absent from the wheel. §11.11 also assumed the eight
+fluorescent accents — `FV2 FB2 FBG2 FYG2 FYG1 FY1 FYR1 FRV1` — were missing.
+They were present all along, in `Tier1Raw`'s `Accents` row.
+
+**What went in.** 49 codes, in four whole-family blocks plus scattered singles:
+
+| family | n | codes |
+|---|---|---|
+| `RV` | 13 | `RV21 RV32 RV34 RV42 RV52 RV55 RV63 RV66 RV69 RV91 RV93 RV95 RV99` |
+| `BG` | 13 | `BG0000 BG000 BG01 BG02 BG05 BG07 BG09 BG10 BG11 BG13 BG15 BG18 BG23` |
+| `B` | 5 | `B91 B93 B95 B97 B99` |
+| `G` | 5 | `G29 G40 G82 G85 G94` |
+| `YR` | 5 | `YR12 YR14 YR20 YR21 YR61` |
+| `R` | 3 | `R02 R05 R30` |
+| `BV` | 2 | `BV11 BV13` |
+| `YG` | 2 | `YG06 YG61` |
+| `Y` | 1 | `Y32` |
+
+**Where the hexes come from.** Concepts' own COPIC table, extracted from
+`TopHatch.Concepts.dll` by `scratchpad/copic_concepts_extract.py` — 357 codes
+held as length-prefixed `CODE` + BGRA records, so each code sits in the same
+record as its colour. The pairing is therefore structural, and the
+rotated-label mis-pairing that makes sampling the rendered wheel risky cannot
+occur.
+
+`scratchpad/copic_wheel_proof.py` establishes that this table is what the wheel
+actually draws, three ways: three of four flat-fill interiors sampled from a
+full-resolution capture of the live Concepts dial are byte-for-byte identical to
+its entries (`R46`, `RV63`, `FV2`); the record run terminates in the
+`IHslWheel_Bindings` literal; and the table's order **is** the wheel's tier
+order — eleven outer families, four grey families, three core numbers, eight
+fluorescent accents — the same three tiers `CopicPalette.cs` mirrors, with
+identical grey and fluorescent memberships.
+
+**They are a different calibration, and that was known and accepted.** The
+existing 309 were lifted verbatim from the user's own web `copicColors.js`,
+which has no entry for any of these 49. On the 308 codes both tables hold,
+Concepts and `copicColors.js` agree **exactly zero times**:
+
+| | value |
+|---|---|
+| exact matches | **0 of 308** |
+| median difference | **35.9 RGB units** |
+| median step between *adjacent* markers | 58.1 RGB units |
+| so, in marker steps | **0.62 of one step** |
+| further apart than two neighbouring markers | 71 of 308 (23%) |
+| worst | `E95` — `#875324` here vs `#ffb68d` in Concepts, d = 187.7 |
+
+Divergence is worst in Earth (median 42.6, max 187.7 — the calibration commit
+darkened Earth wholesale) and in the fluorescents (74–100, i.e. 1.3–1.7 steps).
+Restricted to the nine families that actually received codes it is unchanged at
+36.0, so the headline figure describes the seam a viewer really sees rather than
+being inflated by families that gained nothing.
+
+The user was shown these figures and the before/after render, and chose to
+proceed. Reproduce it with `python scratchpad/copic_control.py`.
+
+**No external source will ever match `copicColors.js`.** This is the part that
+matters for whoever measures this next:
+
+* Concepts and meodai's public dataset agree with **each other** at a median of
+  **22.4** — far closer than either is to this palette (**35.9** and **34.9**).
+  The user's file is the outlier, not the sources.
+* meodai reproduced exactly **one** of its hexes (`0`, white). Concepts
+  reproduces **none**.
+* A learned transform does not rescue it. Per-family affine fits from Concepts
+  to `copicColors.js`, five-fold cross-validated so every residual is measured
+  on codes the fit never saw, move the median only from 35.9 to **29.4** —
+  still half a marker step — and leave `C`, `W` and `Y` *worse* than no fit at
+  all. A single global fit is worse than doing nothing. See
+  `scratchpad/copic_transform_fit.py`.
+
+There is no recipe to recover because there was never a recipe: `copicColors.js`
+was assembled by hand, colour by colour. It also carries six duplicate hexes
+(`FB2`/`B06`, `0`/`White`, `R89`/`E89`, `Y19`/`Y35`, `E59`/`E18`, `E87`/`E77`),
+which is itself a fingerprint of hand assembly.
+
+> **Therefore: do not re-source the 49, and do not re-derive the 309.** Both
+> would be wrong, and the second would quietly destroy a hand-built palette.
+> The only source that could match the 309 is the user's own file, and it does
+> not contain these codes. If the seam is ever to close, it closes by the user
+> extending `copicColors.js` — never by an agent picking a different dataset.
+
+**The ten invented codes stay, and are now confirmed invented.** `BV39`,
+`BV91`, `BV93`, `BV95`, `BV97`, `BV99`, `G91`, `G93`, `G95`, `G97` are not
+Sketch markers: they appear in no official listing, and Concepts' authoritative
+357 excludes every one of them. The user ruled separately to leave them in place
+for now. **They are not reference values — never treat one as a source of truth,
+and never "correct" a real marker to agree with one.**
+
+**Extent did not move**, as §11.21 requires. `MaxRings` stays **17**, the Earth
+column at 190°–200° remains the deepest at 17 cells, and the rendered outer
+radius is **1121 reference DIP before and after** — identical, because the
+radius is an accumulation off `MaxRings` rather than a target. The 49 are dealt
+across each family's *own* columns into whichever is currently shallowest, never
+stacked into one: the bracketing rule an earlier attempt used put all 13 `RV`
+codes into a single column, taking it from 7 cells to 20 and growing the whole
+wheel.
+
+Evidence renders in `scratchpad/copic_out/`: `wheel_before.png`,
+`wheel_after.png`, `wheel_after_marked.png` (added cells ringed white), and the
+per-family detail crops `detail_red-violet.png`, `detail_blue-green.png`,
+`detail_blue.png`, `detail_green.png`, `detail_yellow-red.png`.
 
 ---
 
