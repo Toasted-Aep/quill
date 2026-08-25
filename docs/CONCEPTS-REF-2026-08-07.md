@@ -3010,6 +3010,13 @@ level-constrained fit) returned a different answer, several of them physically
 impossible tilted horizons. **They are left blank rather than filled with a
 plausible-looking decimal.**
 
+**SUPERSEDED 2026-08-25 — see §15.5c. All thirteen are now measured**, at a
+10% viewport calibrated against these six rows, with a worst leave-one-out
+control residual of 0.0084 of the frame. The reasoning above stays as the
+record of why they were blanked: it was a correct statement about those
+frames, in which the fans span 50°–80° and nothing converges on screen. It
+was never a statement about the presets.
+
 **What the next run must do**, and it is a small job: repeat the sweep at a
 zoomed-OUT viewport so the off-frame points come into view, and recover the
 frame-relative fractions by calibrating against the presets measured here. At
@@ -3018,7 +3025,7 @@ and its horizon at 0.4989 are three known landmarks; measuring those same
 landmarks in the zoomed frame gives the scale and offset that convert every
 other measurement back into frame fractions. That calibration is what makes a
 zoomed capture legitimate despite §15.2's freeze rule — the rule exists so that
-captures are comparable, and an explicitly measured mapping restores exactly that.
+captures are comparable, and an explicitly measured mapping restores exactly that. **This was done — §15.5c.**
 
 ### 15.5b What the numbers already settle — and what they refute
 
@@ -3060,7 +3067,10 @@ sit still while the position and spread names move the points along it:
 So a position/spread name changes the horizon height as well as the points,
 which is precisely the case §15.2 said must not be forced into a grammar.
 **`Below` is not the horizon axis; it is one of several things that move the
-horizon.** Nor are the pairs symmetric about the frame centre: `2 Point` and
+horizon.** (Sharpened in §15.5d.3: `Below` ITSELF is a pure vertical translation — it
+moves the horizon 1.453 frame heights and leaves both vanishing points where
+they were. What §15.5d.4 adds is that a POSITION name can do the same thing.)
+Nor are the pairs symmetric about the frame centre: `2 Point` and
 `3 Point` centre on 0.5000 and 0.4999, but `Side Ultrawide` centres on **0.392**.
 
 **4. `2 Point` and `1/2 Narrow` DO NOT render identically. §15.1 is wrong on
@@ -3070,7 +3080,9 @@ that same geometry explicitly". Captured back to back under one frozen viewport,
 the two frames differ in **415,927 pixels, 8% of the frame**. They are not the
 same grid and not near it: `2 Point` is the centred pair at 0.2570 / 0.7430 with
 its horizon across the middle of the frame, while `1/2 Narrow` is a ground plane
-seen close up with both points and the horizon off-frame entirely. Keeping both
+seen close up with both points and the horizon off-frame entirely — measured in
+§15.5c as `-0.2300 / 2.5563` on a horizon at `-0.7231`, a separation of 2.786
+against `2 Point`'s 0.486. Keeping both
 entries is still correct — Concepts ships both — but they must be built as **two
 different grids**, and any build that aliases one to the other is wrong.
 
@@ -3085,6 +3097,222 @@ enumeration said about the names.
 both committed.** Captures for all 19 presets, the `No Grid` differencing
 baseline, the per-preset strip crops and a contact sheet are in the scratchpad at
 `…/5d0bc6f7-2eaf-4e19-afbf-f5efd33b5de9/scratchpad/vpsweep/`.
+
+### 15.5c The thirteen, measured at a zoomed-out viewport — 2026-08-25
+
+**All thirteen blank rows now carry numbers, and one previously blank third
+point is filled as well.** §15.5a said what the next run had to do — repeat the
+sweep zoomed out so the off-frame points come into view, then calibrate the
+zoomed frame against the presets already measured at 100%. That is what this is.
+The six rows of §15.5a are **untouched**; every figure in them still comes from
+the 100% captures, and nothing below overwrites them.
+
+**Why a zoomed capture is admissible at all.** §15.2 froze the viewport so that
+captures would be comparable. A zoom deliberately breaks that freeze, so the
+comparability has to be restored by an explicitly measured mapping — and then
+that mapping has to be *proved*, because if it is wrong, all thirteen rows are
+wrong in the same direction and the table looks authoritative while being
+nothing of the kind.
+
+**The run.** Concepts fullscreen (`0,0 2880x1800`), `Drawing 8`, the same scratch
+page as §15.5a, 0° tilt. The viewport was zoomed from 100% to **10%** with the
+wheel, the pointer parked at the exact frame centre `(1440, 900)`, and then
+**not touched again for all 18 captures**. The zoom readout was captured beside
+every frame: all 18 agree to within 6 grey levels in the digits. The canvas was
+re-checked against an earlier capture after the machine locked and was unlocked
+mid-run — **0 differing pixels** left of the panel, so the viewport survived that
+too.
+
+#### The mapping, and the proof it is right
+
+Measured over 11 landmarks (the five presets §15.5a measured at 100% that have
+two points, plus `3 Point`'s third point), by least squares:
+
+    screen(10%) = 0.101133 x screen(100%) + (1294.816, 807.620)
+    fixed point  = (1440.50, 898.49) px
+
+**The zoom is a PURE ISOTROPIC SCALE about a fixed point — not a general
+affine.** Fitting an unconstrained affine to the same landmarks gives shear
+terms `b = -0.00097` and `c = -0.00001` and `a - d = +0.00019`, and drops the
+residual only from 0.74 px to 0.69 px. The extra freedom buys nothing, so it is
+not there. The fixed point lands within **1.5 px** of the `(1440, 900)` the
+wheel was driven at, which says Concepts zooms **about the pointer**; putting
+the pointer at the frame centre is what reduces the mapping to a bare scale, and
+a run that wheels anywhere else will get a translation term it has to solve for.
+
+A caution for anyone re-deriving this: **the vanishing-point pair's tilt is not
+a usable shear probe at 10%.** The x baseline shrinks tenfold, so `2 Point`
+reads a spurious 2.15° there against 0.014° at 100%. The **drawn horizon** is
+the right probe — it spans all 2880 px at `span=1.00` in every one of the 18
+frames, which bounds any shear below `1/2880`.
+
+**The zoom is exactly reversible, which is a fourth check on the pure-scale
+finding.** After the sweep the viewport was wheeled back — 24 clicks up at the
+same `(1440, 900)` — and the readout returned to `100% 0°`. Comparing that
+frame against the 2026-08-24 100% capture of the preset then showing
+(3-Point `3/4 Ultrawide`): outside the radial dial, the top bar and the bottom
+mode bar, which held different states between the two runs, **63 pixels of
+4.4 million differ**. A scale that composes to the identity over 48 wheel
+steps has no hidden translation in it.
+
+**THE CONTROL. Leave one preset out, fit on the rest, predict the one held
+out.** This is stronger than fitting on one preset and asserting the rest, and
+it avoids resting the table on the worst-conditioned pair in it — `2 Point`'s
+two points are 1400 px apart at 100% but only 142 px apart at 10%, so a 0.3 px
+endpoint error there moves the scale by 0.2%.
+
+| held out | quantity | known at 100% | recovered | residual |
+|---|---|---|---|---|
+| 2-Point `Side Ultrawide` | VP x1 | 0.0839 | 0.0888 | 0.0049 |
+| 2-Point `Side Ultrawide` | VP x2 | 0.7009 | 0.7013 | 0.0004 |
+| 2-Point `Side Ultrawide` | horizon | 0.4989 | 0.4993 | 0.0004 |
+| 2-Point `1/4 Wide` | VP x2 | **1.5112** | **1.5197** | 0.0084 |
+| 3-Point `3 Point` | VP x1 | 0.2221 | 0.2197 | 0.0023 |
+| 3-Point `3 Point` | VP x2 | 0.7777 | 0.7756 | 0.0022 |
+| 3-Point `3 Point` | third x | 0.4999 | 0.4987 | 0.0012 |
+| 3-Point `3 Point` | third y | 0.1657 | 0.1653 | 0.0004 |
+| 3-Point `1/4 Wide` | VP x1 | -0.2695 | -0.2628 | 0.0067 |
+| 3-Point `1/4 Wide` | VP x2 | 1.0207 | 1.0209 | 0.0002 |
+
+**WORST CONTROL RESIDUAL: 0.0084 of the frame — 24 px at 100%.** Every figure
+in the table below carries that. The demanding rows are the ones that matter:
+2-Point `1/4 Wide`'s right-hand point sits **1470 px outside the frame** and
+comes back to 0.0084, and `3 Point`'s third point — an **off-horizon** point,
+which tests the vertical mapping where no horizon constrains it — comes back to
+0.0012.
+
+Two further checks were never part of any fit. `Side Narrow` and `Side Wide`
+had full-width **drawn** horizons at 100% (`0.8933` and `0.6156`) that §15.5a
+did not trust for their points; the mapping returns **0.8948** and **0.6173**.
+
+**Why the numbers exist now and did not before.** It is not that the estimator
+got cleverer — it is that the input stopped being degenerate. At 100% every
+`Narrow` frame gave fans of 50°–80° angular spread and four estimators gave four
+answers. At 10% **every one of the 18 frames yields two families of ~170°
+spread, `n` = 24–67, and a positional sigma under 2 px**, and the two
+independent estimators (`measure_vp.py` clustering in pixels, `vpest.py`
+clustering projectively) land within **0.0037** of each other on every single
+point, third points included. That agreement is the thing that was missing.
+
+#### The complete table — fractions of the ORIGINAL 2880x1800 frame
+
+`from` says which viewport a row was measured in. The 100% rows are §15.5a's,
+reproduced unchanged; the 10% rows are new and carry the ±0.0084 control
+residual.
+
+| list | preset | horizon y | VP x | VP x | third point | sep | from |
+|---|---|---|---|---|---|---|---|
+| 1-Point | `1 Point` | 0.4989 | 0.4998 | — | — | — | 100% |
+| 2-Point | `2 Point` | 0.4989 | 0.2570 | 0.7430 | — | 0.486 | 100% |
+| 2-Point | `1/2 Narrow` | **-0.7231** | **-0.2300** | **2.5563** | — | 2.786 | 10% |
+| 2-Point | `1/4 Narrow` | **-0.0529** | **-1.1019** | **1.6514** | — | 2.753 | 10% |
+| 2-Point | `Side Narrow` | **0.8948** | **-1.0947** | **1.6514** | — | 2.746 | 10% |
+| 2-Point | `1/2 Wide` | **-0.2534** | **-0.5026** | **0.9590** | — | 1.462 | 10% |
+| 2-Point | `1/4 Wide` | 0.2822 | 0.1918 | 1.5112 | — | 1.319 | 100% |
+| 2-Point | `Side Wide` | **0.6173** | **-0.7445** | **0.7166** | — | 1.461 | 10% |
+| 2-Point | `1/2 Wide Below` | **1.1996** | **-0.5004** | **0.9563** | — | 1.457 | 10% |
+| 2-Point | `Side Ultrawide` | 0.4989 | 0.0839 | 0.7009 | — | 0.617 | 100% |
+| 3-Point | `3 Point` | 0.8322 | 0.2221 | 0.7777 | 0.5004 @ y 0.1657 | 0.556 | 100% |
+| 3-Point | `3/4 Narrow` | **-1.3411** | **-0.8953** | **1.7131** | **0.3220** @ y **9.1370** | 2.608 | 10% |
+| 3-Point | `1/2 Narrow` | **-0.8715** | **-0.6686** | **1.9270** | **0.5979** @ y **9.5874** | 2.596 | 10% |
+| 3-Point | `3/4 Wide` | **-0.3387** | **-0.0653** | **1.2334** | **0.5849** @ y **5.7983** | 1.299 | 10% |
+| 3-Point | `1/4 Wide` | 0.2211 | -0.2695 | 1.0207 | **0.3925** @ y **7.2412** | 1.290 | 100% + 10% |
+| 3-Point | `Side Wide Below` | **0.8423** | **0.0392** | **1.3012** | **0.5819** @ y **5.2342** | 1.262 | 10% |
+| 3-Point | `1/4 Wide Below` | **0.7764** | **-0.4048** | **1.0532** | **0.3207** @ y **5.1821** | 1.458 | 10% |
+| 3-Point | `3/4 Ultrawide Below` | **1.3365** | **-0.0967** | **1.0895** | **0.4957** @ y **-0.4554** | 1.186 | 10% |
+| 3-Point | `3/4 Ultrawide` | **-0.5642** | **-0.1638** | **1.1556** | **0.4923** @ y **0.8827** | 1.319 | 10% |
+
+**Nothing is left blank.** The judgement that blanked these rows was right for
+the captures it had; it was a statement about those frames, not about the
+presets, and a viewport in which the points are actually visible dissolves it.
+
+**On the one hybrid row.** 3-Point `1/4 Wide` keeps its 100% horizon and two
+points and gains a **third point** it never had: §15.5a's third column was blank
+for it because the 100% frame's off-horizon candidate was not trustworthy. At
+10% that point is confirmed by both estimators to 0.0003 with `n`=34. Its 100%
+horizon (0.2211) and the 10% mapping's (0.2216) agree to 0.0005, which is why
+the two halves of the row can be read together.
+
+### 15.5d What the full nineteen change about §15.1 and §15.5b
+
+**1. `Narrow` / `Wide` / `Ultrawide` are angles of view — now shown on all
+nineteen, not six.** §15.5b established the inversion from six rows. The
+complete separations put it beyond argument:
+
+| band | separations |
+|---|---|
+| `Ultrawide` | 0.617, 1.186, 1.319 |
+| `Wide` | 1.262, 1.290, 1.299, 1.319, 1.457, 1.458, 1.461, 1.462 |
+| `Narrow` | **2.596, 2.608, 2.746, 2.753, 2.786** |
+
+Every `Narrow` is 2.6–2.8 frame widths apart; nothing else exceeds 1.47. **A
+build that reads `Narrow` as "points close together" inverts every one of the
+five.**
+
+**2. But separation is the WRONG measure for 3-Point, and this is new.** Within
+the 3-Point list the `Ultrawide` and `Wide` separations interleave — `3/4
+Ultrawide` is 1.319 while `Side Wide Below` is 1.262 — so on separation alone
+the axis looks incoherent there. It is not. For a three-point grid the angle of
+view is carried by the **third point's distance from the horizon**, and on that
+measure the ordering is perfectly monotone:
+
+| preset | \|third − horizon\| |
+|---|---|
+| `3 Point` | 0.665 |
+| `3/4 Ultrawide` | 1.447 |
+| `3/4 Ultrawide Below` | 1.792 |
+| `Side Wide Below` | 4.392 |
+| `1/4 Wide Below` | 4.406 |
+| `3/4 Wide` | 6.137 |
+| `1/4 Wide` | 7.020 |
+| `1/2 Narrow` | 10.459 |
+| `3/4 Narrow` | 10.478 |
+
+`Ultrawide` 1.4–1.8 < `Wide` 4.4–7.0 < `Narrow` 10.5, with no overlap. **The
+spread vocabulary IS coherent; it just speaks through a different point in each
+list** — the horizontal pair in 2-Point, the vertical point in 3-Point.
+
+**3. `Below` is a PURE VERTICAL TRANSLATION.** §15.5b said `Below` "is not the
+horizon axis; it is one of several things that move the horizon", which was as
+much as six rows could support. With the pair now visible: 2-Point `1/2 Wide`
+sits at `-0.5026 / 0.9590`, horizon `-0.2534`, and `1/2 Wide Below` at
+`-0.5004 / 0.9563`, horizon `1.1996`. **The two vanishing points are unchanged
+within the control residual (0.0022 and 0.0027, against ±0.0084) while the
+horizon moves 1.453 frame heights.** `Below` moves the horizon and nothing else.
+
+**4. A position name can move the horizon and leave the points alone — §15.1's
+gloss of the position axis is wrong.** §15.1 describes `1/4` `1/2` `3/4` `Side`
+as "which quarter mark … the vanishing-point pair straddles", i.e. a horizontal
+axis. 2-Point `1/4 Narrow` and `Side Narrow` have **the same two points to
+within 0.008** — `-1.1019 / 1.6514` against `-1.0947 / 1.6514` — and horizons
+**0.946 frame heights apart** (`-0.0529` against `0.8948`). Between those two
+entries the position name is doing exactly what `Below` does and nothing
+horizontal at all.
+
+**5. The three axes still do not separate, and §15.5b's ruling stands.** (2)
+and (4) sharpen *why*: each name part moves a different thing in a different
+list, and two different name parts (`Side`-vs-`1/4`, and `Below`) can produce
+the same geometric change. **Nineteen individually measured configurations, not
+a parameterisation** — unchanged, and now supported by nineteen measurements
+rather than six.
+
+**6. `2 Point` and `1/2 Narrow` differ, confirmed a third way.** §15.5b found
+them 415,927 pixels apart. The numbers now say what the difference *is*:
+`2 Point` is the centred pair at `0.2570 / 0.7430` on a horizon across the
+middle of the frame; `1/2 Narrow` is `-0.2300 / 2.5563` on a horizon at
+`-0.7231`, well above the top edge. A separation of 2.786 against 0.486 — a
+factor of 5.7. They are not near-duplicates by any reading.
+
+**Harness and data.** The zoomed driver is `tools/vpsweep/zlib.ps1` and
+`zrun.ps1`, the projective estimator `tools/vpsweep/vpest.py`, and the
+calibration `zcalib.py` / `zfinal2.py` / `ztable.py`, all committed. The
+baseline for the zoomed run is a **pixelwise median of the 18 captures** rather
+than a `No Grid` frame — the machine locked before one could be taken, and the
+median is the better estimator anyway: chrome is identical in all 18 so it
+returns chrome exactly, while grid ink is sparse and moves completely between
+presets. The 18 captures, their strip crops, their zoom readouts and the
+measurement JSONs are in the scratchpad at
+`…/5d0bc6f7-2eaf-4e19-afbf-f5efd33b5de9/scratchpad/vpzoom/`.
 
 
 ---
