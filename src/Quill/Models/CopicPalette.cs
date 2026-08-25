@@ -67,15 +67,15 @@ public static class CopicPalette
     {
         ("red", "Red", new (double, double, string)[]
         {
-            (-90, -80, "R89:58101a R59:9d2238 R46:d91d3c R39:b3224b R29:e10619 R17:ee543c R08:f43333"),
-            (-80, -70, "R85:aa4257 R56:b85c6c R43:e86e7a R37:d6484e R27:ee322b R14:f59683 R12:f7aa9a"),
+            (-90, -80, "R89:58101a R59:9d2238 R46:d91d3c R39:b3224b R30:ffd7c9 R29:e10619 R17:ee543c R08:f43333 R02:ffac8f"),
+            (-80, -70, "R85:aa4257 R56:b85c6c R43:e86e7a R37:d6484e R27:ee322b R14:f59683 R12:f7aa9a R05:ed5d47"),
             (-70, -60, "R83:c56b82 R81:e8a3b5 R35:e34e56 R32:f89a91 R24:f9685a R22:ff9f92 R21:ffb6ab R20:ffc9c2 R11:ffd7cf R01:ffb2b2 R00:ffd0d0 R000:ffe3e3 R0000:fff4f4"),
         }),
         ("red-violet", "Red Violet", new (double, double, string)[]
         {
-            (-60, -50, "RV29:d72866 RV25:ef7da3 RV23:f8b4cb RV14:ee6ea9 RV13:f59cc6 RV11:f8c2db RV10:fadbe9"),
-            (-50, -40, "RV19:ad2972 RV17:c5428a RV06:e55db1 RV04:ef87c8 RV02:f4b1dc RV00:f7d3ec RV000:fae6f4 RV0000:fdf2fa"),
-            (-40, -30, "RV09:d2399a"),
+            (-60, -50, "RV63:e8afd8 RV52:f9c9de RV32:f4abb4 RV29:d72866 RV25:ef7da3 RV23:f8b4cb RV14:ee6ea9 RV13:f59cc6 RV11:f8c2db RV10:fadbe9"),
+            (-50, -40, "RV42:ffa79b RV21:ffbcce RV19:ad2972 RV17:c5428a RV06:e55db1 RV04:ef87c8 RV02:f4b1dc RV00:f7d3ec RV000:fae6f4 RV0000:fdf2fa"),
+            (-40, -30, "RV99:614d4f RV95:bc8797 RV93:e0b0bc RV91:f3d8db RV69:81494a RV66:a95c8d RV55:e485b6 RV34:dd7c9c RV09:d2399a"),
         }),
         ("violet", "Violet", new (double, double, string)[]
         {
@@ -85,40 +85,40 @@ public static class CopicPalette
         }),
         ("blue-violet", "Blue Violet", new (double, double, string)[]
         {
-            (0, 10, "B45:4f7cc4 B41:b5cced B79:27386e B69:2a3b68 B66:4c5c8e B63:8797c4 B60:d3dded"),
+            (0, 10, "B45:4f7cc4 B41:b5cced B79:27386e B69:2a3b68 B66:4c5c8e B63:8797c4 B60:d3dded BV13:6a88c2 BV11:a4a2c3"),
             (10, 20, "B52:859ec9 BV39:36374f BV29:1b2c45 BV17:595eb4 BV08:6850aa BV04:8774c4 BV02:a998da BV01:c5b6e6 BV00:ded3f2 BV000:eae3f7 BV0000:f4effa"),
             (20, 30, "BV99:222838 BV97:3e485e BV95:63708a BV93:95a1b8 BV91:d2d9e6 BV34:8f93a8 BV31:cad2e3 BV25:7280a3 BV23:9aa5c4 BV20:d0d7e6"),
         }),
         ("blue", "Blue", new (double, double, string)[]
         {
-            (30, 40, "B18:007bbd B16:00a3df B14:5bbfe6 B12:a6d8eb"),
+            (30, 40, "B99:445465 B95:64a6c2 B91:b3dae4 B18:007bbd B16:00a3df B14:5bbfe6 B12:a6d8eb"),
             (40, 50, "B29:00438c B28:1759a1 B26:2b7ec0 B24:519fd6 B23:76b1dd B21:cbe4f4"),
-            (50, 60, "B39:184768 B37:1c638a B34:63afd1 B32:bfe1ed"),
+            (50, 60, "B97:49768f B93:8bbfd3 B39:184768 B37:1c638a B34:63afd1 B32:bfe1ed"),
         }),
         ("blue-green", "Blue Green", new (double, double, string)[]
         {
-            (60, 70, "BG34:66c4b8 BG49:009fae BG99:39694e B06:0085cc"),
-            (70, 80, "BG32:97d6cd BG45:6ac9d6 BG57:3cb0c1 BG96:689c7f B05:1e9cd1"),
-            (80, 90, "BG53:87cbd4 BG78:356a64 BG75:679b94 BG93:9dc2ab B04:4cb3dc"),
+            (60, 70, "BG34:66c4b8 BG49:009fae BG99:39694e BG23:7bdec1 BG18:408784 BG11:c2f2de BG07:00939f BG01:85e6ea B06:0085cc"),
+            (70, 80, "BG32:97d6cd BG45:6ac9d6 BG57:3cb0c1 BG96:689c7f BG15:00bfa4 BG10:d7f3e3 BG05:00bacb BG000:dbf7f1 B05:1e9cd1"),
+            (80, 90, "BG53:87cbd4 BG78:356a64 BG75:679b94 BG93:9dc2ab BG13:3ed1b9 BG09:00878e BG02:4cd9e8 BG0000:eaf9f0 B04:4cb3dc"),
             (90, 100, "BG72:9bc2bc BG70:cfdedb BG90:d0ddd4 B02:7ec9e6 B01:a1d9ee B00:c1e7f4 B000:d9f0f7 B0000:eaf6fa"),
         }),
         ("green", "Green", new (double, double, string)[]
         {
             (100, 110, "G99:3b5c2a G97:52783d G95:77995c G93:a7c48c G91:d3e3be G46:67a950 G43:b8d6a4 G28:00793c G24:96ca9a G21:b9dbbc G20:eaf4e5"),
-            (110, 120, "G19:009d43 G17:37b54a G16:1bb55c G14:8cd585 G12:cee8cb"),
-            (120, 130, "G09:139828 G07:32b444 G05:61c86c G03:81d489 G02:a1dba7 G00:c5e8c9 G000:def2e0 G0000:eef8ef"),
+            (110, 120, "G94:83946a G85:83926c G82:abbc7e G40:e8edbe G19:009d43 G17:37b54a G16:1bb55c G14:8cd585 G12:cee8cb"),
+            (120, 130, "G29:456150 G09:139828 G07:32b444 G05:61c86c G03:81d489 G02:a1dba7 G00:c5e8c9 G000:def2e0 G0000:eef8ef"),
         }),
         ("yellow-green", "Yellow Green", new (double, double, string)[]
         {
-            (130, 140, "YG99:4c5c2d YG97:63783a YG95:88a04c YG93:b5c482 YG91:e0e8b8 YG67:779e3d YG63:a6c76e"),
-            (140, 150, "YG45:8ec449 YG41:cee9d6 YG25:d6e969 YG23:e7f394 YG21:f5fbbf YG13:cde497 YG11:e0f0c7"),
+            (130, 140, "YG99:4c5c2d YG97:63783a YG95:88a04c YG93:b5c482 YG91:e0e8b8 YG67:779e3d YG63:a6c76e YG61:d6deb0"),
+            (140, 150, "YG45:8ec449 YG41:cee9d6 YG25:d6e969 YG23:e7f394 YG21:f5fbbf YG13:cde497 YG11:e0f0c7 YG06:90d94b"),
             (150, 160, "YG17:95c635 YG09:81b835 YG07:9fcd34 YG05:b7da53 YG03:cae37c YG01:dbeca1 YG00:e8f3c4 YG0000:f7fbe6"),
         }),
         ("yellow", "Yellow", new (double, double, string)[]
         {
             (160, 170, "Y38:e69d37 Y28:dfb768 Y19:ffc125 Y18:ffcd00 Y17:ffd82c Y15:ffe763 Y13:fff397 Y11:fffac9"),
             (170, 180, "Y08:fde000 Y06:ffe91e Y04:ffee47 Y02:fff074 Y00:fff6a4 Y000:fffbca Y0000:fffde6"),
-            (180, 190, "Y35:ffc125 Y26:e8c576 Y23:ffe590 Y21:fff2bb"),
+            (180, 190, "Y35:ffc125 Y32:ffd58f Y26:e8c576 Y23:ffe590 Y21:fff2bb"),
         }),
         ("earth", "Earth", new (double, double, string)[]
         {
@@ -130,8 +130,8 @@ public static class CopicPalette
         }),
         ("yellow-red", "Yellow Red", new (double, double, string)[]
         {
-            (240, 250, "YR68:e85309 YR27:df621b YR18:f48800 YR09:f1640a"),
-            (250, 260, "YR82:e0a068 YR31:f7d391 YR24:f7aa43 YR16:ffaa35 YR07:f98434"),
+            (240, 250, "YR68:e85309 YR61:ffc4a3 YR27:df621b YR21:ffc675 YR18:f48800 YR14:ff9048 YR09:f1640a"),
+            (250, 260, "YR82:e0a068 YR31:f7d391 YR24:f7aa43 YR20:ffdcae YR16:ffaa35 YR12:ffa457 YR07:f98434"),
             (260, 270, "YR65:f27c24 YR30:f9e0b8 YR23:f4ba6d YR15:ffb54d YR04:ffa96b YR02:ffc69a YR01:ffd0aa YR00:ffdbbf YR000:ffeada YR0000:fff6ed"),
         }),
     };

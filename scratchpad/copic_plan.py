@@ -15,10 +15,18 @@ of its family whose existing members bracket it most tightly.
 SOURCING is the part that is not equivalent to how the 316 were derived, and
 the file records that per code rather than hiding it. The 316 were lifted
 verbatim from the user's web copicColors.js; that file has no entry for any of
-these, and no available source reproduces the calibration (see copic_famfit).
-The hexes here are meodai's swatch-extracted values - the closest-agreeing
-source of the three tested - and they are a PROPOSAL to look at in the render,
-not a claim of equivalence.
+these, and no available source reproduces the calibration (see copic_famfit
+and copic_transform_fit).
+
+The hexes are Concepts' OWN table, extracted from TopHatch.Concepts.dll by
+copic_concepts_extract.py and proved to be what its COPIC wheel renders by
+copic_wheel_proof.py. That is a real calibration, measured rather than guessed
+- but it is a DIFFERENT calibration from the user's, by a median of 35.9 RGB
+units, 0.62 of the 58.1-unit step between adjacent markers (copic_control.py).
+
+The user was shown those figures and the seam render, and chose to proceed.
+The difference is therefore deliberate and accepted, not overlooked. See
+docs/CONCEPTS-REF-2026-08-07.md section 11.20.
 
 Run from the repo root:  python scratchpad/copic_plan.py
 """
@@ -66,7 +74,9 @@ def main():
     angles = {sid: [(a0, a1) for a0, a1, _ in sl] for sid, _, sl in secs}
     before_depth = {sid: [len(c) for c in cols[sid]] for sid in cols}
 
-    src = {k: v['extractedColor'].lstrip('#').lower() for k, v in off.items()}
+    src = json.load(open(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        'copic_out', 'concepts_palette.json')))
 
     # Deal each family's absent codes across that family's OWN columns, always
     # into the currently shallowest one. Two reasons this rather than "the
@@ -116,7 +126,7 @@ def main():
             'angles': angles[sid][ci],
             'index': pos,
             'hex': hexv,
-            'source': 'meodai.extractedColor',
+            'source': 'concepts.dll',
             'calibrated_like_the_316': False,
         }
         for code, f, sid, ci, pos, hexv in additions
@@ -128,8 +138,10 @@ def main():
     after_max = max(d for v in after_depth.values() for d in v)
 
     json.dump({
-        'note': 'PROPOSAL ONLY - not calibrated the way the existing 316 were.',
-        'source': 'meodai extractedColor; the calibration source has no entry for these codes',
+        'note': 'ACCEPTED BY THE USER. Concepts calibration, not the wheel\'s own - '
+                'median 35.9 RGB units from copicColors.js, 0.62 of a marker step.',
+        'source': "Concepts' own table (TopHatch.Concepts.dll), proved to be what its "
+                  'COPIC wheel renders; copicColors.js has no entry for these codes',
         'before_max_rings': before_max,
         'after_max_rings': after_max,
         'additions': additions,
