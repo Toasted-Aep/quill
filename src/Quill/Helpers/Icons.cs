@@ -279,8 +279,21 @@ public static class Icons
         "M5.4 10 H18.6 A1.5 1.5 0 0 1 20.1 11.5 V20.3 A1.5 1.5 0 0 1 18.6 21.8 H5.4 A1.5 1.5 0 0 1 3.9 20.3 V11.5 A1.5 1.5 0 0 1 5.4 10 Z " +
         "M12 13.6 a1.8 1.8 0 1 1 -0.01 0 Z M11.2 15.8 H12.8 V18.8 H11.2 Z";
 
+    /// <summary>Lock, shackle open - the same body, the same hinge, the shackle
+    /// swung clear.
+    ///
+    /// <para><b>RE-CUT AT 17.16.</b> The first cut said "open" by stopping the
+    /// RIGHT LEG 2.2 grid units short of the body. At the 28.8 DIP the quick
+    /// actions used to draw, that was a 2.7 px notch; at 17.28 it is 1.6 px, and
+    /// the two states differed by 8% of their ink with nothing else to tell them
+    /// apart - this bar draws the padlock with NO word beside it, only a tooltip,
+    /// so that notch was the entire signal for whether the selection is locked.
+    /// The shackle now ends at the 1:30 position instead, leaving the free end
+    /// six units clear of the body: an unmissable hook at 13, 17 and 30 DIP
+    /// alike. The BODY, the hinge leg and the keyhole are untouched, so the two
+    /// still read as one control changing state.</para></summary>
     public const string LockOpen =
-        "M6.8 10 V6.6 A5.2 5.2 0 0 1 17.2 6.6 V7.8 H15.4 V6.6 A3.4 3.4 0 0 0 8.6 6.6 V10 Z " +
+        "M6.8 10 V6.6 A5.2 5.2 0 0 1 15.68 2.92 L14.4 4.2 A3.4 3.4 0 0 0 8.6 6.6 V10 Z " +
         "M5.4 10 H18.6 A1.5 1.5 0 0 1 20.1 11.5 V20.3 A1.5 1.5 0 0 1 18.6 21.8 H5.4 A1.5 1.5 0 0 1 3.9 20.3 V11.5 A1.5 1.5 0 0 1 5.4 10 Z " +
         "M12 13.6 a1.8 1.8 0 1 1 -0.01 0 Z M11.2 15.8 H12.8 V18.8 H11.2 Z";
 
@@ -534,9 +547,17 @@ public static class Icons
     /// <summary>Waste bin: lid, squared handle, tapered hollow body, two rules.
     /// The rules sit INSIDE the body's punched hole, so under the default
     /// even-odd rule they are three levels deep - odd - and fill. Nothing
-    /// overlaps anything, so no fill rule can turn this into a blob.</summary>
+    /// overlaps anything, so no fill rule can turn this into a blob.
+    ///
+    /// <para><b>THE RULES WERE RE-CUT AT 17.16</b>, which takes this mark from
+    /// 28.8 DIP to 17.28. They were 1.31 units wide with a 1.02 unit gap - 0.93 px
+    /// and 0.72 px at the new size, BOTH under one pixel - and the pair fused into
+    /// one grey smear inside the body. This is 11.23's failure exactly: a fine
+    /// feature that measures correctly and reads as mush. Widened to 1.9 with a
+    /// 1.9 gap, which is 1.35 px each and survives, and still clears the tapered
+    /// wall by 1.35 units at the body's narrowest.</para></summary>
     public const string WasteBin =
-        "M 3.31 5.33 L 20.69 5.33 L 20.69 7.15 L 3.31 7.15 Z M 9.17 2.5 L 14.83 2.5 L 14.83 5.33 L 13.11 5.33 L 13.11 4.32 L 10.89 4.32 L 10.89 5.33 L 9.17 5.33 Z M 5.33 8.56 L 18.67 8.56 L 17.56 21.5 L 6.44 21.5 Z M 7.05 10.28 L 16.95 10.28 L 16.04 19.78 L 7.96 19.78 Z M 10.18 12 L 11.49 12 L 11.49 18.06 L 10.18 18.06 Z M 12.51 12 L 13.82 12 L 13.82 18.06 L 12.51 18.06 Z";
+        "M 3.31 5.33 L 20.69 5.33 L 20.69 7.15 L 3.31 7.15 Z M 9.17 2.5 L 14.83 2.5 L 14.83 5.33 L 13.11 5.33 L 13.11 4.32 L 10.89 4.32 L 10.89 5.33 L 9.17 5.33 Z M 5.33 8.56 L 18.67 8.56 L 17.56 21.5 L 6.44 21.5 Z M 7.05 10.28 L 16.95 10.28 L 16.04 19.78 L 7.96 19.78 Z M 9.15 12 L 11.05 12 L 11.05 18.06 L 9.15 18.06 Z M 12.95 12 L 14.85 12 L 14.85 18.06 L 12.95 18.06 Z";
 
     /// <summary>Flip horizontal: a dashed MIRROR LINE with a solid wing on one
     /// side and a hollow wing on the other - the solid is the object, the hollow
@@ -661,9 +682,20 @@ public static class Icons
     ///
     /// <para>STROKED, and that is not a style choice. A lasso IS a line; drawn as
     /// a filled outline at the 18 DIP this menu uses, the ring's two edges are
-    /// under a pixel apart and close up into a blob.</para></summary>
+    /// under a pixel apart and close up into a blob.</para>
+    ///
+    /// <para><b>RE-CUT AT 17.16. THE FIRST CUT WAS A SPEECH BALLOON.</b> It was a
+    /// CLOSED ellipse with one smooth tail leaving its bottom edge - which is the
+    /// definition of a speech balloon, and it read as one at 30 DIP and worse at
+    /// the 21 DIP 17.16 leaves it at. What separates a rope from a balloon is that
+    /// a rope CROSSES ITSELF: the loop is open at the bottom, the running end comes
+    /// back across it, and one long end dangles below the crossing. The two ends are
+    /// deliberately UNEQUAL - a symmetric pair reads as a stand, with the loop
+    /// balanced on top of it. Look before believing any of this:
+    /// <c>python scratchpad/render_icons.py --stroked 2 --sizes 21 Lasso</c>.</para>
+    /// </summary>
     public const string Lasso =
-        "M12 3.4 C17.7 3.4 21.4 6.5 21.4 10.4 C21.4 14.3 17.7 17.4 12 17.4 C6.3 17.4 2.6 14.3 2.6 10.4 C2.6 6.5 6.3 3.4 12 3.4 Z M8.6 17 C8 18.8 6.6 20.1 4.4 21";
+        "M5.8 21.8 C7.6 19.4 10.8 16.6 15.15 15.22 C18.78 14.3 21.2 11.89 21.2 9.2 C21.2 5.67 17.08 2.8 12 2.8 C6.92 2.8 2.8 5.67 2.8 9.2 C2.8 11.89 5.22 14.3 8.85 15.22 C11.2 16.3 13.2 17.9 14.6 19.9";
 
     /// <summary>Partial catch (17.10): a disc straddling the square's edge - any
     /// part inside counts. Stroked, so the overlap the mark IS cannot punch a
