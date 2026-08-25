@@ -4571,3 +4571,44 @@ Two things, and the first is a defect report rather than a design change:
 
 The same capability principle as §19.1 and §16.3: what is shown follows what the
 current subject actually supports.
+
+
+### 17.16 The bottom bar's sizes, and its selection fill — SUPERSEDES §17.12
+
+§17.12 set quick actions at **+80%** and bottom-menu buttons at **+100%**. Seen
+on screen, both are too big. The user:
+
+> *"make bottom buttons fill the whole panel, not fill with margin. I want the
+> margins on the selection gone. and make the bottom bar and quick actions that
+> open up after selection smaller by 30 and 40 percent respectively."*
+
+**Three changes.**
+
+**1. The selected button's fill reaches the panel's edges.** Today the selected
+chip is drawn as a lighter rounded rect *inset* inside the darker panel, so a
+margin of panel shows all round it. That margin goes: the fill runs to the
+panel's own bounds, top and bottom, and the chip reads as a filled segment of
+the bar rather than as a button floating inside it.
+
+The panel's own outer radius stays; it is the **inner** inset that is being
+removed, not the bar's shape.
+
+**2. The bottom bar is 30% smaller.** `BottomMenu.Metrics.Scale` goes
+**2.0 → 1.40**. That is 0.70 of what §17.12 asked for, applied to the same one
+constant, so every mark, pitch and target moves together rather than the glyph
+shrinking inside an unchanged button.
+
+**3. The quick actions are 40% smaller.** `QuickScale` goes **1.8 → 1.08**. It
+drives both quick-action modes — selection and text editing — which is why it
+exists as one number; do not split it.
+
+**Check the outcome, do not assume it.** These are the sizes at which a mark
+stops being legible: §11.23 records fine features turning to spindles, and the
+fullscreen marks were weighted at 15 DIP for exactly this reason. `1.08` is
+close to unscaled, so any mark authored to survive **1.8** may not survive it.
+`scratchpad/render_icons.py` now strokes (`--stroked`), so render every affected
+mark at its **new** real size and say which, if any, needed re-cutting.
+
+Also confirm the hit targets stay usable. Shrinking a button by 30% shrinks what
+the finger has to find; if a target drops below what a touch can reliably hit,
+say so with the number rather than shipping it.
