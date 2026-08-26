@@ -434,6 +434,59 @@ def sizes():
     check("the row's original numbers are still recorded where they came from",
           re.search(r"RowMarkSize\s*=\s*15,\s*RowFontSize\s*=\s*12\.5", chrome) is not None)
 
+    # ---- three rulings the user gave after seeing 17.16 on screen --------
+    #
+    # 1. SQUARE OFF THE SELECTED CHIP. 17.16 already took the plate's vertical
+    #    inset to zero so the accent wash reaches the bar's edges, but a rounded
+    #    cell inside a squared opening still showed four wedges of panel colour
+    #    at its corners. The user was shown that those wedges are the chip's own
+    #    rounding rather than a margin around it, and chose hard edges.
+    check("the selected chip is SQUARE: CellCornerRadius is 0, so no wedge of "
+          "panel colour shows at the corners of the fill",
+          re.search(r"CellCornerRadius\s*=\s*0\s*;", menu) is not None,
+          re.search(r"CellCornerRadius\s*=\s*[^;]+;", menu).group(0)
+          if re.search(r"CellCornerRadius\s*=\s*[^;]+;", menu) else "MISSING")
+    check("...and the PLATE keeps its own rounding: it is the cell that squares "
+          "off, not the bar",
+          re.search(r"CornerRadius\s*=\s*10\s*\*\s*Scale", menu) is not None)
+
+    # 2. A GAP BETWEEN QUICK ACTIONS. They abutted at Spacing = 0 - seven
+    #    32.4 x 36.7 DIP targets sharing edges, one of which deletes.
+    gap = re.search(r"MarkGap\s*=\s*([0-9.]+)\s*\*\s*QuickScale", chrome)
+    check("the quick actions no longer ABUT: the bar carries a real gap between "
+          "targets rather than Spacing = 0",
+          gap is not None
+          and re.search(r"_barItems\s*=\s*\n?\s*new\(\)\s*\{[^}]*Spacing\s*=\s*Metrics\.MarkGap",
+                        chrome, flags=re.S) is not None,
+          "MarkGap = %s * QuickScale" % (gap.group(1) if gap else "MISSING"))
+    check("...and the gap is DEAD space between two targets, because the cell "
+          "itself is the button - nothing is laid over the space between cells",
+          re.search(r"var cell = new Grid\s*\{[^}]*Width\s*=\s*Metrics\.MarkCell", chrome,
+                    flags=re.S) is not None
+          and "Spacing = 0" not in chrome)
+
+    # 3. DELETE MOVES TO THE END, away from Duplicate. This SUPERSEDES 16.2's
+    #    "four existence marks together, orientation behind a divider" - which
+    #    is the reading that put the irreversible command against the one it is
+    #    most easily confused with. Asserted as the PROPERTY the ruling is
+    #    about, not as a positional list: a list would pass again the moment
+    #    something else was inserted.
+    for fn, what in (("private void BuildSelectionBar()", "16.2's selection bar"),
+                     ("private void BuildEditingBar()", "11.9's editing bar")):
+        bar = strip_comments(body_of(read(CHROME), fn))
+        order = [m for m in re.findall(r"Icons\.(\w+)|(Divider)\(\)", bar)]
+        order = [a or b for a, b in order]
+        marks = [o for o in order if o != "Divider"]
+        check("%s ends with Delete - the irreversible command is the last thing "
+              "in the row, reached deliberately" % what,
+              marks and marks[-1] == "WasteBin", " ".join(marks))
+        di, wi = order.index("Duplicate"), order.index("WasteBin")
+        between = order[di + 1:wi]
+        check("...and Delete is NOT adjacent to Duplicate: at least a divider "
+              "stands between the two commands most easily confused",
+              wi > di and "Divider" in between,
+              "between them: " + (" ".join(between) or "NOTHING"))
+
 
 # ===========================================================================
 # 8. STRETCH IS A REAL STRETCH (17.9)
