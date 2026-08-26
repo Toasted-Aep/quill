@@ -3,6 +3,7 @@ using Quill.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
@@ -69,6 +70,12 @@ public sealed class MeasurementMenu
 
         // ---- marks ---------------------------------------------------
         public const double InfoSize = 16, MarkSize = 16, PadlockSize = 16;
+
+        /// <summary>The padlock's TARGET, as distinct from its mark. 26 DIP —
+        /// the height of the value row it sits in, so the box fills the row
+        /// rather than floating inside it. A 16 DIP mark is not a 16 DIP target
+        /// and this is the number that has to reach a hit test.</summary>
+        public const double PadlockBox = 26;
 
         // ---- rows ----------------------------------------------------
         public const double TitleRowH = 32, HeadingRowH = 20, ValueRowH = 26, ChipRowH = 26;
@@ -162,8 +169,13 @@ public sealed class MeasurementMenu
     // can reach the current ones.
     private TextBlock _zoomValue = new();
     private TextBlock _tiltValue = new();
-    private ContentControl _zoomLock = new();
-    private ContentControl _tiltLock = new();
+    private ToggleButton _zoomLock = new();
+    private ToggleButton _tiltLock = new();
+    /// <summary>True while <see cref="Sync"/> is writing the padlocks' checked
+    /// state back from the host. A ToggleButton raises Checked / Unchecked
+    /// whenever IsChecked moves, including when WE move it, so without this the
+    /// repaint that follows a toggle would toggle again.</summary>
+    private bool _paintingLocks;
     private StackPanel _zoomChips = ChipStrip();
     private StackPanel _tiltChips = ChipStrip();
 
@@ -313,10 +325,18 @@ public sealed class MeasurementMenu
             HorizontalAlignment = HorizontalAlignment.Left,
             Foreground = new SolidColorBrush(ChromeUi.Ink),
         };
-        var info = new ContentControl
+        // A BORDER, not a ContentControl, and for the same reason the padlock
+        // below is now a ToggleButton: a ContentControl has no default template,
+        // so a Background set on one paints nothing and hit-tests nothing. This
+        // mark's whole job is to be HOVERED - the tooltip is the content - and on
+        // a bare ContentControl only the glyph's own strokes could raise it. A
+        // Border draws and hit-tests its background, so the 16 DIP mark gets a
+        // 26 DIP square to be found in, matching the padlock's target.
+        var info = new Border
         {
-            Content = Icons.Mark(Icons.Info, ChromeUi.Dim, Metrics.InfoSize),
-            IsTabStop = false,
+            Child = Icons.Mark(Icons.Info, ChromeUi.Dim, Metrics.InfoSize),
+            Width = Metrics.PadlockBox,
+            Height = Metrics.PadlockBox,
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right,
             Background = new SolidColorBrush(Colors.Transparent),
@@ -398,7 +418,7 @@ public sealed class MeasurementMenu
         Foreground = new SolidColorBrush(ChromeUi.Ink),
     };
 
-    private static Grid ValueRow(string mark, bool stroked, TextBlock value, ContentControl padlock, double top)
+    private static Grid ValueRow(string mark, bool stroked, TextBlock value, ToggleButton padlock, double top)
     {
         var row = new StackPanel
         {
@@ -431,25 +451,121 @@ public sealed class MeasurementMenu
         return new Grid { Height = Metrics.ChipRowH, Margin = new Thickness(0, top, 0, 0), Children = { chips } };
     }
 
-    private ContentControl LockButton(Func<bool> get, Action<bool> set, string what)
+    /// <summary>ONE PADLOCK. §17.1 gives each section its own.
+    ///
+    /// <para><b>This was dead, and the reason is worth keeping written down.</b>
+    /// It used to be a bare <see cref="ContentControl"/> with
+    /// <c>Width = Height = 26</c> and a Transparent <c>Background</c>. The
+    /// comment on it argued — correctly, for a Border or a templated control —
+    /// that Transparent hit-tests where null does not. What it missed is that a
+    /// ContentControl has NO DEFAULT TEMPLATE: there is no element in it bound to
+    /// Background, so the brush painted nothing, and with nothing painted there
+    /// was nothing to hit. A visual pass found both locks completely inert —
+    /// pressed repeatedly, including at the centre UI Automation itself reported,
+    /// and the press fell straight through to the canvas and selected whatever
+    /// was underneath. UIA saw the cause: <c>ControlType.Group</c>, bounds of
+    /// 21x27 physical (the MARK, not the 26 DIP box), and neither an Invoke nor a
+    /// Toggle pattern. The sibling chips worked first time because a
+    /// <see cref="Border"/> genuinely does draw and hit-test its background.
+    /// That is the FOURTH time a transparent or null background has silently
+    /// killed a hit target in this codebase.</para>
+    ///
+    /// <para><b>So it is a real control now, and specifically a
+    /// <see cref="ToggleButton"/>.</b> A padlock is a two-state thing, and this
+    /// is the control whose automation peer says so: it reports
+    /// <c>ControlType.Button</c>, exposes <b>TogglePattern</b>, and publishes its
+    /// <c>ToggleState</c> — which is what finally makes "two independent locks"
+    /// and "locking one leaves the other free" checkable from outside the app
+    /// rather than only assertable inside it. A plain Button would have been
+    /// hittable too, but it can only say it was invoked, not what it now
+    /// holds.</para>
+    ///
+    /// <para><b>It stays BARE.</b> §1.1's ruling is measured, not decorative, so
+    /// the default Fluent chrome — a filled rest state, and a solid accent fill
+    /// when checked — must not arrive with the control. The theme brushes are
+    /// overridden on the instance so that rest is transparent in BOTH states and
+    /// hover and press are Quill's own wash. The lock's state keeps being told
+    /// the way §17.1 draws it: <see cref="PaintLock"/> swaps the mark between
+    /// LockOpen and LockClosed and lifts it from Dim to Ink. What is new is that
+    /// there is now a press to give feedback to.</para></summary>
+    private ToggleButton LockButton(Func<bool> get, Action<bool> set, string what)
     {
-        var b = new ContentControl
+        var b = new ToggleButton
         {
             IsTabStop = true,
             VerticalAlignment = VerticalAlignment.Center,
             // A 16 DIP mark is not a 16 DIP TARGET. The padlock is the one
-            // control in its row, so it gets a real box around the mark — and
-            // Transparent rather than null, because a null background does not
-            // hit-test and the box would be decoration.
-            Width = 26,
-            Height = 26,
+            // control in its row, so it gets a real box around the mark.
+            Width = Metrics.PadlockBox,
+            Height = Metrics.PadlockBox,
+            // ToggleButton's default style carries a MinWidth and MinHeight far
+            // larger than this box, and measure clamps Width UP to MinWidth — so
+            // without these two lines the 26 is not the size that ships.
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(Metrics.PadlockBox / 2),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Background = new SolidColorBrush(Colors.Transparent),
+            IsChecked = get(),
         };
-        b.Tapped += (_, e) => { set(!get()); Sync(); e.Handled = true; };
+        StripToggleChrome(b);
+        b.Checked += (_, _) => LockToggled(set, true);
+        b.Unchecked += (_, _) => LockToggled(set, false);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, "Lock " + what);
         return b;
+    }
+
+    private void LockToggled(Action<bool> set, bool on)
+    {
+        if (_paintingLocks) return;   // Sync is writing, not the user pressing
+        set(on);
+        Sync();
+    }
+
+    /// <summary>Neutralises the Fluent ToggleButton's own backgrounds and borders
+    /// on ONE instance, so §1.1's bare panel stays bare while the control keeps
+    /// the template that makes it hittable and automatable.
+    ///
+    /// <para>Written as resource overrides rather than a replacement
+    /// <c>ControlTemplate</c> on purpose: a hand-rolled template would have to
+    /// re-declare the visual states and the automation surface, which is exactly
+    /// the part that must not be got wrong again. A key that a future WinUI
+    /// renames simply falls back to the system brush — the control still works,
+    /// it just looks less bare, which is the safe direction to fail in.</para>
+    ///
+    /// <para>Rest is transparent in BOTH states. The checked state is
+    /// deliberately given the same rest brush as the unchecked one: a padlock
+    /// that filled in when locked would read as a selected chip, and the lock is
+    /// already legible from the mark itself.</para></summary>
+    private static void StripToggleChrome(ToggleButton b)
+    {
+        var clear = new SolidColorBrush(Colors.Transparent);
+        var hover = new SolidColorBrush(ChromeUi.Wash(0x14));
+        var press = new SolidColorBrush(ChromeUi.Wash(0x24));
+        foreach (var (key, brush) in new (string, Brush)[]
+        {
+            ("ToggleButtonBackground", clear),
+            ("ToggleButtonBackgroundPointerOver", hover),
+            ("ToggleButtonBackgroundPressed", press),
+            ("ToggleButtonBackgroundDisabled", clear),
+            ("ToggleButtonBackgroundChecked", clear),
+            ("ToggleButtonBackgroundCheckedPointerOver", hover),
+            ("ToggleButtonBackgroundCheckedPressed", press),
+            ("ToggleButtonBackgroundCheckedDisabled", clear),
+            ("ToggleButtonBorderBrush", clear),
+            ("ToggleButtonBorderBrushPointerOver", clear),
+            ("ToggleButtonBorderBrushPressed", clear),
+            ("ToggleButtonBorderBrushDisabled", clear),
+            ("ToggleButtonBorderBrushChecked", clear),
+            ("ToggleButtonBorderBrushCheckedPointerOver", clear),
+            ("ToggleButtonBorderBrushCheckedPressed", clear),
+            ("ToggleButtonBorderBrushCheckedDisabled", clear),
+        })
+        {
+            b.Resources[key] = brush;
+        }
     }
 
     private void BuildChips()
@@ -545,10 +661,20 @@ public sealed class MeasurementMenu
         catch { }
     }
 
-    private static void PaintLock(ContentControl host, bool locked, string what, string value)
+    /// <summary>Writes the host's answer onto one padlock — the mark, its
+    /// weight, the tooltip, and now the CHECKED state that carries all of it into
+    /// UI Automation as a readable ToggleState.
+    ///
+    /// <para>Guarded, because moving IsChecked raises Checked / Unchecked exactly
+    /// as a press does and the handler would call back into the host. The guard
+    /// is the whole difference between reflecting state and fighting it.</para></summary>
+    private void PaintLock(ToggleButton host, bool locked, string what, string value)
     {
         host.Content = Icons.Mark(locked ? Icons.LockClosed : Icons.LockOpen,
                                   locked ? ChromeUi.Ink : ChromeUi.Dim, Metrics.PadlockSize);
+        _paintingLocks = true;
+        try { host.IsChecked = locked; }
+        finally { _paintingLocks = false; }
         ToolTipService.SetToolTip(host, locked
             ? $"{value} is held — tap to unlock {what}"
             : $"Lock {what} at {value}");

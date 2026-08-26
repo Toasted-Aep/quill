@@ -3764,6 +3764,47 @@ value — `[lock] 10%  [lock] 0°`.
 **Locking tilt shifts the zoom readout sideways** to make room for the lock
 glyph appearing beside the tilt value. The row re-lays out; it does not overlap.
 
+**BOTH PADLOCKS WERE DEAD, and everything above depended on them.** A visual
+pass on the built app pressed each lock repeatedly, including at the centre UI
+Automation itself reported, and neither ever toggled — the press fell through to
+the canvas and selected whatever was underneath, while the sibling preset chips
+worked first time. UIA gave the cause: the chips reported real bounds, the
+padlocks reported `ControlType.Group`, **21×27 physical** — the 16 DIP *mark*,
+not the 26 DIP box the source asked for — and **neither an Invoke nor a Toggle
+pattern**. `LockButton` built a bare `ContentControl` with `Width = Height = 26`
+and a Transparent `Background`. Transparent-not-null is the right rule for
+anything that *draws*; a `ContentControl` has **no default template**, so
+nothing was bound to `Background`, nothing was painted, and nothing could be
+hit. That is the fourth time a transparent or null background has silently
+killed a hit target here, so the rule is now asserted over the whole
+`src/Quill/Controls` directory rather than at the one site.
+
+Each padlock is a **`ToggleButton`** now — chosen over a plain `Button` because
+a padlock is two-state and this is the peer that publishes **`ToggleState`**,
+which is what makes "two independent locks" readable from outside the app
+instead of only assertable inside it. `MinWidth`/`MinHeight` are explicitly
+zeroed, because the default style's minimums exceed 26 and measure clamps a
+`Width` **up** to `MinWidth` — without that the 26 would not have been the
+shipped size either. §1.1's bare panel is preserved by overriding the Fluent
+brushes on the instance (rest transparent in *both* states, hover and press on
+Quill's own wash) rather than by replacing the template, so the template that
+makes it hittable and automatable stays the framework's. Lock state is still
+told by the mark, as this section draws it. The sibling **(i)** mark had the
+same defect in milder form — its whole job is to be hovered — and is now a
+`Border`.
+
+**The sideways shift is real, and it is 16 DIP (32 physical at 2×).** It has
+never been reproducible here because the lock that causes it could not be
+pressed, but it does not need a screen: the right cluster is anchored to the
+window's right edge, the zoom cell is built *before* the tilt cell so it sits to
+tilt's left, the stadium `Border` wraps its row with no `Width` so it grows, and
+locking inserts a 12 DIP padlock into a row whose `Spacing` is 4. Anchored
+right, growth at the tilt cell can only come out of the left — so the zoom
+readout moves **left** by 12 + 4. Symmetrically, **locking zoom does not move
+the tilt readout at all**: tilt is to the right of the growth, and nothing right
+of the growth moves against a right-anchored cluster. `tools/measurement_menu_check.py`
+computes this from the layout's own numbers.
+
 `1600%` is the ceiling of the zoom range finalised at 0.1×–16×. Read
 `InkSurface.MinZoom` / `MaxZoom` rather than repeating those numbers — they were
 consolidated from three copies at two values precisely so a fourth would not
