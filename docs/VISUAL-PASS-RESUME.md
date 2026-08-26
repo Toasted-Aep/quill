@@ -1,5 +1,77 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-08-26 (third screen run) — `integration` @ `4d88688`
+
+Rebuilt clean with the given command, 0 warnings, binary of 19:42. Scratch
+`QUILL_DATA_FOLDER` at `scratchpad/vp3data`, copied from the second run's
+`qdata` so that folder survives as evidence. Machine unlocked, 186 s idle at
+start; `Q-Ensure`/`Q-Assert` bracketed every injection and grab. The user's real
+library was **53,582,382 bytes, mtime 2026-08-24 19:48:26 UTC, SHA-256
+`ADD8EA24…35B20A0` before and after** — unchanged, and this run never opened it.
+
+### §16.8 — THE MECHANISM IS FOUND. The suspected one is REFUTED.
+
+The second run's suspicion was that `PenBar.Place()` puts the satellites just
+below a host that renders as a shallow horizontal strip, so they are clipped out
+of existence. **That is not what is happening. `Place()` is fine and nothing is
+clipped.**
+
+**What is actually happening: under the Bar surface, `PenBar` is never shown at
+all.** `MainWindow.xaml.cs:7628` gates it behind a *second* flag:
+
+```csharp
+bool conceptsBar    = surfaceOn && bar &&  _library.ConceptsBarPalette;
+bool legacyIsSurface= surfaceOn && bar && !_library.ConceptsBarPalette;
+...
+_penBar?.SetVisible(conceptsBar);
+```
+
+`ConceptsBarPalette` is a plain `bool` on the library, **default `false`**, with
+**no Settings UI anywhere** (it appears in exactly two files: its declaration and
+this call site). `NoteModels.cs:672` says so out loud: *"'Bar' means the ORIGINAL
+horizontal pen row… it is simply one flag further in, so it can never be what a
+user sees by default."*
+
+So with Bar selected, what a user gets is the **legacy `PenRow`**
+(`MainWindow.xaml:747`), and `PenRow`'s subtree contains `PenScroll`, `PenStack`,
+`PenGrip`, `PresetPanel`, `PenRowColourBtn`, `BtnAddPreset`, `BtnPenRowCollapse`
+— **no undo and no redo**, which is exactly what the pre-ruling comment at
+`MainWindow.xaml.cs:9667` correctly said before it was overwritten.
+
+**Observed live, both branches, same build, same page:**
+
+* **`ConceptsBarPalette = false` (the default, and the only state a user can
+  reach).** `vp3/07-bar-surface.png`. The Bar surface is a shallow horizontal
+  preset strip in the **top-bar band** — which is precisely the thing the second
+  run magnified under and reasoned from. Magnified at 2x
+  (`vp3/07-penrow.png`): grip, nine pen presets, colour dot, `+`, collapse
+  chevron, and **nothing else**; below it, the strip's own bottom border and the
+  page. Top bar at 2x (`vp3/07-topbar-left.png`): Quill, hamburger, breadcrumb,
+  Pen, Text, Lasso, Insert — **no undo, no redo.** **No pointer route to undo.**
+* **`ConceptsBarPalette = true`** (flipped in the scratch `library.json`, app
+  restarted). `vp3/08-conceptsbar.png`. `PenBar` appears as a **tall vertical
+  left dock** with its settings panel docked to its right — and **both
+  satellites are on screen**, centred under the bar's axis about 6 DIP below its
+  bottom edge, exactly where `Place()` puts them. At 4x
+  (`vp3/08-satellites.png`) they are two clean curved arrows, undo and its
+  mirror, **fully visible and not clipped at any edge**, drawn dim because the
+  freshly-loaded page has an empty stack — `PaintSatellite`'s documented
+  "never hidden, unavailable at 30 %".
+
+**So `Place()` is correct and the satellites work.** The premise the ruling rests
+on — "PenBar floats them below the panel as bare satellites" — is *true*, but
+only of a control that is unreachable from the UI. The ruling removed the
+top-bar pair for a replacement the user cannot switch on.
+
+**The stranding is unconditional, not a corner case.** `Set(BtnUndo, "BtnUndo",
+!surfaceCarriesUndo)` passes `inContext: false`, and `Set` collapses on
+`inContext == false` with no other path — so `BtnUndo`/`BtnRedo` are
+**permanently collapsed in the top bar in every configuration this build can be
+put into**. The comment's safety argument ("whichever surface is up is carrying
+the pair") is false for the one surface a user can actually select.
+
+*Not fixed — this is a verification pass, and it is left exactly as found.*
+
 ## RUN OF 2026-08-26 (second screen run) — `integration` @ `1a9db2a`
 
 Rebuilt clean, 0 warnings; binary 11:55. Scratch `QUILL_DATA_FOLDER` under the
