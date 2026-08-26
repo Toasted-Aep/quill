@@ -4863,3 +4863,54 @@ what you chose so it can be corrected in one line rather than discovered.
 
 Whatever the shape, §17.18.1 applies to these too: a frame the exact colour of a
 plain page is invisible for the same reason.
+
+
+### 17.19 The dial's plate carries the PEN'S colour — SUPERSEDES §17.4 and §17.18.1
+
+> *"make the buttons (both in light or dark mode) the colour of the pen or
+> white/black (according to page background) and make the icon of the tool/pen
+> white or black according to the colour of the button."*
+
+This replaces the page-coloured plate entirely. §17.4 gave each mark a plate
+taking `PageTheme.Ground`; §17.18.1 tried to rescue that by lifting it a step
+away from the ground. **Do neither.** The plate now has a colour of its own.
+
+**The rule, one rule, both themes — no light/dark branch:**
+
+- **A pen cell's plate is that pen's own colour.**
+- **A tool cell's plate is white or black**, chosen by the page background — a
+  tool has no colour of its own to show.
+- **The mark on the plate is white or black**, whichever contrasts better with
+  **the plate it is drawn on**.
+
+That last clause is §0's rule finally satisfied by construction rather than by
+care: the mark is judged against the surface it actually sits on, because the
+plate *is* that surface. The whole family of defects behind §17.4 — a contrast
+test reading the inner disc's token while the mark sat on the page, marks whose
+counters showed the page through themselves, pen marks compositing at the pen's
+own alpha — stops being reachable.
+
+#### What to measure, and the case that will hurt
+
+**A mid-luminance pen is the hard one.** A pen at roughly 50% luminance gives
+poor contrast against *both* white and black, and no choice of mark colour
+rescues it. Compute the worst case across the shipped pens and **report the
+lowest mark-on-plate contrast you can produce.** If it falls below 3:1 — the
+floor for non-text — say so with the number rather than shipping it; the fix
+would be an outline or a shift in the plate, and that is the user's call.
+
+Report the contrast for: the darkest pen, the lightest pen, and the pen closest
+to mid-luminance.
+
+#### Two things to check rather than assume
+
+1. **The per-pen colour arcs may now be redundant.** §1 puts each pen's colour on
+   the ring's inner edge as an arc, and §16.3 forbids greying those because they
+   report a fact that stays true. If the plate now shows the same colour as a
+   filled disc, the arc is saying it twice. **Report whether they double up.
+   Do not remove anything** — the arcs carry information at a glance across the
+   whole ring that a plate cannot, and that is the user's decision.
+2. **The active sector.** It pops out and may already be treated differently.
+   Say what happens to it under this rule.
+
+**§17.4's other half still holds: no page texture in the plate.**
