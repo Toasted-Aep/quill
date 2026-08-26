@@ -1,5 +1,28 @@
 # Visual verification pass — resume state
 
+> **STATUS 2026-08-26, branch `visual-fixes`.** The observations below are left
+> exactly as they were recorded. Five of them have been acted on — the page
+> fade's curve (§16.7), the doubled and stale chrome on the attachment path
+> (§17.8, both halves), the dead Measurement padlocks (§17.1), and three bottom
+> bar rulings (new §17.16a). Each is a separate commit and each landed with new
+> assertions rather than relaxed ones: `selection_present_check` 67 → 82,
+> `VeilRoundTrip` 23 → 29, `bottom_bar_check` 66 → 74, and a new
+> `tools/measurement_menu_check.py` (25) over §17.1, which had no checker at all
+> — which is how a completely dead control shipped.
+>
+> **WHAT STILL NEEDS A SCREEN.** That pass was told not to take the machine, so
+> nothing below was re-captured and two things are fixed but unconfirmed:
+> 1. **That a padlock press LANDS.** The control is a `ToggleButton` now, so it
+>    should report `ControlType.Button`, a 52 × 52 physical bounding rectangle
+>    and a **TogglePattern** whose `ToggleState` follows the lock. Read those
+>    three off the live control before believing it.
+> 2. **The sideways shift**, which §17.1 now derives from the layout as **16 DIP
+>    / 32 physical, leftward**, and which should be measured as a captured
+>    number. Locking *zoom* should move the tilt readout by **zero**.
+>
+> Also unconfirmed on screen: the fade's new curve (measured off the drawn 8-bit
+> channel in `VeilRoundTrip` instead), and the chrome and bottom-bar changes.
+
 Run of 2026-08-26 against `integration` @ `cd056cc`, binary of 00:42, driven
 through `tools/vpsweep/q.ps1` (SendInput) with a scratch `QUILL_DATA_FOLDER`.
 **This run got through the input gate and verified items 1–4.** What follows is
