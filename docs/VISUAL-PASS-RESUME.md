@@ -158,6 +158,41 @@ and a brown one already settles the mechanism.*
 * **The machine note below saying this file is LF is wrong** — it is **CRLF**,
   and has been for at least this commit's parent. Checked before writing.
 
+### ADDENDUM, written after the run — §17.17/§17.18/§17.19 landed DURING it
+
+`3fd3a4f`, `e62d52a` and `ca8f440` landed on `integration` while this run was on
+screen. All three are **spec-only** — `docs/CONCEPTS-REF-2026-08-07.md` is the
+single file in each — so the 19:42 binary still matches everything measured
+above, exactly as `9d54593` did for the second run.
+
+**§17.18.2 is being written on a premise this run's measurement contradicts.**
+It says of the top-corner buttons: *"a frame the exact colour of a plain page is
+invisible for the same reason"* — i.e. it assumes the corner frame takes the
+page's colour, as §17.2 specified. **On screen it does not.** The corner plates
+measured `#0F0E10` (zoom/tilt stadiums) and `#212022` (the circles) **identically
+on a black dot-grid page and on Brown Paper**, where the page around them
+sampled `#A36E3E` between the buttons and `#A16B3B` out on the canvas. They
+track the app's dark theme, not the paper.
+
+So the corner buttons have **two** distinct failure modes, not one:
+
+* on a **plain black** page — invisible, which is what §17.18.1 describes;
+* on a **coloured or light** paper — *over*-visible: a near-black plate at
+  **3.62 : 1** (circles) and **4.29 : 1** (stadiums) against the page, reading as
+  ordinary chrome. §17.2's "almost disappears into the page" is not delivered
+  there at all.
+
+A lift-away-from-the-ground fix as §17.18.1 frames it repairs the first and
+leaves the second untouched, because on Brown Paper the plate is not on the
+ground to begin with. **Whoever implements §17.18.2 should check which colour
+the corner frame actually resolves from before choosing a ΔL\* step** — the
+§16.8 ruling is a fresh example of what a wrong premise costs.
+
+§17.18.1's requested measurement — plate-against-page ΔL\* on OLED black,
+Darkprint, Blueprint, Brown Paper and Plain White — was **not** performed: it
+postdates the run, and the run had already stood down. Two of its five grounds
+are measured above in contrast-ratio terms and can be reused.
+
 ## Why this run stopped
 
 `Q-Ensure` refused to inject with the **Claude** window in the foreground — the
