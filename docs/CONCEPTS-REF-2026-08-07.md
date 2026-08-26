@@ -4808,3 +4808,58 @@ Things to settle and report rather than assume:
   bottom-centre midpoint that quadrant may sit off-screen or under the bottom
   bar. Say what happens there — §16.8 already has one surface with no pointer
   route to undo, and a second would be worse.
+
+
+### 17.18 The dial's plates vanish on a black page, and the corner frames go square
+
+> *"the pens and tools in the radial dial have a transparent background if page
+> is black. make frames for the buttons on the top corners of the screen
+> square."*
+
+#### 17.18.1 A page-coloured plate is invisible on a plain page
+
+§17.4 gave each dial mark an opaque plate taking `PageTheme.Ground`, and a
+screen run measured it passing — flat `#0F0E10`, no texture continuing into it,
+the page's own text visibly **clipped** by the plate's arc. That verdict stands
+for the page it was measured on.
+
+**It does not hold on a black page, and the reason is structural.** The plate is
+*the page's own colour*. What makes it visible in §17.2's corner buttons is not
+the colour — it is that the page's **grid or texture stops at the plate's edge**.
+That discontinuity is the whole mechanism. On a plain black page there is no
+grid and no texture to interrupt, so a plate the exact colour of the page is
+**invisible by construction**, and the marks read as sitting on nothing — which
+is what the user is describing as transparent.
+
+Note this is a *different* defect from the one §17.4 fixed. That one was marks
+with even-odd counters showing the page **through themselves**, and pen marks
+composited at the pen's own alpha. This one is a plate that is genuinely opaque
+and genuinely the wrong colour to be seen.
+
+**The fix: the plate must be measurably distinct from the page**, not identical
+to it. Lift it — a small step in L\* away from the ground, in whichever direction
+the ground allows, so a black page gets a plate slightly above black and a white
+page one slightly below white. Keep it quiet: this is a seat for a mark, not
+chrome, and §17.4's other half still holds — **it must carry no page texture**.
+
+Measure the outcome, do not assert it. Report the plate-against-page ΔL\* on
+**OLED black, Darkprint, Blueprint, Brown Paper and Plain White**, and say which
+is tightest. A step that reads on black may be invisible on a mid ground.
+
+#### 17.18.2 The top-corner button frames become square
+
+§17.2 gave the top-corner buttons a page-coloured ground, with **zoom and tilt
+as stadiums and everything else a circle**. The circles become **squares**.
+
+The stadiums are not mentioned and should stay stadiums — they are sized to
+their text, and a square cannot be. If squaring them is wanted the user will say
+so.
+
+**Corner radius is a visible choice: state which you used.** The app's other
+recent rulings have gone hard — §17.16a squared the bottom bar's chip to a 0
+radius, and §17.5's panel corner mark is a square with exactly one rounded
+corner. A small radius matching the app's other surfaces is defensible, but say
+what you chose so it can be corrected in one line rather than discovered.
+
+Whatever the shape, §17.18.1 applies to these too: a frame the exact colour of a
+plain page is invisible for the same reason.
