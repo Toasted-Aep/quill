@@ -4747,3 +4747,64 @@ from zero. The smallest hit target in the row is unchanged at **32.4 × 36.7
 DIP** (64.8 × 73.4 physical) — the gap is taken as new dead space, not out of
 the buttons. The smallest target anywhere in this pass is the §17.1 padlock at
 **26 × 26 DIP** (52 × 52 physical), which previously had no target at all.
+
+
+### 17.17 A switch back to the old pen row, and a movable dial
+
+Two requests:
+
+> *"add a switch in settings that enables old pen row which ditches the new pen
+> row. make radial dial moveable but make it snap to corners and middle of
+> sides."*
+
+#### The old pen row is still in the tree
+
+It was never deleted. `MainWindow.xaml` still carries the whole thing —
+`PenRow`, `PenScroll`, `PenStack`, `PenGrip`, `PenRowColourBtn`,
+`PenRowColourDot` — a bottom-centred horizontally scrolling strip, with **24
+references still live in `MainWindow.xaml.cs`**. The 2026-08-07 rebuild
+(`27aaf93`) added `Controls/PenBar.cs` alongside it rather than replacing it,
+and the old row simply stopped being shown.
+
+So this is a **switch, not a restoration**. Do not resurrect anything from
+history; find why the existing row is never surfaced and give the user control
+of it.
+
+**The setting replaces, it does not add a third surface.** When it is on, the
+old row is what the `Bar` surface shows and `PenBar` is not built. `ToolSurface`
+stays two-valued — `Wheel` and `Bar` — and this chooses which *implementation*
+`Bar` means. A third enum value would multiply every place that already asks
+which surface is up.
+
+**The switch must be live.** Flipping it swaps the row with no restart and no
+page reopen, the same rule §16.8 sets for the surface switch itself.
+
+**Check what the old row has lost.** It predates the Concepts conversion, so it
+almost certainly does not know about: the capability greying of §16.3, the tools
+added since (eyedropper, ruler, Mix, pan, rotate, mouse), §17.14's dash removal,
+and the assignment route that lets a right-click retarget a cell. **Report what
+is missing rather than quietly wiring it up** — the user may want the old row
+exactly as it was, and "old" is the point of the setting.
+
+#### The dial moves, and snaps to eight places
+
+Four corners and the midpoint of each side. **Snap only** — the dial does not
+rest between them; it lands on the nearest of the eight when released.
+
+Things to settle and report rather than assume:
+
+- **The position persists** across sessions, like the surface choice itself.
+- **What is dragged.** The dial has no obvious grip; dragging its ring would
+  fight the ring's own controls, and dragging the hub would fight the colour
+  dot. Say what you chose and why.
+- **§11.13 is now position-dependent.** It records that five items abreast do
+  not fit "the quadrant a docked dial leaves on screen", which is why the puck
+  came off the plate arc and the star stacked radially instead. That reasoning
+  assumed one docked position. At a side midpoint the dial leaves a *half*
+  rather than a quadrant; at a corner it leaves three quadrants. **Check the
+  colour wheel and the dial's own satellites still fit at every one of the
+  eight**, and say which positions are tightest.
+- **Undo and redo live in the dial's lower quadrant.** At a bottom corner or the
+  bottom-centre midpoint that quadrant may sit off-screen or under the bottom
+  bar. Say what happens there — §16.8 already has one surface with no pointer
+  route to undo, and a second would be worse.
