@@ -225,6 +225,24 @@ public sealed class SelectionChrome
         public const byte GuideAlpha = 56;
         /// <summary>The divider between the destructive group and the flips.</summary>
         public const double DividerHeight = 18;
+
+        /// <summary>THE GAP BETWEEN QUICK ACTIONS, and it is a safety number
+        /// rather than a styling one.
+        ///
+        /// <para>The bar used to run at <c>Spacing = 0</c>: seven 32.4 x 36.7 DIP
+        /// targets ABUTTING, with Delete sharing an edge with Duplicate. Two
+        /// commands one pixel apart, one of which cannot be taken back, and no
+        /// dead space at all between them — a press that lands one DIP wide of
+        /// Duplicate lands ON Delete. The user's ruling: space them.</para>
+        ///
+        /// <para>6 is the app's small-separation unit — it is the gap
+        /// <see cref="BottomMenu.Metrics.MarkToWord"/> puts between a mark and
+        /// its word — taken on this surface's own
+        /// <see cref="QuickScale"/> so it tracks the bar if the bar is ever
+        /// resized again. It is a gap between TARGETS, so it is genuinely dead:
+        /// the cell IS the button, and nothing is laid over the space between
+        /// two cells.</para></summary>
+        public const double MarkGap = 6 * QuickScale;
         /// <summary>Keep both plates this far inside the viewport, so a selection
         /// dragged to an edge does not push its own controls off screen.</summary>
         public const double EdgeInset = 8;
@@ -279,7 +297,8 @@ public sealed class SelectionChrome
     /// somewhere else. <see cref="BottomMenu"/> owns only where it goes and what
     /// may cover it.</summary>
     private readonly Border _row;
-    private readonly StackPanel _barItems = new() { Orientation = Orientation.Horizontal, Spacing = 0 };
+    private readonly StackPanel _barItems =
+        new() { Orientation = Orientation.Horizontal, Spacing = Metrics.MarkGap };
     private readonly StackPanel _rowItems = BottomMenu.Items();
 
     private Mode _mode = Mode.None;
@@ -446,6 +465,14 @@ public sealed class SelectionChrome
         _barItems.Children.Add(Mark(locked ? Icons.LockClosed : Icons.LockOpen,
             locked ? "Unlock" : "Lock", true, _h.ToggleEditingTextLock, ink));
         _barItems.Children.Add(Mark(Icons.Duplicate, "Duplicate", true, _h.DuplicateEditingText, ink));
+        // Delete last here too, behind a divider. 11.9's bar and 16.2's are one
+        // bar with two triggers — Metrics.QuickScale says so in as many words —
+        // so a safety ruling that applies to one applies to both, or the same
+        // press means two different things depending on which mode you are in.
+        // 11.9 does not list the flips, so this bar has nothing between
+        // Duplicate and Delete but the divider; that is still a fence where
+        // there was a shared edge.
+        _barItems.Children.Add(Divider());
         _barItems.Children.Add(Mark(Icons.WasteBin, "Delete", !locked, _h.DeleteEditingText, ink,
             deadTip: "This text box is locked"));
     }
@@ -458,20 +485,31 @@ public sealed class SelectionChrome
         var ink = PageTheme.OnSurface;
 
         _barItems.Children.Clear();
-        // 16.2's order, left to right, and the divider is part of it: the four
-        // marks before it act on the object's existence, the two after it act on
-        // its orientation.
+        // 16.2's order, left to right — WITH DELETE MOVED TO THE END, at the
+        // user's ruling, and the dividers carrying the grouping.
+        //
+        // 16.2 put the four "existence" marks together and fenced the two
+        // orientation marks off behind a divider, which left Delete sharing an
+        // edge with Duplicate at Spacing = 0. Duplicate and Delete are the two
+        // commands most easily confused for one another, they were the two
+        // closest together, and exactly one of them cannot be taken back. So
+        // Delete goes to the far end, behind its own divider: the last thing in
+        // the row, reached deliberately, with the whole flip group and two
+        // dividers between it and Duplicate. Nothing about WHAT the marks do
+        // changed; the reading of 16.2's grouping did, and this is the one that
+        // now stands.
         _barItems.Children.Add(Mark(Icons.Paperclip, "Replace attachment", attach, _h.ReplaceAttachment, ink,
             deadTip: "Only an attachment has a file to replace"));
         _barItems.Children.Add(Mark(locked ? Icons.LockClosed : Icons.LockOpen,
             locked ? "Unlock" : "Lock", true, _h.ToggleLock, ink));
         _barItems.Children.Add(Mark(Icons.Duplicate, "Duplicate", true, _h.Duplicate, ink));
-        _barItems.Children.Add(Mark(Icons.WasteBin, "Delete", !locked, _h.Delete, ink,
-            deadTip: "The selection is locked"));
         _barItems.Children.Add(Divider());
         _barItems.Children.Add(Mark(Icons.FlipHorizontal, "Flip horizontal", !locked, () => _h.Flip(true), ink,
             deadTip: "The selection is locked"));
         _barItems.Children.Add(Mark(Icons.FlipVertical, "Flip vertical", !locked, () => _h.Flip(false), ink,
+            deadTip: "The selection is locked"));
+        _barItems.Children.Add(Divider());
+        _barItems.Children.Add(Mark(Icons.WasteBin, "Delete", !locked, _h.Delete, ink,
             deadTip: "The selection is locked"));
 
         BuildModeBar(locked);

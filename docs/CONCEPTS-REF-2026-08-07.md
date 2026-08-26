@@ -4704,3 +4704,46 @@ mark at its **new** real size and say which, if any, needed re-cutting.
 Also confirm the hit targets stay usable. Shrinking a button by 30% shrinks what
 the finger has to find; if a target drops below what a touch can reliably hit,
 say so with the number rather than shipping it.
+
+### 17.16a Three rulings after seeing §17.16 on screen
+
+**1. Square off the selected chip.** `BottomMenu.Metrics.CellCornerRadius`
+**9.8 → 0**. §17.16 change 1 took the plate's vertical inset to zero so the
+accent wash reaches the bar's top and bottom edges, but a *rounded* cell inside
+a squared opening still leaves four small wedges of panel colour showing at the
+corners of the fill. The user was shown that the wedges are the chip's own
+rounding rather than a margin left around it — and chose **hard edges** anyway.
+The plate's own `CornerRadius` is untouched: the bar keeps its shape, the cell
+inside it squares off.
+
+**2. Put a gap between the quick actions.** They ran at `Spacing = 0` — seven
+**32.4 × 36.7 DIP** targets *abutting*, with Delete sharing an edge with
+Duplicate. A press landing one DIP wide of Duplicate landed on Delete.
+`SelectionChrome.Metrics.MarkGap` is **6 × QuickScale = 6.48 DIP**, taking the
+app's small-separation unit (`MarkToWord`'s 6) on this surface's own factor so
+it tracks the bar if the bar is resized again. The gap is genuinely dead space:
+the cell *is* the button and nothing is laid over the space between two cells.
+
+**3. Move Delete to the end of the row.** This **supersedes §16.2's** grouping —
+"the four marks before the divider act on the object's existence, the two after
+it act on its orientation" — which is precisely the reading that put the one
+irreversible command against the one it is most easily confused with. Delete is
+now the last thing in the row, behind its own divider:
+
+```
+[clip] [lock] [duplicate] | [flip H] [flip V] | [delete]
+```
+
+It applies to **both** quick-action modes. §17.16 change 3 says the scale
+"drives both quick-action modes… do not split it", and the same holds for a
+safety ruling: a press must not mean two different things depending on which
+mode the bar is in. §11.9's editing bar carries no flips, so there Delete sits
+behind a single divider — still a fence where there was a shared edge.
+
+**The resulting numbers.** Gap cell-to-cell **6.48 DIP** (12.96 physical at
+2×); across a divider **23.96 DIP** (47.92 physical). Duplicate → Delete is
+**119.2 DIP** on the selection bar and **23.96 DIP** on the editing bar, both
+from zero. The smallest hit target in the row is unchanged at **32.4 × 36.7
+DIP** (64.8 × 73.4 physical) — the gap is taken as new dead space, not out of
+the buttons. The smallest target anywhere in this pass is the §17.1 padlock at
+**26 × 26 DIP** (52 × 52 physical), which previously had no target at all.

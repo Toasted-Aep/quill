@@ -151,7 +151,22 @@ public sealed class BottomMenu
             new(4 * Scale, 4 * Scale, 4 * Scale, 4 * Scale);
 
         public const double CornerRadius = 10 * Scale;
-        public const double CellCornerRadius = 7 * Scale;
+
+        /// <summary>The selected cell's corners, and they are SQUARE.
+        ///
+        /// <para>This was 7 * <see cref="Scale"/> — 9.8 DIP. 17.16 had already
+        /// taken the plate's vertical inset to zero so the accent wash reaches
+        /// the bar's top and bottom edges, but a rounded cell inside a squared
+        /// opening leaves four small wedges of PANEL colour showing at the
+        /// corners of the fill. The user was shown that the wedges are the
+        /// chip's own rounding rather than a margin left around it — and chose
+        /// hard edges anyway. So the fill is a true rectangle and reads as a
+        /// segment of the bar rather than as a pill dropped into it.</para>
+        ///
+        /// <para>The PLATE's <see cref="CornerRadius"/> is untouched. The bar
+        /// still has its own rounded shape; it is the cell inside it that
+        /// squares off.</para></summary>
+        public const double CellCornerRadius = 0;
 
         /// <summary>Clear of the window's bottom edge. Not doubled - it is a
         /// distance to an edge, not part of a button.</summary>
