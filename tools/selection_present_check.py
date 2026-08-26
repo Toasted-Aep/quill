@@ -670,11 +670,137 @@ def extract_veil():
 
 # ===========================================================================
 
+def block_from(src, marker):
+    """The braced block that follows `marker`, brace-matched. Used to read one
+    branch of the pointer handlers without depending on how the chain is laid
+    out around it."""
+    i = src.index(marker)
+    i = src.index("{", i)
+    depth, j = 0, i
+    while j < len(src):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[i + 1:j]
+        j += 1
+    raise AssertionError("unbalanced braces after " + marker)
+
+
+# ===========================================================================
+# 5. 17.8 AND THE SINGLE ACTIVE SHAPE
+# ===========================================================================
+# 17.8 removed the tint, the dashed box and the white corner squares - but the
+# code only did it on the multi-selection path. A visual pass on the built app
+# found an ATTACHMENT wearing both chromes at once: DrawShapeSelection's dashed
+# box and squares over SelectionChrome's circles and guides, on the same
+# rectangle. And on a drag the Win2D half followed while the circles and guides
+# stayed at the pre-drag bounds, during the drag and after the drop.
+#
+# Both are fixed on that path now, and both are pinned here. The half that needs
+# care is that the squares are NOT decoration - HitHandle hit-tests the same
+# vertices to start a resize - so these assertions are as much about what
+# SURVIVED the removal as about what went.
+
+def active_shape_chrome():
+    src = read(INK)
+    stripped = strip_comments(src)
+    draw = strip_comments(body_of(src, "private void DrawShapeSelection("))
+
+    # --- 17.8: the doubled marks are gone from this path ------------------
+    check("17.8 - the single active shape's DASHED BOX is gone: it traced the "
+          "very rectangle SelectionChrome frames",
+          "_dashStyle" not in draw,
+          "no dash style left in DrawShapeSelection" if "_dashStyle" not in draw
+          else "still dashes")
+    check("17.8 - and its white corner SQUARES are drawn only where the chrome's "
+          "circles do not already mark the same points",
+          re.search(r"if\s*\(\s*!ChromeAlreadyMarksHandles\(s\)\s*\)", draw) is not None
+          and "FillRectangle" in draw)
+
+    # --- what the removal must NOT take with it ---------------------------
+    # The squares mark a live gesture. The hit test is model geometry and must
+    # stay completely independent of whether anything was painted.
+    hit = strip_comments(body_of(src, "private static Vector2? HitHandle("))
+    check("17.8 - the RESIZE HIT REGION survives the visual removal: HitHandle "
+          "still tests HandleVertices(s) and asks nothing about what was drawn",
+          "HandleVertices(s)" in hit
+          and "ChromeAlreadyMarksHandles" not in hit
+          and "ViewZoom" not in hit)
+    check("17.8 - the resize is still STARTED from that hit test, so the corner "
+          "drag is reachable with no square under the pointer",
+          re.search(r"HitHandle\(_activeShape,\s*pos", stripped) is not None
+          and re.search(r"_resizingShape\s*=\s*true", stripped) is not None)
+    check("17.8 - the ROTATION handle is untouched: it is a different affordance "
+          "and 17.8 does not name it",
+          "RotateHandlePos(s)" in draw and "DrawCircle" in draw)
+
+    # The corner-drag an earlier note pointed at is a DIFFERENT gesture on a
+    # DIFFERENT path, and the reason it was never in danger is that it refuses
+    # to run unless there is a multi-selection.
+    scale = strip_comments(body_of(src, "private bool TryBeginSelectionScale("))
+    check("17.8 - TryBeginSelectionScale is the MULTI-selection's gesture and "
+          "never sees an active shape, so removing these squares cannot reach it",
+          "SelCorners()" in scale and "!HasMultiSelection" in scale
+          and "_activeShape" not in scale)
+
+    # --- the predicate that decides, asked about its edges ----------------
+    pred = strip_comments(body_of(src, "private static bool ChromeAlreadyMarksHandles("))
+    check("17.8 - a ROTATED shape keeps its squares: its grips turn and the "
+          "chrome's rectangle does not, so the circles are not on them",
+          re.search(r"Math\.Abs\(s\.Rotation\)\s*>\s*0\.001.*return false", pred,
+                    flags=re.S) is not None)
+    check("17.8 - a LINE or ARROW keeps its squares: its two grips are the "
+          "endpoints, which no corner circle marks",
+          "ShapeKind.Line or ShapeKind.Arrow" in pred)
+    check("17.8 - and the redundancy is MEASURED rather than assumed - the "
+          "handles are compared against the corners the chrome circles",
+          "HandleVertices(s)" in pred and "ShapeCorners(s)" in pred
+          and "Vector2.Distance" in pred)
+
+    # --- 17.8's other half: the chrome has to follow this path's drag ------
+    # SubjectBoundsWorld already reports an active shape live - its branch reads
+    # ShapeBounds off the model, which the drag rewrites - so what was missing
+    # was purely the signal SelectionChrome re-places itself on.
+    m = re.search(r"public Rect SubjectBoundsWorld =>(.*?);", stripped, flags=re.S)
+    sbw = m.group(1) if m else ""
+    # The move offset belongs to the multi-selection branch and must stay out of
+    # the active-shape one, or a drag would be counted twice.
+    live = ("ShapeBounds(_activeShape)" in sbw and "_moveDx" in sbw
+            and sbw.index("_moveDx") < sbw.index("ShapeBounds(_activeShape)"))
+    check("17.8 - SubjectBoundsWorld reports an active shape LIVE, straight off "
+          "the model, with the move offset confined to the multi-selection "
+          "branch where it belongs",
+          live, " ".join(sbw.split())[:110] or "MISSING")
+
+    move = strip_comments(block_from(src, "if (_rotatingShape && _activeShape != null)"))
+    check("17.8 - a single shape's ROTATE tells the chrome",
+          "SubjectMoved?.Invoke()" in move)
+    resize = strip_comments(block_from(src, "else if (_resizingShape && _activeShape != null)"))
+    check("17.8 - a single shape's RESIZE tells the chrome",
+          "SubjectMoved?.Invoke()" in resize)
+    drag = strip_comments(block_from(src, "else if (_movingShape && _activeShape != null)"))
+    check("17.8 - a single shape's DRAG tells the chrome, which is the one a "
+          "visual pass watched go stale",
+          "SubjectMoved?.Invoke()" in drag)
+    drop = strip_comments(block_from(src, "if ((_resizingShape || _movingShape) && _activeShape != null)"))
+    check("17.8 - and the DROP tells it too, so the marks do not settle at the "
+          "pre-drag bounds after the finger lifts",
+          "SubjectMoved?.Invoke()" in drop)
+
+    chrome = strip_comments(read(CHROME))
+    check("17.8 - and SubjectMoved is what SelectionChrome re-places itself on, "
+          "so telling it is sufficient as well as necessary",
+          re.search(r"SubjectMoved\s*\+=\s*Place", chrome) is not None)
+
+
 def main():
     capability_rule()
     veil_dataflow()
     wiring()
     interactions()
+    active_shape_chrome()
     extract_veil()
 
     width = max(len(l) for _s, l, _d in NOTES)

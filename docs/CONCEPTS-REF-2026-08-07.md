@@ -3849,6 +3849,42 @@ the full-canvas guides of §16.2. No tinted rectangle, no dashed box.
 This is the suppression offered when the selection chrome landed and deferred
 until the user had seen it. They have now seen it.
 
+**It applies to BOTH selection paths, which the first implementation missed.** A
+visual pass on the built app found the lasso/multi-select path correct and the
+**single active shape** — an attachment — wearing *both* chromes at once:
+`DrawShapeSelection` still painting a dashed box and white corner squares over
+`SelectionChrome`'s circles and guides, on the same rectangle, which is exactly
+the doubling this section removes. Same path, same pass: dragging the attachment
+moved the dashed box while **the circles and guides stayed at the pre-drag
+bounds, during the drag and after the drop.**
+
+Both are fixed, and the second one has a trap worth naming:
+
+* **The dashed box goes unconditionally.** For an active shape
+  `SubjectBoundsWorld` *is* `ShapeBounds(s)`, so that box was tracing the
+  chrome's own rectangle.
+* **The squares go only where the circles already stand on them.** They are not
+  decoration — `HitHandle` hit-tests the same vertices to begin a resize, so
+  they are the visible affordance for a live gesture. They are redundant for an
+  image, an ellipse, a rectangle or axes, whose handles *are* the bounding-box
+  corners the chrome circles. They are **kept** for a line or arrow (handles are
+  the two endpoints), for a polygon (handles are the true vertices) and for
+  **any rotated shape** (the grips turn, the chrome's rectangle does not). The
+  predicate compares the two point sets rather than assuming.
+* **The hit region is untouched either way.** `HitHandle` computes from the
+  model and never consults a draw call. The corner-drag-to-scale gesture over
+  `SelCorners()` is a *different* gesture on a different path — it returns
+  immediately unless `HasMultiSelection`, so it never sees an active shape.
+* **The staleness was a missing signal, not a missing offset.**
+  `SubjectBoundsWorld` already reported an active shape live; `SelectionChrome`
+  re-places itself on `SubjectMoved` and the single-shape move, resize, rotate
+  and drop raised nothing. `ViewChanged` is about pan and zoom, and
+  `SelectionState.Changed` drops a publish whose kind, count and flags match the
+  last one — which a pure drag's always do. All four raise it now.
+
+`tools/selection_present_check.py` pins all of the above, including what
+survived the removal.
+
 ### 17.9 The bottom-of-screen mode bar
 
 **Quick actions stay above the subject, but nothing floats below it.** The

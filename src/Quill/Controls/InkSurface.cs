@@ -2039,6 +2039,7 @@ public sealed class InkSurface : UserControl
                     double snap = Math.Round(ang / 15.0) * 15.0;     // gentle 15° snap
                     if (Math.Abs(snap - ang) < 4) ang = snap;
                     _activeShape.Rotation = ang;
+                    SubjectMoved?.Invoke();   // the chrome follows the turn
                 }
                 else if (_resizingShape && _activeShape != null)
                 {
@@ -2056,11 +2057,28 @@ public sealed class InkSurface : UserControl
                         sR.X += wBefore.X - wAfter.X;
                         sR.Y += wBefore.Y - wAfter.Y;
                     }
+                    SubjectMoved?.Invoke();   // the chrome follows the resize
                 }
                 else if (_movingShape && _activeShape != null)
                 {
                     _activeShape.X = _shapeOrig.X + (pos.X - _shapeStart.X);
                     _activeShape.Y = _shapeOrig.Y + (pos.Y - _shapeStart.Y);
+                    // 17.8: THE SINGLE-SHAPE DRAG HAS TO SAY SO TOO.
+                    //
+                    // SubjectBoundsWorld already reports this shape's live
+                    // position - its active-shape branch reads ShapeBounds
+                    // straight off the model, which the two lines above have just
+                    // rewritten, so unlike the multi-selection it needs no move
+                    // offset folded in. What was missing was the NOTIFICATION.
+                    // SelectionChrome re-places itself on SubjectMoved and on
+                    // nothing else that a pure drag raises: ViewChanged is about
+                    // pan and zoom, and SelectionState.Changed drops a publish
+                    // whose kind, count and flags match the last one - which a
+                    // drag's always do. So the circles and the guides framed
+                    // where the attachment STARTED, through the drag and on past
+                    // the drop, while the Win2D chrome underneath followed. That
+                    // disagreement is what a visual pass saw.
+                    SubjectMoved?.Invoke();   // the chrome follows the drag
                 }
                 else if (_scalingSel)
                 {
@@ -2375,6 +2393,7 @@ public sealed class InkSurface : UserControl
                         changed = true;
                     }
                     _rotatingShape = false;
+                    SubjectMoved?.Invoke();   // ...and settles where it was dropped
                     break;
                 }
                 if ((_resizingShape || _movingShape) && _activeShape != null)
@@ -2389,6 +2408,12 @@ public sealed class InkSurface : UserControl
                         changed = true;
                     }
                     _movingShape = _resizingShape = false;
+                    // The DROP, for the same reason RecomputeSelectionBounds
+                    // raises this after a multi-selection's drop: the drop can
+                    // still move the subject (a table reflows its cells, a
+                    // rotated resize translates to pin its anchor) and nothing
+                    // else here will tell the chrome about it.
+                    SubjectMoved?.Invoke();
                     break;
                 }
                 if (_scalingSel)
@@ -5070,6 +5095,17 @@ public sealed class InkSurface : UserControl
         // untouched, and deliberately so: the lasso and the in-flight rectangle
         // are a gesture in progress, not a selection, and 17.8 is about what a
         // settled selection looks like.
+        //
+        // AND THE SAME NOW GOES FOR THE SINGLE ACTIVE SHAPE, which this comment
+        // used to speak for without covering. DrawShapeSelection above kept its
+        // dashed box and its white squares long after this paragraph was
+        // written, so an attachment wore both chromes at once and a visual pass
+        // saw exactly that. The box is gone from there too, and the squares are
+        // gone wherever the chrome's circles already mark the same four points;
+        // DrawShapeSelection carries the reasoning and the one case that keeps
+        // them, and it is the same reasoning as the paragraph above - a mark is
+        // removed when something else already makes it, never when it is the
+        // only sign that a grip is there.
 
         if (!_replaying) DrawRuler(ds, bg);
 
@@ -6687,27 +6723,81 @@ public sealed class InkSurface : UserControl
         ds.DrawLine(b, b - dir * hs - perp * hs * 0.5f, color, w, _roundStyle);
     }
 
+    /// <summary>17.8, asked of ONE shape: has <see cref="SelectionChrome"/>
+    /// already put a mark on every point this shape's square handles mark?
+    ///
+    /// <para>This is the question that decides whether removing the squares is a
+    /// de-duplication or a deletion, and it is asked geometrically rather than
+    /// assumed. The chrome draws four hollow circles on the four corners of
+    /// <see cref="SubjectBoundsWorld"/>, which for a single active shape is
+    /// <see cref="ShapeBounds"/>. So the squares are redundant exactly when
+    /// <see cref="HandleVertices"/> IS those four corners:</para>
+    ///
+    /// <list type="bullet">
+    /// <item>an image, an ellipse, a rectangle, axes - handles are the bbox
+    /// corners, so every square has a circle on it. REDUNDANT.</item>
+    /// <item>a line or an arrow - two handles, at the two ENDPOINTS. A circle on
+    /// the bounding box's corners does not mark either of them.</item>
+    /// <item>a polygon - handles are the true vertices (#11). A triangle's apex
+    /// is not a corner of its bounding box.</item>
+    /// <item>ANY rotated shape - the handles turn with it and the chrome's
+    /// rectangle does not, so the circles land somewhere the grips are not.</item>
+    /// </list>
+    ///
+    /// <para>In the first case the square is a second mark on a marked point and
+    /// 17.8 removes it. In the others it is the ONLY mark on a live grip, and
+    /// removing it would hide a gesture rather than tidy a duplicate.</para></summary>
+    private static bool ChromeAlreadyMarksHandles(ShapeElement s)
+    {
+        if (Math.Abs(s.Rotation) > 0.001) return false;
+        var handles = HandleVertices(s);
+        var corners = ShapeCorners(s);
+        if (handles.Length != corners.Length) return false;
+        for (int i = 0; i < handles.Length; i++)
+            if (Vector2.Distance(handles[i], corners[i]) > 0.001f) return false;
+        // Line and Arrow report two "corners" that are the endpoints, not a box.
+        return s.Kind is not (ShapeKind.Line or ShapeKind.Arrow);
+    }
+
     private void DrawShapeSelection(CanvasDrawingSession ds, ShapeElement s, Color accent, float uiScale)
     {
         var c = ShapeCenter(s);
         var bb = ShapeBounds(s);
-        var corners = new[]
-        {
-            new Vector2((float)bb.Left, (float)bb.Top),
-            new Vector2((float)bb.Right, (float)bb.Top),
-            new Vector2((float)bb.Right, (float)bb.Bottom),
-            new Vector2((float)bb.Left, (float)bb.Bottom)
-        };
-        for (int i = 0; i < 4; i++)
-            ds.DrawLine(RotatePoint(corners[i], c, s.Rotation),
-                        RotatePoint(corners[(i + 1) % 4], c, s.Rotation), accent, uiScale, _dashStyle);
 
-        float hs = 5.5f / ViewZoom;
-        foreach (var v in HandleVertices(s))
+        // 17.8 ON THE SINGLE-ACTIVE-SHAPE PATH, which it had reached in comment
+        // only. The multi-selection lost its tint, its dashed box and its white
+        // corner squares; this path kept all of the second two, and a visual pass
+        // on the built app found an attachment wearing BOTH chromes at once -
+        // squares sitting on SelectionChrome's circles, a dashed box drawn on
+        // ShapeBounds while the chrome framed the very same rectangle. That is
+        // the doubling 17.8's own comment claims to have removed.
+        //
+        // THE DASHED BOX GOES, unconditionally: SubjectBoundsWorld for an active
+        // shape IS ShapeBounds(s), so this line was tracing the chrome's own
+        // rectangle. 17.8: "only the edges remain - the corner circles and the
+        // full-canvas guides. No tinted rectangle, no dashed box."
+        //
+        // THE SQUARES GO WHERE THE CIRCLES STAND ON THEM, and only there - see
+        // ChromeAlreadyMarksHandles. This is the one place care is owed, because
+        // the squares are NOT decoration: HitHandle hit-tests HandleVertices(s)
+        // to start a resize, so they are the visible affordance for a real
+        // gesture.
+        //
+        // The HIT REGION IS UNTOUCHED EITHER WAY. HitHandle computes from the
+        // model and never consults a draw call, so nothing below can widen or
+        // narrow it. (The corner-drag the earlier note pointed at,
+        // TryBeginSelectionScale over SelCorners(), is a different gesture on a
+        // different path - it returns immediately unless HasMultiSelection, so it
+        // never sees an active shape at all and is not in question here.)
+        if (!ChromeAlreadyMarksHandles(s))
         {
-            var p = RotatePoint(v, c, s.Rotation);
-            ds.FillRectangle(new Rect(p.X - hs, p.Y - hs, hs * 2, hs * 2), Colors.White);
-            ds.DrawRectangle(new Rect(p.X - hs, p.Y - hs, hs * 2, hs * 2), accent, uiScale);
+            float hs = 5.5f / ViewZoom;
+            foreach (var v in HandleVertices(s))
+            {
+                var p = RotatePoint(v, c, s.Rotation);
+                ds.FillRectangle(new Rect(p.X - hs, p.Y - hs, hs * 2, hs * 2), Colors.White);
+                ds.DrawRectangle(new Rect(p.X - hs, p.Y - hs, hs * 2, hs * 2), accent, uiScale);
+            }
         }
 
         if (s.Kind != ShapeKind.Table)
