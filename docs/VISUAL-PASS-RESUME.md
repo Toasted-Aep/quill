@@ -72,6 +72,123 @@ the pair") is false for the one surface a user can actually select.
 
 *Not fixed — this is a verification pass, and it is left exactly as found.*
 
+### §17.14 / §16.5 the dial readouts against the arrows — **PASS, measured**
+
+Measured off the hub at 6x, physical px on the 2x display, hub centre taken from
+the disc extent at (285, 365).
+
+*Enabled* (Pen, nothing selected) — `vp3/10-opacity-vs-redo.png`:
+
+| | measured (DIP) | §16.5 |
+|---|---|---|
+| opacity value ink `100%` | x 25.0..47.0, y 3.5..11.0 | x 23.99..46.49, y 0.40..12.40 |
+| redo arrow **ink** | x 9.0..24.5, y 32.0..47.0 | BOX x 5.42..26.42, y 28.15..49.15 |
+
+The arrow ink sits **inside** its box on all four sides, and its top edge at
+32.0 DIP lands on §16.5's own derived figure of 28.15 + 4.11 = **32.26** — the
+"`UndoRound`'s ink starts 4.11 DIP down a 21 DIP box" sentence, confirmed on
+screen to a quarter of a DIP.
+
+* **value ink → arrow ink, vertical: 21.0 DIP** (spec 19.86).
+* Horizontally the value ink starts at 25.0 and the arrow **ink** ends at 24.5 —
+  they **just miss**. Against the arrow **BOX** (26.42) they overlap by 1.42 DIP,
+  which is §16.5's 2.42 to within a DIP. So the spec's "they do overlap
+  horizontally" is a box-vs-ink statement and it still reads that way: **a
+  stacked pair, and the vertical figure is the whole clearance.** Up-and-outward,
+  clearing the arrows. **PASS.**
+
+*Disabled* — **§17.14 holds on all three readouts, no dash anywhere.**
+
+* **Eraser** (`vp3/11-dial.png`): size stays live and reads `auto`; **opacity and
+  stability lose their values entirely** — no `-`, no empty box out on the rim —
+  and each glyph re-centres in its own section. Measured, the two disabled
+  glyphs sit at **dx = ±38 DIP, dy = 0** — symmetric, and on the hub's own
+  horizontal axis, where enabled they sat at dy ≈ −12.5. That is
+  `LayoutReadouts`' `SectionMid` branch doing exactly what it says.
+* **Text** (`vp3/12-hub.png`): **all three** disabled. The size row loses
+  `3.5 px` too and its hamburger glyph centres horizontally. No dash on any of
+  the three. All three glyphs render muted.
+
+### §17.2 corner plates — **SPLIT. The discontinuity PASSES; the page-coloured ground FAILS.**
+
+**The half that works, and works well.** On a **graph-paper** page
+(`vp3/18-corner2.png`) and then on a **2-point perspective** grid
+(`vp3/19-corner-persp.png`, reached by accident and much the better test) every
+grid line — vertical, horizontal and oblique — runs up to a plate and **stops
+dead at its edge**. Not one line continues across any plate. Same on the
+**Brown Paper** page's isometric lattice and its paper texture
+(`vp3/24-corner.png`). The stadium/circle split is also exactly as specified:
+**`100%` and `0°` are rounded-end capsules sized to their text; the other five
+corner buttons are circles.**
+
+**The half that does not.** §17.2 opens with *"a background that mimics the page
+colour, so the button almost disappears into the page"*. Measured plate and page
+colours, 9x9 averages:
+
+| page | plate `#` | page `#` | contrast |
+|---|---|---|---|
+| dark dot grid | `0F0E10` zoom / `212022` help | `000000` | **1.09 : 1** / **1.29 : 1** |
+| **Brown Paper** | `0F0E10` zoom / `212022` help | `A36E3E` | **4.29 : 1** / **3.62 : 1** |
+
+**The plate colours are byte-identical on the two pages.** The ground does not
+track the paper at all — it tracks the app's dark theme. On the dark page that
+happens to coincide and the button really does almost vanish; on Brown Paper the
+same near-black plate sits on a mid-brown page and reads as plain chrome, which
+is the opposite of what §17.2 asks for. The predicted **3.66 : 1** for Brown
+Paper is confirmed at **3.62 : 1** — the arithmetic was right, and 3.66 : 1 is
+simply not "almost disappears".
+
+*Incidental:* the two plates are not the same colour as each other — the zoom
+stadium is `#0F0E10`, the help circle `#212022`, 1.19 : 1 apart. On the dark page
+nobody would see it; on Brown Paper the stadiums are visibly the darker pair.
+
+*Only these two papers were reached — the user took the machine back before a
+light paper could be tried. But the identical plate colour across a black page
+and a brown one already settles the mechanism.*
+
+### Also observed
+
+* **Escape still does not dismiss things.** Adding to the second run's list: it
+  does **not** close the Text tool's **Maths symbols** panel.
+* The Settings ▸ Tool Setup **"Bar" icon is a tall vertical segmented
+  rectangle** — it depicts `PenBar`, the palette the `ConceptsBarPalette` flag
+  keeps hidden, not the horizontal `PenRow` the user actually gets when they
+  pick it. Small, but it is the same wrong premise as §16.8's, in the picker
+  itself.
+* **The machine note below saying this file is LF is wrong** — it is **CRLF**,
+  and has been for at least this commit's parent. Checked before writing.
+
+## Why this run stopped
+
+`Q-Ensure` refused to inject with the **Claude** window in the foreground — the
+same window run 1 silently measured — and sampling then showed **`Idle()` at
+0.00 s with the cursor moving across the screen** (1329,1639 → 795,1613 →
+1435,1613 → …). That is a person at the machine, not a stale cursor, so nothing
+further was injected and no capture was taken. Quill (pid 42972) was left
+**running** on Physics 1 ▸ 030726 ▸ Study, **Brown Paper**, isometric grid, zoom
+91 %, **Wheel** surface, Pen tool, Settings open, Touch draw **off**, Mouse Mode
+**Normal**. Only the scratch library was written.
+
+## Not reached this run
+
+**§17.6** panel round trip, **§17.15** fullscreen text margin, **§17.3** custom
+colour, **§17.11a** the tilted caret and the marquee round a tilted box, the
+**fullscreen format-bar clearance**, and the **COPIC wheel's 358 codes**.
+
+Two items the brief listed as unseen are in fact **already settled by the second
+run and were not re-litigated**: §16.10 / §17.7's **8 px slop** (PASS, measured)
+and its **barrel-button half** (NEEDS HARDWARE, right-tap probe already tried).
+
+Captures for this run are in the session scratchpad under `scratchpad/vp3/`,
+which has survived all three runs; the scripts beside it are named below.
+
+**For whoever picks this up:** `scratchpad/vp3.ps1` dot-sources `q.ps1` + `qq.ps1`
+and adds `Crop`, `Luma` and `DiffBox`; `scratchpad/wheel.ps1` adds
+`[QW]::VScroll` / `HScroll`, which the paper strip needs and `q.ps1` lacks.
+`Q-Click` on the top bar moves by ~60 physical px when the Text tool raises the
+format bar — re-shoot before clicking after any tool change.
+
+
 ## RUN OF 2026-08-26 (second screen run) — `integration` @ `1a9db2a`
 
 Rebuilt clean, 0 warnings; binary 11:55. Scratch `QUILL_DATA_FOLDER` under the
@@ -416,7 +533,8 @@ tested above — but the bottom mode bar observed here is the pre-§17.16 one, a
   transition in the data rather than trusting the pre-delay.
 - **Never run `python -` in a Bash chain** — it spins at 100 % CPU for ever.
   Use a script file or `python -c`.
-- Line endings are per file. This file is **LF**; check before writing.
+- Line endings are per file. This file is **CRLF** - the note here used to say
+  LF and was wrong; the third run checked the bytes. Check before writing.
 - The user's real library at `C:\Users\irony\Documents\Quill\library.json` was
   53,582,382 bytes, mtime 2026-08-24 19:48:26 UTC, before and after this run.
 - If the machine locks itself, stop driving and do **not** attempt to unlock.
