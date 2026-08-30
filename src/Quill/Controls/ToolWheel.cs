@@ -2873,10 +2873,43 @@ public sealed class ToolWheel
     /// <para>Fully opaque. A pen's own <c>Opacity</c> used to modulate its MARK's
     /// alpha, and 17.19 names that among the defects it makes unreachable - a
     /// half-transparent mark is not "white or black". The pen's opacity is
-    /// reported by the disc's own readout, which is where a number belongs.</para></summary>
+    /// reported by the disc's own readout, which is where a number belongs.</para>
+    ///
+    /// <para><b>THE PAGE, NOT THE THEME - AND THEY ARE NOT THE SAME THING.</b>
+    /// 17.19 says "according to page background", and the obvious reading of
+    /// that is <see cref="PageTheme.IsDark"/>. It is wrong, and it is wrong in a
+    /// way that has already shipped once: <c>MainWindow.ResolveGround</c> returns
+    /// the page's paper ONLY when <c>ThemeSource == "Page"</c>, and that field
+    /// defaults to <c>"Manual"</c> - so on a default install
+    /// <see cref="PageTheme.Ground"/> is a FIXED shell colour and knows nothing
+    /// about the paper. That is exactly how §17.2's "a background that mimics the
+    /// page colour" came to be measured byte-identical (#0F0E10) on a dark page
+    /// and on Brown Paper. A tool plate resolved that way would be white on a
+    /// pinned-dark shell whatever the paper underneath it actually was.</para>
+    ///
+    /// <para>So this reads <see cref="PaperTextures.Ground"/> off the live page -
+    /// the same helper <c>ResolveGround</c> uses for its own Page branch - and
+    /// judges it with <see cref="PageTheme.Luminance"/>, which is the gamma-correct
+    /// threshold the whole shell decides light from dark on.
+    /// <c>ColorUtil.IsDark</c> averages raw bytes and puts Brown Paper on the
+    /// wrong side, and Brown Paper is one of the three grounds §7 names as dark.
+    /// <c>MainWindow.PushGround</c> refreshes the dial so a paper change repaints
+    /// these even when the shell's own ground did not move.</para></summary>
     private Color PlateFor(string id) =>
         PenOf(id) is { } pen ? SafeInk(pen.Color)
-                             : PageTheme.IsDark ? Colors.White : Colors.Black;
+                             : PageIsDark ? Colors.White : Colors.Black;
+
+    /// <summary>Whether the PAGE - the paper the user is drawing on - is dark.
+    /// Deliberately not <see cref="PageTheme.IsDark"/>; see
+    /// <see cref="PlateFor"/> for why those two disagree by default.</summary>
+    private bool PageIsDark
+    {
+        get
+        {
+            try { return PageTheme.Luminance(PaperTextures.Ground(_surface.Page)) < 0.5; }
+            catch { return PageTheme.IsDark; }
+        }
+    }
 
     private static Color SafeInk(string hex)
     {

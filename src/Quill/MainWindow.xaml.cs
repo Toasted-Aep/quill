@@ -2217,6 +2217,19 @@ public sealed partial class MainWindow : Window
     {
         PageTheme.SetGround(ResolveGround());   // idempotent; raises Changed only on a real move
         if (_appliedDark != PageTheme.IsDark) ApplyTheme();
+        // 17.19: the dial's TOOL plates are white or black by THE PAGE, not by
+        // the shell - and those two part company the moment ThemeSource is
+        // "Manual", which is the default. On a pinned theme the line above is a
+        // no-op for every paper change, PageTheme.Changed never fires, and the
+        // dial would keep whichever plate it had when the shell was last
+        // rebuilt. PushGround is the one funnel every paper, background and
+        // theme change already runs through - SetPagePaper's comment calls it
+        // "single entry point, so the theme re-derive can never be forgotten" -
+        // so the repaint goes here rather than at the four call sites that
+        // would each have to remember it. Refresh is a dumb re-render of shared
+        // state and never writes any, so a double call after a real ground move
+        // costs a repaint and nothing else.
+        _toolWheel?.Refresh();
     }
 
     // Code-built UI captures its strings at build time exactly the way it
