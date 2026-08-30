@@ -2113,6 +2113,31 @@ public sealed class SettingsWindow
             () => ToolSurfaceService.Set(ToolSurface.Bar),
             inner: Icons.Mark(Icons.SurfaceBar, cur == ToolSurface.Bar ? Ink : Muted, 40)));
         box.Children.Add(HRow(strip, "toolsetup"));
+
+        // ---- §17.17: which pen row "Bar" means ---------------------------
+        //
+        // A SWITCH, NOT A THIRD CIRCLE. The row above stays two-valued because
+        // §17.17 says so out loud - "a third enum value would multiply every
+        // place that already asks which surface is up" - so this chooses the
+        // IMPLEMENTATION of the Bar circle rather than standing beside it.
+        //
+        // Live by construction: SetLegacyBar raises ToolSurfaceService.Changed,
+        // MainWindow answers it with ApplyPenRowVisibility, and this panel
+        // answers it with a Touch of this section (wired in the constructor). No
+        // restart, no reopen - §16.8 item 4's rule, which §17.17 restates.
+        box.Children.Add(Spacer(6));
+        box.Children.Add(ToggleRow(
+            "Old pen row",
+            ToolSurfaceService.LegacyBar,
+            v => { ToolSurfaceService.SetLegacyBar(v); _h.Save(); },
+            tip: "Bar shows Quill's original horizontal pen strip instead of the vertical " +
+                 "Concepts palette. It predates the Concepts conversion, so it has no tool " +
+                 "greying, no eyedropper, ruler, Mix, pan, rotate or mouse cells, no undo or " +
+                 "redo of its own, and right-click on a cell edits the pen rather than " +
+                 "reassigning the cell."));
+        box.Children.Add(Caption(
+            "Applies to the Bar palette only. With the dial chosen this changes nothing until " +
+            "you switch to Bar."));
         return box;
     }
 

@@ -567,6 +567,13 @@ public sealed partial class MainWindow : Window
         ToolSurfaceService.Configure(
             () => _library.ToolSurface,
             v => { _library.ToolSurface = v; ScheduleSave(); });
+        // 17.17: and WHICH pen row "Bar" means. The stored field is the inverse -
+        // ConceptsBarPalette is what shipped libraries already carry - and this
+        // is the only place in the app that knows that, so nothing downstream has
+        // to remember which way round it reads.
+        ToolSurfaceService.ConfigureBarStyle(
+            () => !_library.ConceptsBarPalette,
+            v => { _library.ConceptsBarPalette = !v; ScheduleSave(); });
         // Both Concepts surfaces watch the service themselves; the legacy row
         // cannot, so the window recomputes all three from one place.
         // 16.8 item 4, "the switch is live": the top bar's undo/redo pair now
@@ -7612,16 +7619,20 @@ public sealed partial class MainWindow : Window
         // service rather than in an if here.
         //
         // 10.3 item 10: with "Bar" chosen the surface is the ORIGINAL horizontal
-        // pen row, not PenBar. PenBar keeps its place behind the same switch,
-        // one opt-in further in.
+        // pen row, not PenBar. 17.17 gives the user the switch between the two -
+        // ToolSurfaceService.LegacyBar - and it REPLACES rather than adding: the
+        // enum is still two-valued and this only decides which implementation
+        // "Bar" is. PenBar re-filters on the same flag inside its own Wanted, so
+        // this call site cannot show both by getting one condition wrong.
         bool surfaceOn = _library.RadialToolDial && (!_uiHidden || _floatPen);
         bool bar = ToolSurfaceService.Current == ToolSurface.Bar;
-        bool conceptsBar = surfaceOn && bar && _library.ConceptsBarPalette;
-        // The legacy row IS the Bar surface unless that opt-in is set. It then
+        bool legacy = ToolSurfaceService.LegacyBar;
+        bool conceptsBar = surfaceOn && bar && !legacy;
+        // The legacy row IS the Bar surface unless the switch is off. It then
         // ignores the pen-mode gate above: inside the Concepts shell it is the
         // only tool surface on screen, and hiding it the moment the user picks
         // Text would leave them with nothing to draw from.
-        bool legacyIsSurface = surfaceOn && bar && !_library.ConceptsBarPalette;
+        bool legacyIsSurface = surfaceOn && bar && legacy;
         if (legacyIsSurface) { showRow = rowOn; showChip = !_uiHidden && !rowOn; }
         else if (_library.RadialToolDial) { showRow = false; showChip = false; }
         _toolWheel?.SetVisible(surfaceOn);
