@@ -19,6 +19,28 @@ using Path = Microsoft.UI.Xaml.Shapes.Path;
 
 namespace Quill.Controls;
 
+/// <summary>The eight places the radial dial may sit (CONCEPTS-REF-2026-08-07
+/// §17.17): the four corners, and the midpoint of each side.
+///
+/// <para>The order is CLOCKWISE FROM THE TOP LEFT, so a neighbour in the list is
+/// a neighbour on screen. Nothing depends on the numbering, but a table that
+/// reads round the window is easier to check against a screenshot than one that
+/// groups the corners together.</para>
+///
+/// <para>Persisted by NAME in <c>Library.DialAnchor</c>, so a value written by a
+/// build with a different member order still means the same corner.</para></summary>
+public enum DialAnchor
+{
+    TopLeft = 0,
+    TopCentre = 1,
+    TopRight = 2,
+    RightCentre = 3,
+    BottomRight = 4,
+    BottomCentre = 5,
+    BottomLeft = 6,
+    LeftCentre = 7,
+}
+
 /// <summary>
 /// The radial tool dial, rebuilt against the measured Concepts reference
 /// (docs/CONCEPTS-REF-2026-08-07.md §1, which supersedes UI-SPEC-V2 §1).
@@ -299,7 +321,7 @@ public sealed class ToolWheel
     private const int AssignMs = 550;
     private const double PreviewBox = 420;
 
-    private enum Zone { None, Dot, Size, Opacity, Smooth, Sector, Undo, Redo }
+    private enum Zone { None, Dot, Size, Opacity, Smooth, Sector, Undo, Redo, Grip }
 
     /// <summary>The three scrubable properties, in the order §1.4 lays them out.</summary>
     private enum Prop { Size = 0, Opacity = 1, Smooth = 2 }
@@ -426,10 +448,13 @@ public sealed class ToolWheel
     // ---- painted parts -------------------------------------------------
     private readonly Ellipse _shadow = new();
     private readonly Path[] _sector = new Path[Slots];
-    // 17.4: one flat, page-coloured plate per slot, UNDER the sector fill. On a
-    // dark ground section 7 takes that fill away and a mark is left sitting on
-    // the raw page - see the note on SeatSize.
+    // 17.19 SUPERSEDES 17.4 AND 17.18.1: one flat plate per slot, OVER the
+    // sector fill, carrying the PEN'S OWN COLOUR - or white / black on a cell
+    // that holds a tool, a command or nothing, since those have no colour of
+    // their own to show. Both themes, one rule, no branch. See the block in
+    // BuildWheel for why it moved above the sectors.
     private readonly Ellipse[] _seat = new Ellipse[Slots];
+    private readonly TranslateTransform[] _seatT = new TranslateTransform[Slots];
     private readonly Path[] _sep = new Path[Slots];
     private readonly Ellipse _ringEdge = new();
     private readonly Path _pop = new();            // the active sector, at 1.19 R
@@ -476,6 +501,11 @@ public sealed class ToolWheel
     private Zone _hoverZone = Zone.None;
     private Prop? _dragProp;
     private bool _scrubbing;
+    // 17.17: a grip drag. _dragMoved is separate from _dragging because a press
+    // on the rim that never travels must land nowhere and write nothing.
+    private bool _dragging;
+    private bool _dragMoved;
+    private Point _dragFrom;
     private bool _pressed;
     private uint? _pointer;
     private Point _pressPt;
@@ -777,18 +807,143 @@ public sealed class ToolWheel
         catch { }
     }
 
-    /// <summary>Top-left dock, mirrored to the top-right when the user keeps
-    /// their tools on the right, so the wheel sits under the drawing hand.</summary>
-    private void Place()
+    // ===================================================================
+    // §17.17 - the eight docks
+    // ===================================================================
+
+    /// <summary>Clearance kept at the BOTTOM edge, the counterpart of
+    /// <see cref="TopInset"/> at the top.
+    ///
+    /// <para>Read straight off <see cref="BottomMenu.Metrics"/> rather than
+    /// pushed in by a host, because those are compile-time constants and a
+    /// second plumbing route would be a second thing to keep in step. The mode
+    /// bar is 56 DIP of plate standing 14 DIP clear of the window's edge; 10 DIP
+    /// of air above it is the same gap the top dock leaves under the chrome bar.
+    ///
+    /// <para><b>Reserved unconditionally, even when the bar is down.</b> The
+    /// mode bar comes and goes with the TOOL - it is up for Select and for a
+    /// live selection and down otherwise - so a dial that only cleared it while
+    /// it was showing would hop 80 DIP up the screen every time the user picked
+    /// the lasso, and back down when they picked the pen. A dock that moves on
+    /// its own is worse than one parked slightly high.</para></summary>
+    private static double BottomReserve =>
+        BottomMenu.Metrics.BottomInset + BottomMenu.Metrics.CellHeight + 10;
+
+    /// <summary>The dock the library says, or the pre-17.17 default when it says
+    /// nothing. An unrecognised name is the default too: a tool palette is not
+    /// worth failing over, which is the same reading
+    /// <see cref="ToolSurfaceService.Parse"/> takes.</summary>
+    private DialAnchor CurrentAnchor
+    {
+        get
+        {
+            var raw = _h.Library().DialAnchor;
+            if (!string.IsNullOrWhiteSpace(raw)
+                && Enum.TryParse<DialAnchor>(raw.Trim(), ignoreCase: true, out var v)
+                && Enum.IsDefined(typeof(DialAnchor), v))
+                return v;
+            // Never dragged: the dock the dial has always had, on the pen hand's
+            // side. Reading PenDock here and NOWHERE ELSE is deliberate - once
+            // the user drags, the dial's position is its own setting and moving
+            // the pen row must not shove it.
+            return string.Equals(_h.Library().PenDock, "Right", StringComparison.OrdinalIgnoreCase)
+                ? DialAnchor.TopRight : DialAnchor.TopLeft;
+        }
+    }
+
+    /// <summary>Where a dock puts the dial's CENTRE, in host coordinates.
+    ///
+    /// <para>The four "centre" docks take the window's own midline; the corners
+    /// take the same padded inset the dial has always had. Both are clamped so
+    /// the popped rim stays on screen in a window too small to hold the dial
+    /// twice over - a clamp, not a fallback, so the eight docks collapse toward
+    /// each other rather than one of them vanishing.</para></summary>
+    private Point AnchorPoint(DialAnchor a)
+    {
+        double w = _host.ActualWidth, h = _host.ActualHeight;
+        const double pad = 10;
+        double half = Half * _scale;
+        double left = half + pad;
+        double right = w - half - pad;
+        double top = half + pad + _topInset;
+        double bottom = h - half - pad - BottomReserve;
+
+        double cx = a switch
+        {
+            DialAnchor.TopLeft or DialAnchor.LeftCentre or DialAnchor.BottomLeft => left,
+            DialAnchor.TopRight or DialAnchor.RightCentre or DialAnchor.BottomRight => right,
+            _ => w / 2,
+        };
+        double cy = a switch
+        {
+            DialAnchor.TopLeft or DialAnchor.TopCentre or DialAnchor.TopRight => top,
+            DialAnchor.BottomLeft or DialAnchor.BottomCentre or DialAnchor.BottomRight => bottom,
+            _ => h / 2,
+        };
+        // Keep the popped rim on screen whatever the window is doing. Math.Max
+        // second so a window narrower or shorter than the dial still centres it
+        // rather than pinning it off the far edge.
+        cx = Math.Max(half, Math.Min(cx, Math.Max(half, w - half)));
+        cy = Math.Max(half, Math.Min(cy, Math.Max(half, h - half)));
+        return new Point(cx, cy);
+    }
+
+    /// <summary>Which of the eight a loose centre lands on. Straight nearest
+    /// neighbour over the eight resting POINTS, not a quadrant test on the
+    /// window: the docks are not evenly spread - the bottom row is 80 DIP up to
+    /// clear the mode bar - and a geometric shortcut would disagree with where
+    /// the dial actually goes.</summary>
+    private DialAnchor NearestAnchor(Point p)
+    {
+        var best = DialAnchor.TopLeft;
+        double bestD = double.MaxValue;
+        foreach (DialAnchor a in Enum.GetValues<DialAnchor>())
+        {
+            var q = AnchorPoint(a);
+            double dx = q.X - p.X, dy = q.Y - p.Y;
+            double d = dx * dx + dy * dy;
+            if (d < bestD) { bestD = d; best = a; }
+        }
+        return best;
+    }
+
+    /// <summary>Land on a dock and remember it. Idempotent, and it writes only
+    /// when the name actually moves - so a drag that comes back to where it
+    /// started costs no save, and a first drag that lands on the dial's original
+    /// corner still records it, because from then on it is the user's choice and
+    /// not a reading of <c>PenDock</c>.</summary>
+    private void SetAnchor(DialAnchor a)
+    {
+        var lib = _h.Library();
+        string name = a.ToString();
+        if (!string.Equals(lib.DialAnchor, name, StringComparison.Ordinal))
+        {
+            lib.DialAnchor = name;
+            try { _h.Save(); } catch { }
+        }
+        Place();
+        Refresh();
+    }
+
+    private void Place() => PlaceAt(AnchorPoint(CurrentAnchor));
+
+    /// <summary>The one place the wheel's parts are laid out against a centre.
+    /// Taken as a parameter rather than read from <see cref="_centre"/> so a drag
+    /// can move the dial without first having to write its resting anchor - the
+    /// snap only happens on release, and a half-finished drag must never be what
+    /// the library records.</summary>
+    private void PlaceAt(Point centre)
     {
         if (!Enforce()) return;
         double w = _host.ActualWidth, h = _host.ActualHeight;
         if (w <= 0 || h <= 0) return;
-        const double pad = 10;
-        _mirrored = string.Equals(_h.Library().PenDock, "Right", StringComparison.OrdinalIgnoreCase);
-        double half = Half * _scale;
-        double cx = _mirrored ? Math.Max(half, w - half - pad) : half + pad;
-        double cy = Math.Min(half + pad + _topInset, Math.Max(half, h - half));
+        // Which way the popover and the colour wheel's chrome lean. It used to be
+        // the pen dock; it is now WHICH HALF OF THE WINDOW THE DIAL IS IN, which
+        // is the question that was always being asked - the pen dock was just the
+        // only answer available while the dial could not move. A top-centre dial
+        // takes the left-hand reading, matching its resting dock.
+        _mirrored = centre.X > w / 2;
+        double cx = centre.X, cy = centre.Y;
         _centre = new Point(cx, cy);
 
         // Margin, not Canvas.Left: this layer is a GRID, and a Grid ignores the
@@ -864,11 +1019,30 @@ public sealed class ToolWheel
         // on, and the contrast test that decides whether a pen keeps its own ink
         // was reading the disc while the mark sat on the page.
         //
-        // THE FIX, 17.4 and 17.2 as one thing: give the mark a ground that mimics
-        // the page colour and deliberately does NOT continue the page's texture.
-        // The seat is then a real colour on both sides, and the contrast test is
-        // finally asking about the surface the mark is standing on.
-        var markSeat = dark ? PageTheme.Ground : ringFill;
+        // 17.19 SETTLES IT, AND SUPERSEDES BOTH 17.4 AND 17.18.1.
+        //
+        // 17.4's fix was a plate of PageTheme.Ground - the page's own colour,
+        // findable because the page's grain and grid stop at its edge. True, and
+        // measured passing, but only on a page that HAS grain or a grid: on a
+        // plain black page there is nothing to interrupt and the plate is
+        // invisible by construction. 17.18.1 proposed lifting it a step in L*.
+        // The user replaced both:
+        //
+        //     a pen cell's plate is THAT PEN'S OWN COLOUR
+        //     a tool cell's plate is WHITE OR BLACK, by the page background
+        //     the mark is WHITE OR BLACK, whichever contrasts with the plate
+        //
+        // One rule, both themes, no light/dark branch - and section 0's rule is
+        // now satisfied BY CONSTRUCTION rather than by care: the mark is judged
+        // against the surface it actually sits on, because the plate IS that
+        // surface. There is no longer a seat colour to resolve from a token, so
+        // the whole family of defects behind 17.4 - a contrast test reading the
+        // disc while the mark sat on the page, counters showing the page
+        // through a mark, a pen mark composited at the pen's own alpha - is
+        // unreachable rather than fixed case by case.
+        //
+        // 17.4's OTHER half still holds: the plate is flat and carries no page
+        // texture.
 
         // The hover tint, and why it is no longer ONE expression.
         //
@@ -937,6 +1111,10 @@ public sealed class ToolWheel
             bool live = Available(id);
             bool act = i == active;
             bool hover = _hoverSlot == i && !act;
+            // 11.2 item 11: an EMPTY cell is not a dead cell. It carries a
+            // muted + and answers a tap by opening the same assignment list a
+            // press-hold does, which is the only way a user could ever fill it.
+            bool empty = id.Length == 0;
 
             // The plain sector. The ACTIVE one is not painted here at all - it is
             // redrawn by _pop at 1.19 R, on top of everything.
@@ -946,50 +1124,56 @@ public sealed class ToolWheel
                 : ringFill);
             _sector[i].Opacity = live ? 1 : 0;
 
-            // 17.4: the seat, in the PAGE's own flat colour. Only where the ring
-            // has no fill to seat the mark on - on a light ground the sector is
-            // already opaque and a page-coloured disc there would be a plate the
-            // reference does not have. It follows the mark's own opacity so an
-            // unassigned cell's muted + does not get a full-strength plate, and
-            // it carries no texture: that discontinuity is 17.2's whole trick,
-            // and continuing the grain across it would undo the fix.
-            _seat[i].Fill = new SolidColorBrush(PageTheme.Ground);
-            _seat[i].Opacity = dark && !act ? (live ? 1 : id.Length == 0 ? 0.45 : 0) : 0;
+            // 17.19: the plate. IN BOTH THEMES AND ON EVERY SECTOR, including the
+            // popped one - the pop is the SECTOR's cue and the plate is the
+            // CELL's, they are different elements and both hold.
+            //
+            // Two cells get none. An UNAVAILABLE one (16.3) is already painting
+            // no mark, and a bare coloured button with nothing on it would be
+            // precisely the "live-looking control that silently does nothing"
+            // that section rules out. An EMPTY one keeps 11.2 item 11's bare
+            // muted + on the sector: 17.19 names pen cells and tool cells, and
+            // an empty cell is neither - giving it a full white or black disc
+            // would make an unassigned sector read as an assigned one, which is
+            // the one thing the + exists to prevent.
+            Color? plate = empty || !live ? null : PlateFor(id);
+            _seat[i].Fill = new SolidColorBrush(plate ?? Colors.Transparent);
+            _seat[i].Opacity = plate is null ? 0 : 1;
 
             // §1.1: separators are hairlines in Outline from 0.70 R to 1.00 R,
             // and §7 keeps them when the ring itself has gone.
             _sep[i].Stroke = new SolidColorBrush(outline);
 
-            // §1.3: the mark in the tool's OWN colour (grey for a non-drawing
-            // tool), the size label beneath it, both rotated to follow the ring.
-            // On the active sector both invert to Surface against the OnSurface
-            // fill - that inversion IS the pop-out's other half.
-            var fg = act ? surface : onSurface;
-            // 17.4: the popped sector paints its own opaque seat in OnSurface, so
-            // it needs no plate; every other sector needs one exactly when the
-            // ring has no fill of its own.
-            var seat = act ? onSurface : markSeat;
+            // 17.19: the mark is WHITE OR BLACK, whichever contrasts better with
+            // the plate it is drawn on. §1.3's "in the tool's own colour" and
+            // 17.4's inversion on the popped sector are both gone: the pen's
+            // colour is the PLATE now, and a mark in the same colour on it would
+            // be invisible. Measured, that choice can never do worse than
+            // 4.583:1 for any colour in sRGB - see BestInk - which clears the 3:1
+            // floor for non-text marks with room to spare. The + on a plateless
+            // empty cell keeps OnSurface, because there it really is standing on
+            // the sector and the page, and that is the token keyed to those.
+            var fg = plate is { } pc ? BestInk(pc) : onSurface;
             _mark[i].Children.Clear();
-            var art = SlotArt(id, fg, act, seat);
+            var art = SlotArt(id, fg);
             if (art != null) _mark[i].Children.Add(art);
 
             var pen = PenOf(id);
             _label[i].Text = pen != null ? SizeLabel(pen.Size) : "";
             _label[i].Foreground = new SolidColorBrush(act ? surface : onSurface);
 
-            // 11.2 item 11: an EMPTY cell is not a dead cell. It carries a
-            // muted + and answers a tap by opening the same assignment list a
-            // press-hold does, which is the only way a user could ever fill it.
-            bool empty = id.Length == 0;
             double a = live ? 1 : empty ? 0.45 : 0;
             _mark[i].Opacity = a;
             _label[i].Opacity = live ? 1 : 0;
 
-            // Ride outward with the pop, along the sector's own radius.
+            // Ride outward with the pop, along the sector's own radius. 17.19
+            // adds the plate to the two that already did: it stands under the
+            // mark, so it has to travel with it or the mark steps off it.
             double push = act ? (PopOut - RingOut) / 2 : 0;
             var outward = Polar(SlotMid(i), push);
             _markT[i].X = outward.X; _markT[i].Y = outward.Y;
             _labelT[i].X = outward.X; _labelT[i].Y = outward.Y;
+            _seatT[i].X = outward.X; _seatT[i].Y = outward.Y;
 
             // §1.5: a 45° arc on the disc rim, in the tool's colour, aligned to
             // its sector. Neutral tools paint nothing at all.
@@ -1337,20 +1521,6 @@ public sealed class ToolWheel
         Canvas.SetTop(_shadow, Half - RingOut - 14 + 2);
         _wheel.Children.Add(_shadow);
 
-        // 17.4's seats go in BEFORE the sectors, which is the whole reason they
-        // work: the sector fill is transparent on a dark ground, so the seat
-        // shows through it, and the hover tint - which is painted ON the sector -
-        // composites over the seat instead of being buried under it.
-        for (int i = 0; i < Slots; i++)
-        {
-            var at = Pt(SlotMid(i), MarkR);
-            var s = new Ellipse { Width = SeatSize, Height = SeatSize, IsHitTestVisible = false };
-            Canvas.SetLeft(s, at.X - SeatSize / 2);
-            Canvas.SetTop(s, at.Y - SeatSize / 2);
-            _seat[i] = s;
-            _wheel.Children.Add(s);
-        }
-
         for (int i = 0; i < Slots; i++)
         {
             double mid = SlotMid(i);
@@ -1421,6 +1591,36 @@ public sealed class ToolWheel
         _flash.Opacity = 0;
         _flash.RenderTransform = _flashScale;
         _wheel.Children.Add(_flash);
+
+        // ---- 17.19: THE PLATES, AND WHY THEY MOVED UP THE STACK ----------
+        //
+        // Under 17.4 these went in FIRST, before the sectors, and that was
+        // correct for what they were: a page-coloured patch that only showed on
+        // a DARK ground, where section 7 leaves the ring transparent and the
+        // sector above them paints nothing. The hover tint, painted on the
+        // sector, then composited over the plate instead of being buried.
+        //
+        // 17.19 makes the plate the PEN'S OWN COLOUR, in both themes and with no
+        // light/dark branch - so it now has to show on a LIGHT ground too, where
+        // the sector fill is opaque and would bury it completely. They go in
+        // after the ring, after the popped sector and after its flash, and
+        // before the marks. The one thing that changes with them: a hover no
+        // longer washes over the plate, only over the sector around it, which is
+        // right - a coloured button is not a place to put a tint.
+        for (int i = 0; i < Slots; i++)
+        {
+            var at = Pt(SlotMid(i), MarkR);
+            var s = new Ellipse { Width = SeatSize, Height = SeatSize, IsHitTestVisible = false };
+            Canvas.SetLeft(s, at.X - SeatSize / 2);
+            Canvas.SetTop(s, at.Y - SeatSize / 2);
+            // The plate rides out with the pop exactly as the mark standing on it
+            // does. It did not need to before, because it was hidden on the
+            // active sector; 17.19 paints it there too.
+            _seatT[i] = new TranslateTransform();
+            s.RenderTransform = _seatT[i];
+            _seat[i] = s;
+            _wheel.Children.Add(s);
+        }
 
         // 10.2 item 6. The MARK takes the inner part of the cell and is NEVER
         // rotated - "every mark upright regardless of sector" - so its transform
@@ -1802,8 +2002,9 @@ public sealed class ToolWheel
         int slot = (int)Math.Round(Norm360(b - Sector0) / Span) % Slots;
         if (r <= RingOut + 2) return (Zone.Sector, slot);
         // Beyond the ring only the POPPED sector is there to be pressed; the rest
-        // of that band is empty and belongs to nobody.
-        if (r <= PopOut + 2 && slot == _active) return (Zone.Sector, slot);
+        // of that band is 17.17's GRIP - see the Zone.Grip case in OnPressed for
+        // why the rim is what moves the dial.
+        if (r <= PopOut + 2) return slot == _active ? (Zone.Sector, slot) : (Zone.Grip, -1);
         return (Zone.None, -1);
     }
 
@@ -1879,6 +2080,46 @@ public sealed class ToolWheel
         _hoverSlot = z == Zone.Sector ? idx : -1;
         _hoverZone = z;
 
+        // ---- 17.17: WHAT IS DRAGGED ------------------------------------
+        //
+        // The rim. The band between the ring's outer edge and the popped
+        // radius, everywhere except under the popped sector itself.
+        //
+        // The section names the two candidates it expects and rules both out:
+        // the ring "would fight the ring's own controls" - all ten sectors are
+        // live and one of them is a press away from switching tool - and the hub
+        // "would fight the colour dot". The hub is in fact WORSE than that reads:
+        // its four other quadrants are size, opacity, stability and the undo /
+        // redo pair, and three of those already interpret a DRAG as a scrub, so a
+        // drag begun there would have to be taken away from a gesture that exists.
+        //
+        // The rim is the one part of the dial no control owns. Aim has always
+        // returned nothing for it, OnPressed has always refused to claim it -
+        // "the empty band: never claim it" - and it rings the dial, so it can be
+        // grabbed from whichever side happens to face the middle of the screen.
+        //
+        // It is 18.6 DIP deep (RingOut 98 to PopOut 116.6, plus the 2 DIP of
+        // slop Aim already allows either side), 20.5 in touch mode, and BROKEN
+        // for the 36 degrees the popped sector occupies. That is a small target
+        // and it is worth saying so plainly rather than discovering it - but the
+        // landing is a SNAP, so unlike a free drag it needs no precision at all
+        // once it has started: the grab is the only accurate part of the gesture.
+        //
+        // The shield is deliberately NOT widened to make it bigger. It already
+        // swallows presses inside PopOut, and every DIP added to it is a DIP of
+        // canvas that stops taking ink.
+        if (z == Zone.Grip)
+        {
+            _dragging = true;
+            _dragMoved = false;
+            _dragFrom = _centre;
+            // The card is docked to the dial and does not ride with it, so it
+            // would be left standing where the dial used to be.
+            _popover.Close();
+            e.Handled = true;
+            return;
+        }
+
         if (z == Zone.Sector && pt.Properties.IsRightButtonPressed) { Refresh(); PickForSlot(idx); e.Handled = true; return; }
         if (z == Zone.Sector) { _assignSlot = idx; _assign.Stop(); _assign.Start(); }
 
@@ -1905,6 +2146,26 @@ public sealed class ToolWheel
         if (_pointer != null && e.Pointer.PointerId != _pointer) return;
         var p = e.GetCurrentPoint(_host).Position;
         if (_pressed && _assignSlot >= 0 && Dist(p, _pressPt) > TapSlop) { _assign.Stop(); _assignSlot = -1; }
+
+        // 17.17: the dial follows the finger while the grip is down and lands on
+        // one of the eight when it lifts. It follows FREELY rather than jumping
+        // between the eight as you pass them, because a control that teleports
+        // out from under the pointer cannot be aimed - the snap is the landing,
+        // not the travel. Same TapSlop the rest of this file uses, so a press
+        // that never really moved is not a move.
+        if (_dragging)
+        {
+            if (!_dragMoved && Dist(p, _pressPt) > TapSlop) _dragMoved = true;
+            if (_dragMoved)
+            {
+                // Clamped to the host so the dial can always be seen and grabbed
+                // again; the release re-clamps it properly to a dock.
+                double cx = Math.Clamp(_dragFrom.X + (p.X - _pressPt.X), 0, Math.Max(0, _host.ActualWidth));
+                double cy = Math.Clamp(_dragFrom.Y + (p.Y - _pressPt.Y), 0, Math.Max(0, _host.ActualHeight));
+                PlaceAt(new Point(cx, cy));
+            }
+            return;
+        }
 
         var (z, idx) = Aim(p);
         if (_dragProp is { } pr)
@@ -1936,6 +2197,21 @@ public sealed class ToolWheel
         _pointer = null;
         try { _shield.ReleasePointerCapture(e.Pointer); } catch { }
         e.Handled = true;
+
+        // 17.17: SNAP ONLY. Whatever loose centre the drag left the dial at, it
+        // lands on the nearest of the eight and the choice is written down. A
+        // grip press that never passed the slop is not a move and writes nothing
+        // - the rim carries no tap action of its own, so it simply does nothing,
+        // which is what it did before this section.
+        if (_dragging)
+        {
+            bool moved = _dragMoved;
+            _dragging = false;
+            _dragMoved = false;
+            if (moved) SetAnchor(NearestAnchor(_centre));
+            else Refresh();
+            return;
+        }
 
         if (_dragProp != null)
         {
@@ -1972,6 +2248,11 @@ public sealed class ToolWheel
         if (_pointer != null && e.Pointer.PointerId != _pointer) return;
         _pressed = false;
         _pointer = null;
+        // A LOST grip is a CANCELLED move, not a landing: the dial goes back to
+        // the dock it started from and nothing is written. Losing capture is how
+        // a gesture ends when the window is deactivated or a flyout steals the
+        // pointer, and neither of those is the user choosing a corner.
+        if (_dragging) { _dragging = false; _dragMoved = false; Place(); }
         if (_dragProp != null) { _dragProp = null; _scrubbing = false; SyncPreview(); }
         ClearHover();
     }
@@ -2577,15 +2858,104 @@ public sealed class ToolWheel
     // binds to, so the two surfaces can never drift again.
     // ===================================================================
 
-    /// <summary>§1.3: the stroke silhouette for a sector, in the tool's OWN
-    /// colour, grey for a non-drawing tool. On the active (popped) sector it
-    /// inverts to Surface, because the sector beneath it is OnSurface.</summary>
-    private FrameworkElement? SlotArt(string id, Color fg, bool inverted, Color seat)
+    /// <summary>17.19: WHAT COLOUR A CELL'S PLATE IS.
+    ///
+    /// <para>A pen cell takes that pen's own colour. Everything else - a tool, a
+    /// command, an empty cell - takes white or black by the page background,
+    /// because "a tool has no colour of its own to show".</para>
+    ///
+    /// <para><b>CONTRASTING, not matching.</b> On a dark page the tool plate is
+    /// WHITE and on a light page BLACK. A plate that took the page's own side
+    /// would be the §17.4 defect back again under a new name: a patch the colour
+    /// of the page, on a page with no grid or texture to interrupt, is invisible
+    /// however it was arrived at.</para>
+    ///
+    /// <para>Fully opaque. A pen's own <c>Opacity</c> used to modulate its MARK's
+    /// alpha, and 17.19 names that among the defects it makes unreachable - a
+    /// half-transparent mark is not "white or black". The pen's opacity is
+    /// reported by the disc's own readout, which is where a number belongs.</para>
+    ///
+    /// <para><b>THE PAGE, NOT THE THEME - AND THEY ARE NOT THE SAME THING.</b>
+    /// 17.19 says "according to page background", and the obvious reading of
+    /// that is <see cref="PageTheme.IsDark"/>. It is wrong, and it is wrong in a
+    /// way that has already shipped once: <c>MainWindow.ResolveGround</c> returns
+    /// the page's paper ONLY when <c>ThemeSource == "Page"</c>, and that field
+    /// defaults to <c>"Manual"</c> - so on a default install
+    /// <see cref="PageTheme.Ground"/> is a FIXED shell colour and knows nothing
+    /// about the paper. That is exactly how §17.2's "a background that mimics the
+    /// page colour" came to be measured byte-identical (#0F0E10) on a dark page
+    /// and on Brown Paper. A tool plate resolved that way would be white on a
+    /// pinned-dark shell whatever the paper underneath it actually was.</para>
+    ///
+    /// <para>So this reads <see cref="PaperTextures.Ground"/> off the live page -
+    /// the same helper <c>ResolveGround</c> uses for its own Page branch - and
+    /// judges it with <see cref="PageTheme.Luminance"/>, which is the gamma-correct
+    /// threshold the whole shell decides light from dark on.
+    /// <c>ColorUtil.IsDark</c> averages raw bytes and puts Brown Paper on the
+    /// wrong side, and Brown Paper is one of the three grounds §7 names as dark.
+    /// <c>MainWindow.PushGround</c> refreshes the dial so a paper change repaints
+    /// these even when the shell's own ground did not move.</para></summary>
+    private Color PlateFor(string id) =>
+        PenOf(id) is { } pen ? SafeInk(pen.Color)
+                             : PageIsDark ? Colors.White : Colors.Black;
+
+    /// <summary>Whether the PAGE - the paper the user is drawing on - is dark.
+    /// Deliberately not <see cref="PageTheme.IsDark"/>; see
+    /// <see cref="PlateFor"/> for why those two disagree by default.</summary>
+    private bool PageIsDark
+    {
+        get
+        {
+            try { return PageTheme.Luminance(PaperTextures.Ground(_surface.Page)) < 0.5; }
+            catch { return PageTheme.IsDark; }
+        }
+    }
+
+    private static Color SafeInk(string hex)
+    {
+        try { var c = ColorUtil.Parse(hex); c.A = 255; return c; }
+        catch { return Colors.Gray; }
+    }
+
+    /// <summary>17.19: "the mark on the plate is white or black, whichever
+    /// contrasts better with the plate it is drawn on."
+    ///
+    /// <para>WCAG relative-luminance contrast, not a luminance threshold. The two
+    /// agree almost everywhere, but the ratio is the thing the 3:1 floor for
+    /// non-text marks is stated in, so measuring it here means the choice and the
+    /// acceptance test are computed from one expression. Ties go to black, which
+    /// only happens at the exact crossover.</para>
+    ///
+    /// <para><b>THE FLOOR IS PROVABLE, and 17.19 asked for it.</b> The section
+    /// warns that a mid-luminance pen contrasts poorly with both white and black
+    /// and asks for the worst case with a number. Taking the better of the two is
+    /// worst exactly where the curves cross: <c>1.05/(Y+0.05) = (Y+0.05)/0.05</c>,
+    /// i.e. Y = √0.0525 − 0.05 = 0.17913, where both give <b>4.583:1</b>. That is
+    /// the minimum over the WHOLE sRGB gamut, not just the shipped pens — no
+    /// colour a user can pick does worse — and it clears the 3:1 floor for
+    /// non-text marks by half as much again. The shipped pens run 4.979:1 (Red
+    /// fountain #D32F2F, the nearest to mid) to 18.434:1 (Ink #141413).</para></summary>
+    private static Color BestInk(Color plate) =>
+        Contrast(Colors.White, plate) > Contrast(Colors.Black, plate) ? Colors.White : Colors.Black;
+
+    /// <summary>WCAG 2.x contrast ratio, 1..21. <see cref="PageTheme.Luminance"/>
+    /// is the gamma-correct relative luminance the whole shell decides light from
+    /// dark on, so this cannot disagree with <c>IsDark</c>.</summary>
+    private static double Contrast(Color a, Color b)
+    {
+        double la = PageTheme.Luminance(a), lb = PageTheme.Luminance(b);
+        return (Math.Max(la, lb) + 0.05) / (Math.Min(la, lb) + 0.05);
+    }
+
+    /// <summary>§1.3's stroke silhouette for a sector, in 17.19's white-or-black
+    /// rather than "the tool's own colour": the tool's own colour is the PLATE
+    /// now, and a mark in it would be a hole.</summary>
+    private FrameworkElement? SlotArt(string id, Color fg)
     {
         // 11.2 item 11's unassigned cell.
         if (id.Length == 0)
             return Icons.Mark(Icons.Plus, fg, MarkBox * 0.62, stroked: true, thickness: 2.2);
-        if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg, inverted, seat);
+        if (PenOf(id) is { } pen) return PenStrokeMark(pen, fg);
         if (id.StartsWith(KindTool, StringComparison.Ordinal))
             return Icons.Mark(Icons.Tool(id[KindTool.Length..]), fg, MarkBox);
         if (id.StartsWith(KindCmd, StringComparison.Ordinal)) return CmdArt(id[KindCmd.Length..], fg, MarkBox);
@@ -2594,33 +2964,19 @@ public sealed class ToolWheel
 
     /// <summary>A pen sector shows THE STROKE THAT PEN LEAVES - a hand-authored
     /// silhouette of its mark (tapered for a nib, chisel for a marker, grainy for
-    /// a pencil, even and round-ended for a ballpoint), painted in the pen's own
-    /// colour. Not the pen-body chip, and not a live render.</summary>
-    private static FrameworkElement? PenStrokeMark(PenPreset p, Color fg, bool inverted, Color seat)
+    /// a pencil, even and round-ended for a ballpoint). Not the pen-body chip,
+    /// and not a live render.
+    ///
+    /// <para>17.19: painted in <paramref name="fg"/>, full stop. There is no
+    /// contrast test left to get wrong here - the caller resolved white or black
+    /// against the plate this mark is standing on, and the plate is the pen's own
+    /// colour, so the old "keep the ink unless it collapses into the seat" branch
+    /// would collapse on every single cell.</para></summary>
+    private static FrameworkElement? PenStrokeMark(PenPreset p, Color fg)
     {
-        try
-        {
-            var ink = ColorUtil.Parse(p.Color);
-            // On the popped sector the seat is OnSurface, so the pen's own colour
-            // would frequently be invisible; there the mark inverts wholesale.
-            // Off it, only a genuine contrast collapse forces the fallback.
-            //
-            // 17.4: THE SEAT IS PASSED IN NOW. It used to be read off
-            // PageTheme.Surface - the inner disc's colour - which is not what a
-            // RING mark sits on in either theme, and on a dark ground is not even
-            // close: the ring has no fill there, so the mark sits on the page.
-            // A pen whose ink was dark but not quite as dark as the disc failed
-            // the test by a hair, kept its own ink, and vanished into a black
-            // page. Section 0 names this: a colour resolved from a token that
-            // does not describe the surface in question.
-            var paint = inverted || Math.Abs(Lum(ink) - Lum(seat)) < 0.14 ? fg : ink;
-            paint.A = (byte)Math.Clamp(255 * Math.Clamp(p.Opacity, 0.2f, 1f), 60, 255);
-            return Icons.Mark(Icons.PenStroke(p.Pen), paint, MarkBox);
-        }
+        try { return Icons.Mark(Icons.PenStroke(p.Pen), fg, MarkBox); }
         catch { return null; }
     }
-
-    private static double Lum(Color c) => (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0;
 
     private FrameworkElement? PenChip(PenPreset p, double size)
     {

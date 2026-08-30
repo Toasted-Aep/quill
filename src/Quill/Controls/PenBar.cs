@@ -274,9 +274,17 @@ public sealed class PenBar
         Apply();
     }
 
+    /// <summary>17.17: this bar is one of TWO implementations of the Bar surface,
+    /// and <see cref="ToolSurfaceService.LegacyBar"/> says which one is current.
+    /// Consulted here rather than only at MainWindow's call site for the same
+    /// reason the surface itself is: <see cref="Apply"/> runs from four vetoes
+    /// and two events that MainWindow does not see, and a bar that only learned
+    /// the answer through <c>_want</c> would come back up behind the old row the
+    /// next time one of them fired.</summary>
     private bool Wanted =>
         _want
         && ToolSurfaceService.Current == ToolSurface.Bar
+        && !ToolSurfaceService.LegacyBar
         && _blocks.Count == 0
         && !(IsBlocked?.Invoke() ?? false);
 
