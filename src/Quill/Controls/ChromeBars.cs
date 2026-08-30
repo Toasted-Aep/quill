@@ -111,8 +111,10 @@ public sealed class ChromeBars
         public const double ReadoutWidth = 52;
 
         // ---- §17.2, the corner buttons' ground ------------------------
-        /// <summary>Diameter of a corner button's page-coloured plate, INSIDE
-        /// its measured <see cref="IconPitch"/> hit target.
+        /// <summary>Size of a corner button's page-coloured plate, INSIDE its
+        /// measured <see cref="IconPitch"/> hit target. A diameter when §17.2
+        /// drew it as a circle; §17.18.2 makes it the SIDE of a square, and the
+        /// number is unchanged so the row's spacing is too.
         ///
         /// <para>Smaller than the target on purpose. The row's spacing is 0 and
         /// the targets are 42 wide, so a plate drawn at the full target size
@@ -122,9 +124,32 @@ public sealed class ChromeBars
         /// so each button reads as its own soft patch. THE HIT TARGET IS
         /// UNCHANGED: 42 is measured, and only what is painted moves.</para></summary>
         public const double GroundDiameter = 34;
+
+        /// <summary>§17.18.2: THE CORNER FRAMES ARE SQUARES NOW, AND THIS IS THE
+        /// RADIUS — <b>4 DIP</b> on a 34 DIP box, 11.8% of the side.
+        ///
+        /// <para>The section asks for the number to be stated rather than
+        /// discovered, because the recent rulings have gone both ways: §17.16a
+        /// took the bottom bar's chip to a hard 0, and §17.5's panel corner mark
+        /// is a square with exactly one rounded corner — but §17.2's own family
+        /// here still contains a stadium.</para>
+        ///
+        /// <para>4 is chosen off <see cref="ProBadge"/>, which is the nearest
+        /// thing in this file: a small free-standing plate on the page, at
+        /// <c>CornerRadius(4)</c>. The bottom bar's 0 is a FILL INSIDE a bar,
+        /// where any radius leaves wedges of the bar's own colour at the corners
+        /// — an argument that does not apply to a patch floating on the page. At
+        /// 4 the plate reads square: the corners are taken off, not rounded.</para>
+        ///
+        /// <para>One line to change if the user wants a hard 0.</para></summary>
+        public const double GroundCorner = 4;
+
         /// <summary>§17.2: the zoom and tilt readouts take "a rounded-end capsule
         /// sized to their text". Same height as the circles' diameter, so the two
-        /// shapes read as one family; the width is whatever the text needs.</summary>
+        /// shapes read as one family; the width is whatever the text needs.
+        ///
+        /// <para>§17.18.2 leaves these alone on purpose: "they are sized to their
+        /// text, and a square cannot be."</para></summary>
         public const double StadiumH = GroundDiameter, StadiumPadX = 10;
 
         // ---- glass mode only (ignored while GlassBars is false) ----
@@ -142,6 +167,21 @@ public sealed class ChromeBars
     /// colour as the paper, and the only thing distinguishing it is that the
     /// grain and the grid stop at its edge. Raising it even a step would trade
     /// the effect §17.2 describes for an ordinary button.</para>
+    ///
+    /// <para><b>A KNOWN GAP, LEFT AS THE REFERENCE LEAVES IT.</b> §17.18.1
+    /// observed that this reasoning has an unstated premise — that there IS grid
+    /// or texture to interrupt — and that on a plain black or plain white page
+    /// there is neither, so a frame the exact colour of the page is invisible by
+    /// construction. §17.18.2's closing line applied that to these frames. But
+    /// §17.19 then SUPERSEDED §17.18.1 outright, and its replacement rule is
+    /// about the dial's pen and tool cells: a plate carrying the pen's own
+    /// colour, which a zoom or a hamburger button has no equivalent of. So the
+    /// observation stands and the rule that would have fixed it is withdrawn.
+    /// This stays at <see cref="PageTheme.Ground"/> rather than inventing a
+    /// treatment no section asks for — measured, a 6 L* lift would have put the
+    /// frame at contrast 1.122 (a pinned dark #0F0E10, the tightest of the
+    /// shipped grounds) to 1.227 (Blueprint, Brown Paper), which is the one line
+    /// to change if the user wants it.</para>
     ///
     /// <para>The discontinuity needs no code. The grid and the paper texture are
     /// painted by <see cref="InkSurface"/> into the Win2D canvas UNDERNEATH these
@@ -606,12 +646,14 @@ public sealed class ChromeBars
             Background = new SolidColorBrush(Colors.Transparent),
         };
         // §17.2's plate, added FIRST so it sits behind the mark and the
-        // underline. A circle: "every other corner button stays a circle".
+        // underline. §17.18.2 makes it a SQUARE - "the circles become squares" -
+        // at Metrics.GroundCorner, which is where that decision is written down.
+        // The zoom and tilt readouts are not built here and keep their stadium.
         cell.Children.Add(new Border
         {
             Width = Metrics.GroundDiameter,
             Height = Metrics.GroundDiameter,
-            CornerRadius = new CornerRadius(Metrics.GroundDiameter / 2),
+            CornerRadius = new CornerRadius(Metrics.GroundCorner),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             Background = GroundBrush(),
@@ -637,6 +679,13 @@ public sealed class ChromeBars
         return cell;
     }
 
+    /// <summary>The 42 DIP hit target the plate sits inside. Its own background
+    /// is transparent, but WinUI's default template still paints a pointer-over
+    /// and pressed wash CLIPPED TO THIS RADIUS — so it was drawing a 42 DIP
+    /// circle behind §17.2's plate. §17.18.2 squares the plate, and leaving this
+    /// at a circle would put a round highlight around a square frame, which is
+    /// the shape mismatch the section is removing. Same
+    /// <see cref="Metrics.GroundCorner"/>, for the same reason.</summary>
     private static Button Bare(FrameworkElement content, string tip)
     {
         var b = new Button
@@ -645,7 +694,7 @@ public sealed class ChromeBars
             Width = Metrics.IconPitch,
             Height = Metrics.IconPitch,
             Padding = new Thickness(0),
-            CornerRadius = new CornerRadius(Metrics.IconPitch / 2),
+            CornerRadius = new CornerRadius(Metrics.GroundCorner),
             Background = new SolidColorBrush(Colors.Transparent),
             BorderThickness = new Thickness(0),
             VerticalAlignment = VerticalAlignment.Center,

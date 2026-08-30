@@ -49,6 +49,11 @@ public static class ToolSurfaceService
     private static ToolSurface _current = ToolSurface.Wheel;
     private static bool _loaded;
 
+    private static Func<bool>? _loadLegacy;
+    private static Action<bool>? _saveLegacy;
+    private static bool _legacy = true;
+    private static bool _legacyLoaded;
+
     /// <summary>The tool surface that should be on screen right now.</summary>
     public static ToolSurface Current
     {
@@ -71,6 +76,39 @@ public static class ToolSurfaceService
     /// several call sites that only care which of the two it is.</summary>
     public static bool IsWheel => Current == ToolSurface.Wheel;
 
+    /// <summary>WHICH IMPLEMENTATION <see cref="ToolSurface.Bar"/> MEANS
+    /// (CONCEPTS-REF-2026-08-07 §17.17).
+    ///
+    /// <para>True - the default, and what §10.3 item 10 ruled - means Bar is the
+    /// ORIGINAL horizontal pen row in <c>MainWindow.xaml</c> (<c>PenRow</c>).
+    /// False means Bar is the section 2 vertical palette,
+    /// <c>Controls/PenBar.cs</c>.</para>
+    ///
+    /// <para><b>Deliberately not a third enum value.</b> §17.17: "a third enum
+    /// value would multiply every place that already asks which surface is up".
+    /// Every one of those sites keeps asking a two-valued question; only the two
+    /// implementations of Bar consult this, and they consult it as a veto in
+    /// their own <c>Wanted</c> - which is the same construction that stops the
+    /// two SURFACES from ever both being on screen.</para>
+    ///
+    /// <para>The persisted field is <c>Library.ConceptsBarPalette</c>, whose
+    /// sense is the inverse of this one. It is stored that way round because it
+    /// already exists and already has that meaning in shipped libraries, and
+    /// renaming a settings field to make a new property read nicer is how a
+    /// user's saved choice silently reverts to a default.</para></summary>
+    public static bool LegacyBar
+    {
+        get
+        {
+            if (!_legacyLoaded && _loadLegacy != null)
+            {
+                _legacyLoaded = true;
+                _legacy = _loadLegacy();
+            }
+            return _legacy;
+        }
+    }
+
     /// <summary>Raised after <see cref="Current"/> actually changes. Carries the
     /// new surface so a subscriber never has to read the property back.</summary>
     public static event Action<ToolSurface>? Changed;
@@ -86,6 +124,44 @@ public static class ToolSurfaceService
         var was = _current;
         var now = Current;                 // forces the read-through above
         if (was != now) Changed?.Invoke(now);
+    }
+
+    /// <summary>Point <see cref="LegacyBar"/> at the persisted setting. Same
+    /// contract as <see cref="Configure"/>: the getter and the setter close over
+    /// the library field, and the read-through means a surface constructed before
+    /// this call still lands on the persisted choice.
+    ///
+    /// <para><paramref name="load"/> and <paramref name="save"/> both speak in
+    /// terms of LEGACY, not of the stored field's inverted sense - the inversion
+    /// lives at the one call site in MainWindow, so nothing else has to remember
+    /// which way round <c>ConceptsBarPalette</c> reads.</para></summary>
+    public static void ConfigureBarStyle(Func<bool> load, Action<bool> save)
+    {
+        _loadLegacy = load;
+        _saveLegacy = save;
+        _legacyLoaded = false;
+        bool was = _legacy;
+        bool now = LegacyBar;              // forces the read-through above
+        if (was != now) Changed?.Invoke(Current);
+    }
+
+    /// <summary>Choose which implementation <see cref="ToolSurface.Bar"/> means.
+    ///
+    /// <para>It raises <see cref="Changed"/> rather than an event of its own,
+    /// and that is not laziness: every subscriber to <c>Changed</c> is asking
+    /// "what is on screen now, and does my surface belong there" - which is
+    /// exactly the question a change of Bar's implementation re-opens. Giving it
+    /// a second event would mean every one of them had to subscribe twice to
+    /// stay correct, and the one that forgot would be the live-switch bug §17.17
+    /// and §16.8 item 4 both rule out.</para></summary>
+    public static void SetLegacyBar(bool legacy)
+    {
+        _ = LegacyBar;                     // ensure the persisted value is in
+        if (_legacy == legacy) return;
+        _legacy = legacy;
+        _legacyLoaded = true;
+        try { _saveLegacy?.Invoke(legacy); } catch { }
+        Changed?.Invoke(Current);
     }
 
     /// <summary>Choose a surface. Persists it and tells everyone. A no-op when

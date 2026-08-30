@@ -674,7 +674,23 @@ public class Library
     // (Controls/PenBar.cs) is still in the tree and still wired to the same
     // switch - it is simply one flag further in, so it can never be what a user
     // sees by default. Turning this on with Bar selected brings it back.
+    //
+    // 17.17 gives the user that switch, in Settings > Tool Setup, through
+    // Services.ToolSurfaceService.LegacyBar - which is the INVERSE of this
+    // field. The field keeps its name and its sense so that a library.json
+    // written by any earlier build still means what it meant.
     public bool ConceptsBarPalette { get; set; }
+    // 17.17: which of eight docks the radial dial sits at - the four corners and
+    // the midpoint of each side. Persisted like the surface choice itself.
+    //
+    // EMPTY MEANS "the pre-17.17 dock", which is the top-left corner mirrored to
+    // the top-right when PenDock is Right. Written only once the user actually
+    // drags the dial, so an untouched library keeps the exact placement it had
+    // and a user who has never moved the dial still gets it on their pen hand's
+    // side. Tolerant of an unrecognised value the same way ToolSurface is: an
+    // enum name Quill does not know degrades to that default rather than making
+    // the whole library.json undeserializable.
+    public string DialAnchor { get; set; } = "";
     // Which ten tools occupy the dial's outer ring, as "pen:<guid>",
     // "tool:<tag>", "cmd:<name>" or "" for an empty slot. EMPTY means "use the
     // defaults": the list is only written once the user actually customises the
