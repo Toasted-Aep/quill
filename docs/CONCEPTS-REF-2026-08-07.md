@@ -4809,6 +4809,72 @@ Things to settle and report rather than assume:
   bar. Say what happens there — §16.8 already has one surface with no pointer
   route to undo, and a second would be worse.
 
+#### 17.17a What the old row has lost — verified in source, 2026-08-26
+
+The switch shipped, and this is the answer to "report what is missing rather
+than quietly wiring it up". Every item was read out of the source, not inferred.
+
+- **No undo and no redo.** `PenStack`'s whole subtree is the grip, the eraser
+  chip, one two-tone chip per pen preset, the colour dot, `+`, a separator and
+  the collapse chevron. This is what §16.8's stranding turned on, and it is now
+  fixed from the other end: with the legacy row up the **top bar keeps its
+  pair** (`surfaceCarriesUndo = IsWheel || !LegacyBar`).
+- **No §16.3 capability greying.** `BuildPenStrip` never touches
+  `SelectionState`, so with an attachment selected the row's pens look exactly
+  as live as they do on an empty page.
+- **No §11.25 assignment route.** Right-click on a chip opens
+  `CreatePresetFlyout` — *edit this pen*, not *retarget this cell*. The Brushes
+  library's targeted assignment (§11.24) has nothing to aim at, because the row
+  has no addressable slots.
+- **§17.14 is not applicable rather than violated.** The row carries no size,
+  opacity or smoothness readouts at all, so there is no disabled readout to show
+  a dash in.
+
+**THE ONE THAT IS A REAL HOLE: the legacy row plus fullscreen.**
+
+The row has **no tool cells of any kind**. Eraser, Select, Text, FreeSpace,
+Fill, Eyedropper, Ruler and Mix exist only as dial sectors (`ToolWheel.ToolKinds`),
+and Mouse, Pan and Rotate only in the Brushes library's Tools row. Windowed this
+costs nothing — the legacy `TopBar` is still on screen under the Concepts shell,
+and the Brushes library still opens — so the tools are reachable, just not from
+the row.
+
+**In fullscreen they are not.** `ApplyFullscreenChrome` computes
+`fold = fs && _chromeBars?.IsVisible == true` and fades `TopBar` out, on the
+reasoning that with ChromeBars up the caption row is redundant. That reasoning
+was written when the surface was the dial, which carries the tools itself. With
+the legacy row it leaves the user with **pens, one hard-wired eraser, and no
+pointer route to any other tool** — and because the legacy row is the DEFAULT
+meaning of `Bar`, this combination is two clicks away, not a corner case.
+
+*Not built — the user rules on it.* The cheapest fix that fits the existing
+shape is to make `fold` conditional on the surface carrying tools, the same way
+§16.8's undo pair now is: fold the legacy top bar in fullscreen under Wheel and
+under PenBar, keep it under the legacy row. That is one expression, in the file
+that already asks the question, and it reuses `ToolSurfaceService.LegacyBar`
+rather than adding a second flag. The alternative — giving the old row tool
+cells — is a rebuild of the row, and "old" is the point of the setting.
+
+#### 17.17b The bottom docks and the HSL/RGB arc ladder — open
+
+Making the dial movable created three docks that never existed (the bottom
+corners and bottom-centre), and one piece of hub chrome does not fit two of
+them. The COPIC face is fine everywhere: the plate fan — COPIC, HSL and RGB
+plates, the eyedropper, the star and the puck, all inside 209 DIP — clears all
+eight docks, tightest at the bottom corners with **25.7 DIP** to spare.
+
+The **HSL and RGB faces' arc ladder** does not. Its outer arc sits at ~400 DIP,
+and a dial docked 677 DIP down a 900 DIP window has no 400 DIP beneath it, so
+the low end of the ladder overruns the bottom edge by **68.3 DIP** at
+**BottomLeft and BottomRight**. This is radial, not rotational: no roll fixes
+it. §17.17's roll-follows-the-dock fix cured the *top-right* ladder (it ran
+108.9 DIP off the top) and, because the roll mirrors, moved the bottom-corner
+overrun from bottom-left alone onto both bottom corners.
+
+*Not built.* The fix is a decision the user should make: bias the ladder away
+from the nearest window edge rather than merely mirroring it, shorten it at the
+bottom docks, or accept that the two bottom corners are COPIC-only.
+
 
 ### 17.18 The dial's plates vanish on a black page, and the corner frames go square
 
