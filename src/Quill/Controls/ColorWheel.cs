@@ -502,6 +502,75 @@ public sealed class ColorWheel : UserControl
     // Shared by the draw pass and the hit test, so a tap cannot resolve against
     // the unrolled position of an arc that is drawn rolled.
     private const float ArcRoll = 0.26f;
+
+    // ---- 17.19: the ladder is FITTED to the room the dock leaves ----------
+    //
+    // 17.17b's finding, and the user's ruling on it: at the two bottom docks
+    // the dial sits 222.6 DIP off the bottom edge and the ladder wants far more
+    // than that, so the low end of it - the value box hung outside the outer
+    // arc - lands off screen. It is a RADIAL overrun, so the answer is a
+    // radial one: pull the ladder in until it fits.
+    //
+    // DERIVED, NOT A SECOND SET OF NUMBERS. The ruling is explicit that a
+    // second hardcoded radius would drift from the first the moment either was
+    // retuned - this codebase has that failure three times over. So there is
+    // one ladder, laid out from one table of reference units, and the fit is
+    // two SCALES on that table solved from the room. At every dock with room
+    // to spare both scales are exactly 1 and the arithmetic is bit-for-bit the
+    // line it replaces.
+    //
+    // THE TABLE. One reference unit is _ui * Elem DIP. The radial budget past
+    // the hole splits in two, and the split is the whole point:
+    //
+    //     ELEMENT  arc half-width           9   (x2 - the HSL face has 2 arcs)
+    //     ELEMENT  knob proud of the arc  4.5
+    //     ELEMENT  value box            62 x 30
+    //     GAP      hole -> inner arc       40
+    //     GAP      inner arc -> outer      72
+    //     GAP      arc -> value box        11
+    //
+    //     extent past the hole = u * (42*el + 123*gap)
+    //
+    // Elements carry information - a knob you can hit, a number you can read.
+    // Gaps carry none. So the AIR IS SPENT FIRST and the elements only give
+    // when the air is gone, which is what keeps the 1440x900 bottom docks at
+    // el 0.818 rather than the 0.484 a uniform squeeze would have taken.
+    private const float LadElRef = 42f;
+    private const float LadGapRef = 123f;
+    // 11.15 item 6's invariant, solved rather than assumed: a value box hung
+    // outside the inner arc must still clear the outer arc's inner edge.
+    //     inner arc -> box outer edge   = 39*el + 11*gap
+    //     inner arc -> outer arc inner  =  9*el + 72*gap
+    // so 61*gap >= 30*el. Scale-invariant, which is why the second regime can
+    // shrink both scales together and keep every clearance inside the ladder
+    // exactly as drawn.
+    private const float LadGapMin = 30f / 61f;
+    // What one unit of element scale costs in extent once the air is at its
+    // floor - the slope the second regime solves against.
+    private const float LadSpanRef = LadElRef + LadGapRef * LadGapMin;
+    // Half the value box, in the same reference units: 30 tall, 62 wide. The
+    // box is axis-aligned and always reaches further than the knob (39 element
+    // units past its arc against the knob's 13.5, on every bearing), so it is
+    // the only element the fit has to check.
+    private const float LadBoxHalfH = 15f, LadBoxHalfW = 31f;
+    // The floor on the element scale, taken from the floor this class ALREADY
+    // sets for the palette's own code text - Math.Clamp(_band * 0.5f, 7f, 14f)
+    // - rather than invented here. The bubble is 15 reference units, so
+    // holding it at 7 is el >= 7 / (15 * _ui). Below that the number in the box
+    // is the smear 11.20 item 1 named, and a ladder you cannot read is worse
+    // than a ladder whose last 14 DIP is off screen: the fit stops there and
+    // the residual is reported rather than absorbed.
+    private const float LadTypeFloor = 7f, LadBubbleRef = 15f;
+    // 1 when the ladder is laid out as authored. Read by every radius, every
+    // element size and the hit test, so the drawn ladder and the tappable one
+    // can never disagree about which of them was fitted.
+    private float _ladderEl = 1f, _ladderGap = 1f;
+    // Reused across frames. This runs inside the draw pass and the file's own
+    // rule for that is no per-frame allocation.
+    private readonly float[] _fitCoef = new float[4];
+    private readonly float[] _fitSlack = new float[4];
+    private static readonly float[] FitHalfRef =
+        { LadBoxHalfH, LadBoxHalfH, LadBoxHalfW, LadBoxHalfW };
     // The measured size of each face's word, so 11.16's chip can be snug on it
     // ("horizontal padding roughly double the vertical") instead of a fixed box
     // with a different margin round every word. Re-measured only when the type
@@ -979,7 +1048,8 @@ public sealed class ColorWheel : UserControl
         // 11.12 item 1: "the face labels are far too small." 11 -> 18.
         // 11.15 item 3 takes 20% back off that, against a bold face.
         _labelFmt.FontSize = 18f * Elem * _ui;
-        _bubbleFmt.FontSize = 15f * Elem * _ui;
+        // _bubbleFmt is set with the ladder it belongs to, below - 17.19 gives
+        // it an element scale and two assignments would be two answers.
         // 11.12: the plates are 42 DIP tall now against 26, so they reach
         // inward to where the recents row used to sit and the first chip landed
         // ON the HSL plate. The row moves in; the two bands no longer meet.
@@ -1016,10 +1086,23 @@ public sealed class ColorWheel : UserControl
         // box hung outside one arc still clears the next arc's inner edge by
         // more than its own height. Nothing is measured off the tiers, so the
         // HSL and RGB faces no longer inherit the COPIC face's band structure.
-        _arcW = 9f * _ui * Elem;
-        _arcKnob = _arcW + 4.5f * _ui * Elem;
-        float pitch = _arcW * 2f + 72f * _ui * Elem;
-        float arc0 = _r1In + 40f * _ui * Elem;
+        //
+        // 17.19: the ladder's angular span is settled BEFORE its radii now,
+        // because the fit below needs to know which bearings the fan occupies
+        // before it can say how much room the window leaves along them. The
+        // two lines are the ones that were below; nothing about them changed.
+        float arcRoll = ArcRoll * rollSign;
+        float top = _base + arcRoll + 0.86f, bot = _base + arcRoll - 0.86f;
+        FitLadder(w, h, bot, top);
+        float lu = _ui * Elem;
+        _arcW = 9f * lu * _ladderEl;
+        _arcKnob = _arcW + 4.5f * lu * _ladderEl;
+        float pitch = _arcW * 2f + 72f * lu * _ladderGap;
+        float arc0 = _r1In + 40f * lu * _ladderGap;
+        // 11.15 item 3 / 11.20 item 4 set the bubble's size; 17.19's element
+        // scale is the only thing that moves it off that, and it moves the
+        // DRAWN box and the live field together because both read it here.
+        _bubbleFmt.FontSize = LadBubbleRef * Elem * _ui * _ladderEl;
         // 11.20 items 7 and 8, superseding 11.15 item 6's one-arc-per-channel
         // ladder. RGB is "three dials on a SINGLE arc, ordered anticlockwise:
         // red, green, blue"; HSL is "two arcs - the first carries the hue
@@ -1036,21 +1119,18 @@ public sealed class ColorWheel : UserControl
         // this ladder are one piece of hub chrome. Rolling them opposite ways on
         // the right-hand docks would be visibly incoherent whatever it bought.
         //
-        // BE CLEAR ABOUT WHAT THIS DOES AND DOES NOT FIX. It does fix the ladder
-        // at the top-right dock, which ran 108.9 DIP off the TOP edge. It does
-        // not fix the ladder at the two BOTTOM corners, and it moves that defect
-        // from bottom-left to both of them: this arc sits at ~400 DIP radius,
-        // and a dial docked 677 DIP down a 900 DIP window simply has no 400 DIP
-        // of room beneath it, so the low end of the ladder overruns the bottom
-        // edge by 68.3 DIP whichever way the fan is rolled. That is a RADIAL
-        // problem and no rotation solves it; the fan itself (plates, eyedropper,
-        // star and puck, all inside 209 DIP) clears every one of the eight docks
-        // with 25.7 DIP to spare at worst. Left as found and reported rather than
-        // patched, because the fix is a decision - bias the ladder away from the
-        // nearest edge rather than merely mirroring it, or shorten it - and the
-        // bottom docks are new in 17.17, so the user has not seen this yet.
-        float arcRoll = ArcRoll * rollSign;
-        float top = _base + arcRoll + 0.86f, bot = _base + arcRoll - 0.86f;
+        // WHAT THIS DOES AND DOES NOT FIX. It fixes the ladder at the top-right
+        // dock, which ran 108.9 DIP off the TOP edge. It does NOT reach the two
+        // BOTTOM corners, and it moved that defect from bottom-left onto both of
+        // them: the overrun there is RADIAL - the dial sits 222.6 DIP off the
+        // bottom edge and the ladder reaches further than that down the fan's
+        // low end - so no rotation of the fan is the answer to it. 17.19's
+        // FitLadder is, and it runs above: the roll is unchanged and the RADII
+        // give instead. The fan itself (plates, eyedropper, star and puck, all
+        // inside 209 DIP) clears every one of the eight docks with 25.7 DIP to
+        // spare at worst and is not touched by either.
+        //
+        // arcRoll, top and bot now live ABOVE, with the radii - see 17.19.
         if (_mode == ColorWheelMode.Hsl)
         {
             _arcCount = 2;
@@ -1100,6 +1180,8 @@ public sealed class ColorWheel : UserControl
                     $"spine={(_r2Out - _r2In):F2} gapBand={(_rOutBase - _r2Out):F2} " +
                     $"label={_labelFmt.FontSize:F2} bubble={_bubbleFmt.FontSize:F2} " +
                     $"arcs={_arcCount} arcR={_arcR[0]:F1},{_arcR[1]:F1} arcW={_arcW:F2} " +
+                    $"ladEl={_ladderEl:F4} ladGap={_ladderGap:F4} " +
+                    $"knob={_arcKnob:F2} box={BoxW:F2}x{BoxH:F2} fieldR={(_arcR[1] + _arcW + 11f * _ui * Elem * _ladderGap + BoxH * 0.5f):F2} " +
                     $"drop={44f * _ui * Elem:F1} puck={20f * _ui * Elem:F1} " +
                     $"surface={SurfaceScale:F2} elem={Elem:F3} codeInkTop={_codeInkTop:F2}");
             }
@@ -1162,6 +1244,83 @@ public sealed class ColorWheel : UserControl
     }
 
     private Vector2 At(float r, float a) => _c + new Vector2(r * MathF.Cos(a), r * MathF.Sin(a));
+
+    /// <summary>17.19. Solves the two ladder scales against the room the dock
+    /// actually leaves, and leaves both at 1 when the ladder already fits.
+    ///
+    /// <para>The ladder's furthest element is the value box: it reaches 39
+    /// element units past its arc against the knob's 13.5, on every bearing,
+    /// so if the box is inside the window everything else is. The box is
+    /// axis-aligned, so its own half-height bounds it against the top and
+    /// bottom edges and its half-width against the left and right ones,
+    /// whatever bearing the knob is at.</para>
+    ///
+    /// <para>Four inequalities, one per edge, each of the form
+    /// <c>centre + Rbox*coef + half &lt;= limit</c>, where coef is the extreme of
+    /// sin or cos over the bearings the fan occupies. An edge the fan never
+    /// points at has a non-positive coef and does not bind. Solved twice: once
+    /// for the gap scale with the elements held at full size, and - only if
+    /// the air runs out - once for both together at the gap floor.</para></summary>
+    private void FitLadder(float w, float h, float bot, float top)
+    {
+        _ladderEl = 1f;
+        _ladderGap = 1f;
+        float u = _ui * Elem;
+        if (u <= 0.001f) return;
+
+        // The extremes of sin and cos over [bot, top]. The endpoints are not
+        // enough on their own: a quarter turn INSIDE the range takes one of
+        // them to +/-1 there, and at the side docks the range does contain one.
+        float lo = MathF.Min(bot, top), hi = MathF.Max(bot, top);
+        float sLo = MathF.Sin(lo), sHi = MathF.Sin(hi);
+        float cLo = MathF.Cos(lo), cHi = MathF.Cos(hi);
+        float sMin = MathF.Min(sLo, sHi), sMax = MathF.Max(sLo, sHi);
+        float cMin = MathF.Min(cLo, cHi), cMax = MathF.Max(cLo, cHi);
+        const float Quarter = MathF.PI * 0.5f;
+        for (float q = MathF.Ceiling(lo / Quarter) * Quarter; q <= hi; q += Quarter)
+        {
+            float s = MathF.Sin(q), c = MathF.Cos(q);
+            if (s < sMin) sMin = s;
+            if (s > sMax) sMax = s;
+            if (c < cMin) cMin = c;
+            if (c > cMax) cMax = c;
+        }
+        // Bottom, top, right, left - matching FitHalfRef.
+        _fitCoef[0] = sMax; _fitSlack[0] = h - _c.Y;
+        _fitCoef[1] = -sMin; _fitSlack[1] = _c.Y;
+        _fitCoef[2] = cMax; _fitSlack[2] = w - _c.X;
+        _fitCoef[3] = -cMin; _fitSlack[3] = _c.X;
+
+        // Regime A. Every element at full size; the air gives. This is the
+        // whole fix at a dock that is only slightly short, and it costs
+        // nothing that can be read or hit.
+        float gap = 1f;
+        for (int e = 0; e < 4; e++)
+        {
+            float k = _fitCoef[e];
+            if (k <= 0.000001f) continue;
+            float rBox = (_fitSlack[e] - FitHalfRef[e] * u - _r1In * k) / k;
+            gap = MathF.Min(gap, (rBox / u - LadElRef) / LadGapRef);
+        }
+        if (gap >= 1f) return;                        // fits as authored
+        if (gap >= LadGapMin) { _ladderGap = gap; return; }
+
+        // Regime B. The air is at the floor 11.15 item 6 sets and the ladder is
+        // still long, so the elements give too - both scales together, which
+        // is why every clearance INSIDE the ladder survives untouched and only
+        // its overall size changes.
+        float el = 1f;
+        for (int e = 0; e < 4; e++)
+        {
+            float k = _fitCoef[e];
+            if (k <= 0.000001f) continue;
+            float den = u * (LadSpanRef * k + FitHalfRef[e]);
+            if (den <= 0.000001f) continue;
+            el = MathF.Min(el, (_fitSlack[e] - _r1In * k) / den);
+        }
+        _ladderEl = Math.Clamp(el, LadTypeFloor / (LadBubbleRef * _ui), 1f);
+        _ladderGap = LadGapMin * _ladderEl;
+    }
 
     /// Records where one channel lives: which arc, and the two angles its
     /// value 0 and value 1 sit at (11.20 items 7-8).
@@ -1647,8 +1806,11 @@ public sealed class ColorWheel : UserControl
     // on the reference, the one piece of this control the doc gives an explicit
     // colour to, and it sits ON a saturated gradient arc rather than on the
     // page, so it takes its contrast from the arc and not from the paper.
-    private float BoxW => 62f * _ui * Elem;
-    private float BoxH => 30f * _ui * Elem;
+    /// 17.19: the box is an ELEMENT - it carries a number the user reads and a
+    /// field they type into - so it takes the element scale, not the gap scale,
+    /// and at every dock with room to spare that scale is exactly 1.
+    private float BoxW => 62f * _ui * Elem * _ladderEl;
+    private float BoxH => 30f * _ui * Elem * _ladderEl;
 
     /// The centre of one channel's value box, in this control's coordinates:
     /// radially outside the knob, at the knob's own bearing.
@@ -1656,7 +1818,8 @@ public sealed class ColorWheel : UserControl
     {
         float r = _arcR[_chArc[i]];
         float va = _chA0[i] + (_chA1[i] - _chA0[i]) * ChannelValue(i);
-        return At(r + _arcW + 11f * _ui * Elem + BoxH * 0.5f, va);
+        // The 11 is air between the arc and the box, so it goes with the gaps.
+        return At(r + _arcW + 11f * _ui * Elem * _ladderGap + BoxH * 0.5f, va);
     }
 
     private void ValueBox(CanvasDrawingSession ds, Vector2 p, string text, float a)
