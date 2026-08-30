@@ -831,6 +831,46 @@ public sealed class ColorWheel : UserControl
     {
         var mid = new Vector2(w * 0.5f, h * 0.5f);
         _c = CenterOnAnchor ? _hint : mid;
+
+        // Which way the hub's chrome faces. Centred in the viewport that is the
+        // direction of the thing that opened the picker; centred ON that thing
+        // there is no such direction, so the chrome leans toward the middle of
+        // the window, which is the only direction guaranteed to be on screen.
+        //
+        // COMPUTED HERE, not further down where it used to be. It was assigned
+        // AFTER the HSL/RGB arc ladder that reads it, so those arcs were laid
+        // out against the PREVIOUS frame's _base - invisible on a stationary
+        // wheel, because the next frame corrects it, but wrong on the first
+        // frame after an open and wrong for anything that has to agree with it
+        // within one pass. rollSign below is one of those things.
+        var lean = CenterOnAnchor ? mid - _c : _hint - _c;
+        _base = lean.LengthSquared() < 4f ? 0f : MathF.Atan2(lean.Y, lean.X);
+
+        // 17.17: WHICH WAY THE FAN ROLLS, AND WHY IT DEPENDS ON THE DOCK.
+        //
+        // The hub's cluster is rolled a little off _base - see Roll and ArcRoll
+        // below - because at the top-LEFT dock the leading plate was reaching up
+        // into the top chrome bar, and rolling the whole fan clockwise costs
+        // nothing there since the far end still lands well inside the window.
+        //
+        // That correction was written for one dock and silently assumed it. The
+        // fan is ASYMMETRIC about _base (it runs -1.5 to +2.4 steps), and on the
+        // right-hand side of the window _base points back the other way, so the
+        // same clockwise roll drives the TRAILING end - the star and the puck -
+        // up off the top edge instead of pulling the leading end down. Measured
+        // at the top-right dock in a 1440x900 viewport, the star overran the top
+        // by 35.2 DIP and the puck by 7.7. 17.17 makes eight docks draggable, so
+        // that is now a corner a user can simply drop the dial into, but it was
+        // ALREADY reachable through Settings > Pen dock > Right.
+        //
+        // So the roll mirrors with the dock, exactly as §1.7's popover already
+        // does. Expressed as the side of the WINDOW the wheel's centre sits on,
+        // because that is the only form of the question this class can ask - it
+        // knows _c and the viewport, and nothing about ToolWheel's anchors.
+        // Docks on the left half and the two centre docks are bit-for-bit
+        // unchanged; only the three right-hand docks mirror.
+        float rollSign = _c.X > w * 0.5f ? -1f : 1f;
+
         // One reference unit == one DIP. Fixed, so the swatches are the same
         // comfortable size at every window size and only HOW MUCH of the ring
         // you can see changes.
@@ -991,7 +1031,26 @@ public sealed class ColorWheel : UserControl
         // ordering and the scale then progress in one direction rather than
         // arguing with each other.
         const float SegGap = 0.16f;
-        float top = _base + ArcRoll + 0.86f, bot = _base + ArcRoll - 0.86f;
+        // 17.17: ArcRoll mirrors with the dock for the same reason Roll does -
+        // see rollSign above - and it mirrors WITH it because the plate fan and
+        // this ladder are one piece of hub chrome. Rolling them opposite ways on
+        // the right-hand docks would be visibly incoherent whatever it bought.
+        //
+        // BE CLEAR ABOUT WHAT THIS DOES AND DOES NOT FIX. It does fix the ladder
+        // at the top-right dock, which ran 108.9 DIP off the TOP edge. It does
+        // not fix the ladder at the two BOTTOM corners, and it moves that defect
+        // from bottom-left to both of them: this arc sits at ~400 DIP radius,
+        // and a dial docked 677 DIP down a 900 DIP window simply has no 400 DIP
+        // of room beneath it, so the low end of the ladder overruns the bottom
+        // edge by 68.3 DIP whichever way the fan is rolled. That is a RADIAL
+        // problem and no rotation solves it; the fan itself (plates, eyedropper,
+        // star and puck, all inside 209 DIP) clears every one of the eight docks
+        // with 25.7 DIP to spare at worst. Left as found and reported rather than
+        // patched, because the fix is a decision - bias the ladder away from the
+        // nearest edge rather than merely mirroring it, or shorten it - and the
+        // bottom docks are new in 17.17, so the user has not seen this yet.
+        float arcRoll = ArcRoll * rollSign;
+        float top = _base + arcRoll + 0.86f, bot = _base + arcRoll - 0.86f;
         if (_mode == ColorWheelMode.Hsl)
         {
             _arcCount = 2;
@@ -1019,13 +1078,6 @@ public sealed class ColorWheel : UserControl
                 Segment(i, 0, s0, s0 - third);
             }
         }
-
-        // Which way the hub's chrome faces. Centred in the viewport that is the
-        // direction of the thing that opened the picker; centred ON that thing
-        // there is no such direction, so the chrome leans toward the middle of
-        // the window, which is the only direction guaranteed to be on screen.
-        var lean = CenterOnAnchor ? mid - _c : _hint - _c;
-        _base = lean.LengthSquared() < 4f ? 0f : MathF.Atan2(lean.Y, lean.X);
 
         // 10.2 item 8: the ring's centre, converted into the SAME space the
         // caller's anchor was given in, so the two probe lines are directly
@@ -1068,7 +1120,13 @@ public sealed class ColorWheel : UserControl
         // was reaching up into the top chrome bar, and rolling the cluster is
         // the one correction that costs nothing, since the far end still lands
         // well inside the window.
-        const float Step = 0.52f, Roll = 0.18f;
+        // 17.17: Step and Roll both take the dock's sign. Step as well as Roll,
+        // because mirroring only the roll would leave the fan running the same
+        // way round the dial on both sides - the LEADING plate would end up
+        // where the trailing one belongs, and the reading order of COPIC, HSL
+        // and RGB would reverse against the hand holding the pen.
+        const float Step0 = 0.52f, Roll0 = 0.18f;
+        float Step = Step0 * rollSign, Roll = Roll0 * rollSign;
         _labelPt[0] = At(_rLabel, _base + Roll - Step * 1.5f);
         _labelPt[1] = At(_rLabel, _base + Roll - Step * 0.5f);
         _labelPt[2] = At(_rLabel, _base + Roll + Step * 0.5f);

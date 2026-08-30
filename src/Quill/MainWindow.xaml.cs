@@ -9702,21 +9702,50 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             // duplicated exactly the way 16.8 objects to under Wheel.
             //
             // Told that, the user ruled that Bar loses the top-bar pair too. So
-            // the condition is now unconditional in practice, and the variable
-            // is named for the reason rather than for the dial.
+            // the condition was made unconditional - a const true - and the
+            // variable was named for the reason rather than for the dial.
             //
-            // This cannot strand anyone. ToolSurface has exactly TWO members,
-            // they are mutually exclusive, and ToolSurfaceService exists
-            // precisely to stop both being off screen at once - so whichever
-            // surface is up is carrying the pair. If a third, surface-less mode
-            // is ever added, THIS is the line that has to learn about it.
+            // THAT WAS TRUE OF PenBar AND OF NOTHING A USER COULD SELECT. The
+            // safety argument written here said ToolSurface has two members, they
+            // are mutually exclusive, and "whichever surface is up is carrying
+            // the pair". The second half was false. `Bar` had ALREADY been two
+            // implementations behind Library.ConceptsBarPalette - default false,
+            // no Settings UI - so the only Bar a user could reach was the legacy
+            // horizontal PenRow, which carries no undo and no redo at all. A
+            // screen run confirmed both halves: PenBar's satellites render
+            // perfectly and unclipped, in a state nobody could switch to, while
+            // BtnUndo/BtnRedo were collapsed in EVERY configuration this build
+            // could be put into. 16.8's own text names that outcome as the one
+            // thing that must not happen - "removing them outright would leave
+            // that surface with no pointer route to undo at all".
+            //
+            // 17.17 surfaced that flag as ToolSurfaceService.LegacyBar, so the
+            // question finally has an answer worth asking. The pair comes back
+            // exactly when the LEGACY ROW is the surface, which is 16.8's
+            // original ruling applied to the surface it was actually written
+            // about:
+            //
+            //     Wheel            - lower quadrant carries it   -> no top bar
+            //     Bar + PenBar     - satellites carry it         -> no top bar
+            //     Bar + legacy row - nothing carries it          -> TOP BAR
+            //
+            // Do not collapse this back to a constant. If a future surface
+            // carries no undo of its own, THIS is the line that has to learn
+            // about it, and a const cannot.
+            //
+            // Live by construction: ApplyToolbarVisibility already re-runs on
+            // ToolSurfaceService.Changed (see the subscription beside
+            // ToolSurfaceService.Configure), and SetLegacyBar raises exactly that
+            // event - so flipping either the surface or the row style moves these
+            // two buttons with no restart and no page reopen, which is 16.8
+            // item 4's own requirement.
             //
             // This rides the existing in-context channel rather than adding a
             // parallel one: it is the same question ApplyToolbarVisibility
             // already asks of TouchDrawToggle and ShapeBtn - is this control's
             // job being done elsewhere right now - and the user's own
             // HiddenTools choice still overrides it either way.
-            const bool surfaceCarriesUndo = true;   // Wheel in its quadrant, Bar as satellites
+            bool surfaceCarriesUndo = ToolSurfaceService.IsWheel || !ToolSurfaceService.LegacyBar;
             Set(BtnUndo, "BtnUndo", !surfaceCarriesUndo);
             Set(BtnRedo, "BtnRedo", !surfaceCarriesUndo);
             // The separator above the pair exists only to fence it off, so it
