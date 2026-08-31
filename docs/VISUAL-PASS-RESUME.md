@@ -359,6 +359,86 @@ asks for, and the paper a note-taking app is most likely to be used on.
 A ΔL\* step computed against the page, as §17.18.2 proposes, still assumes the
 plate resolves from the page. It does not, on any of the six.
 
+### The COPIC wheel — **the 49 landed. The seam reads BETTER than the numbers in six families and WORSE in two. And the wheel does not draw at a bottom dock.**
+
+#### The rendering failure, which is the bigger finding
+
+**At the BottomLeft dock the COPIC face draws its marker CODES with no swatch
+tiles underneath them.** `vp4/50-labels3x.png` at 3x: `E71 E81 E93 E70 E51 E42
+E41 E50 E40 E30 C1 C2 YR68 YR61 YR27 YR21 YR18 YR14` — two dozen labels in
+near-black text lying on bare red paper, with the page's own graph-paper grid
+lines running straight through where the tiles should be.
+
+Not an animation frame: re-captured after the wheel had been open and idle, and
+the pixels at four labels' own tile centres sample **`#E10619` exactly** — the
+page colour, byte-for-byte — at `E71`, `E42`, `YR27` and `YR68`. Radial scans out
+from the dial along three bearings clear of the dial and the page's text panel
+find **no sustained tile band at all**: bearing 3° is page from 130 DIP to
+1228 DIP, bearing 10° is page all the way off the screen edge, bearing 18° gives
+only three 2-DIP glyph blips.
+
+**It is the dock.** Restarting with `DialAnchor` set back to `TopLeft` and
+reopening the same wheel on the same page renders it **perfectly** —
+`vp4/53-half.png`, every family in full colour, codes on their tiles, identical
+to this run's first capture before anything had been touched. The comparison is
+like for like: same build, same page, same paper, same wheel, one changed dock.
+
+So the viewport's bottom half now holds **two** things: §17.22's roll fix, which
+is correct and which nobody can reach, and this, which is broken and which
+nobody can reach either. **The dial drag not landing is what keeps both of them
+out of sight**, which is the strongest argument for fixing the drag first: it is
+not only a missing feature, it is the lid on an untested half of the window.
+
+#### The seam, measured on the palette the wheel actually draws
+
+All **49 added codes are present** (`CopicPalette.cs`, `CODE:hex` strings; a
+plain regex finds 360 codes and all 49 of §11.27's list). The file is what the
+screen draws — four tiles sampled off the live wheel match their entries
+**byte-for-byte** (`RV99 #614d4f`, `RV42 #ffa79b`, `RV69 #81494a`,
+`RV66 #a95c8d`).
+
+§11.27's headline is a **median of 35.9 RGB units, 0.62 of a marker step**. That
+number is a poor predictor of what a viewer sees, in both directions, because a
+step *within* a family is mostly a lightness step while the divergence is mostly
+a **hue** one — and because it averages over families that were never touched.
+
+Measured per family, circularly (`scratchpad/seam2.py`), as "how far outside its
+own family's hue band does an added code sit":
+
+| family | kept | added | the kept codes' own band | added codes outside it |
+|---|---|---|---|---|
+| **RV** | 16 | 12 | ±12.3° | **RV42 at 40°**, RV69 at 31°, RV91 at 26° |
+| **G** | 24 | 5 | ±32.1° | **G40 at 52°**, G82 at 42°, G85 at 34° |
+| R | 27 | 3 | ±15.4° | R30 and R02 at 17° — marginal |
+| B | 30 | 5 | ±19.9° | **none** |
+| BG | 14 | 13 | ±29.4° | **none** |
+| YG | 22 | 2 | ±58.7° | **none** |
+| YR | 19 | 5 | ±9.8° | **none** |
+| BV | 20 | 2 | ±31.1° | **none** |
+| Y | 19 | 1 | ±14.1° | **none** |
+
+**Six of the nine families that received codes show no seam at all** — including
+**BG, which took 13 of the 49**, the joint-largest block. On those the
+calibration difference is real but lands inside the spread the family already
+had, and nothing looks wrong.
+
+**Two are visibly wrong, and one of them badly.** In **RV** the kept codes hold a
+tight ±12.3° band of magenta, and **`RV42 #ffa79b` sits 40° outside it — more
+than three times the family's entire band.** On screen (`vp4/54-rv2x.png`, 2.2x)
+it does not read as a mis-stepped pink at all: **it is a peach tile in a fan of
+magentas**, and `RV69 #81494a` and `RV99 #614d4f` beside it read as browns. In
+**G**, `G40 #e8edbe` at 52° is a pale khaki among greens.
+
+**So: does it read as badly as the numbers suggest? No — it reads differently.**
+Milder than 35.9 across most of the wheel, and worse than it where it goes wrong,
+because the damage is concentrated in a handful of codes that leave their
+family's hue band rather than spread thinly over all 308. If the user ever wants
+this narrowed without re-sourcing anything, **RV42, RV69, RV99, G40 and G82 are
+the five tiles that carry almost all of the visible seam** — which is a much
+smaller ask than the section's "no external source will ever match" framing
+implies, and it stays inside §11.27's rule, because it is a list for the user to
+hand-extend `copicColors.js` with, not a dataset to swap in.
+
 ## RUN OF 2026-08-26 (third screen run) — `integration` @ `4d88688`
 
 Rebuilt clean with the given command, 0 warnings, binary of 19:42. Scratch
