@@ -5369,7 +5369,7 @@ is a `Button`, so the hit target is the template's own, not the mark's
 is the same construction every existing chip in this row uses, which is why it
 is expected to work, but it is not proof.
 
-### 17.21 The legacy row's colour dot goes white with the dial
+### 17.23 The legacy row's colour dot goes white with the dial
 
 > *the user, ruling on §17.20's report:* fix it — and **mirror the existing rule
 > rather than inventing one**.
