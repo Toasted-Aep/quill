@@ -1,5 +1,197 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-08-31 (fourth screen run) — `integration` @ `c038c8d`
+
+Binary of 22:32, 0 warnings, run against a scratch `QUILL_DATA_FOLDER` at
+`scratchpad/vp4data` (copied from `vp3data`, so that folder survives as
+evidence). Machine unlocked, 165 s idle at start, foreground **Claude** — the
+same window run 1 mismeasured, so `Q-Ensure`/`Q-Assert` bracketed every
+injection and grab, as before. Window maximised: 2880x1800 physical = **1440x900
+DIP at exactly 2x**, which is the viewport §17.17b and §17.22 do their own
+arithmetic in, so every figure below is directly comparable to theirs.
+
+The user's real library at `C:\Users\irony\Documents\Quill\library.json` was
+**53,582,459 bytes, SHA-256 `0C32CE6C16A4…8E038A`, mtime 2026-08-28 17:26 UTC
+before and after** — unchanged, and this run never opened it. (Note this is a
+different size from the third run's figure; the user has been working since.)
+
+### §17.17 the eight-position dial drag — **THE GRAB PASSES. THE LANDING FAILS.**
+
+**Findable and grabbable: yes, first try.** The rim reads exactly as the section
+describes it. Dial centre measured at (288.75, 362.5) physical; `Aim`'s grip band
+is `RingOut + 2 < r <= PopOut + 2`, i.e. **100 to 118.6 DIP = 200 to 237 physical
+px** from that centre. A press at bearing 225 degrees, r = 218 physical — the
+middle of the band — took the grip on the first attempt, and the dial then
+**followed the pointer freely and exactly**, holding its grab offset to the pixel
+over a 960 px travel (`vp4/07-probe-mid.png`, `vp4/07-probe-end.png`). It is a
+small target and the section is right to say so, but it is not a hard one.
+
+**Then it does not land.** On release the dial **springs back to the dock it
+started from** and `Library.DialAnchor` is never written. Burst-captured at
+~60 ms intervals across the release (`vp4/10-burst-*.png`), sampling the hub's
+own fill `#353536` at both docks:
+
+```
+frame 0  hub at the DROP point (230,1322)   TopLeft spot = page/panel
+frame 1  hub back at TOPLEFT   (230,362)    drop point   = page red #E10619
+```
+
+So the dial holds the dropped position for well under 100 ms and then reverts.
+**Nine attempts, all reverting**, varying every parameter that could matter:
+
+| attempt | travel | steps | step dwell | post-move dwell | landed? |
+|---|---|---|---|---|---|
+| vertical | 960 px | 24 | 60 ms | 300 ms | no |
+| vertical | 960 px | 96 | 22 ms | 400 ms | no |
+| vertical | 960 px | 48 | 30 ms | 250 ms | no |
+| vertical | 538 px | 30 | 35 ms | 300 ms | no |
+| horizontal | 1154 px | 30 | 35 ms | 300 ms | no |
+| vertical | 180 px | 3 | 40 ms | none | no |
+| vertical | 538 px | 3 | 40 ms | none | no |
+| vertical | 538 px | 60 | 20 ms | none | no |
+| vertical | 538 px | 60 | 20 ms | 800 ms | no |
+
+`DialAnchor` read straight out of the scratch `library.json` after each: **`""`
+every time.**
+
+**It is the cancel path, and the maths it bypasses is fine.** `OnLost`
+(ToolWheel.cs:2268) is the only branch that both restores the starting dock and
+writes nothing — *"A LOST grip is a CANCELLED move, not a landing"*. That it is
+`OnLost` and not a bad `NearestAnchor` is settled independently: writing
+`"DialAnchor":"BottomLeft"` into the scratch library by hand and restarting docks
+the dial bottom-left correctly (`vp4/11-bl-boot.png`, centre measured at
+**(144, 676) DIP**), so `CurrentAnchor`, `AnchorPoint` and the dock geometry all
+work. The drop point of the 960 px drag was (143, 663) DIP — **13 DIP from
+BottomLeft and 482 from TopLeft** — so `NearestAnchor` could not have chosen
+TopLeft.
+
+**The control that rules out the harness.** A stationary press-and-release on a
+*sector* commits normally through the same `OnReleased` — a click on the pen
+sector re-selected the pen, and an earlier one selected Text (format bar up,
+status line "Tap anywhere on the page to add a text box"). So `PointerReleased`
+reaches the shield fine when the dial has not moved. The one thing that differs
+in the failing case is that **the drag moves the shield** (`PlaceAt` rewrites
+`_shield.Margin` on every move). Press and move are both delivered correctly, so
+injection is not a plausible explanation for the release alone failing.
+
+*Not fixed — this is a verification pass.*
+
+### The consequence: §17.22's fix is on a branch no user can reach
+
+`DialAnchor` is written from **exactly one place in the app** — `SetAnchor`,
+reached only from the drag release — and there is **no Settings UI for it**
+(`grep -rn DialAnchor src/Quill/` is the model field, `ToolWheel.cs`, and nothing
+else). With the drag not landing, the only docks reachable are the two defaults
+`CurrentAnchor` falls back to: **TopLeft and TopRight**, both in the viewport's
+top half.
+
+`ColorWheel.cs:1124` is `arcRoll = _c.Y > h * 0.5f ? 0f : ArcRoll * rollSign`.
+Every dock a user can actually reach takes the **`ArcRoll` branch**. So §17.22's
+drop-the-roll-in-the-bottom-half fix, and the §17.17b bottom-corner overrun it
+was written to repair, are **both on a branch that is currently unreachable from
+the UI** — the same shape as §16.8's `ConceptsBarPalette`, one flag further in.
+
+### §17.21/§17.22 the ladder's roll across the midline — **REAL, MEASURED, AND NOT VISIBLE AS A SNAP**
+
+**It cannot be seen in motion, because the ladder is never on screen while the
+dial moves.** The press that would begin a dial drag **dismisses the colour
+picker first**. Pressed the rim at the grab point with the HSL ladder up and
+dragged 770 px down over 14 slow steps: the wheel closed on press-down, the dial
+**did not move at all**, and the whole travel did nothing
+(`vp4/05-drag-07.png`, `vp4/05-after-half.png`). There is no gesture in this
+build that has the ladder on screen and the dial's centre moving.
+
+**The discontinuity itself is real, and confirmed on screen at both docks.** A
+model of `Layout()` reproduces the drawn arc endpoints to within **4 DIP** at
+both docks, so the roll can be read off the picture rather than asserted:
+
+| | `_c` (DIP) | `_base` | `arcRoll` | outer-arc ends predicted | measured |
+|---|---|---|---|---|---|
+| **TopLeft** | (144, 181) | +0.437 | **+0.26** | (487.4, 124.6) / (148.9, 529) | (487, 120) / (145, 533) |
+| **BottomLeft** | (144, 676) | −0.374 | **0** | (258.9, 347.4) / (451.8, 838.6) | (258, 350) / (450, 845) |
+
+Captures `vp4/04-hsl-top-half.png` and `vp4/12-hsl-bl-half.png`.
+
+Expressed as the fan's centre bearing, the step between the two docks either side
+of the midline on the left-hand side is:
+
+* **LeftCentre** `_base` = 0, roll **+0.26** → centre bearing **+14.9 degrees**
+* **BottomLeft** `_base` = −0.374, roll **0** → centre bearing **−21.4 degrees**
+
+so of the **36.3 degrees** between two adjacent docks, **14.9 degrees — 41 % —
+is the discontinuous roll**, the rest being `_base` turning to face the middle of
+the window. Note `LeftCentre` puts `_c.Y` exactly on `h * 0.5`, and `>` is false
+there, so the two side docks take the roll; the boundary is between the centre
+row and the bottom row, not through it.
+
+**Would it read as a jump if it could be seen? On this evidence, no — because
+nothing about the transition is continuous to begin with.** The dial teleports
+between eight discrete docks, the whole ladder relocates with it, and the roll is
+41 % of a change in which the ladder has already moved 500 DIP down the screen
+and re-pointed at the window's middle. There is no smooth motion for the 0.26 to
+interrupt. The artefact the brief was braced for needs a continuously-positioned
+dial, and this dial is not one.
+
+**§17.22's bottom-corner claim does hold where it can be seen.** At BottomLeft in
+this exact 1440x900 DIP viewport — the same viewport §17.22 does its arithmetic
+in — the outer arc's clockwise end lands at **y = 838.6 DIP** against a 900 DIP
+window, so the ladder **clears the bottom edge** with room to spare, and no
+element is shrunk. That much of the fix is confirmed on screen. It just cannot
+be reached by dragging.
+
+### §17.18 square corner frames — **PASS on the shape. §17.2's ground FAILS again, on a third paper.**
+
+Measured off `vp4/11-bl-boot.png`, masking "not the red page" so plate and glyph
+read as one box (`scratchpad/corners2.ps1`):
+
+| button | box (DIP) | corner | plate |
+|---|---|---|---|
+| zoom `91%` | 69 x 34 | capsule | `#0F0E10` |
+| tilt `0°` | 51 x 34 | capsule | `#0F0E10` |
+| the five icon buttons | **34 x 34** each | **radius 4 DIP** | `#0F0E10` |
+
+The five are **rounded squares, not circles** — run 3 recorded them as circles,
+so §17.18 has visibly landed. The corner reads at 6 physical px by the
+threshold walk, which is exactly what a true `CornerRadius(4)` gives that method
+(the arc reaches the box's own edge about a DIP early once antialiasing is
+counted), and `Metrics.GroundCorner = 4`. **They read square: the corners are
+taken off, not rounded.**
+
+**But the ground is still not the page's.** The page here samples `#E10619` and
+every plate measures **`#0F0E10`** — *byte-identical to the value run 3 measured
+on a black dot-grid page and on Brown Paper*. Three papers now — black, brown,
+red — and one plate colour. Contrast against this page: **3.82 : 1**, alongside
+run 3's 3.62 and 4.29 on Brown Paper. §17.2's *"a background that mimics the page
+colour, so the button almost disappears into the page"* is not delivered on any
+coloured paper, and §17.18.2's premise that the frame takes the page's colour is
+contradicted for the third time. This is a re-confirmation, not a new finding —
+but it is now confirmed on a paper nobody had tried.
+
+### §17.19 the dial plate carries the pen's own colour — **PASS, observed**
+
+`vp4/01-dial2x.png` at 2x. Each pen sector's mark sits on a plate in **that pen's
+own colour** and the mark auto-contrasts against it: **black mark on the blue
+plate, white on the red, black on the orange, white on the near-black**. The
+tool sectors (eraser, lasso, text `A`) take white plates with black marks. It
+reads cleanly and it is obvious at a glance which pen is which — the best-looking
+of the new work.
+
+### The same plate, in the picker's own fan — **FAILS on the page's black text panel**
+
+Opening the wheel from the dial dot puts the three face labels — `COPIC`, `HSL`,
+`RGB` — on the plate fan at r ~ 210 DIP. In `vp4/03-fan2x.png`, **`COPIC` has a
+clearly visible plate and `HSL` and `RGB` have none**: the first happens to fall
+on the red page, the other two fall on the page's own **black text panel**, and a
+near-black plate on a black panel is invisible. They read as bare grey labels
+floating on the text.
+
+This is §17.18.1's "the plate that vanishes on black" happening live, and it is
+worse than that section frames it, because the black is **not** the app's dark
+theme or an OLED page — it is **a text box the user put on a red page**. Any
+dark object on the canvas does it, anywhere the fan happens to land, and the
+three siblings are inconsistent *within one fan and one frame*. A ΔL\* step
+computed against the *page* would not fix this case at all: the page is red.
+
 ## RUN OF 2026-08-26 (third screen run) — `integration` @ `4d88688`
 
 Rebuilt clean with the given command, 0 warnings, binary of 19:42. Scratch
