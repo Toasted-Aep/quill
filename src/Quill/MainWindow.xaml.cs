@@ -855,6 +855,12 @@ public sealed partial class MainWindow : Window
         BottomMenu.Changed += () => { BuildToolMenu(); BuildPickerMenu(); BuildRotateMenu(); };
         ToolUiChanged += SyncBottomMenu;
         SelectionState.Changed += SyncBottomMenu;
+        // 16.3: the legacy row's colour swatch greys with the dial, so it listens
+        // to the same state - the same subscription PenBar makes for the Concepts
+        // row ("the pen row greys with the dial"). Without it 17.17a's "no 16.3
+        // capability greying" held for the one control on the row that 16.3 names
+        // by hand, and the dot stayed live with an attachment selected.
+        SelectionState.Changed += SyncPenRowColour;
         // 17.11a's angle moves under the hand rather than on a click, so its
         // report is driven by the surface rather than polled. BuildRotateMenu
         // decides for itself whether the printed value actually changed.
@@ -3562,6 +3568,11 @@ public sealed partial class MainWindow : Window
     /// rather than in the middle of the window.</summary>
     private void PenRowColour_Click(object sender, RoutedEventArgs e)
     {
+        // 16.3: white AND UNUSABLE. The dial refuses the press on its dot and
+        // PenBar never wires the tap at all; this row is the third surface the
+        // section names, and it was the one that still opened the wheel on a
+        // subject that cannot take a colour.
+        if (ColourInert) return;
         var p = ActivePreset() ?? _library.Pens.FirstOrDefault();
         if (p == null) return;
         var tl = PenRowColourBtn.TransformToVisual(RootGrid).TransformPoint(new Point(0, 0));
@@ -3579,12 +3590,27 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            // 16.3, the legacy row's half of "in the dial AND IN THE PEN ROW":
+            // WHITE when the subject cannot be recoloured. Not muted, not dimmed -
+            // white is the one fill that cannot be read as a colour the subject
+            // carries, which is the same choice ToolWheel and PenBar make.
+            if (ColourInert)
+            {
+                PenRowColourDot.Fill = new SolidColorBrush(Microsoft.UI.Colors.White);
+                return;
+            }
             var p = ActivePreset() ?? _library?.Pens.FirstOrDefault();
             PenRowColourDot.Fill = new SolidColorBrush(
                 p != null ? ColorUtil.Parse(p.Color) : Microsoft.UI.Colors.Transparent);
         }
         catch { }
     }
+
+    /// <summary>16.3: the colour circle goes WHITE and unusable "in the dial AND
+    /// IN THE PEN ROW" for a subject that cannot be recoloured. With 17.17's
+    /// setting on this row IS the pen row, so it asks the same question of the
+    /// same object as ToolWheel and PenBar and the three cannot disagree.</summary>
+    private static bool ColourInert => SelectionState.Current is { Any: true, CanRecolour: false };
 
     private async void AddPreset_Click(object sender, RoutedEventArgs e)
     {
