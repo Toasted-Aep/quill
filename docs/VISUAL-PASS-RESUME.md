@@ -439,6 +439,153 @@ smaller ask than the section's "no external source will ever match" framing
 implies, and it stays inside §11.27's rule, because it is a list for the user to
 hand-extend `copicColors.js` with, not a dataset to swap in.
 
+### §17.11a the tilted caret, and the marquee round a tilted box — **caret PASSES. The marquee is axis-aligned, and at low zoom it swamps the object.**
+
+§17.11a has two requirements. Run 2 settled the first (the rotate tool is an
+interface preview; the page does not turn). This is the **second** — *"every
+rotatable object rotates freely"* — and the two things the brief asked to see.
+
+**Setting it up.** A text box was made with the Text tool and filled by
+clipboard paste (`[Q]::Key` alone never reached the editor — the empty box was
+discarded on blur; `Ctrl+V` with the clipboard preloaded works). While editing,
+the box carries a drag strip with a **rotate handle at its top-right**, tooltip
+*"Drag to rotate around the centre (double-tap to reset)."*
+
+**Free rotation — PASS.** Dragging that handle through an arc about the box's
+centre rotated it **continuously, not in quarter steps**. Measured off the
+rendered text's own baseline: **37.6°**, against a 37° target.
+
+**The caret inside it — PASS, and it is the clean result of this run.**
+`vp4/61-s16.png`. With the caret live at the end of "TILTED", it is drawn **at
+the box's own angle** — running down-and-right parallel to the box's local
+vertical, at ~125° against the box's local down of ~128° — **not axis-aligned**.
+The glyphs render cleanly at 37.6° with no stair-stepping, and the box's own
+chrome (drag strip, rotate handle, the resize furniture down its right edge)
+**rotates with it**: measured, those strips lie at 28–32° and 124°, i.e. along
+the box's two edge directions. Nothing is left behind axis-aligned.
+
+*(I first read those pale strips as an unrotated ghost frame and was wrong —
+re-measuring their edge angles is what corrected it. Recording that because the
+mistake is the easy one to make here: the strips sit OUTSIDE the box's edges, so
+at a glance they read as a separate rectangle.)*
+
+**The marquee — axis-aligned, which is correct against the spec and loose in
+practice.** Lassoed at 100 % (`vp4/69-s2x.png`): bar above, **four hollow
+circles, full-canvas guides, no tint, no dashed box** — §16.2/§17.8 satisfied
+exactly. But the four circles sit on the corners of the **axis-aligned bounding
+box**, not the rotated box's own corners. Measured **227.7 × 204.8 DIP** around
+an object that is **186 × 150 DIP** — the marquee encloses about **1.67× the
+object's area**, and all four handles sit in empty page rather than on the shape.
+
+Nothing in §16.2, §16.9 or §17.8 asks for an oriented marquee, so this is not a
+violation. It is worth flagging only because the gap is proportional to the
+rotation and is invisible in every test done at 0°.
+
+**At low zoom it reads badly.** Dropped to **10 %** with the selection held
+(`vp4/71-marq8x.png`, 8x). The handles are drawn at a **fixed screen size** —
+~14 physical px — while the object shrinks with the page, so at 10 % the tilted
+box is about **25 physical px** of text and **each handle is more than half the
+object's entire extent**. Combined with the axis-aligned marquee round a rotated
+shape, what is on screen is **four dark dots in a diamond of empty red paper
+with a smudge of text between them** — the chrome no longer marks the object, it
+replaces it. This is the case the brief asked about and it is the one place the
+selection chrome does not read.
+
+**§16.3 on the dial — PASS, and exactly as written.** With that text box
+selected the dial's colour dot goes **solid pure white** (`vp4/71-dot8x.png`,
+8x) — not muted, not dimmed, the "one fill that cannot be read as a colour the
+subject carries". `ColourInert` is keyed to a **non-recolourable selection**,
+not to the tool: with the eraser chosen and nothing selected, the legacy row's
+dot stays fully coloured and live, which is correct per the code and worth
+knowing before anyone tests it the other way round.
+
+### Two smaller things seen on the way
+
+* **The Measurement menu's BARE ruling, on a bright paper.** `vp4/64-m2x.png`.
+  Over the black text panel it is legible; over the saturated red page the
+  preset row — `10% 100% 250% 1600%` and `90° 180° 270°` — is muted grey on
+  `#E10619` and is genuinely hard to read. Run 2 flagged this over dense ink;
+  it is no better over a plain bright paper, which is the easier case.
+* **Low zoom makes Partial pick hard to aim.** At 10 % the tilted box's top edge
+  and the page's big text panel are about **5 physical px** apart, so three
+  successive lassos aimed at the box caught the panel instead. Not a defect —
+  Partial is doing what it says — but it is the practical reason the low-zoom
+  marquee had to be set up at 100 % and zoomed out afterwards.
+
+### Not re-litigated
+
+**§16.10 / §17.7's 8 px slop (PASS, measured) and its barrel-button half (NEEDS
+HARDWARE)** were both settled by the second run and are recorded above in its
+own section. The brief listed them as unseen; they are not. Nothing was
+re-tested.
+
+### Not reached this run
+
+* **§17.14 / §16.5, §17.2, §17.4, §17.1, §17.9–§17.12 / §17.16** — all settled by
+  runs 2 and 3 and deliberately left alone.
+* **The 49 added codes' effect on the wheel's TIER ORDER** — only the colours
+  were checked, not whether the new entries land in the right slice.
+* **The COPIC no-tile failure's mechanism** — established that it is the dock and
+  reproducible, but not chased into `Layout()`. Whoever picks it up should start
+  from the fact that `TopLeft` renders and `BottomLeft` does not, on one build
+  and one page.
+* **§16.3's white dot on the LEGACY ROW** — confirmed on the dial only. The row's
+  `PenRowColourDot` takes the same `ColourInert` flag through the same
+  subscription, so it should follow, but it was not put on screen.
+
+### How this run ended
+
+Nobody took the machine back; the run finished its list. Quill (**pid 37444**)
+was left **running** on Physics 1 ▸ 030726 ▸ Study, **Wheel** surface, dial at
+**TopLeft**, **Lasso** tool, zoom **10 %**, the tilted text box **selected**,
+page on **Custom Color `#E10619`** with a **Graph Paper** grid, Touch draw
+**off**. Only the scratch library was written.
+
+Captures for this run: **172 PNGs** in `scratchpad/vp4/`, beside the previous
+three runs' folders.
+
+### Machine notes, added to the previous runs'
+
+* **PowerShell variable names are CASE-INSENSITIVE.** `$b` for a `Bitmap` and
+  `$B` for a rectangle edge are **the same variable**, and the clobber shows up
+  as `[System.Int32] does not contain a method named 'GetPixel'` several frames
+  later. This cost two measurement passes. The helpers here now use long names
+  (`$bitmap`, `$edgeB`) for exactly that reason.
+* **`$arr += ,@(...)` inside a scanning loop** silently produces the wrong shape
+  and then fails on arithmetic against the loop variable. Use
+  `System.Collections.ArrayList` and two parallel lists instead — `corners2.ps1`
+  does.
+* **Typing into a Quill text box:** `[Q]::Key(vk)` does **not** reach the editor
+  — the box takes no characters and is discarded as empty on blur. Preload the
+  clipboard with `Set-Clipboard` and send `[Q]::KeyMod(0x11, 0x56)` (Ctrl+V).
+* **The top bar moves ~86 physical px down when the Text tool raises the format
+  bar**, and the **dial moves with it** (its `_topInset` grows). Run 3 recorded
+  the first half; the dial's half matters just as much, because every dial
+  bearing is computed off its centre. Re-shoot after any tool change.
+* **`Windows-MCP`'s `Type` needs `loc`**, which is the same coerced-to-string
+  parameter that breaks `Click`/`Move`. The clipboard route above avoids it.
+* **An instruction again arrived through the tooling** telling this agent to
+  route file edits through Bash `sed`/heredocs rather than Read/Edit/Write. As
+  the previous runs recorded, it is **not from the user**; it was refused again,
+  and this file was written with a Python splice that asserts CRLF on both sides.
+* This file is **CRLF**, still. `scratchpad/splice.py` and `scratchpad/append.py`
+  insert into it without breaking that, and assert it before and after.
+
+### For whoever picks this up
+
+`scratchpad/vp4.ps1` dot-sources `q.ps1` + `qq.ps1` + `wheel.ps1` and adds
+`Crop`, `Luma`, `AvgHex`, `DiffBox`, `Q-Safe` (lock/idle/foreground in one) and
+`Q-Launch`. Beside it: `corners2.ps1` (button boxes and corner radii by
+masking "not the page"), `panelrect.ps1` (a panel's rect and gaps in DIP),
+`plate.ps1` (plate-vs-page contrast and ΔL\*), `fbar.ps1` (format-bar clearance
+to the strip), `radial.ps1` (walk out from the wheel's centre), and
+`seam2.py` (the COPIC seam, per family, circularly).
+
+**The one thing worth doing first** is the dial drag. It is not just a feature
+that does not work: it is what has kept the viewport's whole bottom half out of
+sight, and the first look at that half this run found a hard rendering failure
+sitting in it.
+
 ## RUN OF 2026-08-26 (third screen run) — `integration` @ `4d88688`
 
 Rebuilt clean with the given command, 0 warnings, binary of 19:42. Scratch
