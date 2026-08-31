@@ -100,8 +100,12 @@ BUBBLE_REF = 15.0
 
 
 class Ladder:
-    def __init__(self, cx, cy, w, h, fit: bool):
+    """mode: 'before' = as 17.17 shipped it; 'fit' = 17.19's radial shrink;
+    'roll' = 17.21, the roll zeroed in the viewport's bottom half."""
+
+    def __init__(self, cx, cy, w, h, mode: str = "before"):
         self.cx, self.cy, self.w, self.h = cx, cy, w, h
+        self.mode = mode
         lean = (w * 0.5 - cx, h * 0.5 - cy)
         self.base = 0.0 if lean[0] ** 2 + lean[1] ** 2 < 4 else math.atan2(lean[1], lean[0])
         roll_sign = -1.0 if cx > w * 0.5 else 1.0
@@ -114,11 +118,17 @@ class Ladder:
         self.ui = min(max((self.r1in - lo) / 100.0, 0.80), 1.10)
         self.u = self.ui * Elem
 
-        self.roll = ArcRoll * roll_sign
+        # 17.21. ArcRoll exists to push the ladder's ANTICLOCKWISE end DOWN,
+        # off the top chrome bar. In the viewport's bottom half that same push
+        # drives the CLOCKWISE end into the bottom edge instead, which is the
+        # whole of 17.17b's overrun. Asked on Y exactly as rollSign is asked on
+        # X - the only form of the question this class can put.
+        self.roll = 0.0 if (mode in ("roll", "both") and cy > h * 0.5) \
+            else ArcRoll * roll_sign
         self.top = self.base + self.roll + SPAN
         self.bot = self.base + self.roll - SPAN
 
-        self.el, self.gap = (self.solve() if fit else (1.0, 1.0))
+        self.el, self.gap = (self.solve() if mode in ("fit", "both") else (1.0, 1.0))
 
         self.arcw = 9.0 * self.u * self.el
         self.knob = self.arcw + 4.5 * self.u * self.el
@@ -215,60 +225,78 @@ class Ladder:
                                    else (span - SegGap * 2.0) / 3.0)
 
 
+MODES = (("BEFORE - 17.17 as shipped", "before"),
+         ("FIT    - 17.19's radial shrink alone", "fit"),
+         ("ROLL   - 17.21's zeroed roll alone", "roll"),
+         ("BOTH   - 17.21 shipped: roll zeroed, solve kept as backstop", "both"))
+
+
 def table(w, h):
     print(f"viewport {w:.0f} x {h:.0f}   dial scale {SCALE}   "
           f"topInset {TopInset:.2f}   bottomReserve {BottomReserve:.1f}")
     hdr = (f"{'dock':<13}{'centre':>17}  {'face':<4}"
-           f"{'el':>6}{'gap':>6}{'arc0':>9}{'outer':>9}{'boxC':>9}"
+           f"{'roll':>7}{'el':>6}{'gap':>6}{'arc0':>9}{'outer':>9}{'boxC':>9}"
            f"{'over':>8} {'edge':<7}{'travel':>9}{'short':>9}")
-    for tag, fit in (("BEFORE - as committed", False), ("AFTER - fitted", True)):
+    for tag, mode in MODES:
         print(f"\n=== {tag} " + "=" * max(0, len(hdr) - len(tag) - 5))
         print(hdr)
         for dock in DOCKS:
             cx, cy = anchor_point(dock, w, h)
-            L = Ladder(cx, cy, w, h, fit)
+            L = Ladder(cx, cy, w, h, mode)
             for face in ("HSL", "RGB"):
                 over, side = L.overrun(face)
                 print(f"{dock:<13}{cx:8.2f},{cy:7.2f}  {face:<4}"
-                      f"{L.el:6.3f}{L.gap:6.3f}{L.arc0:9.2f}{L.outer(face):9.2f}"
+                      f"{L.roll:7.2f}{L.el:6.3f}{L.gap:6.3f}"
+                      f"{L.arc0:9.2f}{L.outer(face):9.2f}"
                       f"{L.field_r(face):9.2f}{over:8.2f} "
                       f"{side if over > 0.005 else '-':<7}"
                       f"{L.travel(face):9.2f}{L.shortest(face):9.2f}")
-    print("\n=== what the shrink costs, at the docks that shrink ===")
-    print(f"{'dock':<13}{'arcW':>8}{'knobD':>8}{'box w x h':>16}{'type':>8}"
-          f"{'dragBand':>10}{'hueTrav':>9}{'segTrav':>9}")
+
+    print("\n=== does the ROLL fix cost anything? every dock, against BEFORE ===")
+    print(f"{'dock':<13}{'over b':>9}{'over roll':>11}{'boxC':>9}{'type':>7}"
+          f"{'hueTrav':>9}{'segTrav':>9}  verdict")
     for dock in DOCKS:
         cx, cy = anchor_point(dock, w, h)
-        b, a = Ladder(cx, cy, w, h, False), Ladder(cx, cy, w, h, True)
-        if abs(a.el - 1.0) < 1e-9 and abs(a.gap - 1.0) < 1e-9:
-            continue
-        for tag, L in (("  before", b), ("  after", a)):
-            print(f"{tag:<13}{L.arcw:8.2f}{L.knob * 2:8.2f}"
-                  f"{f'{L.boxw:.2f} x {L.boxh:.2f}':>16}{L.font:8.2f}"
-                  f"{2 * (L.arcw + 13):10.2f}{L.travel('HSL'):9.2f}"
-                  f"{L.shortest('RGB'):9.2f}")
-        print(f"  {dock} delta   el={a.el:.4f} gap={a.gap:.4f}  "
-              f"box area {100 * (a.boxw * a.boxh) / (b.boxw * b.boxh) - 100:+.1f}%  "
-              f"type {100 * a.font / b.font - 100:+.1f}%  "
-              f"hue travel {100 * a.travel('HSL') / b.travel('HSL') - 100:+.1f}%  "
-              f"seg travel {100 * a.shortest('RGB') / b.shortest('RGB') - 100:+.1f}%")
+        b = Ladder(cx, cy, w, h, "before")
+        r = Ladder(cx, cy, w, h, "roll")
+        ob, _ = b.overrun("HSL")
+        orr, _ = r.overrun("HSL")
+        same = abs(r.roll - b.roll) < 1e-9
+        if same:
+            verdict = "UNTOUCHED - identical geometry"
+        elif abs(orr - ob) < 0.005:
+            verdict = "rotated, clearance BIT-IDENTICAL"
+        else:
+            verdict = f"fixed, {ob - orr:+.2f} DIP of overrun removed"
+        print(f"{dock:<13}{ob:9.2f}{orr:11.2f}{r.field_r('HSL'):9.2f}"
+              f"{r.font:7.2f}{r.travel('HSL'):9.2f}{r.shortest('RGB'):9.2f}  {verdict}")
 
 
 def sweep():
-    print(f"{'viewport':>12}{'dock':>14}{'over(before)':>14}{'el':>8}{'gap':>8}"
-          f"{'over(after)':>13}{'type':>8}{'boxH':>8}")
+    """Every dock at every viewport that overruns under ANY model."""
+    print(f"{'viewport':>12}{'dock':>14}{'before':>9}{'fit':>9}{'fit el':>8}"
+          f"{'fit type':>9}{'roll':>9}{'roll type':>10}{'both':>8}"
+          f"{'both el':>9}{'both type':>10}")
     for w, h in [(1024, 700), (1280, 800), (1440, 900), (1600, 900),
                  (1920, 1080), (2560, 1440), (1366, 768), (900, 640),
                  (1920, 1200), (3440, 1440), (2560, 1080), (3840, 1080)]:
         for dock in DOCKS:
             cx, cy = anchor_point(dock, w, h)
-            b, a = Ladder(cx, cy, w, h, False), Ladder(cx, cy, w, h, True)
-            ob, _ = b.overrun("HSL")
-            oa, _ = a.overrun("HSL")
-            if ob <= 0.005 and oa <= 0.005:
+            b = Ladder(cx, cy, w, h, "before")
+            f = Ladder(cx, cy, w, h, "fit")
+            r = Ladder(cx, cy, w, h, "roll")
+            t = Ladder(cx, cy, w, h, "both")
+            ob = b.overrun("HSL")[0]
+            of = f.overrun("HSL")[0]
+            orr = r.overrun("HSL")[0]
+            ot = t.overrun("HSL")[0]
+            if max(ob, of, orr, ot) <= 0.005:
                 continue
-            print(f"{f'{w}x{h}':>12}{dock:>14}{ob:14.2f}{a.el:8.3f}{a.gap:8.3f}"
-                  f"{oa:13.2f}{a.font:8.2f}{a.boxh:8.2f}")
+            print(f"{f'{w}x{h}':>12}{dock:>14}{ob:9.2f}{of:9.2f}{f.el:8.3f}"
+                  f"{f.font:9.2f}{orr:9.2f}{r.font:10.2f}{ot:8.2f}"
+                  f"{t.el:9.3f}{t.font:10.2f}")
+    print("\n(before / fit / roll are the worst overrun in DIP; "
+          "negative or absent = clears)")
 
 
 if __name__ == "__main__":

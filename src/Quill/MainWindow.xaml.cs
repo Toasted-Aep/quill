@@ -7745,8 +7745,29 @@ public sealed partial class MainWindow : Window
         // colour. Hiding the row under them would hide the one thing they change,
         // and Mix in particular is unreadable without it - the whole feedback for
         // a dilution is watching the row's swatch go pale.
-        bool penMode = _toolTag is "Pen" or "Eraser" or "Ruler" or "Eyedropper" or "Mix";
-        if (!penMode && !_uiHidden) { showRow = false; showChip = false; }
+        //
+        // 17.20 RETIRES THE PEN-MODE GATE, and the reason is that its premise
+        // expired. It read "outside pen/eraser mode neither the row nor its
+        // reopen chip belongs on screen" (#14-batch4), which was true while the
+        // row was a shelf of pens and nothing else. The row now CARRIES THE
+        // TOOLS, so the gate had become self-defeating: clicking the row's own
+        // Text, Select, FreeSpace or Fill cell hid the row that carried it - the
+        // control disappearing at the moment it was used.
+        //
+        // Retiring it rather than widening the tag list, because a list would
+        // have to name all eight and then be edited again by the next tool.
+        // "The row belongs on screen because it is a tool surface" is the rule,
+        // and the row is a tool surface in EVERY configuration it appears in:
+        // with the Concepts shell up, legacyIsSurface below already said so
+        // explicitly; with the shell off, the row is the only route the app has
+        // to Fill, Eyedropper, Ruler and Mix, since the legacy TopBar carries
+        // just Pen, Text, Select and FreeSpace.
+        //
+        // WHAT THIS CHANGES ON SCREEN. Nothing in the default configuration -
+        // legacyIsSurface already overrode this gate there, which is exactly the
+        // behaviour being generalised. With RadialToolDial switched OFF the row
+        // now also stays up under Text, Select, FreeSpace and Fill, where it
+        // used to fade; that is the fix, and it is the whole of the difference.
         // ONE request, THREE surfaces, exactly one of them up. The dial and the
         // section 2 palette each re-filter this on ToolSurfaceService inside
         // their own Wanted, so this call site cannot show two of them by getting
