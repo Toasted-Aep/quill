@@ -503,7 +503,7 @@ public sealed class ColorWheel : UserControl
     // the unrolled position of an arc that is drawn rolled.
     private const float ArcRoll = 0.26f;
 
-    // ---- 17.19: the ladder is FITTED to the room the dock leaves ----------
+    // ---- 17.20: the ladder is FITTED to the room the dock leaves ----------
     //
     // 17.17b's finding, and the user's ruling on it: at the two bottom docks
     // the dial sits 222.6 DIP off the bottom edge and the ladder wants far more
@@ -1048,7 +1048,7 @@ public sealed class ColorWheel : UserControl
         // 11.12 item 1: "the face labels are far too small." 11 -> 18.
         // 11.15 item 3 takes 20% back off that, against a bold face.
         _labelFmt.FontSize = 18f * Elem * _ui;
-        // _bubbleFmt is set with the ladder it belongs to, below - 17.19 gives
+        // _bubbleFmt is set with the ladder it belongs to, below - 17.20 gives
         // it an element scale and two assignments would be two answers.
         // 11.12: the plates are 42 DIP tall now against 26, so they reach
         // inward to where the recents row used to sit and the first chip landed
@@ -1087,19 +1087,58 @@ public sealed class ColorWheel : UserControl
         // more than its own height. Nothing is measured off the tiers, so the
         // HSL and RGB faces no longer inherit the COPIC face's band structure.
         //
-        // 17.19: the ladder's angular span is settled BEFORE its radii now,
-        // because the fit below needs to know which bearings the fan occupies
-        // before it can say how much room the window leaves along them. The
-        // two lines are the ones that were below; nothing about them changed.
-        float arcRoll = ArcRoll * rollSign;
+        // 17.20: the ladder's angular span is settled BEFORE its radii, because
+        // the fit below needs to know which bearings the fan occupies before it
+        // can say how much room the window leaves along them.
+        //
+        // 17.22: AND THE ROLL IS DROPPED IN THE VIEWPORT'S BOTTOM HALF.
+        //
+        // ArcRoll exists for one purpose, stated at its own declaration: to push
+        // the ladder's ANTICLOCKWISE end - and the value box hung outside it -
+        // DOWN, off the top chrome bar. That is worth 0.26 rad at a dock near
+        // the top. At a dock near the BOTTOM the very same push drives the
+        // CLOCKWISE end down instead, into the bottom edge, and that is the
+        // whole of 17.17b's overrun: measured at BottomLeft in 1440x900 the fan
+        // runs -0.975 to +0.745 rad, so its low end points 42.7 degrees below
+        // the horizontal, and 0.26 of that is this constant's own doing.
+        //
+        // 17.17b recorded that no rotation could fix this. THAT WAS WRONG, and
+        // it is corrected in the reference rather than quietly worked around -
+        // dropping the roll here removes 78.95 DIP of overrun at 1440x900 and
+        // 73.94 at 1366x768, taking both bottom corners from off-screen to 38.3
+        // and 11.0 DIP of clearance, AT NO COST AT ALL: every element keeps its
+        // full size, every channel keeps its full travel, and the fit below then
+        // finds nothing to do.
+        //
+        // Asked on Y exactly as rollSign is asked on X, and for the identical
+        // reason - _c and the viewport are the only things this class knows, so
+        // "which half of the window is the wheel's centre in" is the only form
+        // of the question it can put. It cannot ask ToolWheel which dock it is.
+        //
+        // THE PLATE FAN IS NOT TOUCHED. Its roll is Roll0 = 0.18 and this one is
+        // 0.26: the two have NEVER been rolled by the same amount, so this does
+        // not part chrome that used to move together. 17.17's objection was to
+        // rolling them in OPPOSITE DIRECTIONS on the right-hand docks, and the
+        // sign still mirrors together. The fan clears all eight docks with 25.7
+        // DIP to spare and keeps every one of them.
+        float arcRoll = _c.Y > h * 0.5f ? 0f : ArcRoll * rollSign;
         float top = _base + arcRoll + 0.86f, bot = _base + arcRoll - 0.86f;
+        // 17.22 keeps this. The roll covers every viewport a window is likely to
+        // be at, but it is a ROTATION and three cases stay radial: at 3840x1080
+        // the bottom corners still run 23.30 DIP over and the TOP corners 0.22,
+        // and at 900x640 the two side docks - which are in neither half, so the
+        // roll never reaches them - run 26.10. Measured with the roll in place,
+        // the solve closes all three in REGIME A, squeezing only air: el is
+        // 1.000 at every dock at every viewport tested, so nothing that can be
+        // read or hit is ever smaller than it is now. It costs 4.2% of travel at
+        // the ultrawide's bottom corners and 0.7% of one gap at its top ones.
         FitLadder(w, h, bot, top);
         float lu = _ui * Elem;
         _arcW = 9f * lu * _ladderEl;
         _arcKnob = _arcW + 4.5f * lu * _ladderEl;
         float pitch = _arcW * 2f + 72f * lu * _ladderGap;
         float arc0 = _r1In + 40f * lu * _ladderGap;
-        // 11.15 item 3 / 11.20 item 4 set the bubble's size; 17.19's element
+        // 11.15 item 3 / 11.20 item 4 set the bubble's size; 17.20's element
         // scale is the only thing that moves it off that, and it moves the
         // DRAWN box and the live field together because both read it here.
         _bubbleFmt.FontSize = LadBubbleRef * Elem * _ui * _ladderEl;
@@ -1118,19 +1157,30 @@ public sealed class ColorWheel : UserControl
         // see rollSign above - and it mirrors WITH it because the plate fan and
         // this ladder are one piece of hub chrome. Rolling them opposite ways on
         // the right-hand docks would be visibly incoherent whatever it bought.
+        // That still holds: 17.22 drops the roll in the bottom half, it does not
+        // reverse it, so the two never point opposite ways.
         //
-        // WHAT THIS DOES AND DOES NOT FIX. It fixes the ladder at the top-right
-        // dock, which ran 108.9 DIP off the TOP edge. It does NOT reach the two
-        // BOTTOM corners, and it moved that defect from bottom-left onto both of
-        // them: the overrun there is RADIAL - the dial sits 222.6 DIP off the
-        // bottom edge and the ladder reaches further than that down the fan's
-        // low end - so no rotation of the fan is the answer to it. 17.19's
-        // FitLadder is, and it runs above: the roll is unchanged and the RADII
-        // give instead. The fan itself (plates, eyedropper, star and puck, all
+        // WHAT THE MIRROR DOES AND DOES NOT FIX. It fixes the ladder at the
+        // top-right dock, which ran 108.9 DIP off the TOP edge. It does not
+        // reach the two BOTTOM corners, and it moved that defect from
+        // bottom-left onto both of them.
+        //
+        // ~~"so no rotation of the fan is the answer to it"~~ - THIS LINE WAS
+        // WRONG and is kept struck through rather than deleted, because the
+        // evidence that produced it is still here and a clean correction would
+        // invite the next reader to derive it again. The overrun IS reachable by
+        // rotation, and by the cheapest rotation there is: ArcRoll's own 0.26 is
+        // what tips the fan's low end to 42.7 degrees below horizontal at a
+        // bottom dock, and dropping it there clears both corners at every normal
+        // viewport with every element at full size. See the roll line above.
+        //
+        // The RADIAL solve (17.20's FitLadder) is still here and still runs, but
+        // it is now a backstop for the three cases rotation cannot reach rather
+        // than the fix. The fan itself (plates, eyedropper, star and puck, all
         // inside 209 DIP) clears every one of the eight docks with 25.7 DIP to
-        // spare at worst and is not touched by either.
+        // spare at worst and is touched by none of this.
         //
-        // arcRoll, top and bot now live ABOVE, with the radii - see 17.19.
+        // arcRoll, top and bot now live ABOVE, with the radii - see 17.20/17.22.
         if (_mode == ColorWheelMode.Hsl)
         {
             _arcCount = 2;
@@ -1245,7 +1295,7 @@ public sealed class ColorWheel : UserControl
 
     private Vector2 At(float r, float a) => _c + new Vector2(r * MathF.Cos(a), r * MathF.Sin(a));
 
-    /// <summary>17.19. Solves the two ladder scales against the room the dock
+    /// <summary>17.20. Solves the two ladder scales against the room the dock
     /// actually leaves, and leaves both at 1 when the ladder already fits.
     ///
     /// <para>The ladder's furthest element is the value box: it reaches 39
@@ -1806,7 +1856,7 @@ public sealed class ColorWheel : UserControl
     // on the reference, the one piece of this control the doc gives an explicit
     // colour to, and it sits ON a saturated gradient arc rather than on the
     // page, so it takes its contrast from the arc and not from the paper.
-    /// 17.19: the box is an ELEMENT - it carries a number the user reads and a
+    /// 17.20: the box is an ELEMENT - it carries a number the user reads and a
     /// field they type into - so it takes the element scale, not the gap scale,
     /// and at every dock with room to spare that scale is exactly 1.
     private float BoxW => 62f * _ui * Elem * _ladderEl;
