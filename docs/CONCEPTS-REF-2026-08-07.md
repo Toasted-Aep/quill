@@ -4821,7 +4821,10 @@ than quietly wiring it up". Every item was read out of the source, not inferred.
   pair** (`surfaceCarriesUndo = IsWheel || !LegacyBar`).
 - **No §16.3 capability greying.** `BuildPenStrip` never touches
   `SelectionState`, so with an attachment selected the row's pens look exactly
-  as live as they do on an empty page.
+  as live as they do on an empty page. **Half-retired by §17.21**: the row's
+  *colour dot* now greys, because §16.3 names it by hand. The pens and — since
+  §17.20 — the tool cells still do not, and that is a ruling rather than an
+  omission.
 - **No §11.25 assignment route.** Right-click on a chip opens
   `CreatePresetFlyout` — *edit this pen*, not *retarget this cell*. The Brushes
   library's targeted assignment (§11.24) has nothing to aim at, because the row
@@ -5230,6 +5233,7 @@ implements it (`ColourInert`); `ToolWheel` implements it; the **legacy row's
 colour dot that silently cannot recolour it. That is a real defect, it is
 pre-existing, it is about a *property* control rather than a tool cell, and it
 is outside both rulings. Reported for a decision rather than folded in.
+**The decision came back — fix it. §17.21 is that fix.**
 
 #### Kept recognisably the old row
 
@@ -5299,3 +5303,73 @@ is a `Button`, so the hit target is the template's own, not the mark's
 (`Icons.Mark` hosts on a Canvas with `IsHitTestVisible = false` by design); that
 is the same construction every existing chip in this row uses, which is why it
 is expected to work, but it is not proof.
+
+### 17.21 The legacy row's colour dot goes white with the dial
+
+> *the user, ruling on §17.20's report:* fix it — and **mirror the existing rule
+> rather than inventing one**.
+
+§16.3 names its surfaces in a single sentence: the colour circle goes white and
+unusable *"in the dial **and** in the pen row"*. `ToolWheel` had it, `PenBar`
+had it, and the legacy row — which **is** the pen row whenever §17.17's setting
+is on — did not. With an attachment selected it offered a live, clickable dot
+that opened the wheel on a subject the wheel could not recolour. That is the
+failure §16.3 calls out in its own words: *"a live-looking colour control that
+silently does nothing is worse than one that says so."*
+
+**Nothing new was decided here.** All three surfaces now ask one question of one
+object, spelled identically in all three:
+
+```csharp
+private static bool ColourInert => SelectionState.Current is { Any: true, CanRecolour: false };
+```
+
+A fourth spelling of the same predicate is how two surfaces begin to disagree.
+
+#### Three changes — the subscription, the paint, the refusal
+
+- **It listens to the same state.** `SelectionState.Changed += SyncPenRowColour`,
+  placed beside the window's existing `SelectionState.Changed += SyncBottomMenu`
+  and matching the subscription `PenBar` already makes for exactly this reason
+  (*"16.3: the pen row greys with the dial, so it listens to the same state"*).
+  The row previously had **no route at all** by which a selection could reach it;
+  this is that route, and it is the one the other surface uses.
+- **WHITE, not dimmed.** `SyncPenRowColour` fills `PenRowColourDot` with
+  `Microsoft.UI.Colors.White` when inert, short-circuiting before it reads the
+  active preset. White is the one fill that cannot be misread as a colour the
+  subject carries — `PenBar.ColourRow` records the same reasoning, and neither
+  surface merely dims.
+- **The press is refused.** `PenRowColour_Click` returns on `ColourInert` before
+  it touches a preset. `ToolWheel` refuses at the matching point (`if (z ==
+  Zone.Dot && ColourInert) return;`); `PenBar` goes further and never wires the
+  tap at all. That third option is not available here — this dot is a XAML
+  `Button` with its `Click` declared in markup — so the row takes `ToolWheel`'s
+  shape of the same guard rather than being rebuilt to take `PenBar`'s.
+
+#### What deliberately did NOT change
+
+- **§17.20's ruling stands.** The pens and the eight tool cells still do not
+  grey. §16.3's rule is *"a subject that LACKS a **property** greys that
+  **property's** control"*, and a tool cell sets no property. This change reaches
+  exactly one control: the one §16.3 names by hand.
+- **§16.9 is still absent here, and this does not pretend otherwise.** `PenBar`
+  and `ToolWheel` also show a *recolourable* selection's own ink in the dot, and
+  on commit recolour the selection rather than the pen. The legacy dot still
+  reads the active pen's colour and still writes to the pen. So with a **stroke**
+  selected the three surfaces now agree that the dot is live and still disagree
+  about what it reads and what it writes. That is a §16.9 gap, not a §16.3 one —
+  reported here rather than folded in, for the same reason §17.20 reported this
+  one.
+- **The other route through this button is untouched.** §17.9's Filter opens the
+  wheel with `PenRowColourBtn` as a *positioning anchor* only (`OpenFilterMenu`),
+  carrying its own subject. It is not the row's colour control and is not gated.
+
+#### Not verified on screen
+
+The same standing debt §17.20 records. The build is clean at 0 warnings and all
+thirteen checkers hold at their counts — and **not one of them renders this row
+or drives a selection through it**. What a screen run still owes: that the dot
+actually turns white when an image is selected and returns to the pen's colour
+when it is deselected, and that the click is genuinely refused rather than
+merely appearing to be. `VeilRoundTrip` exercises §16.7's page fade for the very
+same selection and says nothing about this dot.
