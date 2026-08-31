@@ -192,6 +192,173 @@ dark object on the canvas does it, anywhere the fan happens to land, and the
 three siblings are inconsistent *within one fan and one frame*. A ΔL\* step
 computed against the *page* would not fix this case at all: the page is red.
 
+### §17.17a the legacy pen row's tool cells — **PASS, and they close §17.20's hole**
+
+Settings ▸ Workspace ▸ Tool Setup now carries **"Old pen row"**, a toggle under
+the Wheel/Bar circles, **on by default**, with the caption *"Applies to the Bar
+palette only."* It is findable and it switches live — no restart, no reopen.
+
+With Bar + old row selected, the row (`vp4/20-penrow3x.png`, 3x) reads left to
+right: grip, then **eight tool cells** — eraser, lasso, `A`, insert, fill,
+eyedropper, ruler, Mix — then the eight pen presets, the colour dot, `+`, and the
+collapse chevron. Pressing the eraser cell selects it, the cell takes a lighter
+selection chip, and the previously raised pen drops back into line
+(`vp4/21-row3x.png`). **§17.20's "the row has no tool cells of any kind" is out
+of date** — that was the hole it called "THE ONE THAT IS A REAL HOLE", and
+§17.17a has filled it.
+
+*Incidental, unchanged since run 3:* the Settings **Bar icon is still the tall
+vertical segmented rectangle**, i.e. it still depicts `PenBar`, the palette the
+default toggle keeps off. Run 3 flagged this and it is the same picture.
+
+*Also:* the Background swatch's label is **clipped to "Custom Colo"** — the cell
+is a few DIP narrower than its own caption.
+
+### §16.8 the undo/redo pair — **RETURNS WINDOWED. GOES AGAIN IN FULLSCREEN.**
+
+`MainWindow.xaml.cs:9917` is now
+`surfaceCarriesUndo = ToolSurfaceService.IsWheel || !ToolSurfaceService.LegacyBar`,
+so under Bar + old row the top bar carries the pair. **Windowed, it does**
+(`vp4/20-topbar4x.png`, 4x): Pen, Text, Lasso, Insert, a gap, then **undo and
+redo** as a mirrored pair of curved arrows, drawn dim on an empty stack. Run 3's
+"no pointer route to undo" is fixed for the windowed case.
+
+**In fullscreen it is not.** `ApplyFullscreenChrome` still computes
+`fold = fs && _chromeBars?.IsVisible == true` — **unconditional on the surface**,
+exactly as §17.20 describes it, and §17.20's suggested fix is marked *"Not built
+— the user rules on it."* So with the legacy row up, going fullscreen fades
+`TopBar` out and **takes BtnUndo and BtnRedo with it**.
+
+Swept the whole fullscreen top strip at 2x, both halves
+(`vp4/23-fstopL.png`, `vp4/23-fstopR.png`): notebook, `Study`, layers, precision,
+artboard, the pen row entire, then exit-fullscreen, `91%`, `0°`, sparkle,
+download, upload, gear, `?`. **No undo. No redo. Anywhere.** The legacy row has
+none of its own — the Settings tooltip says so out loud ("no undo or redo of its
+own") — so §16.8's stranding is back, in fullscreen, two clicks from the default.
+
+**Worth saying plainly: §17.20 framed this hole as being about TOOLS, and the
+tools are the half that got fixed.** §17.17a gave the row tool cells, so
+fullscreen no longer strands the user without an eraser or a lasso. What it
+strands them without is **undo** — which §17.20's text does not name, and which
+its proposed one-expression fix to `fold` would have carried along for free.
+
+### §17.15 the strip and the reclaimed margin — **the 10 DIP is REAL. "No live control under the strip" is NOT.**
+
+**The arithmetic, measured live at last.** `FullscreenChrome.Metrics`:
+`RevealBand = 4`, `StripHeight = 34`, `StripWidth = MarkPitch 46 x MarkCount 3 =
+138`, `StripSlack = 6`. On screen the revealed strip measures **138.0 x 33 DIP,
+flush to the top-right corner**, left edge at x = 1302 DIP (`vp4/24-strip.png`,
+sampled above the buttons so the mask cannot merge them). The topmost live
+control below it — the ChromeBars right cluster — has its **top edge at exactly
+14.0 DIP**. Against a 4 DIP arming band that is **10.0 DIP of clearance**, which
+is the ~10 DIP figure that had never been checked. **It holds.**
+
+**And the format bar clears easily.** With Text selected in fullscreen
+(`vp4/25-fs-text.png`) the rightmost live ink in the format bar sits at
+**1251.5 DIP** against the strip's 1302 — **50.5 DIP of clearance**. §17.15's
+sideways reservation (`8 + StripReserve`, 152 DIP of right padding) works.
+
+**But the strip does land on live controls, and on the DEFAULT tool.** The
+reservation is applied to `FormatBar` and `TopBar`. In fullscreen with the
+caption row folded and **no format bar** — i.e. every tool except Text, the pen
+included — the bar actually at the top-right is **ChromeBars, which gets no
+reservation at all**. Measured (`scratchpad/corners2.ps1`):
+
+| | box (DIP) | inside the strip's 1302..1440? |
+|---|---|---|
+| sparkle | x 1224..1257.5, y 14..47.5 | no |
+| download | x 1266..**1299.5** | clears by **2.5 DIP** |
+| **upload** | x 1308..1341.5 | **yes** |
+| **gear** | x 1350..1383.5 | **yes** |
+| **help ?** | x 1392..1425.5 | **yes** |
+
+Against a strip occupying y 0..33 DIP, those three overlap it by **19 DIP of
+their 34 DIP height**. `vp4/24-strip4x.png` shows it plainly: the upload tray is
+cut in half, the gear is reduced to its bottom teeth, the `?` to its dot.
+
+**How bad is it in practice? Not as bad as the numbers.** Two things save it,
+and both were checked on screen rather than assumed:
+
+* Hovering **straight onto the gear at its own centre** (DIP 1366, 30.5) does
+  **not** arm the strip — the 10 DIP margin does its job, and the gear hovers and
+  shows its tooltip normally (`vp4/26-gear4x.png`).
+* Arming the strip first and then walking down onto the gear **retracts it**, and
+  the gear becomes reachable (`vp4/27-ongear4x.png`).
+
+So it is an occlusion, not a block. But §17.15's requirement as written is "no
+live control under the strip", and on the default tool three of them are.
+**With the format bar up the problem vanishes** — the bar takes the top row and
+pushes ChromeBars down to y 57..90.5 DIP, clear by 24 — which is exactly why the
+case that fails is the one nobody looks at.
+
+### §17.6 the panel round trip — **PASS, and not merely proportionally: EXACTLY**
+
+Fullscreen, Settings open, Tool Setup expanded. The panel's **bottom-left grip is
+hover-revealed** — absent until the pointer is over the panel, then a grey arc
+inside each bottom corner (`vp4/30-bottom2x.png`; my first look missed it because
+the pointer was parked on the canvas). Grabbed at (924.5, 771.5) DIP and dragged
+out to fill; **the grip drag lands cleanly**, unlike the dial's.
+
+Measured with `scratchpad/panelrect.ps1` against the red page:
+
+| state | panel (DIP) | left | top | right | bottom |
+|---|---|---|---|---|---|
+| **B** fullscreen, dragged to fill | **1255.5 x 823** | 169 | 61.5 | **15.5** | **15.5** |
+| **C** windowed (round trip midpoint) | 1336 x 790 | 88.5 | 94.5 | **15.5** | **15.5** |
+| **D** fullscreen again | **1255.5 x 823** | 169 | 61.5 | **15.5** | **15.5** |
+
+**D is identical to B in every figure.** Size and gap do not merely return
+proportionally, they return to the DIP. The right and bottom gaps hold at 15.5
+through all three states; leaving fullscreen moves the panel's TOP down by
+exactly the 33 DIP the caption row costs and leaves the bottom pinned.
+
+### §17.3 custom colour — **PASS, both halves**
+
+Pressing the **Custom Color** swatch opens the wheel, centred on the swatch, with
+the Settings panel dimmed behind it (§11.19), and it opens **at the colour the
+swatch is holding** — the HSL knobs read `355°`, `45%`, `35%`, the red in use
+(`vp4/35-custom-half.png`). Dismissed, the swatch still carries the red and its
+selected ring; **pressing it again reopens the wheel** at the same colour
+(`vp4/40-re-half.png`). It also survives a detour: after switching the paper away
+to Plain White, Blueprint and Darkprint and pressing Custom Color again, the page
+came back to the **same** `#E10619`.
+
+*But two controls in that wheel would not take a press.* Neither a click on the
+hue arc's band nor a drag of the `355°` knob — grabbed within **2 physical px**
+of its measured centre (852, 1115) and dragged ~350 px along the arc — changed
+the readout. The arc is alive to *hover*: the pointer raises a large translucent
+grab ring that follows it along the band (`vp4/39-a3x.png`). This is the same
+signature as the dial's rim drag, and it is the second control found this run
+where a gesture that should MOVE something does not land while taps that SELECT
+something do. The Settings panel's grip, by contrast, drags fine — so it is not
+every drag in the app.
+
+### §17.18.1's requested measurement — **DONE, all five grounds, and the plate never moves**
+
+§17.18.1 asked for plate-against-page on OLED black, Darkprint, Blueprint, Brown
+Paper and Plain White. Run 3 had two of them. Here are the rest, measured off the
+**gear button's own plate** against the page sampled in the gap beside it
+(`scratchpad/plate.ps1`, sRGB relative luminance and CIE L\*):
+
+| paper | page | plate | contrast | ΔL\* |
+|---|---|---|---|---|
+| OLED black *(run 3)* | `#000000` | `#0F0E10` / `#212022` | 1.09 / 1.29 : 1 | — |
+| **Darkprint** | `#262B31` | `#0F0E10` | **1.35 : 1** | **13.3** |
+| Brown Paper *(run 3)* | `#A36E3E` | `#0F0E10` / `#212022` | 3.62 / 4.29 : 1 | — |
+| **Custom red** | `#E10619` | `#0F0E10` | **3.89 : 1** | **43.2** |
+| **Blueprint** | `#2D7FC1` | `#0F0E10` | **4.54 : 1** | **47.5** |
+| **Plain White** | `#FCFCFC` | `#0F0E10` | **18.77 : 1** | **94.9** |
+
+**`#0F0E10` on every single one.** Six papers across three runs and the plate has
+never once moved. §17.2's *"a background that mimics the page colour, so the
+button almost disappears into the page"* is delivered only where the page happens
+to be near-black anyway; on **Plain White the corner button sits at 18.77 : 1,
+ΔL\* 94.9** — maximum possible contrast, the exact opposite of what the section
+asks for, and the paper a note-taking app is most likely to be used on.
+
+A ΔL\* step computed against the page, as §17.18.2 proposes, still assumes the
+plate resolves from the page. It does not, on any of the six.
+
 ## RUN OF 2026-08-26 (third screen run) — `integration` @ `4d88688`
 
 Rebuilt clean with the given command, 0 warnings, binary of 19:42. Scratch
