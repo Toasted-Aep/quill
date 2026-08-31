@@ -2854,7 +2854,7 @@ public sealed partial class MainWindow : Window
     // the old accent ring as the selection cue.
     private readonly Dictionary<Guid, TranslateTransform> _penLifts = new();
     private TranslateTransform? _eraserLift;
-    // 17.20: the tool cells join the same cue rather than inventing a second
+    // 17.21: the tool cells join the same cue rather than inventing a second
     // one. A pen lifts, a tool lifts, and the row has one way of saying "this
     // is the live cell" whatever kind of cell it is.
     private readonly Dictionary<string, TranslateTransform> _toolLifts = new();
@@ -2895,7 +2895,7 @@ public sealed partial class MainWindow : Window
     private void BuildPenStrip()
     {
         PresetPanel.Children.Clear();
-        // 17.20: the eraser chip is ToolOrder[0] and stays exactly where it has
+        // 17.21: the eraser chip is ToolOrder[0] and stays exactly where it has
         // always been - first cell, immediately before the shelf. It is not
         // rebuilt as a generic tool cell: it is the one tool with a right-click
         // flyout of its own (point/stroke mode, the four point styles, its own
@@ -2942,7 +2942,7 @@ public sealed partial class MainWindow : Window
         SyncPenRowColour();
     }
 
-    /// <summary>CONCEPTS-REF 17.20. The legacy pen row's TOOL CELLS.
+    /// <summary>CONCEPTS-REF 17.21. The legacy pen row's TOOL CELLS.
     ///
     /// <para><b>Why they exist.</b> 17.17a found the row's one real hole: it had
     /// no tool cells at all. Windowed that cost nothing, because the legacy
@@ -7746,7 +7746,7 @@ public sealed partial class MainWindow : Window
         // and Mix in particular is unreadable without it - the whole feedback for
         // a dilution is watching the row's swatch go pale.
         //
-        // 17.20 RETIRES THE PEN-MODE GATE, and the reason is that its premise
+        // 17.21 RETIRES THE PEN-MODE GATE, and the reason is that its premise
         // expired. It read "outside pen/eraser mode neither the row nor its
         // reopen chip belongs on screen" (#14-batch4), which was true while the
         // row was a shelf of pens and nothing else. The row now CARRIES THE

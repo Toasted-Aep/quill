@@ -4855,25 +4855,65 @@ that already asks the question, and it reuses `ToolSurfaceService.LegacyBar`
 rather than adding a second flag. The alternative — giving the old row tool
 cells — is a rebuild of the row, and "old" is the point of the setting.
 
-#### 17.17b The bottom docks and the HSL/RGB arc ladder — open
+#### 17.17b The bottom docks and the HSL/RGB arc ladder — CORRECTED
 
-Making the dial movable created three docks that never existed (the bottom
-corners and bottom-centre), and one piece of hub chrome does not fit two of
-them. The COPIC face is fine everywhere: the plate fan — COPIC, HSL and RGB
-plates, the eyedropper, the star and the puck, all inside 209 DIP — clears all
-eight docks, tightest at the bottom corners with **25.7 DIP** to spare.
+**Corrected 2026-08-31. This section shipped two numbers and one conclusion, and
+the conclusion was WRONG.** Both are kept below exactly as they were written,
+struck through, rather than quietly replaced — the same treatment §15.1 gives
+the preset cross-product that never existed, and for the same reason: the
+evidence that produced them is still in the file, so a clean correction would
+only invite the next reader to derive them again from the same place.
 
-The **HSL and RGB faces' arc ladder** does not. Its outer arc sits at ~400 DIP,
-and a dial docked 677 DIP down a 900 DIP window has no 400 DIP beneath it, so
-the low end of the ladder overruns the bottom edge by **68.3 DIP** at
-**BottomLeft and BottomRight**. This is radial, not rotational: no roll fixes
-it. §17.17's roll-follows-the-dock fix cured the *top-right* ladder (it ran
-108.9 DIP off the top) and, because the roll mirrors, moved the bottom-corner
-overrun from bottom-left alone onto both bottom corners.
+What was here, verbatim:
 
-*Not built.* The fix is a decision the user should make: bias the ladder away
-from the nearest window edge rather than merely mirroring it, shorten it at the
-bottom docks, or accept that the two bottom corners are COPIC-only.
+> ~~The **HSL and RGB faces' arc ladder** does not. Its outer arc sits at ~400
+> DIP, and a dial docked 677 DIP down a 900 DIP window has no 400 DIP beneath
+> it, so the low end of the ladder overruns the bottom edge by **68.3 DIP** at
+> **BottomLeft and BottomRight**. This is radial, not rotational: **no roll
+> fixes it.**~~
+
+**Error 1 — "no roll fixes it" is false, and it cost a whole implementation.**
+The overrun is not merely reachable by rotation, it is *caused* by one.
+`ArcRoll` is 0.26 rad, and its stated purpose is to push the ladder's
+anticlockwise end DOWN, off the top chrome bar — worth having at a dock near the
+top. At a dock near the BOTTOM the identical push drives the *clockwise* end
+down instead, into the bottom edge. Measured at BottomLeft in 1440×900 the fan
+runs −0.975 to **+0.745** rad, so its low end points **42.7° below the
+horizontal**, and 0.26 of that is this constant's own doing. Drop the roll in
+the viewport's bottom half and both corners clear at every ordinary viewport
+with every element at full size. §17.22 is that fix.
+
+The damage was not just a wrong line in a document. This section's confidence
+was relayed to the user as established, and they chose a radial shrink (§17.20)
+partly *because* they were told rotation was impossible. Told correctly they
+would most likely have picked the roll first. **A claim of impossibility is the
+most expensive kind to get wrong**, because it removes an option from someone
+else's decision without their knowing it was removed.
+
+**Error 2 — 68.3 DIP reproduces as 40.63 DIP.** Not a rounding difference; the
+two numbers measure different things. "Its outer arc sits at ~400 DIP" is the
+**value box's far corner** (397.0 DIP), not the outer arc, which is at 348.14.
+Worked through in `scratchpad/ladder_fit.py`, which reproduces
+`ToolWheel.AnchorPoint` and `ColorWheel.Layout` so the figure is re-runnable
+rather than asserted.
+
+**What in this section was RIGHT and still stands**, so the correction does not
+throw out the finding with the numbers:
+
+- Making the dial movable created three docks that never existed (the bottom
+  corners and bottom-centre).
+- The COPIC face is fine everywhere: the plate fan — COPIC, HSL and RGB plates,
+  the eyedropper, the star and the puck, all inside 209 DIP — clears all eight
+  docks, tightest at the bottom corners with **25.7 DIP** to spare.
+- The ladder overruns at **BottomLeft and BottomRight**, symmetrically, and the
+  element that goes off screen is the **value box**.
+- §17.17's roll-follows-the-dock fix cured the *top-right* ladder (it ran 108.9
+  DIP off the top) and, because the roll mirrors, moved the bottom-corner
+  overrun from bottom-left alone onto both bottom corners.
+
+**Built, in two parts.** §17.20 fits the ladder radially to the room its dock
+leaves; §17.22 drops the roll in the bottom half and demotes §17.20's solve to a
+backstop for the three cases rotation cannot reach.
 
 
 ### 17.18 The dial's plates vanish on a black page, and the corner frames go square
@@ -4982,11 +5022,22 @@ to mid-luminance.
 **§17.4's other half still holds: no page texture in the plate.**
 
 
-### 17.19 The arc ladder is fitted to the room its dock leaves
+### 17.20 The arc ladder is fitted to the room its dock leaves
 
 > *the user, ruling on §17.17b:* **shrink the ladder at bottom docks.** Pull the
 > radius in so it fits — derive the radius from the room available, not from a
 > second hardcoded constant.
+
+**SUPERSEDED AS THE FIX BY §17.22, and kept as a backstop.** This ruling was
+made on §17.17b's assurance that rotation could not help. That assurance was
+wrong (see §17.17b, corrected), and once the roll is dropped in the viewport's
+bottom half the two bottom corners clear on their own. **Everything below is
+still live code** — `FitLadder` still runs on every layout pass — but with
+§17.22's roll in place it engages only in the three cases a rotation cannot
+reach, and when it does it engages in *regime A*, squeezing air and leaving
+every element at full size. **The legibility costs tabulated further down are
+therefore no longer paid at any viewport measured.** They are kept because they
+are what the mechanism costs if it is ever pushed into regime B again.
 
 The second constant was ruled out for a recorded reason: this codebase has that
 drift three times over — the zoom range in three places at two values,
@@ -5149,7 +5200,7 @@ corner and its neighbour, since the two scales change discontinuously at the
 dock boundary.
 
 
-### 17.20 The legacy pen row gets tool cells
+### 17.21 The legacy pen row gets tool cells
 
 > *the user, ruling on §17.17a:* **give the old row tool cells** — chosen over
 > making `ApplyFullscreenChrome`'s fold conditional, having been told plainly
@@ -5168,7 +5219,7 @@ other tool" was two clicks away.
 FreeSpace, Fill, Eyedropper, Ruler, Mix. Not a copy of the list — the same list,
 newly exposed as `IReadOnlyList<string>` off the dial's own private array, so
 the row cannot drift into a second ordering. Two orders for one set of tools is
-exactly the drift §17.19 was told to avoid on the other half of the same task.
+exactly the drift §17.20 was told to avoid on the other half of the same task.
 
 **The boundary is the dial's sectors.** The row gets what a sector can hold and
 nothing else, which settles the two questions that boundary answers at once:
@@ -5268,21 +5319,35 @@ The eraser chip keeps its existing `Surface.Tool == ToolType.Eraser` test
 untouched; the two agree for the eraser, and churning a working line to unify
 spelling would be a change with no reader.
 
-#### One wrinkle, reported not patched
+#### The pen-mode gate — reported here, then RETIRED on the user's ruling
 
-`ApplyPenRowVisibility` has a pen-mode gate — the row hides outside
+`ApplyPenRowVisibility` had a pen-mode gate — the row hid outside
 `Pen / Eraser / Ruler / Eyedropper / Mix`. **With the Concepts shell on (the
-default), it does not apply**: `legacyIsSurface` overrides it precisely because
-the legacy row is then the only tool surface on screen, so every new cell stays
-visible after it is clicked, and the fullscreen hole is fully closed.
+default) it never applied**: `legacyIsSurface` overrode it precisely because the
+legacy row is then the only tool surface on screen, so every new cell stayed
+visible after it was clicked and the fullscreen hole was fully closed.
 
-**With `RadialToolDial` switched OFF in Settings**, the shell goes away, the
-gate applies, and clicking the new Text, Select, FreeSpace or Fill cell hides
-the row that carries it. It reappears on Pen, and in that configuration the
-legacy `TopBar` is up and shows the tool state, so nothing is unreachable — but
-a shelf that vanishes when you pick a tool from it is a wrinkle. Fixing it means
-widening the pen-mode gate, which changes when the row shows in the pre-Concepts
-app, and that is beyond this ruling.
+**With `RadialToolDial` switched OFF in Settings** the shell goes away, the gate
+applied, and clicking the new Text, Select, FreeSpace or Fill cell hid the row
+that carried it — the control disappearing at the moment it was used. Nothing
+became unreachable (the legacy `TopBar` is up there), but it was reported as a
+wrinkle, and the user ruled: **the gate stops hiding the row when the row is the
+tool surface.**
+
+**Retired rather than widened.** A widened tag list would have to name all eight
+tools and then be edited again by the next one. The rule is that the row belongs
+on screen *because it is a tool surface*, and it is one in every configuration
+it appears in — with the shell up `legacyIsSurface` already said exactly that,
+and with the shell off the row is the app's **only** route to Fill, Eyedropper,
+Ruler and Mix, since the legacy `TopBar` carries just Pen, Text, Select and
+FreeSpace. The gate's own premise — "outside pen/eraser mode neither the row nor
+its reopen chip belongs on screen" (#14-batch4) — was true while the row was a
+shelf of pens and expired the moment it carried tools.
+
+**What changes on screen:** nothing in the default configuration. With
+`RadialToolDial` off the row now also stays up under Text, Select, FreeSpace and
+Fill, where it used to fade. That is the whole of the difference, and it is the
+one part of this change that has not been seen running.
 
 #### Not verified on screen
 
@@ -5299,3 +5364,104 @@ is a `Button`, so the hit target is the template's own, not the mark's
 (`Icons.Mark` hosts on a Canvas with `IsHitTestVisible = false` by design); that
 is the same construction every existing chip in this row uses, which is why it
 is expected to work, but it is not proof.
+
+
+### 17.22 The ladder's roll is dropped in the viewport's bottom half
+
+> *the user, reversing their §17.20 ruling once §17.17b's error was reported:*
+> **zero the roll at the bottom docks and drop the shrink.**
+
+**This is the fix §17.17b said did not exist.** That section's "no roll fixes
+it" was relayed as established, and the radial shrink of §17.20 was chosen partly
+because of it. See §17.17b, corrected in place.
+
+#### Why the roll was the cause, not merely a cure
+
+`ArcRoll` is 0.26 rad and its declared job is to push the ladder's
+**anticlockwise** end — and the value box hung outside it — DOWN, clear of the
+top chrome bar. That is worth having at a dock near the top. At a dock near the
+**bottom** the identical push drives the **clockwise** end down instead, into
+the bottom edge. Measured at BottomLeft in 1440×900 the fan runs −0.975 to
+**+0.745** rad, so its low end points **42.7° below the horizontal** — and 0.26
+of that is this constant's own doing. The overrun was self-inflicted.
+
+    float arcRoll = _c.Y > h * 0.5f ? 0f : ArcRoll * rollSign;
+
+Asked on **Y** exactly as `rollSign` is asked on **X**, and for the identical
+reason: `_c` and the viewport are the only things `ColorWheel` knows, so "which
+half of the window is the wheel's centre in" is the only form of the question it
+can put. It cannot ask `ToolWheel` which dock it is in.
+
+#### The plate fan is not touched, and the coherence objection does not apply
+
+§17.17 kept the ladder's roll mirroring with the fan's because "the plate fan and
+this ladder are one piece of hub chrome", and that still holds — **this drops the
+roll, it does not reverse it, so the two never point opposite ways.** The
+objection was specifically to opposite *directions* on the right-hand docks.
+
+And the two were never rolled by the same amount in any case: the fan rolls at
+`Roll0 = 0.18` and the ladder at `ArcRoll = 0.26`. This does not part chrome that
+used to move together. The fan — plates, eyedropper, star and puck, all inside
+209 DIP — clears all eight docks with 25.7 DIP to spare and keeps every one.
+
+#### Every dock, 1440 × 900 — the roll alone, against §17.17 as shipped
+
+| dock | overrun before | after | verdict |
+|---|---|---|---|
+| TopLeft | −94.52 | −94.52 | untouched, identical geometry |
+| TopCentre | −301.85 | −301.85 | untouched, identical geometry |
+| TopRight | −94.52 | −94.52 | untouched, identical geometry |
+| RightCentre | −103.90 | −103.90 | untouched, identical geometry |
+| **BottomRight** | **+40.63** | **−38.32** | fixed, 78.95 DIP removed |
+| BottomCentre | −294.04 | −294.04 | rotated, clearance **bit-identical** |
+| **BottomLeft** | **+40.63** | **−38.32** | fixed, 78.95 DIP removed |
+| LeftCentre | −103.90 | −103.90 | untouched, identical geometry |
+
+**Five docks are untouched and BottomCentre's clearance is bit-identical** — its
+arcs rotate, but the bearing that binds it is straight up (`_base` points at the
+window's middle from directly below) and −π/2 is inside the span either way, so
+the extent it is measured on does not move at all. At 1366×768 the same shape:
+five untouched, BottomCentre bit-identical, both corners fixed with **73.94 DIP**
+removed.
+
+**And it costs nothing.** `arc0` 284.78, outer arc 348.14, box centre 372.78,
+value type 10.56 DIP, hue travel 489.82, segment travel 162.47 — every one of
+them identical to §17.17 at every dock. The whole of §17.20's legibility bill is
+refunded: 1366×768 goes back from 5.51 DIP type to 10.56, and 3840×1080 from
+4.48 to 10.56.
+
+#### Why §17.20's solve is KEPT — the roll does not cover everything
+
+The roll is a **rotation**, and three cases are radial enough to survive it. This
+was measured before removing anything, and the solve was kept because of it:
+
+| viewport | dock | before | roll alone | roll + solve |
+|---|---|---|---|---|
+| 3840×1080 | Bottom corners | +89.70 | **+23.30** | **0.00** |
+| 3840×1080 | Top corners | +0.22 | **+0.22** | **0.00** |
+| 900×640 | Left/RightCentre | +26.10 | **+26.10** | **0.00** |
+
+The ultrawide bottom corners keep 23.30 DIP because at an extreme aspect ratio
+`_base` is nearly horizontal and the fan's own ±0.86 rad span puts its low end
+49.3° down with **no roll at all** — the aspect ratio dominates, not the roll.
+The top corners and the side docks the roll never reaches: it acts only in the
+bottom half, and the side docks sit exactly on the midline.
+
+**With the roll in place the solve closes all three in regime A**, squeezing only
+air: **`el` is 1.000 at every dock at every viewport tested**, so nothing that
+can be read or hit is ever smaller than §17.17 drew it. It costs 4.2% of travel
+at the ultrawide's bottom corners (gap 0.574) and 0.7% of one gap at its top
+corners (gap 0.993). **Roll plus solve is strictly better than either alone at
+every viewport measured** — better than the solve alone, which left 14.37 DIP
+over at 3840×1080 *and* charged 4.48 DIP type for it; and better than the roll
+alone, which leaves three cases off screen.
+
+#### Not verified on screen
+
+**No screen run.** What one still owes: that the ladder does not visibly *snap*
+as the dial is dragged across the horizontal midline, since the roll changes
+discontinuously there by 0.26 rad — this is the one new artefact the change can
+produce, it did not exist before, and it is the first thing to look at; that the
+fan and the ladder still read as one instrument at a bottom dock now that only
+one of them is rolled; and that BottomCentre's rotation, which the arithmetic
+says is free, is also free to the eye.

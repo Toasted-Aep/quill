@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""17.17b / 17.19: does the HSL+RGB arc ladder fit the dock the dial is in?
+"""17.17b / 17.20: does the HSL+RGB arc ladder fit the dock the dial is in?
 
 Reproduces, in one place, the arithmetic that decides where the ladder lands:
 ToolWheel.AnchorPoint (which of the eight docks puts the dial's centre where)
@@ -100,8 +100,8 @@ BUBBLE_REF = 15.0
 
 
 class Ladder:
-    """mode: 'before' = as 17.17 shipped it; 'fit' = 17.19's radial shrink;
-    'roll' = 17.21, the roll zeroed in the viewport's bottom half."""
+    """mode: 'before' = as 17.17 shipped it; 'fit' = 17.20's radial shrink;
+    'roll' = 17.22, the roll zeroed in the viewport's bottom half."""
 
     def __init__(self, cx, cy, w, h, mode: str = "before"):
         self.cx, self.cy, self.w, self.h = cx, cy, w, h
@@ -118,7 +118,7 @@ class Ladder:
         self.ui = min(max((self.r1in - lo) / 100.0, 0.80), 1.10)
         self.u = self.ui * Elem
 
-        # 17.21. ArcRoll exists to push the ladder's ANTICLOCKWISE end DOWN,
+        # 17.22. ArcRoll exists to push the ladder's ANTICLOCKWISE end DOWN,
         # off the top chrome bar. In the viewport's bottom half that same push
         # drives the CLOCKWISE end into the bottom edge instead, which is the
         # whole of 17.17b's overrun. Asked on Y exactly as rollSign is asked on
@@ -226,9 +226,9 @@ class Ladder:
 
 
 MODES = (("BEFORE - 17.17 as shipped", "before"),
-         ("FIT    - 17.19's radial shrink alone", "fit"),
-         ("ROLL   - 17.21's zeroed roll alone", "roll"),
-         ("BOTH   - 17.21 shipped: roll zeroed, solve kept as backstop", "both"))
+         ("FIT    - 17.20's radial shrink alone", "fit"),
+         ("ROLL   - 17.22's zeroed roll alone", "roll"),
+         ("BOTH   - 17.22 shipped: roll zeroed, solve kept as backstop", "both"))
 
 
 def table(w, h):

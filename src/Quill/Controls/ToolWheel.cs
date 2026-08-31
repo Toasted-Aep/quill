@@ -379,12 +379,12 @@ public sealed class ToolWheel
         { "Eraser", "Select", "Text", "FreeSpace", "Fill", "Eyedropper", "Ruler", "Mix" };
     private static readonly string[] BuiltInCmds = { "Undo", "Redo", "MouseMode" };
 
-    /// <summary>The same eight, for the LEGACY PEN ROW (CONCEPTS-REF 17.20).
+    /// <summary>The same eight, for the LEGACY PEN ROW (CONCEPTS-REF 17.21).
     ///
     /// <para>The row gets tool cells because in fullscreen it was the only
     /// surface on screen and it had none. It takes THIS list, in THIS order,
     /// rather than a copy: two orders for one set of tools is exactly the kind
-    /// of drift 17.19 was told to avoid on the other side of the same task, and
+    /// of drift 17.20 was told to avoid on the other side of the same task, and
     /// the eraser being first here is why the row's existing eraser chip is
     /// already in the right place and does not move.</para>
     ///
