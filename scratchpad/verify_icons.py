@@ -24,6 +24,14 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICONS = os.path.join(ROOT, "src", "Quill", "Helpers", "Icons.cs")
+SRC_ROOT = os.path.join(ROOT, "src", "Quill")
+
+# Text-source file types under src/Quill/ - deliberately excludes binary
+# formats (.png, .ico, .dll, ...) that legitimately contain 0x00 bytes.
+NUL_CHECK_EXTS = {
+    ".cs", ".xaml", ".csproj", ".manifest", ".appxmanifest", ".resw", ".svg",
+}
+NUL_CHECK_SKIP_DIRS = {"bin", "obj", ".vs"}
 
 # Argument counts per SVG path command, from the SVG 1.1 grammar.
 ARGC = {"M": 2, "L": 2, "H": 1, "V": 1, "C": 6, "S": 4, "Q": 4, "T": 2, "A": 7, "Z": 0}
@@ -134,6 +142,28 @@ def check(name: str, d: str) -> list[str]:
     return errs
 
 
+def check_no_nul_bytes() -> tuple[int, list[str]]:
+    """Every text source file under src/Quill/ must be free of 0x00 bytes.
+
+    A stray NUL inside a string literal (typed/pasted where the escape "\\0"
+    was meant) makes grep/ripgrep classify the whole file as binary and
+    silently drop matching lines from search results - ToolWheel.cs's
+    `_taken` sentinel has reintroduced exactly this twice already.
+    """
+    scanned, bad = 0, []
+    for dirpath, dirnames, filenames in os.walk(SRC_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in NUL_CHECK_SKIP_DIRS]
+        for fn in filenames:
+            if os.path.splitext(fn)[1].lower() not in NUL_CHECK_EXTS:
+                continue
+            path = os.path.join(dirpath, fn)
+            scanned += 1
+            with open(path, "rb") as f:
+                if b"\x00" in f.read():
+                    bad.append(f"  {os.path.relpath(path, ROOT)}: contains a 0x00 byte")
+    return scanned, bad
+
+
 def main() -> int:
     text = open(ICONS, "r", encoding="utf-8").read()
     total, bad = 0, []
@@ -148,11 +178,16 @@ def main() -> int:
         for e in check(name, value):
             bad.append(f"  Icons.cs:{line}  {e}")
     print(f"verify_icons: {total} path literals reassembled")
+
+    nul_scanned, nul_bad = check_no_nul_bytes()
+    print(f"verify_icons: {nul_scanned} source files scanned for 0x00 bytes")
+    bad += nul_bad
+
     if bad:
         print("FAILED:")
         print("\n".join(bad))
         return 1
-    print("OK - every literal parses; no fused coordinates.")
+    print("OK - every literal parses; no fused coordinates; no NUL bytes.")
     return 0
 
 
