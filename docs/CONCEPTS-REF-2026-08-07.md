@@ -4980,3 +4980,322 @@ to mid-luminance.
    Say what happens to it under this rule.
 
 **§17.4's other half still holds: no page texture in the plate.**
+
+
+### 17.19 The arc ladder is fitted to the room its dock leaves
+
+> *the user, ruling on §17.17b:* **shrink the ladder at bottom docks.** Pull the
+> radius in so it fits — derive the radius from the room available, not from a
+> second hardcoded constant.
+
+The second constant was ruled out for a recorded reason: this codebase has that
+drift three times over — the zoom range in three places at two values,
+`StripHeight` without `StripSlack`, §17.12's sizes superseded wholesale. So
+there is still **one ladder**, laid out from one table of reference units, and
+the fit is **two scales on that table**, solved from the window. Where the
+ladder already fits, both scales are exactly 1 and the arithmetic is
+bit-for-bit the lines it replaces.
+
+#### The table the fit solves against
+
+One reference unit is `_ui * Elem` DIP (0.704 at every dock, since `_ui` pins at
+its 1.10 ceiling whenever the dial fills the hole). The radial budget past the
+hole splits in two, and **the split is the whole fix**:
+
+| | reference units | |
+|---|---|---|
+| **element** | arc half-width | 9, twice on the HSL face |
+| **element** | knob proud of the arc | 4.5 |
+| **element** | value box | 62 × 30 |
+| **gap** | hole → inner arc | 40 |
+| **gap** | inner arc → outer arc | 72 |
+| **gap** | arc → value box | 11 |
+
+so `extent past the hole = u * (42*el + 123*gap)`.
+
+Elements carry information — a knob you can hit, a number you can read. Gaps
+carry none. **The air is spent first**, and the elements give only when the air
+is gone. That ordering is worth 22% of element size at the bottom docks: a
+single uniform squeeze solves to 0.484, the two-stage one to **0.818**.
+
+The air has a floor, and it is §11.15 item 6's own invariant rather than a new
+number: a value box hung off the inner arc must still clear the outer arc's
+inner edge, `39*el + 11*gap` against `9*el + 72*gap`, so **`61*gap ≥ 30*el`**.
+It is scale-invariant, which is why the second regime may shrink both scales
+together and every clearance *inside* the ladder survives untouched.
+
+The binding element is always the **value box** — it reaches 39 element units
+past its arc against the knob's 13.5, on every bearing — so the fit checks the
+box and nothing else. Four inequalities, one per window edge, each
+`centre + Rbox*coef + half ≤ limit`, where `coef` is the extreme of sin or cos
+over the bearings the fan occupies. An edge the fan never points at has a
+non-positive coefficient and does not bind.
+
+#### Every dock, before and after — 1440 × 900
+
+`scratchpad/ladder_fit.py` reproduces `ToolWheel.AnchorPoint` and
+`ColorWheel.Layout` so these are re-runnable rather than a story. `over` is the
+value box's furthest edge against the window edge; negative is clearance.
+
+| dock | centre | before: arc0 / outer / boxC / over | after | changed |
+|---|---|---|---|---|
+| TopLeft | 142.62, 150.00 | 284.78 / 348.14 / 372.78 / −94.52 | identical | no |
+| TopCentre | 720.00, 150.00 | 284.78 / 348.14 / 372.78 / −301.85 | identical | no |
+| TopRight | 1297.38, 150.00 | 284.78 / 348.14 / 372.78 / −94.52 | identical | no |
+| RightCentre | 1297.38, 450.00 | 284.78 / 348.14 / 372.78 / −103.90 | identical | no |
+| **BottomRight** | 1297.38, 677.38 | 284.78 / 348.14 / 372.78 / **+40.63** | 267.95 / 298.73 / 315.67 / **0.00** | **yes** |
+| BottomCentre | 720.00, 677.38 | 284.78 / 348.14 / 372.78 / −294.04 | identical | no |
+| **BottomLeft** | 142.62, 677.38 | 284.78 / 348.14 / 372.78 / **+40.63** | 267.95 / 298.73 / 315.67 / **0.00** | **yes** |
+| LeftCentre | 142.62, 450.00 | 284.78 / 348.14 / 372.78 / −103.90 | identical | no |
+
+**Six of eight are byte-identical and the two that move are the two that were
+off screen.** That is the same standard §17.17's roll fix was held to, and it is
+met by construction rather than by luck: at a dock with room, regime A's solve
+returns a gap scale ≥ 1 and the method returns before touching anything.
+
+#### What the shrink costs — the numbers, not an assurance
+
+At **BottomLeft and BottomRight**, el 0.8184, gap 0.4025:
+
+| | before | after | |
+|---|---|---|---|
+| value box | 43.65 × 21.12 DIP | 35.72 × 17.28 | −33.0% area |
+| value type | 10.56 DIP | 8.64 | −18.2% |
+| knob | 19.01 DIP across | 15.56 | −18.2% |
+| arc half-width | 6.34 DIP | 5.19 | −18.2% |
+| **drag band** | **38.67 DIP** | **36.37** | **−5.9%** |
+| hue travel | 489.82 DIP | 460.88 | −5.9% |
+| paired-segment travel | 162.47 DIP | 139.41 | −14.2% |
+
+**The number that matters most barely moves.** The arc's hit test is
+`|r − arcR| < arcW + 13`, and the 13 is *absolute* — it does not scale — so the
+band you must land a drag in goes 38.67 → 36.37 DIP, a 5.9% loss, not the 18%
+the knob loses. Dragging a channel is as easy as it was; what shrinks is the
+picture of the knob, not the target under it.
+
+**The costs to state plainly rather than absorb.** The value box at
+35.72 × 17.28 DIP with 8.64 DIP type is small — it is a live `TextBox` you can
+type into, and 17.28 DIP is well under the 26 DIP §17.1's padlock set as the
+app's smallest deliberate target. It was *already* under it at 21.12, so this
+deepens an existing condition rather than creating one, but it deepens it.
+Travel loss is a precision loss: the paired HSL segments and every RGB third
+give up 14.2% of their sweep, so one DIP of drag is worth 1.17× the value
+change it was.
+
+**The element scale has a floor, and it is this class's own.** `_codeFmt`
+already clamps the palette's code text at 7 reference units, so the ladder's
+bubble — 15 units — floors at `el ≥ 7 / (15 * _ui)`. Below that the number in
+the box is the smear §11.20 item 1 named, and a ladder you cannot read is worse
+than a ladder whose last few DIP are off screen.
+
+#### Across viewports — where the fit is free, and where the floor bites
+
+The vertical slack under a bottom dock is **always 222.62 DIP**, whatever the
+window height, because the dock is measured from the bottom edge. What changes
+with the window is how far *down* the fan points: `_base` aims at the window's
+middle, so a **wider** window flattens it and the roll then tips the low end
+further below the horizontal. Wider is therefore worse, and taller is better:
+
+| viewport | before | el | after | type |
+|---|---|---|---|---|
+| 1920 × 1200 | +24.50 | **1.000** — air only, no element shrinks | 0.00 | 10.56 |
+| 2560 × 1440 | +30.30 | 0.971 | 0.00 | 10.25 |
+| 1440 × 900 | +40.63 | 0.818 | 0.00 | 8.64 |
+| 1920 × 1080 | +41.94 | 0.800 | 0.00 | 8.45 |
+| 1280 × 800 | +49.43 | 0.697 | 0.00 | 7.36 |
+| 1600 × 900 | +51.96 | 0.663 | 0.00 | 7.00 |
+| 1366 × 768 | +62.97 | 0.522 | 0.00 | **5.51** |
+| 3840 × 1080 | +89.70 | 0.424 *floored* | **+14.37** | 4.48 |
+
+Two things to report rather than bury. At **1366 × 768** — a common laptop —
+the ladder fits, but its value type reaches **5.51 DIP** and its box
+27.4 × 13.3. That is legible-at-best. At **3840 × 1080** the type floor binds
+first and **14.37 DIP of overrun remains**; the fit takes 84% of it and stops,
+which is the deliberate answer, not a failure. The same viewport shows the
+top corners overrunning by 0.22 DIP today; regime A closes them with every
+element at full size.
+
+#### One measured note that does not change the ruling
+
+§17.17b recorded the overrun as **68.3 DIP**; the reproduction here measures
+**40.63**. Everything else about the finding reproduces exactly — it is at both
+bottom corners, it is symmetric, it is radial, and it is the value box that goes
+off the bottom edge. The gap is what was being measured: §17.17b's "outer arc
+sits at ~400 DIP" matches the **value box's far corner** at 397.0, not the outer
+arc, which is at 348.14. Two different elements, one finding. The ruling is
+unaffected — a smaller overrun makes the fix cheaper, not different.
+
+**A second measured note, deliberately not acted on.** §17.17b states that no
+rotation fixes the bottom docks. Measured here, that is not quite true: the fan
+at BottomLeft runs −0.975 to **+0.745** rad, i.e. its low end points 42.7° below
+the horizontal, and it is `ArcRoll`'s own +0.26 that puts it there. With the
+roll zeroed at the bottom docks the low end sits at 27.8° and the ladder clears
+the edge with room to spare, at **zero legibility cost**. That is recorded and
+**not built**: the user ruled radius, the radius is what gave, and a
+dock-conditional roll would be a second answer to a question already settled.
+It is here so a future reader does not inherit "no rotation fixes it" as
+established when it is not.
+
+#### Not verified on screen
+
+Everything above is arithmetic reproduced from the two source files. **No screen
+run.** What a render would still have to confirm: that the fitted box's live
+`TextBox` lands where `FieldCentre` puts it (`SyncFields` reads the same
+`BoxW`/`BoxH`, so they cannot disagree by construction, but the XAML field is
+not drawn by the same code path as the stand-in box); that 8.64 DIP type in
+Segoe UI actually reads on the arc's saturated gradient; and that the fitted and
+unfitted ladders do not visibly jump when the dial is dragged between a bottom
+corner and its neighbour, since the two scales change discontinuously at the
+dock boundary.
+
+
+### 17.20 The legacy pen row gets tool cells
+
+> *the user, ruling on §17.17a:* **give the old row tool cells** — chosen over
+> making `ApplyFullscreenChrome`'s fold conditional, having been told plainly
+> that it amounts to a rebuild of the row and that "old" is the point of the
+> setting.
+
+The hole being closed is §17.17a's: the row had **no tool cells at all**, and in
+fullscreen `ApplyFullscreenChrome` folds `TopBar` away on a rule written when
+the surface was the dial — which carries the tools itself. The legacy row is the
+**default** meaning of `Bar`, so "pens, one eraser, and no pointer route to any
+other tool" was two clicks away.
+
+#### Which tools, and the boundary that decides it
+
+**`ToolWheel.ToolOrder`, taken whole and in order**: Eraser, Select, Text,
+FreeSpace, Fill, Eyedropper, Ruler, Mix. Not a copy of the list — the same list,
+newly exposed as `IReadOnlyList<string>` off the dial's own private array, so
+the row cannot drift into a second ordering. Two orders for one set of tools is
+exactly the drift §17.19 was told to avoid on the other half of the same task.
+
+**The boundary is the dial's sectors.** The row gets what a sector can hold and
+nothing else, which settles the two questions that boundary answers at once:
+
+- **Mouse, Pan and Rotate stay out.** They live only in the Brushes library's
+  Tools row and were never on the dial either. The row is not the place to close
+  a gap the dial also has; that is a separate finding with a separate ruling.
+- **Anything less than all eight leaves a tool with no pointer route in
+  fullscreen**, which is the hole. A subset would have been a matter of taste;
+  the whole list is the smallest set that actually closes it.
+
+**What does NOT come over, and why this is still a row.** The dial also carries
+commands (undo, redo, mouse mode), three property readouts, a colour dot with
+its scrub gestures, and slot assignment. None of it is here. A row that carried
+all of that would be a dial drawn in a line, and §16.8's undo pair has *already*
+come back to the top bar specifically for this row — putting undo in the row as
+well would be two routes to one command.
+
+#### The eraser chip becomes the first tool cell, and does not move
+
+`ToolOrder[0]` is `"Eraser"`, and the row's hard-wired eraser chip is already
+its first cell, immediately before the pen shelf. So the eraser **is** the first
+tool cell, in the position it already occupied, and `BuildToolCells` starts at
+index 1. There is exactly **one** route to the eraser.
+
+It is deliberately **not** rebuilt as a generic cell. It is the one tool with a
+right-click flyout of its own — point/stroke mode, the four point styles, its
+own size slider — and a generic cell would throw all of that away to gain
+consistency with seven cells that have no flyout at all.
+
+#### §16.3 capability greying: NO — and by measurement, not assumption
+
+The question §17.17a raised: a Fill or Eyedropper cell on a selected attachment
+is in the same position the dial's controls are, so does the row now need
+`SelectionState`?
+
+**It does not, and the reference had already settled the identical case.**
+§16.3's rule is *"a subject that LACKS a **property** greys that **property's**
+control"*, and every flag on `SelectionSubject` is a property — `HasPenSize`,
+`HasStability`, `HasOpacity`, `CanRecolour`. A tool cell sets no property; it
+changes what the *next* pointer action means. `SelectionSubject`'s own summary
+says it in the same words about undo and redo: they *"are not here at all,
+deliberately — 16.3 keeps them live for every subject because they are
+page-level commands rather than properties of the thing selected, so there is
+nothing for a subject to report about them."* A tool cell is that shape of
+thing. Adding a `CanFill` flag would be inventing a rule §16.3 does not state.
+
+**Measured against the surface that has to agree with it.** `ToolWheel.Enabled`
+covers `Prop.Size`, `Prop.Opacity` and `Prop.Smooth` only, and `ColourInert`
+covers the dot. **The dial does not grey its tool sectors either.** So the two
+surfaces agree, and they agree by both doing nothing — which is the outcome that
+needed checking, because had the dial greyed them the row would have had to.
+
+**A separate §16.3 gap, found while checking and NOT fixed.** §16.3 says the
+colour circle goes white and inert *"in the dial AND IN THE PEN ROW"*. `PenBar`
+implements it (`ColourInert`); `ToolWheel` implements it; the **legacy row's
+`PenRowColourDot` does not** — `BuildPenStrip` still never touches
+`SelectionState`, so with an attachment selected the legacy row offers a live
+colour dot that silently cannot recolour it. That is a real defect, it is
+pre-existing, it is about a *property* control rather than a tool cell, and it
+is outside both rulings. Reported for a decision rather than folded in.
+
+#### Kept recognisably the old row
+
+Every choice here was made by asking what the row already does:
+
+- **The same 26 × 40 seat** a pen chip sits in, the same `Button` with the same
+  padding, corner radius and transparent background. The row's height does not
+  change.
+- **The same body grey** (`ChipBodyGrey()`), so the tools read as part of the
+  same shelf and follow the theme with it. No new colour.
+- **The same 8 DIP lift** as the selection cue, joining `RefreshPenSelection`
+  rather than inventing a second way to say "this cell is live".
+- **The row's own separator.** `AppBarSeparator` — already the row's vocabulary,
+  used before the collapse chevron — divides the tool rack from the pen shelf.
+  Without it eight tools and N pens read as one undifferentiated run.
+- **The canonical marks.** `Icons.Tool(tag)` on the 24-unit grid, the same
+  literals the dial and the Brushes library draw, at **22 DIP** — a size the
+  renderer already lists as "a dial slot", so no new mark size is introduced.
+  Rendered offline at every size: Select is the sparsest at 40.8 ink px at 22
+  and still reads; Ruler's three tick notches survive.
+- **Optical alignment measured, not eyeballed.** A pen is 31 DIP of art standing
+  on the bottom of its 40 DIP seat, so its optical centre is 24.5 up. A 22 DIP
+  mark held 5 clear of the bottom centres at 24 — the tools sit on the pens'
+  own midline.
+
+The row is therefore still a shelf of pens; it now has a tool rack beside it.
+
+#### `ToolCellLive` and the Select/Mouse fold
+
+§17.10 folds `Select` into `Mouse` inside `InkSurface.SetTool`, so the tag the
+user picked and the tool the surface is running can spell differently. The cell
+uses the **top bar's own answer**, character for character —
+`_toolTag is "Select" or "Mouse"` for the Select cell, a plain tag compare for
+the rest — so the row and the bar cannot disagree about which of them is lit.
+The eraser chip keeps its existing `Surface.Tool == ToolType.Eraser` test
+untouched; the two agree for the eraser, and churning a working line to unify
+spelling would be a change with no reader.
+
+#### One wrinkle, reported not patched
+
+`ApplyPenRowVisibility` has a pen-mode gate — the row hides outside
+`Pen / Eraser / Ruler / Eyedropper / Mix`. **With the Concepts shell on (the
+default), it does not apply**: `legacyIsSurface` overrides it precisely because
+the legacy row is then the only tool surface on screen, so every new cell stays
+visible after it is clicked, and the fullscreen hole is fully closed.
+
+**With `RadialToolDial` switched OFF in Settings**, the shell goes away, the
+gate applies, and clicking the new Text, Select, FreeSpace or Fill cell hides
+the row that carries it. It reappears on Pen, and in that configuration the
+legacy `TopBar` is up and shows the tool state, so nothing is unreachable — but
+a shelf that vanishes when you pick a tool from it is a wrinkle. Fixing it means
+widening the pen-mode gate, which changes when the row shows in the pre-Concepts
+app, and that is beyond this ruling.
+
+#### Not verified on screen
+
+**No screen run.** The build is clean at 0 warnings and all thirteen checkers
+hold, but none of them renders this row. What a screen run still owes:
+that eight cells plus the pen shelf do not push the row past its
+`MaxWidth="1280"` for a user with many pens (it scrolls, and the tools are at
+the scrolling end that stays put, but that is reasoning rather than a
+measurement); that the marks read against `CardBrushFloat` at both themes; that
+the lift cue is as legible on a flat mark as it is on an upright pen
+silhouette; and — the failure this project has shipped **four** times, most
+recently the Measurement padlocks — **that a press actually lands**. Each cell
+is a `Button`, so the hit target is the template's own, not the mark's
+(`Icons.Mark` hosts on a Canvas with `IsHitTestVisible = false` by design); that
+is the same construction every existing chip in this row uses, which is why it
+is expected to work, but it is not proof.
