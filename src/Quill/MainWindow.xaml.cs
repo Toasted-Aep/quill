@@ -2854,6 +2854,10 @@ public sealed partial class MainWindow : Window
     // the old accent ring as the selection cue.
     private readonly Dictionary<Guid, TranslateTransform> _penLifts = new();
     private TranslateTransform? _eraserLift;
+    // 17.20: the tool cells join the same cue rather than inventing a second
+    // one. A pen lifts, a tool lifts, and the row has one way of saying "this
+    // is the live cell" whatever kind of cell it is.
+    private readonly Dictionary<string, TranslateTransform> _toolLifts = new();
     private void RefreshPenSelection()
     {
         bool penMode = Surface.Tool == ToolType.Pen;
@@ -2861,6 +2865,8 @@ public sealed partial class MainWindow : Window
             kv.Value.Y = (penMode && kv.Key == _activePresetId) ? -8 : 0;
         if (_eraserLift != null)
             _eraserLift.Y = Surface.Tool == ToolType.Eraser ? -8 : 0;
+        foreach (var kv in _toolLifts)
+            kv.Value.Y = ToolCellLive(kv.Key) ? -8 : 0;
     }
 
     private static Microsoft.UI.Xaml.Shapes.Path MakeIconPath(string data, Color fill, double size = 14)
@@ -2889,7 +2895,14 @@ public sealed partial class MainWindow : Window
     private void BuildPenStrip()
     {
         PresetPanel.Children.Clear();
+        // 17.20: the eraser chip is ToolOrder[0] and stays exactly where it has
+        // always been - first cell, immediately before the shelf. It is not
+        // rebuilt as a generic tool cell: it is the one tool with a right-click
+        // flyout of its own (point/stroke mode, the four point styles, its own
+        // size), and a generic cell would throw all of that away to gain
+        // nothing. There is still exactly ONE way to reach the eraser.
         BuildEraserChip();
+        BuildToolCells();
         // freshly built chips must honour touch mode (#36)
         if (_library.TouchMode)
             DispatcherQueue.TryEnqueue(() => ApplyTouchMode(true));
@@ -2928,6 +2941,115 @@ public sealed partial class MainWindow : Window
         // WITHOUT re-applying the preset, and the swatch would sit stale.
         SyncPenRowColour();
     }
+
+    /// <summary>CONCEPTS-REF 17.20. The legacy pen row's TOOL CELLS.
+    ///
+    /// <para><b>Why they exist.</b> 17.17a found the row's one real hole: it had
+    /// no tool cells at all. Windowed that cost nothing, because the legacy
+    /// TopBar was still on screen; in fullscreen <c>ApplyFullscreenChrome</c>
+    /// folds TopBar away on a rule written when the surface was the DIAL, which
+    /// carries the tools itself - so the legacy row plus fullscreen left the
+    /// user with pens, one eraser and no pointer route to anything else. The
+    /// legacy row is the DEFAULT meaning of <c>Bar</c>, so that was two clicks
+    /// away, not a corner case. The user ruled on the fix: give the old row tool
+    /// cells rather than making the fold conditional.</para>
+    ///
+    /// <para><b>Which tools.</b> <see cref="ToolWheel.ToolOrder"/>, taken whole
+    /// and in order - Eraser, Select, Text, FreeSpace, Fill, Eyedropper, Ruler,
+    /// Mix. The boundary is deliberate and it is the DIAL'S SECTORS: the row
+    /// gets what a sector can hold and nothing else. Mouse, Pan and Rotate stay
+    /// in the Brushes library, because they were never on the dial either and
+    /// the row is not the place to fix a gap the dial also has. Anything less
+    /// than the whole list leaves some tool with no pointer route in fullscreen,
+    /// which is the hole this closes.</para>
+    ///
+    /// <para><b>What it is NOT.</b> The dial also carries commands (undo, redo,
+    /// mouse mode), three property readouts, a colour dot and slot assignment.
+    /// None of that comes here. A row that did all of it would be a dial drawn
+    /// in a line, and "old" is the point of the setting - 16.8's undo pair
+    /// already came back to the TOP BAR for exactly this row, so putting undo
+    /// in it as well would be two routes to one command.</para>
+    ///
+    /// <para><b>16.3 greying: NO, and not by assumption.</b> The rule is "a
+    /// subject that LACKS a PROPERTY greys that PROPERTY's control", and every
+    /// flag on <see cref="Services.SelectionSubject"/> is a property -
+    /// HasPenSize, HasStability, HasOpacity, CanRecolour. A tool cell sets no
+    /// property; it changes what the next pointer action means. The reference
+    /// already settled the identical case in the same words: undo and redo "are
+    /// not here at all, deliberately - 16.3 keeps them live for every subject
+    /// because they are page-level commands rather than properties of the thing
+    /// selected". Measured against the dial, which is the surface that must
+    /// agree with this one: <c>ToolWheel.Enabled</c> covers Size, Opacity and
+    /// Smooth only, and <c>ColourInert</c> covers the dot - the dial does not
+    /// grey its tool sectors either. So the two surfaces agree, and they agree
+    /// by both doing nothing.</para></summary>
+    private void BuildToolCells()
+    {
+        _toolLifts.Clear();
+        var order = ToolWheel.ToolOrder;
+        for (int i = 1; i < order.Count; i++)          // [0] is the eraser chip
+            PresetPanel.Children.Add(BuildToolCell(order[i]));
+        // The row's own vocabulary for "a different kind of thing" - the same
+        // AppBarSeparator it already puts before the collapse chevron. Without
+        // it the tools and the pens read as one undifferentiated run; with it
+        // the row is still a shelf of pens, now with a tool rack beside it.
+        PresetPanel.Children.Add(new AppBarSeparator
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+    }
+
+    /// <summary>One tool cell, built in the ROW's language rather than the
+    /// dial's: the same 26x40 seat a pen chip sits in, the same body grey, and
+    /// the same 8 DIP LIFT for the live one. The mark itself is the canonical
+    /// 24-grid one <see cref="Icons.Tool"/> hands the dial and the Brushes
+    /// library, so the three surfaces cannot draw the same tool differently.
+    /// </summary>
+    private Button BuildToolCell(string tag)
+    {
+        var mark = Icons.Mark(Icons.Tool(tag), ChipBodyGrey(), 22);
+        var lift = new TranslateTransform();
+        mark.RenderTransform = lift;
+        mark.HorizontalAlignment = HorizontalAlignment.Center;
+        mark.VerticalAlignment = VerticalAlignment.Bottom;
+        // The pens are 31 DIP of art standing on the bottom of a 40 DIP seat, so
+        // their optical centre is 24.5 up from it. A 22 DIP mark 5 clear of the
+        // bottom centres at 24, which puts the tools on the pens' own midline.
+        mark.Margin = new Thickness(0, 0, 0, 5);
+        var content = new Grid { Width = 26, Height = 40 };
+        content.Children.Add(mark);
+
+        var cell = new Button
+        {
+            Content = content,
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(6),
+            BorderThickness = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Bottom,
+            // Icons.Mark's host is IsHitTestVisible=false by design, so the
+            // press has to land on the Button's own template. It does: a Button
+            // is hit-testable through its template whatever its Background is,
+            // which is why every chip in this row is a Button and not a Border.
+            Background = new SolidColorBrush(Colors.Transparent)
+        };
+        ToolTipService.SetToolTip(cell, Loc.T("Wheel.Tool." + tag));
+        cell.Click += (_, _) => SelectTool(tag);
+        _toolLifts[tag] = lift;
+        return cell;
+    }
+
+    /// <summary>Which tool cell is the live one. 17.10 folds Select into Mouse
+    /// inside <c>InkSurface.SetTool</c>, so the tag the user picked and the tool
+    /// the surface is running can spell differently; this is the TOP BAR's own
+    /// answer to that, character for character, so the row and the bar cannot
+    /// disagree about which of them is lit.</summary>
+    private bool ToolCellLive(string tag) => tag == "Select"
+        ? _toolTag is "Select" or "Mouse"
+        : _toolTag == tag;
 
     private void BuildEraserChip()
     {

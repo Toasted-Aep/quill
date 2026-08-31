@@ -379,6 +379,19 @@ public sealed class ToolWheel
         { "Eraser", "Select", "Text", "FreeSpace", "Fill", "Eyedropper", "Ruler", "Mix" };
     private static readonly string[] BuiltInCmds = { "Undo", "Redo", "MouseMode" };
 
+    /// <summary>The same eight, for the LEGACY PEN ROW (CONCEPTS-REF 17.20).
+    ///
+    /// <para>The row gets tool cells because in fullscreen it was the only
+    /// surface on screen and it had none. It takes THIS list, in THIS order,
+    /// rather than a copy: two orders for one set of tools is exactly the kind
+    /// of drift 17.19 was told to avoid on the other side of the same task, and
+    /// the eraser being first here is why the row's existing eraser chip is
+    /// already in the right place and does not move.</para>
+    ///
+    /// <para>Read-only on purpose - the array itself stays private so no caller
+    /// can reorder the dial's sectors by writing through it.</para></summary>
+    public static IReadOnlyList<string> ToolOrder => ToolKinds;
+
     /// <summary>A top-bar command donated to the dial. The host owns the
     /// behaviour; the dial owns the sector, the mark and the top-bar hand-back.</summary>
     public sealed class ExtraCommand
