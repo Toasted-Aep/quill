@@ -745,7 +745,7 @@ public sealed class ToolWheel
         _layer.Visibility = Visibility.Visible;
         // Force the next Refresh to re-announce the slots even if the set is
         // unchanged, so the top bar is always re-trimmed on the way back in.
-        _taken = new HashSet<string>(StringComparer.Ordinal) { " " };
+        _taken = new HashSet<string>(StringComparer.Ordinal) { "\0" };
         Place();
         Refresh();
         Drop();
