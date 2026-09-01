@@ -8128,6 +8128,21 @@ public sealed partial class MainWindow : Window
     private static double StripReserve =>
         FullscreenChrome.Metrics.StripWidth + FullscreenChrome.Metrics.StripSlack;
 
+    /// <summary>CONCEPTS-REF 16.8 / 17.20 - whether the TOOL SURFACE carries
+    /// undo and redo, so the top bar does not have to.
+    ///
+    /// <para>The dial carries its own pair in the hub. The Bar palette does
+    /// too - unless the user has switched on the LEGACY pen row, which has
+    /// none of its own and says so in its own Settings tooltip. In that one
+    /// combination the top bar is the only route to undo in the whole app.</para>
+    ///
+    /// <para>Hoisted from ApplyToolbarVisibility, which was already asking it
+    /// to decide whether to SHOW the pair. ApplyFullscreenChrome has to ask
+    /// the same question to decide whether it may HIDE the row carrying them,
+    /// and two copies of that expression would have drifted.</para></summary>
+    private static bool SurfaceCarriesUndo =>
+        ToolSurfaceService.IsWheel || !ToolSurfaceService.LegacyBar;
+
     /// <summary>CONCEPTS-REF 15.3 — the chrome changes SHAPE in fullscreen.
     ///
     /// <para>Windowed, <c>TopBar</c> IS the caption bar: the system one is
@@ -8153,7 +8168,44 @@ public sealed partial class MainWindow : Window
             bool fs = AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
             _chromeBars?.SetFullscreen(fs);
             _fsChrome?.SetActive(fs);
-            bool fold = fs && _chromeBars?.IsVisible == true;
+            // CONCEPTS-REF 16.8 / 17.20 - AND ONLY IF SOMETHING ELSE CARRIES UNDO.
+            //
+            // This was unconditional on the surface, and 16.8's stranding came
+            // back through it: under Bar + the legacy pen row the top bar holds
+            // the only undo and redo in the app, and folding it in fullscreen
+            // took them away with it. Swept on screen at 2x across the whole
+            // fullscreen top strip - notebook, Study, layers, precision,
+            // artboard, the pen row entire, exit-fullscreen, the readouts,
+            // sparkle, download, upload, gear, ? - and there was no undo
+            // anywhere. Two clicks from the default.
+            //
+            // 17.20 named this hole as being about TOOLS, and the tools are the
+            // half 17.17a already fixed by giving the legacy row tool cells.
+            // What it actually strands is undo, which that section never names.
+            //
+            // THE COST, STATED RATHER THAN HIDDEN: in that one combination
+            // fullscreen now keeps a bar it would otherwise hide. That is a real
+            // price and it is paid only there - every other surface folds
+            // exactly as before, because every other surface has its own pair.
+            // The alternative, giving the strip or ChromeBars an undo pair of
+            // their own, invents chrome no section asks for.
+            bool fold = fs && _chromeBars?.IsVisible == true && SurfaceCarriesUndo;
+
+            // 17.15 - CHROMEBARS IS THE BAR UNDER THE STRIP WHENEVER THE ROW IS
+            // FOLDED, and it was the one bar getting no reservation. Measured in
+            // a 1440x900 DIP viewport with no format bar up - i.e. every tool
+            // except Text, the pen included - the strip occupies x 1302..1440,
+            // y 0..33 and upload (1308), gear (1350) and help (1392) all sat
+            // inside it, overlapped by 19 of their 34 DIP. With a format bar up
+            // the problem vanishes because that bar takes the top row and pushes
+            // this cluster down to y 57..90.5 - which is exactly why the failing
+            // case is the one nobody looks at.
+            //
+            // Sideways, like every other 17.15 reservation: reserving HEIGHT is
+            // what cost the page 46 DIP on the axis text needs most. And only
+            // when folded, because that is precisely when this cluster is the
+            // topmost thing on screen.
+            _chromeBars?.SetStripReserve(fold ? StripReserve : 0);
 
             // CONCEPTS-REF 17.15 - THE FORMAT BAR MOVES OUT FROM UNDER THE STRIP
             // SIDEWAYS, NOT DOWNWARD. See StripReserve for the whole argument;
@@ -9922,7 +9974,7 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             // already asks of TouchDrawToggle and ShapeBtn - is this control's
             // job being done elsewhere right now - and the user's own
             // HiddenTools choice still overrides it either way.
-            bool surfaceCarriesUndo = ToolSurfaceService.IsWheel || !ToolSurfaceService.LegacyBar;
+            bool surfaceCarriesUndo = SurfaceCarriesUndo;
             Set(BtnUndo, "BtnUndo", !surfaceCarriesUndo);
             Set(BtnRedo, "BtnRedo", !surfaceCarriesUndo);
             // The separator above the pair exists only to fence it off, so it

@@ -489,6 +489,23 @@ public sealed class ChromeBars
         _layout.Invalidate();
     }
 
+    /// <summary>CONCEPTS-REF 17.15 - how far the right cluster is held clear of
+    /// the fullscreen reveal strip. Zero unless this cluster is the topmost bar
+    /// on screen; MainWindow owns that question because it is the one that
+    /// computes the fold.</summary>
+    public double StripReserve { get; private set; }
+
+    /// <summary>Set by ApplyFullscreenChrome. Guarded on a real change because
+    /// ApplyFullscreenChrome is self-correcting and runs on SizeChanged and
+    /// after every surface switch, so this is called far more often than it
+    /// changes.</summary>
+    public void SetStripReserve(double px)
+    {
+        if (Math.Abs(StripReserve - px) < 0.5) return;
+        StripReserve = px;
+        ApplyDockInset();
+    }
+
     /// <summary>Slides the right cluster clear of the docked settings panel, so
     /// the glyph that opened it can still close it. A docked panel has no title
     /// bar and therefore no close button of its own - by design - so the toggle
@@ -498,12 +515,16 @@ public sealed class ChromeBars
         try
         {
             double inset = Metrics.EdgeMargin - Metrics.IconPitch / 2;
-            _right.Margin = new Thickness(0, Metrics.RowTop, inset + _h.RightDockWidth(), 0);
+            _right.Margin = new Thickness(
+                0, Metrics.RowTop, inset + _h.RightDockWidth() + StripReserve, 0);
             // The Measurement panel hangs off this cluster, so it slides with it
             // rather than being left behind under a docked settings panel.
             if (_measure != null)
             {
-                _measure.RightDockWidth = _h.RightDockWidth();
+                // The strip reserve rides along: this panel hangs off the
+                // cluster, so a cluster held clear of the strip that left its
+                // panel behind would just move the misalignment one control on.
+                _measure.RightDockWidth = _h.RightDockWidth() + StripReserve;
                 _measure.Reposition();
             }
         }
