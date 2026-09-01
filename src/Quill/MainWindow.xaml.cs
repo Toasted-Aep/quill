@@ -2185,6 +2185,16 @@ public sealed partial class MainWindow : Window
     // surface dozens of times a second while the user scrubs. Coalesce.
     private DispatcherTimer? _groundTimer;
 
+    /// <summary>§24: the PAGE ground the chrome bars were last painted for.
+    ///
+    /// <para>Separate from <see cref="_lastPageGround"/>, which remembers a
+    /// ground so the GALLERY can keep deriving after the page closes. This one
+    /// exists to answer a different question: did the paper move without the
+    /// shell's ground moving with it? Under the default ThemeSource = "Manual"
+    /// that is EVERY paper change, and it is the exact case
+    /// <c>PageTheme.Changed</c> cannot see.</para></summary>
+    private Color? _pushedPageGround;
+
     /// <summary>Re-points <see cref="PageTheme"/> at whatever the ground is now.
     /// Call after anything that can move it: page open, page switch, background
     /// change, paper change, theme-source change.
@@ -2221,21 +2231,46 @@ public sealed partial class MainWindow : Window
     /// turn is the cost ApplyTheme's gate has always existed to avoid.</para></summary>
     private void PushGround()
     {
+        var was = PageTheme.Ground;
         PageTheme.SetGround(ResolveGround());   // idempotent; raises Changed only on a real move
         if (_appliedDark != PageTheme.IsDark) ApplyTheme();
-        // 17.19: the dial's TOOL plates are white or black by THE PAGE, not by
-        // the shell - and those two part company the moment ThemeSource is
-        // "Manual", which is the default. On a pinned theme the line above is a
-        // no-op for every paper change, PageTheme.Changed never fires, and the
-        // dial would keep whichever plate it had when the shell was last
-        // rebuilt. PushGround is the one funnel every paper, background and
-        // theme change already runs through - SetPagePaper's comment calls it
+        // 17.19, and §24 has only widened it: the dial's plates come from THE
+        // PAGE, not from the shell - and those two part company the moment
+        // ThemeSource is "Manual", which is the default. On a pinned theme the
+        // line above is a no-op for every paper change, PageTheme.Changed never
+        // fires, and the dial would keep whichever plate it had when the shell
+        // was last rebuilt. PushGround is the one funnel every paper, background
+        // and theme change already runs through - SetPagePaper's comment calls it
         // "single entry point, so the theme re-derive can never be forgotten" -
         // so the repaint goes here rather than at the four call sites that
         // would each have to remember it. Refresh is a dumb re-render of shared
         // state and never writes any, so a double call after a real ground move
         // costs a repaint and nothing else.
         _toolWheel?.Refresh();
+
+        // §24: THE CHROME BARS NEED THE SAME, AND FOR THE SAME REASON. Their
+        // §17.2 plates are the page's colour now, so they are stale under exactly
+        // the condition PageTheme.Changed cannot report - a paper that moved
+        // while the shell's ground stood still. Without this the bars keep the
+        // PREVIOUS paper's plate until something else invalidates them, which is
+        // invisible to any test that changes paper before opening the chrome.
+        //
+        // GUARDED, unlike the dial's. ToolWheel.Refresh is a re-render;
+        // ChromeBars.Refresh rebuilds both clusters, re-measures the inset and
+        // repaints four panes, and it is ALREADY subscribed to PageTheme.Changed
+        // - which has run synchronously inside SetGround by the time we get here.
+        // So this fires only in the case that subscription cannot see, and a page
+        // turn does not pay for two rebuilds.
+        try
+        {
+            var pageGround = PagePlate.Ground(_curPage);
+            bool shellMoved = was.R != PageTheme.Ground.R
+                              || was.G != PageTheme.Ground.G
+                              || was.B != PageTheme.Ground.B;
+            if (!shellMoved && _pushedPageGround != pageGround) _chromeBars?.Refresh();
+            _pushedPageGround = pageGround;
+        }
+        catch { }
     }
 
     // Code-built UI captures its strings at build time exactly the way it

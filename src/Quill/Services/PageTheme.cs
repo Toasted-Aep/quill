@@ -58,6 +58,20 @@ public static class PageTheme
     /// page - it is their choice, not the paper's.</summary>
     public static Color Accent { get; set; } = Color.FromArgb(255, 0xD9, 0x77, 0x57);
 
+    /// <summary>The two marks <see cref="OnSurface"/> chooses between, named so
+    /// that a surface which has to make the SAME choice against a DIFFERENT
+    /// ground can make it out of the same two colours.
+    ///
+    /// <para>§24 needs exactly that: the two floating bars stand on the PAGE,
+    /// not on the shell's ground, and those two part company the moment
+    /// ThemeSource is "Manual" - which is the default. A mark keyed to the wrong
+    /// one of the two is §17.4's defect, and re-deriving the pair at the call
+    /// site would be a second copy of them that could drift.</para></summary>
+    public static readonly Color InkOnDark = Color.FromArgb(255, 0xF2, 0xF2, 0xF2);
+
+    /// <inheritdoc cref="InkOnDark"/>
+    public static readonly Color InkOnLight = Color.FromArgb(255, 0x14, 0x14, 0x14);
+
     /// <summary>How much of the ground's colour a PANEL carries.
     ///
     /// <para>Panels used to be neutral by design - section 6 had them flat
@@ -113,8 +127,7 @@ public static class PageTheme
         Surface = FromLab(sl, a * 0.55, b * 0.55);
         SurfaceAlt = FromLab(L > 80 ? sl - 4 : sl + 4, a * 0.55, b * 0.55);
 
-        OnSurface = IsDark ? Color.FromArgb(255, 0xF2, 0xF2, 0xF2)
-                           : Color.FromArgb(255, 0x14, 0x14, 0x14);
+        OnSurface = IsDark ? InkOnDark : InkOnLight;
         OnSurfaceMuted = WithAlpha(OnSurface, 140);
         Outline = WithAlpha(OnSurface, 36);
         // A RAMP, not a switch. Panel used to be one of two constants, so an
@@ -191,6 +204,19 @@ public static class PageTheme
     }
 
     public static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
+
+    /// <summary>CIE L*, perceptual lightness on 0..100.
+    ///
+    /// <para>NOT interchangeable with <see cref="Luminance"/>, and §24 turns on
+    /// the difference. Luminance answers "does the chrome have to invert?" and
+    /// puts Blueprint (0.199) and Brown Paper (0.206) firmly on the dark side,
+    /// which is what §7 requires. L* answers "is this page blackish or
+    /// lightish?" and puts the same two at 51.7 and 52.5 - just above the
+    /// perceptual midpoint - while Darkprint sits at 17.3. Both are right about
+    /// their own question. Exposed here rather than recomputed elsewhere because
+    /// there is already exactly one CIELAB implementation in this file and a
+    /// second copy is how two surfaces come to disagree about one page.</para></summary>
+    public static double Lightness(Color c) => ToLab(c).L;
 
     /// <summary>Relative luminance, gamma-correct. Averaging the raw bytes is
     /// wrong by enough to put Brown Paper on the wrong side of the threshold.</summary>
