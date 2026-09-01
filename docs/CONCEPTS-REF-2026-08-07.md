@@ -4974,7 +4974,24 @@ Whatever the shape, §17.18.1 applies to these too: a frame the exact colour of 
 plain page is invisible for the same reason.
 
 
-### 17.19 The dial's plate carries the PEN'S colour — SUPERSEDES §17.4 and §17.18.1
+### 17.19 The dial's plate carries the PEN'S colour — SUPERSEDES §17.4 and §17.18.1; ITSELF SUPERSEDED IN PART BY §24
+
+> **§24 REPLACED THIS SECTION'S PLATE COLOUR AND KEPT EVERYTHING ELSE.** The
+> user has since ruled that *every* plate takes a grey derived from the page —
+> pens included — and that the pen's own colour comes **off** the plate, to
+> survive only on §1.5's inner arc. The first two bullets below are therefore
+> **withdrawn**. The third is not: the mark is still white or black by contrast
+> against the plate it stands on, and §24 leans on it harder than this section
+> did, because the plate it now stands on is a mid-tone rather than a pen
+> colour.
+>
+> This section is left standing rather than edited into agreement, for two
+> reasons. Its *reasoning* is what §24 inherited — that a mark must be judged
+> against the surface it actually sits on — and the fourth screen run called the
+> pen-coloured plate **"the best-looking of the new work"**, which is a thing
+> the record should keep saying about a decision that was then reversed. What
+> replaced it, what that costs, and the one switch that would put the pen's
+> colour back in the icon are all in §24.
 
 > *"make the buttons (both in light or dark mode) the colour of the pen or
 > white/black (according to page background) and make the icon of the tool/pen
@@ -5844,3 +5861,476 @@ moved the misalignment one control along rather than fixing it.
 
 That third row is the one to watch: the reserve must be zero when the cluster
 is not the topmost bar, or the unfolded case pays 144 DIP for nothing.
+
+## 24 The chrome's grounds are derived from the page the user is drawing on — 2026-09-01
+
+Two rulings, **one shared formula**, which is why they landed together. The
+formula lives in `src/Quill/Controls/PagePlate.cs`; `ChromeBars` and `ToolWheel`
+each evaluate it at one end.
+
+### 24.1 The root cause, and it was never a value that needed a nudge
+
+**`PageTheme.Ground` is not the paper.** `MainWindow.ResolveGround` returns the
+page's paper **only** when `ThemeSource == "Page"`, and that field **defaults to
+`"Manual"`**. On a default install `PageTheme.Ground` is a fixed shell colour
+that knows nothing about the paper.
+
+Every surface that wanted *"the colour of the page"* and reached for
+`PageTheme.Ground` therefore got the shell. §17.2's corner plates — *"a
+background that mimics the page colour, so the button almost disappears into the
+page"* — were measured **byte-identical `#0F0E10` on six papers across three
+screen runs**: OLED black, Darkprint, Brown Paper, a custom red, Blueprint and
+Plain White. What that plate actually scored:
+
+| paper | plate | contrast | ΔL\* |
+|---|---|---|---|
+| Plain White | `#0F0E10` | **18.77:1** | **94.9** |
+| Transparent | `#0F0E10` | 17.20:1 | 91.4 |
+| Crumpled | `#0F0E10` | 16.33:1 | 89.4 |
+| Lightweight | `#0F0E10` | 17.36:1 | 91.8 |
+| Heavyweight | `#0F0E10` | 15.19:1 | 86.6 |
+| Rippled | `#0F0E10` | 16.91:1 | 90.7 |
+| Blueprint | `#0F0E10` | 4.57:1 | 47.6 |
+| Brown Paper | `#0F0E10` | 4.70:1 | 48.4 |
+| Darkprint | `#0F0E10` | 1.35:1 | 13.2 |
+
+On Plain White that is the **maximum contrast sRGB has**, on the paper a
+note-taking app is most likely used on, from a section that asked for a button
+which almost disappears. No adjustment to a wrong source could have been right
+on more than one paper at a time.
+
+`ChromeBars.cs` carried a long paragraph that anticipated this request, named
+the change and left it undone because §17.19 superseded the section that would
+have fixed it. **That paragraph is rewritten, not just the line under it.** Its
+reasoning was sound; its unexamined premise — that the line was reading the page
+at all — was false.
+
+### 24.2 The one formula
+
+```
+    plate = grey × (1 − t)  +  page × t
+```
+
+Two call sites, one endpoint each:
+
+| | t | result |
+|---|---|---|
+| §17.2's corner plates (`ChromeBars`) | `PagePlate.Full` = **1.00** | the grey drops out — the plate **is** the page |
+| the dial's plates (`ToolWheel`) | `PagePlate.Tint` = **0.40** | a grey carrying four tenths of the page |
+
+They are the same line of arithmetic at its two ends, so they cannot drift
+apart — there is nothing to drift. `Of(page, Full) == page` byte for byte on all
+nine papers is asserted by the harness in 24.9.
+
+**The light base and t come from the user's own worked example, not a guess.**
+*"make them inhibit the colour of the background slightly, like slightly blueish
+grey (#7EA0B9) if blueprint is selected."* Blueprint's ground is `#2E80C2`.
+Solving per channel against `#7EA0B9` for a base of 180 gives
+t = 0.403 / 0.385 / 0.357, and at a round **t = 0.40** the formula returns
+**`#7E9FBA`** — within one unit of the target on all three channels. So
+`LightBase = #B4B4B4` and `Tint = 0.40`, both the user's numbers.
+
+> **One correction to the brief.** It quotes Blueprint as `#2D7FC1`; the shipped
+> ground in `PaperGrain.GroundRgb` is **`#2E80C2`**, one unit up on every
+> channel. The fit holds either way — `#2D7FC1` returns `#7E9FB9` — so nothing
+> changes, but the number in the repo is the one used here.
+
+**`DarkBase = #4B4B4B`, and it was chosen here.** The user specified only *"dark
+grey (for black background)"*. Three derivations were computed:
+
+| candidate | how it was derived | plate on a black page | plate-vs-page |
+|---|---|---|---|
+| `#3F3F3F` (63) | L\* reflection of the light base (L\* 73.31) about L\* 50 | `#262626` | 1.39:1 |
+| `#484848` (72) | solve for equal findability against the light case | `#2B2B2B` | 1.48:1 |
+| **`#4B4B4B` (75)** | **byte-axis reflection of 180 about mid-grey** | **`#2D2D2D`** | **1.52:1** |
+
+The light base on Plain White gives a plate-vs-page contrast of **1.4884:1**;
+that is the number the dark base has to match if the plate is to be as findable
+on black as it is on white. Solving exactly lands on 72.1. **75 was chosen**: it
+is inside 4% of the solve, it is the roundest of the three, and it makes the two
+bases one number written twice rather than two numbers to keep in step.
+
+### 24.3 The split that picks the base is L\*, not luminance — the one departure
+
+This is the place §24 had to depart from the obvious reading, and it is stated
+rather than buried.
+
+The user's own example makes **Blueprint a light case**: `#7EA0B9` can only come
+out of the light base. But §7 names Blueprint one of three grounds that are
+**dark**, and `PageTheme.IsDark` agrees — its relative luminance is 0.199, far
+under 0.5. Both are right, because they answer different questions:
+
+- *"Does the chrome have to invert?"* is **photometric**, and luminance settles
+  it. Unchanged: §7 still holds, Blueprint and Brown Paper still carry white
+  chrome.
+- *"Is this page blackish or lightish?"* is **perceptual**, and L\* settles it.
+
+| ground | Y (chrome) | L\* (base) | base | margin |
+|---|---|---|---|---|
+| Plain White | 0.9734 light | 98.96 | light | 48.96 |
+| Transparent | 0.8879 light | 95.49 | light | 45.49 |
+| Crumpled | 0.8406 light | 93.48 | light | 43.48 |
+| Lightweight | 0.8969 light | 95.87 | light | 45.87 |
+| Heavyweight | 0.7782 light | 90.70 | light | 40.70 |
+| Rippled | 0.8720 light | 94.82 | light | 44.82 |
+| **Blueprint** | **0.1991 DARK** | **51.74** | **light** | **1.74** |
+| **Brown Paper** | **0.2060 DARK** | **52.51** | **light** | **2.51** |
+| Darkprint | 0.0236 dark | 17.28 | **dark** | 32.72 |
+| pinned dark `#0F0E10` | 0.0045 dark | 4.09 | **dark** | 45.91 |
+| OLED black | 0.0000 dark | 0.00 | **dark** | 50.00 |
+
+**The margin at the top is thin and is not hidden: Blueprint clears the split by
+1.74 L\*.** If it ever crossed, its plate would become `#3F607B` instead of
+`#7E9FBA` — still a blueish grey, but the dark one, and not the colour the user
+named. The alternative constant, if that margin is judged too tight, is a split
+at **L\* 35**, which is the maximum-margin cut of the shipped set (Darkprint
+17.28 / Blueprint 51.74). It is not used because 50 is a principle and 35 is a
+curve fitted to the nine papers that happen to ship today.
+
+**What is *not* departed from:** the ground is judged with a gamma-correct
+measure. `ColorUtil.IsDark` averages raw bytes and puts Brown Paper on the wrong
+side of any threshold, which is the trap `ToolWheel.PlateFor` was written to
+avoid and which `PagePlate` inherits. `PageTheme.Lightness` is exposed off the
+file's one existing CIELAB implementation rather than adding a second copy.
+
+### 24.4 Ruling 1 — §17.2's corner plates take the page colour
+
+`ChromeBars.GroundBrush()` **stopped being static.** That was the whole defect: a
+static factory had no live page to read, so it reached for the one global that
+looked like a page colour and was not one. It is now
+
+```csharp
+private SolidColorBrush GroundBrush() => new(PagePlate.Of(PageGround(), PagePlate.Full));
+```
+
+and `PageGround()` reads `PagePlate.Ground(_h.Surface().Page)` — the same helper
+`ResolveGround` uses for its own Page branch, so the two can never answer
+differently about one page. `Slot`, `BarButton`, `BarMenuButton` and `Divider`
+became instance methods to reach it.
+
+§17.18.1's observation **still stands and is still unanswered**: on a plain black
+or plain white page there is no grain or grid for the plate to interrupt, so the
+frame is findable only by its mark. That is a question for the user. The one
+thing to change is the `Full` passed to `Of` — `Tint` would give these frames the
+dial's grey instead.
+
+### 24.5 Ruling 2 — the dial's plates, in the user's own words
+
+> *"make the radial dial button backgrounds the current theme colour. just not
+> make it transparent. keep the dark grey (for black background) and light grey
+> (for light background) for opacity, stability, size buttons but make them
+> inhibit the colour of the background slightly, like slightly blueish grey
+> (#7EA0B9) if blueprint is selected. make pen colour appear just on the inner
+> arc of the button and in the pen icon."*
+
+One colour, for the inner disc and for every cell's seat alike:
+`PagePlate.Of(pageGround, Tint)`. That the user gave a **single** example colour
+for "the buttons" is why it is one value and not two.
+
+- **Every seat takes the grey, pens included.** Never transparent.
+- **The inner disc takes the same grey**, because it is the background the size /
+  opacity / stability buttons the user named actually stand on. It was
+  `PageTheme.Surface`, which is derived from the **shell's** ground.
+- Two cells still get no seat, and §17.19's reasoning for that is untouched by
+  this ruling: an **unavailable** cell paints no mark and a bare filled button
+  with nothing on it is the "live-looking control that silently does nothing"
+  §16.3 rules out; an **empty** cell keeps §11.2 item 11's bare muted `+`, so an
+  unassigned sector cannot read as an assigned one.
+- **The pen's colour comes off the plate.** It survives on §1.5's 45° inner arc
+  at the disc rim, which this section does not touch and which is now the only
+  place on the ring a pen's colour appears. The pen **icon** is 24.8.
+
+**How far this actually moves the disc.** The shared formula and the repo's own
+`PageTheme.Surface` derivation — *when Surface is allowed to see the page* —
+agree closely. This is a re-pointing, not a redesign:
+
+| paper | §24 plate | `Surface` under `ThemeSource = "Page"` | ΔL\* |
+|---|---|---|---|
+| Plain White | `#D1D1D1` | `#D1D1D1` | **0.00** |
+| Transparent | `#CDCDCD` | `#C8C8C8` | 1.80 |
+| Crumpled | `#CCCAC7` | `#C4C2BD` | 2.94 |
+| Lightweight | `#CECDCB` | `#CAC9C6` | 1.47 |
+| Heavyweight | `#C9C7C3` | `#BDBAB5` | 4.67 |
+| Rippled | `#CDCCC9` | `#C7C6C2` | 2.19 |
+| Blueprint | `#7E9FBA` | `#8FADD3` | −5.79 |
+| Brown Paper | `#B09985` | `#CAA689` | −5.89 |
+| Darkprint | `#3C3E41` | `#505357` | −9.04 |
+
+Under the **default** `ThemeSource = "Manual"` dark, `Surface` is `#353536` for
+**every one of those papers**. That is the defect, in one column.
+
+### 24.6 §0's trap — and it fires here, measurably
+
+If the ground moves, the mark on it must be re-keyed. `ChromeUi.Ink` is
+`PageTheme.OnSurface`, which is right *only* because `OnSurface` is selected by
+`IsDark(PageTheme.Ground)` — it is keyed to **that** ground, the one both surfaces
+have just stopped using.
+
+Left alone, this would have been **§17.4's exact fault for the third time**:
+
+| paper | new dial plate | `OnSurface` on it (stale key) | `BestInk` on it (re-keyed) |
+|---|---|---|---|
+| Blueprint | `#7E9FBA` | `#F2F2F2` → **2.48:1** | `#000000` → 7.56:1 |
+| Brown Paper | `#B09985` | `#F2F2F2` → **2.42:1** | `#000000` → 7.74:1 |
+
+Both under the 3:1 floor. So:
+
+- **On the dial**, every mark standing on the disc or on a seat is resolved
+  against the plate by `BestInk` — the three readouts and their glyphs, undo and
+  redo, the colour dot's ring, the hover wash, and every cell's mark.
+- **In the chrome bars**, every mark is keyed to the **page** through
+  `BarInk()` — not only the glyphs on a plate but the page name, the divider and
+  the readouts, because all of them float over the page and always did. A bar
+  that keys half its marks to the page and half to the shell is a rule nobody can
+  hold.
+
+`BarInk` deliberately uses `PageTheme.OnSurface`'s **own rule** (luminance < 0.5),
+re-keyed, rather than a best-of contrast pick. A best-of would flip Blueprint and
+Brown Paper to black glyphs, and §7 rules those two carry white chrome. It costs
+nothing: the worst case is 3.66:1, clear of the floor.
+
+**This also fixes something that was already broken before §24 touched it.** On
+Blueprint the inner disc was `#8FADD3` carrying `#F2F2F2` at **2.06:1**, and on
+Brown Paper `#CAA689` at **2.01:1** — the dial's size, opacity and stability
+readouts were already under the floor on two shipped papers, under
+`ThemeSource = "Page"`. They are now 7.56:1 and 7.74:1.
+
+### 24.7 The measurement §17.19 asked for — all nine shipped papers
+
+Produced by an acceptance harness that **links `PageTheme.cs` and `PagePlate.cs`
+from the repo**, so these are the shipped arithmetic and not a model of it.
+`BestInk` is the only transcription (it is private to `ToolWheel.cs` and is two
+lines).
+
+| paper | ground | L\* | base | dial plate | mark | mark:plate | chrome plate | ink | ink:plate |
+|---|---|---|---|---|---|---|---|---|---|
+| Plain White | `#FCFCFC` | 98.96 | light | `#D1D1D1` | `#000000` | 13.75:1 | `#FCFCFC` | `#141414` | 17.96:1 |
+| Transparent | `#F2F2F2` | 95.49 | light | `#CDCDCD` | `#000000` | 13.21:1 | `#F2F2F2` | `#141414` | 16.46:1 |
+| Crumpled | `#F0ECE3` | 93.48 | light | `#CCCAC7` | `#000000` | 12.84:1 | `#F0ECE3` | `#141414` | 15.63:1 |
+| Lightweight | `#F5F3EE` | 95.87 | light | `#CECDCB` | `#000000` | 13.22:1 | `#F5F3EE` | `#141414` | 16.61:1 |
+| Heavyweight | `#E9E4D9` | 90.70 | light | `#C9C7C3` | `#000000` | 12.44:1 | `#E9E4D9` | `#141414` | 14.53:1 |
+| Rippled | `#F3F0E8` | 94.82 | light | `#CDCCC9` | `#000000` | 13.08:1 | `#F3F0E8` | `#141414` | 16.18:1 |
+| Blueprint | `#2E80C2` | 51.74 | light | `#7E9FBA` | `#000000` | **7.56:1** | `#2E80C2` | `#F2F2F2` | 3.76:1 |
+| Brown Paper | `#A9713F` | 52.51 | light | `#B09985` | `#000000` | 7.74:1 | `#A9713F` | `#F2F2F2` | **3.66:1** |
+| Darkprint | `#262B31` | 17.28 | **dark** | `#3C3E41` | `#FFFFFF` | 10.73:1 | `#262B31` | `#F2F2F2` | 12.74:1 |
+
+**Worst mark-on-plate on the dial: 7.56:1 (Blueprint). Worst mark-on-plate in the
+chrome bars: 3.66:1 (Brown Paper). Floor is 3:1. Both PASS**, and the mid-tone
+page — the case §17.19 warned would hurt — is exactly where both worst cases
+land, as predicted.
+
+The other grounds a user can reach, for completeness:
+
+| ground | L\* | base | dial plate | mark:plate | chrome ink:plate |
+|---|---|---|---|---|---|
+| custom default `#FAF9F5` | 97.90 | light | `#D0D0CE` | 13.60:1 | 17.49:1 |
+| OLED black `#000000` | 0.00 | dark | `#2D2D2D` | 13.77:1 | 18.76:1 |
+| pinned dark `#0F0E10` | 4.09 | dark | `#333333` | 12.63:1 | 17.20:1 |
+| pinned light `#F7F6F1` | 96.84 | light | `#CFCECC` | 13.35:1 | 17.03:1 |
+
+**Findability of the plate against the page** — reported, no floor applies,
+because §17.2's whole point is a plate that nearly disappears: 1.33:1
+(Heavyweight, Darkprint) to 1.52:1 (Blueprint). The dark base was chosen to make
+this number symmetric, and it is: 1.49 on Plain White, 1.52 on black.
+
+### 24.8 The pen's colour in the pen icon — NOT SHIPPED, and here is the figure
+
+The ruling reads *"make pen colour appear just on the inner arc of the button
+**and in the pen icon**"*. The inner arc **is** shipped. The icon is **not**, and
+the reason is a measurement, not a preference.
+
+| paper | plate | Ink | Paper | Clay | Red | Amber | Sage | Sky | Plum |
+|---|---|---|---|---|---|---|---|---|---|
+| Plain White | `#D1D1D1` | 12.07 | 1.45\* | 2.04\* | 3.26 | **1.08**\* | 2.41\* | 1.92\* | 5.37 |
+| Transparent | `#CDCDCD` | 11.60 | 1.51\* | 1.96\* | 3.13 | 1.04\* | 2.31\* | 1.84\* | 5.16 |
+| Crumpled | `#CCCAC7` | 11.27 | 1.55\* | 1.91\* | 3.04 | **1.01**\* | 2.25\* | 1.79\* | 5.02 |
+| Lightweight | `#CECDCB` | 11.60 | 1.51\* | 1.97\* | 3.13 | 1.04\* | 2.32\* | 1.84\* | 5.16 |
+| Heavyweight | `#C9C7C3` | 10.92 | 1.60\* | 1.85\* | 2.95\* | 1.02\* | 2.18\* | 1.73\* | 4.86 |
+| Rippled | `#CDCCC9` | 11.48 | 1.52\* | 1.94\* | 3.10 | 1.03\* | 2.29\* | 1.82\* | 5.11 |
+| Blueprint | `#7E9FBA` | 6.63 | 2.64\* | 1.12\* | 1.79\* | 1.68\* | 1.32\* | 1.05\* | 2.95\* |
+| Brown Paper | `#B09985` | 6.80 | 2.57\* | 1.15\* | 1.84\* | 1.64\* | 1.36\* | 1.08\* | 3.02 |
+| Darkprint | `#3C3E41` | 1.72\* | 10.18 | 3.44 | 2.15\* | 6.48 | 2.92\* | 3.66 | 1.31\* |
+
+`*` = under 3:1. **48 of 72 pairs fail. The worst is Amber `#FBC02D` on
+Crumpled's plate at 1.01:1** — an icon that is not hard to see but *absent*.
+
+**And it cannot be fixed by choosing a different grey.** Ink `#141413` needs a
+plate at Y ≥ 0.1209; Amber `#FBC02D` needs one at Y ≤ 0.1613. That window
+exists — but only around a mid-dark grey, which *"light grey for a light
+background"* forbids. **Swept over all 256 neutral greys, the best covers 6 of
+the 8 shipped pens, and it is `#000000`.** There is no single plate colour that
+carries the shipped palette past the floor.
+
+So the construction path is **live and compiled** behind
+`ToolWheel.PenColourInIcon`, which is `false` — the same treatment
+`ChromeBars.Metrics.ProBadgeVisible` gets, and for the same reason: commented-out
+code does not survive the next refactor of the method it sat in. **Flipping that
+one constant turns it on.** It needs one of the two fixes the floor leaves open,
+and **both are the user's call**:
+
+1. an outline on the icon in `BestInk`, or
+2. a plate base that is not chosen by the page.
+
+A third option was deliberately *not* taken: gating the pen colour per-pen on a
+3:1 test. It would have left the pen colour on Ink and Plum and taken it off the
+other six — inconsistent within one frame, which is the same complaint §24.11
+records about the picker fan.
+
+### 24.9 Repaint on a paper change
+
+`MainWindow.PushGround` already refreshed the dial for exactly this reason — a
+paper change under the default `ThemeSource = "Manual"` never moves the shell's
+ground, so `PageTheme.Changed` never fires. **`ChromeBars` needed the same**, or
+it would show the previous paper's plate until something else invalidated it —
+which is invisible to any test that changes paper *before* opening the chrome.
+
+It is **guarded**, unlike the dial's. `ToolWheel.Refresh` is a re-render;
+`ChromeBars.Refresh` rebuilds both clusters, re-measures the inset and repaints
+four panes, and it is already subscribed to `PageTheme.Changed` — which has run
+synchronously inside `SetGround` by the time `PushGround` continues. So the new
+call fires **only** in the case that subscription cannot see: a page ground that
+moved while the shell's stood still. A page turn does not pay for two rebuilds.
+
+### 24.10 What §17.19 loses, said plainly
+
+§17.19 put the pen's colour on the plate and the fourth screen run called it
+*"the best-looking of the new work"*. **That is withdrawn**, on the user's
+ruling, and this is what replaced it:
+
+| §17.19 | §24 |
+|---|---|
+| a pen cell's plate is that pen's own colour | every plate is the page-derived grey |
+| a tool cell's plate is white or black by the page | the same grey; there is no pen/tool split left |
+| the mark is white or black by contrast with the plate | **unchanged, and leaned on harder** |
+
+The third line is the one §17.19 got permanently right, and §24 inherits it
+wholesale: the mark is judged against the surface it actually sits on. §17.19's
+own guarantee — that `BestInk` can never do worse than 4.583:1 for any colour in
+sRGB — is what makes the new mid-tone plates safe.
+
+What a pen cell has left to identify itself with: its **stroke silhouette**, its
+**size label**, and §1.5's **colour arc** on the disc rim. That is three cues
+where §17.19 had four, and the one removed was the loudest. If the dial reads as
+having lost its pen colours, the fix is 24.8's switch plus an outline, not a
+retreat to a pen-coloured plate — the user was explicit.
+
+### 24.11 The picker fan's plates — checked, and it does NOT fall out for free
+
+The report: with the colour wheel open on a red page, `COPIC` keeps its plate
+while `HSL` and `RGB` land on a text box's black fill and disappear.
+
+**This is not a plate-logic inconsistency and §24 does not fix it.** Read
+`ColorWheel.DrawChrome`: **only the active face gets a plate.** §11.16
+deliberately reversed §11.12 item 1 on this — the Concepts capture is explicit
+that the inactive labels *are* bare, *"no box, no border, no ground"*, and that
+the chip alone says which face is up. `COPIC` had a plate because `COPIC` was
+selected. `HSL` and `RGB` are bare **by design** and vanished because their ink
+is `PageTheme.OnSurfaceMuted` while the thing under them was a **canvas
+object**, not the paper.
+
+Two reasons the page-derived formula cannot help:
+
+1. `ColorWheel` never calls `GroundBrush` or `PlateFor`. It reads
+   `PageTheme.Surface` / `OnSurface` / `OnSurfaceMuted` straight, and §24 touched
+   neither of those tokens' definitions.
+2. Even a perfectly page-derived colour would be keyed to the **paper**. The
+   offending ground is a text box's black fill sitting on top of it — arbitrary,
+   and it moves. The brief's own suspicion was right.
+
+What would actually fix it, none of which §24 is authorised to do: give all three
+labels a plate (§11.16 forbids it), restore the dark scrim §11.19 removed (which
+is what this control was authored against and what used to guarantee its ground),
+or sample the composited canvas under each label. **A separate ruling.**
+
+One thing worth flagging while in there: the active face's plate is
+`PageTheme.Surface`, which is the *shell's* token — so on a pinned theme it is
+the same colour on every paper, the same family of defect §24.1 describes. Not
+changed, not asked for.
+
+### 24.12 Neighbours left alone, on purpose
+
+- **The ring's sector fill and hover wash** still branch on
+  `PageTheme.IsDark` — the **shell's** ground. On a pinned-dark shell over white
+  paper, §7's *"the ring goes fully transparent"* fires on a light page. Same
+  root cause, but §1.1 and §7 rule the ring and no ruling covers it.
+- **`ChromeUi.Ink` itself is unchanged.** It is read by panes, popups and the
+  settings window, which stand on `Surface` and `Panel`, not on the page. Only
+  `ChromeBars`' own two bars were re-keyed.
+- **`ProBadge`** stays static on `ChromeUi.Dim`; it is behind
+  `ProBadgeVisible = false` and is never built.
+- **The §17.1 hover pill** stays dark on every page, which is what §17.1 asks
+  for.
+
+### 24.13 Two notes on the working conditions, for the next agent
+
+- **`ToolWheel.cs` is CRLF, not LF.** The brief stated the reverse. Verified by
+  byte count: 3067 CRLF, 0 bare LF before the patch. `PageTheme.cs` is the LF
+  file (0 CRLF, 233 bare LF). Every file here was patched by a script that
+  asserts ending purity and byte counts on both sides; the counts are in the
+  commit message.
+- **Blueprint is `#2E80C2`**, not `#2D7FC1` — see 24.2.
+
+### 24.14 NOTHING WAS VERIFIED ON SCREEN
+
+The machine was locked for the whole of this work. **No part of §24 has been
+seen running.** What *was* proved, and how:
+
+| claim | how it was established |
+|---|---|
+| the formula returns the user's colour on Blueprint | shipped `PagePlate.Of` run against `#2E80C2` → `#7E9FBA` |
+| `Of(page, Full)` is the page | asserted over all nine papers by the harness |
+| every contrast figure in 24.7 and 24.8 | harness linking the repo's own `PageTheme.cs` and `PagePlate.cs` |
+| the build is clean | `dotnet build … --no-incremental`, **0 warnings, 0 errors** |
+| line endings and byte counts | asserted by the patch scripts, re-checked after |
+| **that any of it looks right** | **NOT ESTABLISHED. Nobody has looked.** |
+
+### 24.15 The sweep — what to do, and what a failure looks like
+
+A colour that is merely *present* is not a pass. Each row says what a **failure**
+looks like so "working" can be told from "not crashing".
+
+**Ruling 1 — the corner plates.** Leave `ThemeSource` at its default (`Manual`);
+that is the case that was broken.
+
+| # | gesture | PASS | FAIL |
+|---|---|---|---|
+| 1.1 | open a **Plain White** page, look at the top-left and top-right clusters | each glyph sits on a near-white patch you have to look for; grid/lines stop at its edge | a **dark square** behind any glyph — the plate is still `PageTheme.Ground` |
+| 1.2 | switch the page to **Blueprint** | the plates go blue and the glyphs stay **white** | the plates stay whatever they were, or the glyphs go black |
+| 1.3 | switch to **Brown Paper** | plates brown, glyphs white | plates unchanged from Blueprint |
+| 1.4 | switch to **Darkprint** | plates near-black, glyphs white | plates still brown |
+| 1.5 | **with the chrome already up**, change paper Plain White → Blueprint | plates repaint **on the same frame** | plates keep the old colour until you click something — the §24.9 refresh is not wired |
+| 1.6 | compare the plate on six papers, screenshot and sample the pixel | six **different** hexes | any two identical — the plate is not reading the page |
+| 1.7 | read the page name and the zoom / tilt readouts on **Plain White** | dark text | near-white text on white paper — `BarInk` is not reaching them |
+| 1.8 | the 1×16 divider left of the page name | visible on every paper | invisible on the papers where the ink flipped |
+
+**Ruling 2 — the dial.**
+
+| # | gesture | PASS | FAIL |
+|---|---|---|---|
+| 2.1 | open the dial on **Blueprint** | the disc and every cell seat are one **blueish grey**, near `#7E9FBA` | grey with no blue in it (reading the shell), or the seats still carry pen colours |
+| 2.2 | the size / opacity / stability readouts on Blueprint | **black** text and glyphs | white text — the §24.6 re-key did not happen; this is the 2.06:1 case |
+| 2.3 | the same on **Darkprint** | **white** text on a dark grey disc | black text |
+| 2.4 | a **pen** cell vs a **tool** cell | the same seat colour on both | the pen cell's seat is the pen's colour — §17.19 still live |
+| 2.5 | the pen cells' **inner arcs** at the disc rim | still in each pen's own colour | grey or gone — the arc was collateral |
+| 2.6 | an **empty** cell and an **unavailable** one | no seat at all; empty shows a muted `+` | a bare grey disc with nothing on it |
+| 2.7 | **OLED black** page | disc and seats a dark grey (`#2D2D2D`), clearly not black and clearly not white | white seats (§17.19), or invisible |
+| 2.8 | **Plain White** page | disc and seats `#D1D1D1`-ish — should look **identical to before** | it moved; the formula and `Surface` agree here, so a change means something else broke |
+| 2.9 | hover size / opacity / stability | the wash still reads on every paper | no visible hover on the mid-tone papers |
+| 2.10 | undo / redo inside the disc, and the colour dot's ring | legible on Blueprint and Brown Paper | washed out — still keyed to the shell |
+| 2.11 | **with the dial open**, change paper | the disc and seats repaint immediately | stale until the dial is closed and reopened |
+| 2.12 | pop a sector (select a cell) | the seat travels out with the mark and keeps the plate colour | the seat stays behind or turns transparent |
+
+**Regression watch — things that must NOT have changed.**
+
+| # | check | FAIL looks like |
+|---|---|---|
+| 3.1 | popped-sector fill and its label | the label is unreadable on the popped wedge |
+| 3.2 | the ring's separators and outer edge | gone or doubled |
+| 3.3 | tool-options row at the bottom of the dial | its ink changed |
+| 3.4 | panes (Layers, Precision, Comments), Export, Objects, Settings | any of their ink changed — §24 must not have touched `ChromeUi.Ink` |
+| 3.5 | the §17.1 hover pill on the readouts | it stopped being dark |
+| 3.6 | flip `ThemeSource` to **Page** in Settings | everything above still holds; only the *panels* should differ |
+
+**The one to look hardest at:** row 1.5 and row 2.11. A paper change while the
+chrome is already up is the case every automated test misses, because tests
+change paper first and open the surface second.

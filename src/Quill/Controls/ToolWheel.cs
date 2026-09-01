@@ -1027,9 +1027,50 @@ public sealed class ToolWheel
         // ---- the palette, all of it from the page ground -----------------
         var onSurface = PageTheme.OnSurface;
         var surface = PageTheme.Surface;
-        var muted = PageTheme.OnSurfaceMuted;
         var outline = PageTheme.Outline;
         bool dark = PageTheme.IsDark;
+
+        // ---- §24: THE DIAL'S PLATES, AND THEY COME OFF THE PAGE ----------
+        //
+        // "make the radial dial button backgrounds the current theme colour.
+        // just not make it transparent. keep the dark grey (for black
+        // background) and light grey (for light background) for opacity,
+        // stability, size buttons but make them inhibit the colour of the
+        // background slightly, like slightly blueish grey (#7EA0B9) if blueprint
+        // is selected. make pen colour appear just on the inner arc of the
+        // button and in the pen icon."
+        //
+        // ONE colour, for the inner disc and for every cell's seat alike, out of
+        // PagePlate's shared formula at its Tint endpoint - the same expression
+        // ChromeBars evaluates at Full for §17.2's corner plates. That the user
+        // gave a single example colour for "the buttons" is why it is one value
+        // and not two: #7EA0B9 on Blueprint is what base 180 at t = 0.40 returns,
+        // to within a unit on all three channels.
+        //
+        // "BACKGROUND" HERE MEANS THE PAGE. Both of the user's examples
+        // (Blueprint, black) are papers, and PageTheme.Ground is the SHELL's
+        // ground - a fixed colour under the default ThemeSource = "Manual" that
+        // knows nothing about the paper. See PlateFor.
+        //
+        // WHAT IT COSTS: §17.19's pen-coloured plate, which the fourth screen run
+        // called the best-looking of the new work. The user has replaced it -
+        // every plate takes the grey, pens included - and the pen's colour
+        // survives on §1.5's inner arc, which this does not touch.
+        //
+        // WHAT IT FIXES, and this was already broken before §24 touched it: on
+        // Blueprint the inner disc was PageTheme.Surface #8FADD3 carrying
+        // OnSurface #F2F2F2 at 2.06:1, and on Brown Paper #CAA689 at 2.01:1 -
+        // both already under the 3:1 floor. Re-keying the disc's marks to the
+        // plate they actually stand on takes those to 7.56:1 and 7.74:1.
+        var plate = PlateFor();
+        // §0's rule, and it is not optional. The ground moved, so the mark on it
+        // is resolved against THAT ground and nothing else. Keeping onSurface
+        // here would have been §17.4 for the third time in this file: measured,
+        // 2.48:1 on Blueprint and 2.42:1 on Brown Paper, both under the floor.
+        // BestInk can never do worse than 4.583:1 for any colour in sRGB.
+        var plateInk = BestInk(plate);
+        var plateMuted = PageTheme.WithAlpha(plateInk, 140);
+        var plateOutline = PageTheme.WithAlpha(plateInk, 36);
 
         // §1.1: "Sector fill is Surface lightened toward the ground - near-white
         // on a paper page." §7: on a Blueprint / Brown Paper / Darkprint page the
@@ -1124,7 +1165,14 @@ public sealed class ToolWheel
                              : Mix(ringFill, onSurface, 0.07);
 
         _shadow.Fill = ShadowBrush();
-        _disc.Fill = new SolidColorBrush(surface);
+        // §24: the disc is the "background" of the size / opacity / stability
+        // buttons the user named, so it takes the shared plate rather than
+        // PageTheme.Surface - which is derived from the SHELL's ground and is
+        // therefore one fixed grey for every paper on a default install. On Plain
+        // White the two agree byte for byte (#D1D1D1); across the nine shipped
+        // papers they differ by at most 9.04 L*. This is a re-pointing, not a
+        // redesign.
+        _disc.Fill = new SolidColorBrush(plate);
         // §1.1 calls this "Outline at 40%". Read literally that is 0.14 x 0.40 =
         // 5.6% of OnSurface, which is not a hairline - it is nothing, and on a
         // dark ground where §7 takes the ring's fill away it is the only thing
@@ -1161,36 +1209,47 @@ public sealed class ToolWheel
                 : ringFill);
             _sector[i].Opacity = live ? 1 : 0;
 
-            // 17.19: the plate. IN BOTH THEMES AND ON EVERY SECTOR, including the
-            // popped one - the pop is the SECTOR's cue and the plate is the
-            // CELL's, they are different elements and both hold.
+            // §24: the seat, on every sector including the popped one - the pop
+            // is the SECTOR's cue and the seat is the CELL's, they are different
+            // elements and both hold. One colour for all eight, pens included:
+            // "EVERY plate takes the grey", and never transparent.
             //
-            // Two cells get none. An UNAVAILABLE one (16.3) is already painting
-            // no mark, and a bare coloured button with nothing on it would be
-            // precisely the "live-looking control that silently does nothing"
-            // that section rules out. An EMPTY one keeps 11.2 item 11's bare
-            // muted + on the sector: 17.19 names pen cells and tool cells, and
-            // an empty cell is neither - giving it a full white or black disc
-            // would make an unassigned sector read as an assigned one, which is
-            // the one thing the + exists to prevent.
-            Color? plate = empty || !live ? null : PlateFor(id);
-            _seat[i].Fill = new SolidColorBrush(plate ?? Colors.Transparent);
-            _seat[i].Opacity = plate is null ? 0 : 1;
+            // Two cells still get none, and §17.19's reasoning for that is
+            // untouched by the user's ruling. An UNAVAILABLE one (16.3) is
+            // already painting no mark, and a bare filled button with nothing on
+            // it would be precisely the "live-looking control that silently does
+            // nothing" that section rules out. An EMPTY one keeps 11.2 item 11's
+            // bare muted + on the sector: an unassigned sector must not read as
+            // an assigned one, which is the one thing the + exists to prevent.
+            Color? seat = empty || !live ? null : plate;
+            _seat[i].Fill = new SolidColorBrush(seat ?? Colors.Transparent);
+            _seat[i].Opacity = seat is null ? 0 : 1;
 
             // §1.1: separators are hairlines in Outline from 0.70 R to 1.00 R,
             // and §7 keeps them when the ring itself has gone.
             _sep[i].Stroke = new SolidColorBrush(outline);
 
-            // 17.19: the mark is WHITE OR BLACK, whichever contrasts better with
-            // the plate it is drawn on. §1.3's "in the tool's own colour" and
-            // 17.4's inversion on the popped sector are both gone: the pen's
-            // colour is the PLATE now, and a mark in the same colour on it would
-            // be invisible. Measured, that choice can never do worse than
-            // 4.583:1 for any colour in sRGB - see BestInk - which clears the 3:1
-            // floor for non-text marks with room to spare. The + on a plateless
-            // empty cell keeps OnSurface, because there it really is standing on
-            // the sector and the page, and that is the token keyed to those.
-            var fg = plate is { } pc ? BestInk(pc) : onSurface;
+            // §24 keeps §17.19's mark rule and re-points its ground: the mark
+            // is WHITE OR BLACK, whichever contrasts better with the seat it is
+            // drawn on, and the seat is now the page-derived grey rather than the
+            // pen's colour. Measured, that choice can never do worse than
+            // 4.583:1 for any colour in sRGB - see BestInk - and over the nine
+            // shipped papers it runs 7.56:1 (Blueprint) to 13.75:1 (Plain
+            // White). The + on a seatless empty cell keeps onSurface, because
+            // there it really is standing on the sector and the page.
+            //
+            // THE PEN'S COLOUR IN THE PEN ICON is the user's ruling and is NOT
+            // on: it measures 1.01:1 at worst and no grey plate can carry all
+            // eight shipped pens past 3:1. The path is live behind
+            // PenColourInIcon, which is where the numbers are written down. The
+            // constant is read SECOND so the compiler never sees a constant-false
+            // left operand and never reports the right one unreachable.
+            Color fg = onSurface;
+            if (seat is { } pc)
+            {
+                fg = plateInk;
+                if (PenOf(id) is { } iconPen && PenColourInIcon) fg = SafeInk(iconPen.Color);
+            }
             _mark[i].Children.Clear();
             var art = SlotArt(id, fg);
             if (art != null) _mark[i].Children.Add(art);
@@ -1281,15 +1340,19 @@ public sealed class ToolWheel
                 : $"{ap!.Stabiliser * 100:0}%",
         };
 
-        Glyph(_sizeGlyph, Icons.Size, enabled[0] ? onSurface : muted, stroked: false);
-        Glyph(_opacGlyph, Icons.Opacity, enabled[1] ? onSurface : muted, stroked: false);
-        Glyph(_smoothGlyph, Icons.Smoothness, enabled[2] ? onSurface : muted, stroked: true);
+        // §24: these three are the buttons the user named by name, and they
+        // stand on the disc, so they are keyed to the disc's fill and not to the
+        // shell's OnSurface. On Blueprint and Brown Paper that is the difference
+        // between 2.06:1 / 2.01:1 and 7.56:1 / 7.74:1.
+        Glyph(_sizeGlyph, Icons.Size, enabled[0] ? plateInk : plateMuted, stroked: false);
+        Glyph(_opacGlyph, Icons.Opacity, enabled[1] ? plateInk : plateMuted, stroked: false);
+        Glyph(_smoothGlyph, Icons.Smoothness, enabled[2] ? plateInk : plateMuted, stroked: true);
         _sizeText.Text = read[0];
         _opacText.Text = read[1];
         _smoothText.Text = read[2];
         foreach (var (t, en) in new[] { (_sizeText, enabled[0]), (_opacText, enabled[1]), (_smoothText, enabled[2]) })
         {
-            t.Foreground = new SolidColorBrush(en ? onSurface : muted);
+            t.Foreground = new SolidColorBrush(en ? plateInk : plateMuted);
             t.Opacity = en ? 1 : 0.6;
         }
         // 16.5 / 16.4. Placement is state-dependent, so it happens here rather
@@ -1310,17 +1373,23 @@ public sealed class ToolWheel
         // information rather than disable a control.
         bool colourDead = ColourInert;
         _dot.Fill = new SolidColorBrush(colourDead ? Colors.White : SelectionColour() ?? ActiveColour());
+        // §24: the dot sits on the disc, so its ring is the disc's outline, not
+        // the shell's. PageTheme.Outline is OnSurface at alpha 36 and would be a
+        // hairline of the wrong ink on Blueprint and Brown Paper.
         _dot.Stroke = new SolidColorBrush(
-            colourDead ? outline : _hoverZone == Zone.Dot ? PageTheme.Accent : outline);
+            colourDead ? plateOutline : _hoverZone == Zone.Dot ? PageTheme.Accent : plateOutline);
         _dot.StrokeThickness = !colourDead && _hoverZone == Zone.Dot ? 3 : 2;
 
         // ---- 11.2 item 13: hover indicators ------------------------------
-        PlaceHover(onSurface);
+        PlaceHover(plateInk);      // §24: the wash is carried on the DISC's ink
 
         // ---- 10.2 item 5: undo and redo, inside the disc -----------------
         // 11.2 item 14: the redesigned pair.
-        Button(_undoArt, Icons.UndoRound, false, _surface.UndoManager.CanUndo, onSurface);
-        Button(_redoArt, Icons.UndoRound, true, _surface.UndoManager.CanRedo, onSurface);
+        // §24: on the disc, so keyed to the disc. The user's list named size,
+        // opacity and stability; these two sit on the same fill and would have
+        // been the only marks on it still keyed to the shell.
+        Button(_undoArt, Icons.UndoRound, false, _surface.UndoManager.CanUndo, plateInk);
+        Button(_redoArt, Icons.UndoRound, true, _surface.UndoManager.CanRedo, plateInk);
 
         BuildToolOptions(onSurface, outline, surface);
         _popover.Sync();
@@ -2920,56 +2989,81 @@ public sealed class ToolWheel
     // binds to, so the two surfaces can never drift again.
     // ===================================================================
 
-    /// <summary>17.19: WHAT COLOUR A CELL'S PLATE IS.
+    /// <summary>§24: WHETHER THE PEN'S OWN COLOUR GOES IN THE PEN ICON.
     ///
-    /// <para>A pen cell takes that pen's own colour. Everything else - a tool, a
-    /// command, an empty cell - takes white or black by the page background,
-    /// because "a tool has no colour of its own to show".</para>
+    /// <para><b>OFF, AND IT IS THE ONE PART OF THE USER'S RULING NOT SHIPPED.</b>
+    /// The ruling reads "make pen colour appear just on the inner arc of the
+    /// button and in the pen icon". The INNER ARC is shipped - §1.5's 45 degree
+    /// arc at the disc rim, untouched by this section and now the only place on
+    /// the ring a pen's colour appears. The ICON is not, because it does not
+    /// clear the 3:1 floor §17.19 set for a non-text mark, and the failure is not
+    /// marginal.</para>
     ///
-    /// <para><b>CONTRASTING, not matching.</b> On a dark page the tool plate is
-    /// WHITE and on a light page BLACK. A plate that took the page's own side
-    /// would be the §17.4 defect back again under a new name: a patch the colour
-    /// of the page, on a page with no grid or texture to interrupt, is invisible
-    /// however it was arrived at.</para>
+    /// <list type="bullet">
+    /// <item>48 of the 72 pairs of eight shipped pen colours against the nine
+    /// shipped papers' plates fall under 3:1.</item>
+    /// <item>The worst is Amber #FBC02D on Crumpled's plate #CCCAC7 at 1.01:1 -
+    /// an icon that is not hard to see but absent.</item>
+    /// <item>No choice of grey fixes it. Ink #141413 needs a plate at
+    /// Y &gt;= 0.121 and Amber #FBC02D needs one at Y &lt;= 0.161; that window
+    /// exists, but only around a mid-dark grey, which "light grey for a light
+    /// background" forbids. Swept over all 256 neutral greys the best covers 6 of
+    /// the 8 shipped pens, and it is #000000.</item>
+    /// </list>
     ///
-    /// <para>Fully opaque. A pen's own <c>Opacity</c> used to modulate its MARK's
-    /// alpha, and 17.19 names that among the defects it makes unreachable - a
-    /// half-transparent mark is not "white or black". The pen's opacity is
-    /// reported by the disc's own readout, which is where a number belongs.</para>
-    ///
-    /// <para><b>THE PAGE, NOT THE THEME - AND THEY ARE NOT THE SAME THING.</b>
-    /// 17.19 says "according to page background", and the obvious reading of
-    /// that is <see cref="PageTheme.IsDark"/>. It is wrong, and it is wrong in a
-    /// way that has already shipped once: <c>MainWindow.ResolveGround</c> returns
-    /// the page's paper ONLY when <c>ThemeSource == "Page"</c>, and that field
-    /// defaults to <c>"Manual"</c> - so on a default install
-    /// <see cref="PageTheme.Ground"/> is a FIXED shell colour and knows nothing
-    /// about the paper. That is exactly how §17.2's "a background that mimics the
-    /// page colour" came to be measured byte-identical (#0F0E10) on a dark page
-    /// and on Brown Paper. A tool plate resolved that way would be white on a
-    /// pinned-dark shell whatever the paper underneath it actually was.</para>
-    ///
-    /// <para>So this reads <see cref="PaperTextures.Ground"/> off the live page -
-    /// the same helper <c>ResolveGround</c> uses for its own Page branch - and
-    /// judges it with <see cref="PageTheme.Luminance"/>, which is the gamma-correct
-    /// threshold the whole shell decides light from dark on.
-    /// <c>ColorUtil.IsDark</c> averages raw bytes and puts Brown Paper on the
-    /// wrong side, and Brown Paper is one of the three grounds §7 names as dark.
-    /// <c>MainWindow.PushGround</c> refreshes the dial so a paper change repaints
-    /// these even when the shell's own ground did not move.</para></summary>
-    private Color PlateFor(string id) =>
-        PenOf(id) is { } pen ? SafeInk(pen.Color)
-                             : PageIsDark ? Colors.White : Colors.Black;
+    /// <para>So the construction path is here, LIVE and compiled, and this
+    /// constant is the one line to change - the same treatment
+    /// <c>ChromeBars.Metrics.ProBadgeVisible</c> gets and for the same reason:
+    /// commented-out code does not survive the next refactor of the method it sat
+    /// in. Switching it on needs one of the two fixes the floor leaves open, and
+    /// both are the user's call: an outline on the icon in <see cref="BestInk"/>,
+    /// or a plate base that is not chosen by the page. It is read alongside a
+    /// runtime value and SECOND, so the compiler never sees a constant-false left
+    /// operand and never reports the right one unreachable - the build stays at
+    /// zero warnings.</para></summary>
+    private const bool PenColourInIcon = false;
 
-    /// <summary>Whether the PAGE - the paper the user is drawing on - is dark.
-    /// Deliberately not <see cref="PageTheme.IsDark"/>; see
-    /// <see cref="PlateFor"/> for why those two disagree by default.</summary>
-    private bool PageIsDark
+    /// <summary>§24: WHAT COLOUR A CELL'S PLATE IS - and it is the page's.
+    ///
+    /// <para>"make the radial dial button backgrounds the current theme colour.
+    /// just not make it transparent." Every plate takes the grey, PENS INCLUDED,
+    /// and never transparent - so this no longer depends on which cell is asking
+    /// and takes no id. It is <see cref="PagePlate"/>'s shared formula at its
+    /// <see cref="PagePlate.Tint"/> endpoint, the same expression
+    /// <c>ChromeBars.GroundBrush</c> evaluates at <c>Full</c> for §17.2's corner
+    /// plates. One formula, two surfaces, nothing to drift.</para>
+    ///
+    /// <para><b>THIS SUPERSEDES §17.19'S PEN-COLOURED PLATE</b>, which the fourth
+    /// screen run called the best-looking of the new work. What replaced it and
+    /// why is recorded in §24 rather than edited into agreement here. The pen's
+    /// colour comes OFF the plate and survives on §1.5's inner arc.</para>
+    ///
+    /// <para>What §17.19 got right, and this keeps: THE PAGE, NOT THE THEME, AND
+    /// THEY ARE NOT THE SAME THING. <c>MainWindow.ResolveGround</c> returns the
+    /// paper only when <c>ThemeSource == "Page"</c>, and that field defaults to
+    /// <c>"Manual"</c> - so <see cref="PageTheme.Ground"/> is a fixed shell
+    /// colour on a default install and knows nothing about the paper. Reading it
+    /// here would give every paper the same plate, which is exactly how §17.2's
+    /// "background that mimics the page colour" came to be measured
+    /// byte-identical on six papers.</para></summary>
+    private Color PlateFor() => PagePlate.Of(PageGround, PagePlate.Tint);
+
+    /// <summary>The live page's ground - the paper the user is drawing on.
+    ///
+    /// <para>Deliberately not <see cref="PageTheme.Ground"/>; see
+    /// <see cref="PlateFor"/> for why those two disagree by default. The judgment
+    /// made on it lives in <see cref="PagePlate.BaseIsDark"/> and is
+    /// gamma-correct: <c>ColorUtil.IsDark</c> averages raw bytes and puts Brown
+    /// Paper on the wrong side, and Brown Paper is one of the three grounds §7
+    /// names as dark. <c>MainWindow.PushGround</c> refreshes the dial so a paper
+    /// change repaints these even when the shell's own ground did not
+    /// move.</para></summary>
+    private Color PageGround
     {
         get
         {
-            try { return PageTheme.Luminance(PaperTextures.Ground(_surface.Page)) < 0.5; }
-            catch { return PageTheme.IsDark; }
+            try { return PagePlate.Ground(_surface.Page); }
+            catch { return PageTheme.Ground; }
         }
     }
 

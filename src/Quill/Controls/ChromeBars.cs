@@ -162,51 +162,89 @@ public sealed class ChromeBars
     /// <para>The corner buttons take "a background that mimics the page colour,
     /// so the button almost disappears into the page — but the page's grid and
     /// texture do NOT continue across it, and that discontinuity is what makes
-    /// the button findable". So this is <see cref="PageTheme.Ground"/> EXACTLY,
-    /// not a raised or tinted variant of it: the plate is meant to be the same
-    /// colour as the paper, and the only thing distinguishing it is that the
-    /// grain and the grid stop at its edge. Raising it even a step would trade
-    /// the effect §17.2 describes for an ordinary button.</para>
+    /// the button findable". So this is the PAGE's colour EXACTLY, not a raised
+    /// or tinted variant of it: the plate is meant to be the same colour as the
+    /// paper, and the only thing distinguishing it is that the grain and the grid
+    /// stop at its edge. Raising it even a step would trade the effect §17.2
+    /// describes for an ordinary button.</para>
     ///
-    /// <para><b>A KNOWN GAP, LEFT AS THE REFERENCE LEAVES IT.</b> §17.18.1
-    /// observed that this reasoning has an unstated premise — that there IS grid
-    /// or texture to interrupt — and that on a plain black or plain white page
-    /// there is neither, so a frame the exact colour of the page is invisible by
-    /// construction. §17.18.2's closing line applied that to these frames. But
-    /// §17.19 then SUPERSEDED §17.18.1 outright, and its replacement rule is
-    /// about the dial's pen and tool cells: a plate carrying the pen's own
-    /// colour, which a zoom or a hamburger button has no equivalent of. So the
-    /// observation stands and the rule that would have fixed it is withdrawn.
-    /// This stays at <see cref="PageTheme.Ground"/> rather than inventing a
-    /// treatment no section asks for — measured, a 6 L* lift would have put the
-    /// frame at contrast 1.122 (a pinned dark #0F0E10, the tightest of the
-    /// shipped grounds) to 1.227 (Blueprint, Brown Paper), which is the one line
-    /// to change if the user wants it.</para>
+    /// <para><b>§24: IT WAS READING THE WRONG SOURCE, AND THIS IS THE PARAGRAPH
+    /// THAT SAID SO.</b> What stood here recorded a "known gap": that §17.18.1
+    /// had observed the plate is invisible on a plain page with no grain or grid
+    /// to interrupt, that §17.18.2 applied that observation to these frames, and
+    /// that §17.19 then superseded §17.18.1 outright and left them with no rule
+    /// to fix them. Every step of that is true and the conclusion was still
+    /// wrong, because it accepted the premise that this line was reading the page
+    /// at all. IT WAS NOT. It was <c>PageTheme.Ground</c>, and
+    /// <c>MainWindow.ResolveGround</c> returns the paper only when
+    /// <c>ThemeSource == "Page"</c> — a field that DEFAULTS to <c>"Manual"</c>.
+    /// On a default install this plate was a fixed shell colour, measured
+    /// byte-identical <c>#0F0E10</c> on OLED black, Darkprint, Brown Paper, a
+    /// custom red, Blueprint and Plain White across three screen runs. On Plain
+    /// White that is 18.77:1 and ΔL* 94.9 — the maximum contrast sRGB has, from
+    /// the section that asked for a button which almost disappears. It was never
+    /// a value that needed a nudge. It was the wrong source, and no adjustment to
+    /// a wrong source could have been right on more than one paper at a
+    /// time.</para>
+    ///
+    /// <para>So it reads <see cref="PagePlate"/> now — the LIVE page's ground,
+    /// through the same shared formula the dial's plates use, at
+    /// <see cref="PagePlate.Full"/>, the endpoint where the base grey drops out
+    /// of the mix and the page's own colour is all that remains. §17.18.1's
+    /// observation still stands and is still unanswered: on a plain black or
+    /// plain white page there is no grain or grid for the plate to interrupt, so
+    /// the frame is findable only by its mark. That is a question for the user,
+    /// and the one thing to change if they want a lift is the <c>Full</c> passed
+    /// below — <c>PagePlate.Tint</c> would give these frames the dial's grey
+    /// instead.</para>
     ///
     /// <para>The discontinuity needs no code. The grid and the paper texture are
     /// painted by <see cref="InkSurface"/> into the Win2D canvas UNDERNEATH these
     /// WinUI elements, so an opaque patch of the ground colour interrupts them by
-    /// construction. <see cref="PageTheme.Ground"/> is always fully opaque, which
-    /// is what makes that true.</para>
+    /// construction. <see cref="PagePlate.Of"/> is always fully opaque, which is
+    /// what makes that true.</para>
     ///
-    /// <para><b>What may be drawn on it.</b> §17.4's fault was a mark whose
-    /// contrast had been tested against a NEIGHBOURING surface's token, so it
-    /// passed the test and still vanished on the ground it was actually drawn on.
-    /// The mark here is <see cref="ChromeUi.Ink"/> = <c>PageTheme.OnSurface</c>,
-    /// and the reason that is the right pairing is not that it reads well — it is
-    /// that <c>OnSurface</c> is selected by <c>IsDark</c>, which is
-    /// <c>Luminance(Ground) &lt; 0.5</c>. It is keyed to THIS ground, not to
-    /// <c>Surface</c>'s. Measured over the nine shipped papers the glyph-on-plate
-    /// ratio runs 3.66:1 (Brown Paper) to 17.96:1 (Plain White), all past the 3:1
-    /// floor non-text marks need.</para>
+    /// <para><b>What may be drawn on it — and why the mark had to move too.</b>
+    /// §17.4's fault was a mark whose contrast had been tested against a
+    /// NEIGHBOURING surface's token, so it passed the test and still vanished on
+    /// the ground it was actually drawn on. The mark here used to be
+    /// <see cref="ChromeUi.Ink"/> = <c>PageTheme.OnSurface</c>, and the reason
+    /// that was the right pairing was NOT that it read well — it was that
+    /// <c>OnSurface</c> is selected by <c>IsDark</c>, i.e. keyed to
+    /// <c>PageTheme.Ground</c>, the very ground this plate has just stopped
+    /// using. Left alone it would have been §17.4 for a third time. So every mark
+    /// these two bars draw is keyed to the PAGE now, through
+    /// <see cref="BarInk"/>: not only the glyphs standing on a plate but the page
+    /// name, the divider and the readouts as well, because all of them float over
+    /// the page and always did — a bar that keys half its marks to the page and
+    /// half to the shell is a rule nobody can hold. Measured over the nine
+    /// shipped papers the mark-on-plate ratio runs 3.66:1 (Brown Paper) to
+    /// 17.96:1 (Plain White), every one clear of the 3:1 floor a non-text mark
+    /// needs. The table is in §24.</para></summary>
+    private Color PageGround()
+    {
+        try { return PagePlate.Ground(_h.Surface().Page); }
+        catch { return PageTheme.Ground; }
+    }
+
+    /// <summary>§17.2's plate: the page's own colour, through the shared
+    /// formula's <see cref="PagePlate.Full"/> endpoint.
     ///
-    /// <para><b>And the pairing is UNCHANGED by this section</b>, which is what
-    /// makes it safe: the glyphs already sat directly on the page. All §17.2 does
-    /// is replace page-plus-grid-plus-texture under them with a flat patch of the
-    /// same colour, so their contrast can only improve. Nothing here re-purposes
-    /// <c>Surface</c> or adds a second page-mimicking token for other surfaces to
-    /// reach for — it reads the one that already exists.</para></summary>
-    private static SolidColorBrush GroundBrush() => new(PageTheme.Ground);
+    /// <para>NOT static any more, and that is the whole of the change. A static
+    /// factory had no live page to read, so it reached for the one global that
+    /// looked like a page colour and was not one.</para></summary>
+    private SolidColorBrush GroundBrush() => new(PagePlate.Of(PageGround(), PagePlate.Full));
+
+    /// <summary>The mark for these two bars, keyed to the PAGE they float over
+    /// rather than to the shell's ground. See <see cref="GroundBrush"/> for why
+    /// those two part company and why reaching for the shell's token here is
+    /// §17.4's defect wearing a new name.</summary>
+    private Color BarInk() => PagePlate.Ink(PageGround());
+
+    /// <summary>Secondary ink for the bars — the same relation
+    /// <c>PageTheme.OnSurfaceMuted</c> has to <c>OnSurface</c>, carried onto the
+    /// page-keyed mark instead of the shell-keyed one.</summary>
+    private Color BarDim() => PageTheme.WithAlpha(BarInk(), 140);
 
     public sealed class Host
     {
@@ -582,7 +620,7 @@ public sealed class ChromeBars
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxWidth = Metrics.TitleMaxWidth,
-            Foreground = new SolidColorBrush(ChromeUi.Ink),
+            Foreground = new SolidColorBrush(BarInk()),
         };
 
         // The page title is renamable FROM THE BAR (V3 B) - the whole cell is
@@ -592,7 +630,7 @@ public sealed class ChromeBars
         titleCell.VerticalAlignment = VerticalAlignment.Center;
         titleCell.Background = new SolidColorBrush(Colors.Transparent);
         titleCell.Children.Add(_title);
-        var pencil = ChromeUi.Mark(Icons.Rename, 12);
+        var pencil = Icons.Filled(Icons.Rename, BarInk(), 12);
         if (pencil != null) { pencil.Opacity = 0.5; titleCell.Children.Add(pencil); }
         ToolTipService.SetToolTip(titleCell, "Rename this page");
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(titleCell, "Page name - tap to rename");
@@ -658,7 +696,7 @@ public sealed class ChromeBars
 
     /// <summary>One status-bar glyph on its measured 42 DIP hit target, with the
     /// 40 x 2 DIP underline slot beneath it. Bare: no background, no border.</summary>
-    private static Grid Slot(FrameworkElement? art, string tip, bool underline)
+    private Grid Slot(FrameworkElement? art, string tip, bool underline)
     {
         var cell = new Grid
         {
@@ -694,7 +732,7 @@ public sealed class ChromeBars
                 CornerRadius = new CornerRadius(Metrics.UnderlineH / 2),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Bottom,
-                Background = new SolidColorBrush(ChromeUi.Ink),
+                Background = new SolidColorBrush(BarInk()),
             });
         ToolTipService.SetToolTip(cell, tip);
         return cell;
@@ -725,17 +763,18 @@ public sealed class ChromeBars
         return b;
     }
 
-    private static Button BarButton(string geometry, string tip, Action click, bool stroked = false)
+    private Button BarButton(string geometry, string tip, Action click, bool stroked = false)
     {
+        var ink = BarInk();
         var art = stroked
-            ? Icons.Stroked(geometry, ChromeUi.Ink, Metrics.GlyphSize, 1.6)
-            : Icons.Filled(geometry, ChromeUi.Ink, Metrics.GlyphSize);
+            ? Icons.Stroked(geometry, ink, Metrics.GlyphSize, 1.6)
+            : Icons.Filled(geometry, ink, Metrics.GlyphSize);
         var b = Bare(Slot(art, tip, underline: false), tip);
         b.Click += (_, _) => click();
         return b;
     }
 
-    private static Button BarMenuButton(string geometry, string tip, FlyoutBase flyout)
+    private Button BarMenuButton(string geometry, string tip, FlyoutBase flyout)
     {
         var b = BarButton(geometry, tip, () => { });
         b.Flyout = flyout;
@@ -747,14 +786,17 @@ public sealed class ChromeBars
     /// migrated bracket and the zoom readout. The gaps are a parameter because
     /// the two situations are not the same measurement — see
     /// <see cref="Metrics.FsDividerGapL"/>.</summary>
-    private static FrameworkElement Divider(double gapL = Metrics.DividerGapL,
-                                            double gapR = Metrics.DividerGapR) => new Border
+    private FrameworkElement Divider(double gapL = Metrics.DividerGapL,
+                                     double gapR = Metrics.DividerGapR) => new Border
     {
         Width = Metrics.DividerW,
         Height = Metrics.DividerH,
         Margin = new Thickness(gapL, 0, gapR, 0),
         VerticalAlignment = VerticalAlignment.Center,
-        Background = new SolidColorBrush(ChromeUi.BarDivider),
+        // §24: ChromeUi.BarDivider is the same alpha off the SHELL's ink. These
+        // bars are keyed to the page now, and a rule between two page-keyed
+        // glyphs cannot be the one element still keyed to the shell.
+        Background = new SolidColorBrush(PageTheme.WithAlpha(BarInk(), 0x66)),
     };
 
     /// <summary>15.3's `PRO`, which in Concepts is the Pro Store button — it
@@ -823,7 +865,7 @@ public sealed class ChromeBars
     /// popup silently. See CanvasPane's remarks.</para></summary>
     private Button PanelButton(string geometry, string label, Func<CanvasPane> pane)
     {
-        var art = Icons.Filled(geometry, ChromeUi.Ink, Metrics.GlyphSize);
+        var art = Icons.Filled(geometry, BarInk(), Metrics.GlyphSize);
         bool open = false;
         try { open = PaneIfBuilt(label)?.IsOpen == true; } catch { }
         var b = Bare(Slot(art, label, underline: open), label);
@@ -847,7 +889,7 @@ public sealed class ChromeBars
     /// than a bare canvas pane.</summary>
     private Button ObjectsButton()
     {
-        var art = Icons.Filled(Icons.Objects, ChromeUi.Ink, Metrics.GlyphSize);
+        var art = Icons.Filled(Icons.Objects, BarInk(), Metrics.GlyphSize);
         var b = Bare(Slot(art, "Objects", underline: _objects?.IsOpen == true), "Objects");
         b.Click += (_, _) =>
         {
@@ -971,7 +1013,7 @@ public sealed class ChromeBars
             FontSize = 12.5,
             TextAlignment = TextAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = new SolidColorBrush(ChromeUi.Ink),
+            Foreground = new SolidColorBrush(BarInk()),
         };
         yield return ReadoutCell(_zoomText, _zoomLocked, Metrics.ReadoutWidth,
                                  "Zoom", "Zoom — tap for the Measurement menu", 0);
@@ -981,7 +1023,7 @@ public sealed class ChromeBars
             FontSize = 12.5,
             TextAlignment = TextAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = new SolidColorBrush(ChromeUi.Dim),
+            Foreground = new SolidColorBrush(BarDim()),
         };
         // DEFERRED, AND SAID SO (V3 K.26). Tilt is not a readout that needs
         // filling in - it needs canvas rotation, which Quill does not have. The
@@ -1012,7 +1054,7 @@ public sealed class ChromeBars
         };
         // Padlock BEFORE the value, matching the order §17.1 draws the hover
         // pill in: `[lock] 10%  [lock] 0°`.
-        if (locked) row.Children.Add(Icons.Mark(Icons.LockClosed, ChromeUi.Ink, 12));
+        if (locked) row.Children.Add(Icons.Mark(Icons.LockClosed, BarInk(), 12));
         row.Children.Add(value);
 
         // §17.2: "The zoom and tilt readouts take a stadium shape — a rounded-end
