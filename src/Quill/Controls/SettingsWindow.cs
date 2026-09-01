@@ -82,6 +82,23 @@ public sealed class SettingsWindow
         public Func<string>? MouseMode { get; init; }
         public Action<string>? SetMouseMode { get; init; }
 
+        // ---- §21: the radial dial's dock ------------------------------------
+        /// <summary>Where the dial actually IS right now - <see
+        /// cref="ToolWheel.Dock"/>'s honest reading, including its PenDock-derived
+        /// default before the first drag. Never blank. Null only so an older host
+        /// construction still compiles; without it the dock picker cannot know
+        /// which cell to mark and does not appear.</summary>
+        public Func<DialAnchor>? DialDock { get; init; }
+        /// <summary>Moves the dial through <see cref="ToolWheel.SetDock"/> - the
+        /// SAME semantics a rim drag gets: write only on an actual change, then
+        /// place and refresh. The picker must never write
+        /// <c>Library.DialAnchor</c> itself; that desyncs it from the drag.</summary>
+        public Action<DialAnchor>? SetDialDock { get; init; }
+        /// <summary>Subscribe to be told whenever the dock changes - by a rim
+        /// drag or by the picker itself - so a drag updates the picker live while
+        /// Settings is open. Handed the dial's own <c>DockChanged</c> event.</summary>
+        public Action<Action<DialAnchor>>? DialDockChanged { get; init; }
+
         // ---- §11.11's Stylus and Gestures tabs -----------------------------
         /// <summary>Push the eraser's behaviour and width at the live surface, and
         /// the shape recogniser's switch. Optional only so an older host
@@ -354,6 +371,14 @@ public sealed class SettingsWindow
         // painted against the old ground.
         PageTheme.Changed += () => { if (IsOpen) _previews.Clear(); };
         ToolSurfaceService.Changed += _ => { if (IsOpen) Touch("Tool Setup"); };
+        // §21: a rim drag moves the dock from OUTSIDE this panel's own controls,
+        // the same way a Wheel/Bar tap does through ToolSurfaceService.Changed
+        // just above - so the dock picker answers it with the same Touch of this
+        // section, and a drag while Settings is open moves the picker's marked
+        // cell live. This is the OTHER half of the round trip: Host.SetDialDock
+        // is the picker-moves-the-dial direction, this is the dial-moves-the-
+        // picker direction.
+        _h.DialDockChanged?.Invoke(_ => { if (IsOpen) Touch("Tool Setup"); });
     }
 
     // =======================================================================
@@ -2114,6 +2139,31 @@ public sealed class SettingsWindow
             inner: Icons.Mark(Icons.SurfaceBar, cur == ToolSurface.Bar ? Ink : Muted, 40)));
         box.Children.Add(HRow(strip, "toolsetup"));
 
+        // ---- §21: the radial dial's dock ---------------------------------
+        //
+        // Until this, DialAnchor had exactly one writer in the whole app -
+        // ToolWheel.SetAnchor, reached only by dragging the dial's 18.6 DIP rim
+        // band - and no UI at all. This picker is the second writer, and it goes
+        // THROUGH ToolWheel.SetDock (Host.SetDialDock), which is SetAnchor's
+        // public face: write only on an actual change, then place and refresh.
+        // Writing Library.DialAnchor directly here would desync the picker from
+        // the drag the moment either one moved without the other knowing.
+        //
+        // Optional on the host so an older construction still compiles; without
+        // both funcs the picker has nothing to read or write and does not
+        // appear at all, rather than appearing and silently doing nothing.
+        if (_h.DialDock != null && _h.SetDialDock != null)
+        {
+            bool dialActive = cur == ToolSurface.Wheel;
+            box.Children.Add(Spacer(6));
+            box.Children.Add(SubHead("Dial dock"));
+            box.Children.Add(Caption(dialActive
+                ? "Choose where the dial docks - the same eight places dragging its rim reaches."
+                : "Choose where the dial docks. Only takes effect with Wheel chosen above - Bar " +
+                  "has no dial to dock, so this does nothing until you switch."));
+            box.Children.Add(BuildDockPicker(dialActive, _h.DialDock()));
+        }
+
         // ---- §17.17: which pen row "Bar" means ---------------------------
         //
         // A SWITCH, NOT A THIRD CIRCLE. The row above stays two-valued because
@@ -2140,6 +2190,101 @@ public sealed class SettingsWindow
             "you switch to Bar."));
         return box;
     }
+
+    // ---- §21's dock picker: a diagram, not eight words -------------------
+    //
+    // A 3x3 arrangement with the centre left empty reads as "the eight places
+    // around a window's edge" on sight, which is the whole point - the picker
+    // is a small drawing of the window the dial sits in, corners and edge
+    // midpoints marked, nothing in the middle where the page is. No caption
+    // spells out "bottom left"; the position on the frame already says it, and
+    // AutomationProperties/the tooltip carry the same name for a screen reader
+    // or a mouse that pauses over one.
+    private const double DockFrameW = 148, DockFrameH = 112, DockDot = 26;
+
+    /// <summary><paramref name="active"/> is honest, not decorative: with Bar
+    /// chosen every marker is a REAL disabled Button (WinUI's own disabled
+    /// visual state, via <see cref="StripScroll.Bare"/>'s <c>IsEnabled</c>) -
+    /// not a live-looking circle with <c>IsHitTestVisible</c> quietly turned
+    /// off underneath it. That distinction is the padlock defect (§17.1):
+    /// a control that LOOKS live and has no hit target at all.</summary>
+    private UIElement BuildDockPicker(bool active, DialAnchor current)
+    {
+        const double half = DockDot / 2;
+
+        var frame = new Border
+        {
+            Width = DockFrameW,
+            Height = DockFrameH,
+            CornerRadius = new CornerRadius(8),
+            BorderBrush = B(Line),
+            BorderThickness = new Thickness(1.5),
+            Background = B(Colors.Transparent),
+            Opacity = active ? 1 : 0.4,
+        };
+
+        var host = new Grid
+        {
+            Width = DockFrameW,
+            Height = DockFrameH,
+            Margin = new Thickness(half, half, half, half),
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        host.Children.Add(frame);
+
+        FrameworkElement Dot(DialAnchor a, HorizontalAlignment ha, VerticalAlignment va, Thickness margin)
+        {
+            bool on = a == current;
+            var mark = new Ellipse
+            {
+                Width = DockDot,
+                Height = DockDot,
+                Fill = B(on ? Ink : Colors.Transparent),
+                Stroke = B(on ? Ink : Line),
+                StrokeThickness = on ? 2 : 1.5,
+            };
+            string name = DockName(a);
+            var btn = StripScroll.Bare(mark, name, () => _h.SetDialDock?.Invoke(a), active);
+            btn.HorizontalAlignment = ha;
+            btn.VerticalAlignment = va;
+            btn.Margin = margin;
+            btn.Opacity = active ? 1 : 0.4;
+            ToolTipService.SetToolTip(btn, name);
+            return btn;
+        }
+
+        host.Children.Add(Dot(DialAnchor.TopLeft, HorizontalAlignment.Left, VerticalAlignment.Top,
+            new Thickness(-half, -half, 0, 0)));
+        host.Children.Add(Dot(DialAnchor.TopCentre, HorizontalAlignment.Center, VerticalAlignment.Top,
+            new Thickness(0, -half, 0, 0)));
+        host.Children.Add(Dot(DialAnchor.TopRight, HorizontalAlignment.Right, VerticalAlignment.Top,
+            new Thickness(0, -half, -half, 0)));
+        host.Children.Add(Dot(DialAnchor.LeftCentre, HorizontalAlignment.Left, VerticalAlignment.Center,
+            new Thickness(-half, 0, 0, 0)));
+        host.Children.Add(Dot(DialAnchor.RightCentre, HorizontalAlignment.Right, VerticalAlignment.Center,
+            new Thickness(0, 0, -half, 0)));
+        host.Children.Add(Dot(DialAnchor.BottomLeft, HorizontalAlignment.Left, VerticalAlignment.Bottom,
+            new Thickness(-half, 0, 0, -half)));
+        host.Children.Add(Dot(DialAnchor.BottomCentre, HorizontalAlignment.Center, VerticalAlignment.Bottom,
+            new Thickness(0, 0, 0, -half)));
+        host.Children.Add(Dot(DialAnchor.BottomRight, HorizontalAlignment.Right, VerticalAlignment.Bottom,
+            new Thickness(0, 0, -half, -half)));
+
+        return host;
+    }
+
+    private static string DockName(DialAnchor a) => a switch
+    {
+        DialAnchor.TopLeft => "Top left",
+        DialAnchor.TopCentre => "Top centre",
+        DialAnchor.TopRight => "Top right",
+        DialAnchor.RightCentre => "Right centre",
+        DialAnchor.BottomRight => "Bottom right",
+        DialAnchor.BottomCentre => "Bottom centre",
+        DialAnchor.BottomLeft => "Bottom left",
+        DialAnchor.LeftCentre => "Left centre",
+        _ => a.ToString(),
+    };
 
     // =======================================================================
     // APPEARANCE — the light/dark control §C moved in here

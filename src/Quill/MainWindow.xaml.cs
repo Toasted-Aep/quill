@@ -5833,6 +5833,14 @@ public sealed partial class MainWindow : Window
             {
                 if (Enum.TryParse<MouseMode>(t, out var m)) SetMouseMode(m);
             },
+            // §21: the Settings dock picker. Routed straight at the dial's own
+            // public face (ToolWheel.Dock / SetDock) rather than the library -
+            // SetAnchor's write-only-on-change and Place()/Refresh() are what a
+            // rim drag gets, and the picker must get exactly the same thing or
+            // the two fall out of step with each other.
+            DialDock = () => _toolWheel?.Dock ?? DialAnchor.TopLeft,
+            SetDialDock = a => _toolWheel?.SetDock(a),
+            DialDockChanged = cb => { if (_toolWheel != null) _toolWheel.DockChanged += cb; },
             ApplyTheme = ApplyTheme,
             Save = ScheduleSave,
             TouchDraw = () => TouchDrawToggle.IsChecked == true,

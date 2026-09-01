@@ -357,6 +357,13 @@ public sealed class ToolWheel
     /// over, so a tool that lives in the dial is not also offered on the bar.</summary>
     public event Action<IReadOnlySet<string>>? SlotsChanged;
 
+    /// <summary>Raised whenever the dial's dock changes - by a rim drag landing
+    /// (§17.17) or by <see cref="SetDock"/> - carrying the anchor it landed on.
+    /// The Settings dock picker (§21) subscribes to this so a drag updates the
+    /// picker live; that is the other half of the round trip <see cref="SetDock"/>
+    /// completes in the opposite direction.</summary>
+    public event Action<DialAnchor>? DockChanged;
+
     /// <summary>Reference 11.22 item 4: right-clicking a sector, and tapping an
     /// empty + cell, hand the slot to the Brushes library rather than to the
     /// flyout. The host owns that library, so it owns this; returning false
@@ -864,6 +871,11 @@ public sealed class ToolWheel
         }
     }
 
+    /// <summary>Public face of <see cref="CurrentAnchor"/> (§21). A picker
+    /// outside the dial needs to show where the dial ACTUALLY is - including the
+    /// honest PenDock-derived default before the first drag - never a blank.</summary>
+    public DialAnchor Dock => CurrentAnchor;
+
     /// <summary>Where a dock puts the dial's CENTRE, in host coordinates.
     ///
     /// <para>The four "centre" docks take the window's own midline; the corners
@@ -936,7 +948,19 @@ public sealed class ToolWheel
         }
         Place();
         Refresh();
+        // Fired on every landing, changed or not - a rim drag that returns to
+        // its own dock still tells a listening picker the gesture is over, the
+        // same way Refresh() above always repaints regardless of whether
+        // anything moved.
+        DockChanged?.Invoke(a);
     }
+
+    /// <summary>Public face of <see cref="SetAnchor"/> (§21): the SAME semantics
+    /// a rim drag gets, for a caller outside the dial - the Settings dock
+    /// picker. Writes <c>Library.DialAnchor</c> only when it actually changes,
+    /// then places and refreshes. Never write <c>Library.DialAnchor</c>
+    /// directly from outside the dial; that desyncs the picker from the drag.</summary>
+    public void SetDock(DialAnchor a) => SetAnchor(a);
 
     private void Place() => PlaceAt(AnchorPoint(CurrentAnchor));
 
