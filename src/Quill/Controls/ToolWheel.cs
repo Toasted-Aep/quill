@@ -2206,6 +2206,37 @@ public sealed class ToolWheel
         if (_pointer != null && e.Pointer.PointerId != _pointer) return;
         var p = e.GetCurrentPoint(_host).Position;
         bool wasPressed = _pressed;
+
+        // 17.17: TAKE THE GESTURE OFF THE FIELDS BEFORE GIVING UP THE CAPTURE.
+        //
+        // ReleasePointerCapture raises PointerCaptureLost SYNCHRONOUSLY: OnLost
+        // runs to completion INSIDE the call on the line below, before the next
+        // line of this method. With _dragging still set it therefore cancelled
+        // the very drag this release was about to land - the dial sprang back to
+        // the dock it started from and DialAnchor was never written. Traced:
+        // OnReleased entered with _dragging=true, OnLost fired 1 ms later with
+        // _pointer ALREADY null (so it came from the line below, not from the
+        // shell), and the drag branch was then dead by the time it was reached.
+        //
+        // That is why nine drags across every timing, travel and step count
+        // failed identically: nothing about it was a race. It was never a lost
+        // pointer and never the drag's own re-layout of the shield. OnLost is
+        // UNCHANGED and still cancels - a deactivated window or a flyout
+        // stealing the pointer is not the user choosing a dock - it simply has
+        // nothing left to cancel when WE are the ones ending the gesture.
+        //
+        // The scrub state is snapshotted for the same reason: the nested OnLost
+        // also cleared _dragProp, so a finished scrub fell past its own branch
+        // into the TAP tests below - its card never closed, and a scrub that
+        // ended over a sector reached Commit and changed tool.
+        bool wasDragging = _dragging;
+        bool wasDragMoved = _dragMoved;
+        var wasProp = _dragProp;
+        bool wasScrubbing = _scrubbing;
+        _dragging = false;
+        _dragMoved = false;
+        _dragProp = null;
+        _scrubbing = false;
         _pressed = false;
         _pointer = null;
         try { _shield.ReleasePointerCapture(e.Pointer); } catch { }
@@ -2216,27 +2247,21 @@ public sealed class ToolWheel
         // grip press that never passed the slop is not a move and writes nothing
         // - the rim carries no tap action of its own, so it simply does nothing,
         // which is what it did before this section.
-        if (_dragging)
+        if (wasDragging)
         {
-            bool moved = _dragMoved;
-            _dragging = false;
-            _dragMoved = false;
-            if (moved) SetAnchor(NearestAnchor(_centre));
+            if (wasDragMoved) SetAnchor(NearestAnchor(_centre));
             else Refresh();
             return;
         }
 
-        if (_dragProp != null)
+        if (wasProp != null)
         {
-            bool scrubbed = _scrubbing;
-            _dragProp = null;
-            _scrubbing = false;
             // A scrub's popover closes when the finger lifts; a TAP's stays up,
             // because a tap IS the user asking for it. The test is "did this
             // gesture ever scrub", not an elapsed time - a deliberate press held
             // without moving is still a tap, and it used to close the very
             // popover it had just opened.
-            if (scrubbed) _popover.Close();
+            if (wasScrubbing) _popover.Close();
             Refresh();
             return;
         }
