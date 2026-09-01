@@ -1,5 +1,124 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-01 (fifth screen run) — `integration`, both fixed
+
+**Both defects the fourth run left open are fixed, and both had a different
+cause from the one it named.** Full write-up in
+`CONCEPTS-REF-2026-08-07.md` §20 (19 was the highest section in use). Clean
+unpackaged x64 `--no-incremental` build, **0 warnings**, scratch
+`QUILL_DATA_FOLDER` at `scratchpad/vp5data`. The user's real library at
+`C:\Users\irony\Documents\Quill\library.json` was **53,582,459 bytes, SHA-256
+`0C32CE6C…8E038A`, mtime 2026-08-28 17:26 UTC before and after** — byte-identical,
+and this run never opened it. Captures in `scratchpad/vp5/`.
+
+### §17.17 the dial drag — **FIXED, and the landing verified by gesture**
+
+`ToolWheel.OnReleased`. The capture is **never lost**. `ReleasePointerCapture`
+raises `PointerCaptureLost` **synchronously**, so `OnReleased` was re-entering
+`OnLost` from inside itself, with `_dragging` still set, and cancelling the very
+drag it was about to land. The fourth run's `PlaceAt`-rewrites-the-shield
+hypothesis is **refuted**: the shield's layout has nothing to do with it.
+
+The trace line that settles it is the `LOST` record reporting **`_pointer=-1`** —
+already nulled, which happens two statements above the release call and nowhere
+else. That is also why nine attempts across every timing and travel failed
+*identically*: it is a straight-line ordering bug, not a race.
+
+One inference to retire: **the dial tracking the pointer is not evidence that
+the capture held.** The shield is a 233-physical-px circle that moves with the
+dial, so `PointerMoved` arrives by hit-test with or without a capture. That is
+what pointed the fourth run at `PlaceAt`.
+
+`OnLost` is **unchanged and still cancels**. The fix snapshots the gesture into
+locals and clears the fields before giving up the capture.
+
+Verified: `DialAnchor` written on the drop; TopLeft → BottomLeft landing at
+**(144, 676) DIP** — the exact point the fourth run could only reach by
+hand-editing the library — and BottomLeft → TopLeft back to (144, 150). Round
+trips repeatedly in one session.
+
+It also fixes an unreported defect in the same handler: the nested `OnLost`
+cleared `_dragProp` too, so a finished **scrub** never closed its value card,
+and a scrub that ended over a sector reached `Commit` and **changed tool**.
+
+### The COPIC wheel drawing no tiles — **FIXED. It was never the dock.**
+
+`ColorWheel`. The observation was exact and the attribution was wrong. A bottom
+dock renders perfectly — fresh boot at `BottomLeft` renders on black paper *and*
+on the same Custom `#E10619` graph paper the fourth run used, and so does
+`BottomLeft` reached by dragging. What fails is a **second open of the wheel at
+a different centre**, at any dock: captured failing at **`TopLeft`**.
+
+The fourth run could not have separated the two. With the drag broken, every
+dock change it could make was also a centre change.
+
+`ColorWheel.cs:1124`'s `arcRoll` — the flagged suspect — is **exonerated**; it
+rotates the ladder and touches no tile.
+
+Cause: `ArcTile` builds the cached tile paths through `At(r, a) = _c + polar(…)`,
+i.e. in **absolute** coordinates with the wheel's centre baked in, and the only
+thing that dropped that cache was `_geoDirty`, raised by `SizeChanged` alone.
+`_c` follows the dial's dot through `_hint` on every open, and the `ColorWheel`
+is a singleton, so the cache outlives the centre it was built for. The **labels
+are positioned live**, which is the entire appearance of the defect: tiles round
+the old centre, codes round the new one. Fixed by keying the cache on everything
+it is built from.
+
+Before/after on the identical gesture: `vp5/93-open2-tl.png` (bare paper) and
+`vp5/C5-clean-copic-tl-AFTERMOVE.png` (every tile drawn), plus five tile centres
+sampled off the live wheel, none of them the page colour.
+
+### The hue-arc knob — **could not be reproduced; it drags**
+
+Grabbed at r = 284.1 against `_arcR[0]` = 284.8, `_dragArc` armed, 31 moves,
+hue **15° → 161°**, pen colour orange → teal throughout the chrome. Reported
+here rather than "fixed", because nothing was changed for it.
+
+It **cannot** have had the dial's cause: `ColorWheel.OnReleased` already calls
+`EndDrag()` and snapshots its state *before* `ReleasePointerCapture`, so the
+synchronous re-entry finds nothing to destroy. Same shape, right order.
+
+**What to check first if it recurs:** `App.xaml.cs` swallows any exception
+thrown in a pointer handler (`e.Handled = true`) and appends it to `crash.log`
+in the data folder. The press vanishes silently while hover keeps working —
+exactly the reported symptom. This session reproduced that by accident with a
+bad diagnostic line, and `crash.log` named it. **Read `crash.log` before
+concluding a control ignores its press.**
+
+### The machine, and a gate that answered the wrong question
+
+The brief said nothing else was running. **Concepts was** — maximised, holding
+the user's live handwritten maths at 800 % zoom, re-taking the foreground every
+~1.5 s and un-minimising itself, and still returning as the foreground window
+*while minimised*. Nothing was injected until that was dealt with: a 960 px drag
+landing there would have drawn on the user's page.
+
+So the run-4 foreground gate was replaced. Injected mouse input is hit-tested by
+**z-order**, not activation, so the gate is now `WindowFromPoint(cursor)`
+resolved to its root window plus Quill pinned `HWND_TOPMOST` — nothing is
+pressed unless the window under the cursor is Quill. Strictly stronger than the
+foreground assert, which says nothing about what is under the pointer.
+`GetLastInputInfo` also resets continuously here while the cursor never moves,
+so the idle check is useless on this machine and was dropped.
+
+Concepts was minimised for the run and restored afterwards; its document was
+never touched.
+
+### Harness
+
+`scratchpad/vp5.ps1` (dot-source; `Q-Launch`, `Q-Safe`, `Q-Pin`/`Q-Unpin`,
+`Q-Under`, `Q-Down`/`Q-Up`/`Q-Tap`, `Q-Anchor`, `Q-Seal`) on top of the surviving
+`tools/vpsweep/q.ps1`, plus `fg.ps1` (AttachThreadInput foreground) and
+`top.ps1` (topmost pin, window-under-cursor, Concepts demotion). Run 4's
+`vp4.ps1` and `vp4/` were **not in the tree** — they were never committed and
+are gone, so the harness was rebuilt from `q.ps1`.
+
+### Still open from the fourth run
+
+Everything else it left open is untouched: the RV/G seam's five worst tiles, the
+49 codes' effect on tier order, §16.3's dot on the legacy pen row, and the
+Measurement menu's bare ruling over a bright paper.
+
 ## RUN OF 2026-08-31 (fourth screen run) — `integration` @ `c038c8d`
 
 Binary of 22:32, 0 warnings, run against a scratch `QUILL_DATA_FOLDER` at

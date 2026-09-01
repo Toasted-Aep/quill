@@ -5539,3 +5539,184 @@ produce, it did not exist before, and it is the first thing to look at; that the
 fan and the ladder still read as one instrument at a bottom dock now that only
 one of them is rolled; and that BottomCentre's rotation, which the arithmetic
 says is free, is also free to the eye.
+
+## 20. Two pointer defects the fourth screen run found — 2026-09-01
+
+Both were reported by the fourth screen run (`VISUAL-PASS-RESUME.md`, run of
+2026-08-31) and both are fixed here. **Neither cause is the one the report
+suspected**, and in the second case the report's headline finding — "it is the
+dock" — is wrong; the correction is set out below rather than the observation
+quietly dropped, because the observation itself was accurate and reproducible
+and only its attribution was not.
+
+### 20.1 The eight-position dial drag never lands — the release cancelled itself
+
+`ToolWheel.OnReleased`, fixed in place.
+
+**The report had the right suspect and the wrong mechanism.** It established
+that `OnLost` was running — it is the only branch that restores the starting
+dock *and* writes nothing — and concluded from that that the pointer capture was
+being lost, most likely because `PlaceAt` rewrites `_shield.Width/Height` and
+`_shield.Margin` (the captured element's own layout) on every move. **The
+capture is never lost.** `OnLost` was being re-entered *from inside
+`OnReleased`*, by `OnReleased` itself.
+
+`UIElement.ReleasePointerCapture` raises `PointerCaptureLost`
+**synchronously**: the handler runs to completion inside the call, before the
+next statement of the method that made it. `OnReleased` released the capture
+*before* it consumed `_dragging`, so the nested `OnLost` found the drag still
+armed, cancelled it and called `Place()`. Control then returned to `OnReleased`,
+which found `_dragging` already false and fell through to the tap tests, where
+`Zone.Grip` matches nothing. The dial went home; `SetAnchor` was never reached;
+`Library.DialAnchor` stayed `""`.
+
+Traced on 2026-09-01 against the run's own gesture — a 960 physical px rim drag
+at 1440×900 DIP, 2x:
+
+```
+PRESSED  z=Grip  id=1 dev=Mouse got=True caps=[1] centre=142.6,150.0
+MOVE#1 … MOVE#28                     id=1 inContact=True caps=[1]
+RELEASED id=1 _pointer=1  _pressed=True  _dragging=True  _dragMoved=True
+LOST     id=1 _pointer=-1 _dragging=True _dragMoved=True
+PLACE    from=OnLost anchor=TopLeft
+```
+
+The `LOST` line is the proof and not merely the symptom: it reports
+**`_pointer=-1`**, i.e. `_pointer` had *already* been nulled — which happens two
+statements above the `ReleasePointerCapture` call and nowhere else. `OnLost`
+therefore ran after that assignment and before `if (_dragging)`, and the only
+call between them is the release. Nothing in the shell was involved.
+
+That also explains the shape of the failure that made it look like a race and
+is not one. Nine attempts across every timing, travel and step count failed
+**identically**, because the defect is a straight-line ordering bug. The
+stationary sector tap committed fine through the same handler because
+`_dragging` is false for a sector press, so the nested `OnLost` had nothing to
+cancel. And the moves were delivered throughout because the shield is a
+233-physical-px circle that travels *with* the dial — the pointer never leaves
+it, so `PointerMoved` arrives by hit-test whether or not a capture is held. **A
+drag that visibly tracks the pointer is not evidence that the capture survived**
+in this control; that inference is what sent the report to `PlaceAt`.
+
+**The fix** snapshots the gesture into locals and clears the fields *before*
+giving up the capture, so the nested `OnLost` is a no-op when this handler is
+the one ending the gesture. `OnLost` is **unchanged** and still cancels: a
+window deactivating or a flyout stealing the pointer is not the user choosing a
+dock, and making the cancel path write an anchor would have been the wrong fix.
+
+**It fixes a second defect nobody had reported.** The same nested `OnLost` also
+cleared `_dragProp` and `_scrubbing`, so a finished *scrub* of size / opacity /
+stability fell past its own branch in `OnReleased` and into the tap tests
+below. Two consequences, both now gone: `if (scrubbed) _popover.Close()` never
+ran, so a scrubbed value card stayed up; and a scrub that travelled far enough
+to end over a sector reached `Commit(idx)` and **changed tool**.
+
+**Verified on screen**, not merely built: `DialAnchor` written on the drop, the
+dial staying at the dropped dock, and round trips in both directions —
+TopLeft → BottomLeft landing at (144, 676) DIP, the exact anchor point the
+fourth run could only reach by hand-editing the library, and BottomLeft →
+TopLeft back to (144, 150).
+
+### 20.2 The COPIC wheel drew its codes onto bare paper — **it is NOT the dock**
+
+`ColorWheel`, fixed in `OnDraw`.
+
+The observation was exact: marker codes in near-black text lying on the page,
+tile centres sampling the page colour byte for byte, no tile band along a radial
+scan. The attribution was not. **A bottom dock renders perfectly.** Measured
+2026-09-01, all on one build and one page:
+
+| what | result |
+|---|---|
+| `BottomLeft`, fresh boot, first open, black paper | **renders** |
+| `BottomLeft`, fresh boot, first open, Custom `#E10619` + graph paper | **renders** |
+| `BottomLeft` reached by dragging, first open in that process | **renders** |
+| `TopLeft`, **second** open, after the dial moved | **FAILS** |
+
+So the failing variable is not the dock at all: it is **a second open of the
+wheel at a different centre**. The fourth run could not separate the two,
+because with the drag broken the only way to change dock was to hand-edit the
+library, and every dock change it could perform was also a centre change.
+
+`§17.22`'s `arcRoll = _c.Y > h * 0.5f ? 0f : ArcRoll * rollSign` — named as the
+obvious suspect because it is the one place the bottom half is treated
+differently — is **exonerated**. It rotates the HSL/RGB ladder and touches no
+tile.
+
+**The mechanism.** `ArcTile` builds every cached tile path through
+`At(r, a) = _c + polar(r, a)`, so the cache holds **absolute canvas
+coordinates** with the wheel's centre baked into them. The only thing that
+dropped that cache was `_geoDirty`, and `_geoDirty` is raised by `SizeChanged`
+alone. The centre moves with no resize whatsoever: `_c = CenterOnAnchor ? _hint
+: mid`, and `_hint` is the dial's own dot, re-read by `ColorPickerService.Open`
+on every open. The `ColorWheel` is a singleton (`_wheel ??= BuildWheel()`), so
+the stale cache survives across opens.
+
+The labels do not use the cache — `DrawCode` positions every code live off the
+current `_c` — and that split is the whole appearance of the defect: **tiles
+around the old centre, codes around the new one.** Hence codes on bare paper,
+and hence the label ink reading near-black (`LabelInk` is computed from the
+swatch's own colour, which is light, and then drawn over whatever happens to be
+underneath).
+
+Anything that moves the dot reproduces it, at any dock: dragging the dial;
+opening the picker from the pen row instead (`centreOnPoint: false`, so
+`_c = mid`); and the format bar raising the top bar ~86 physical px, which the
+fourth run's own machine notes record as moving the dial with it.
+
+**The fix** compares every input the cached geometry is built from —
+`(_c, _rOutBase, _band, _r1In, _r1Out, _r2In, _r2Out)` — after `Layout` has
+decided them, and drops the cache when any of them moves. `_geoDirty` is kept: a
+resize has to rebuild whether or not it happens to leave those equal. `_c` is
+fixed for the whole of an open, so this costs one rebuild per open and nothing
+per frame.
+
+**Verified on screen** by the gesture the fix in §20.1 makes possible: the
+failing sequence captured before (`scratchpad/vp5/93-open2-tl.png`) and after
+(`scratchpad/vp5/C5-clean-copic-tl-AFTERMOVE.png`), plus five tile centres
+sampled off the live wheel, none of them the page colour.
+
+### 20.3 The colour wheel's hue-arc knob — **could not be reproduced**
+
+Reported by the fourth run as a second instance of the same signature: grabbed
+within 2 px of centre, pulled 350 px, readout unchanged, arc alive to hover.
+
+**It drags.** Measured 2026-09-01 on the fixed build: grabbed at r = 284.1 DIP
+against `_arcR[0]` = 284.8 (`dr` = 0.7, gate 19.3), `_dragArc` armed to 0, 31
+move events delivered, hue **15° → 161°**, and the pen colour, the dial hub, the
+recents dot and both other arcs all recoloured orange → teal with it.
+
+**It cannot have had §20.1's cause**, and the reason is worth recording because
+it is the pattern to copy: `ColorWheel.OnReleased` already calls `EndDrag()` and
+snapshots `wasRing` / `path` **before** `_input.ReleasePointerCapture`, so the
+synchronous re-entry has nothing left to destroy when it arrives. The two
+controls were written to the same shape and only `ToolWheel` got the order
+wrong.
+
+**What to check first if it recurs.** `App.xaml.cs` installs an
+`UnhandledException` handler that sets `e.Handled = true` and appends to
+`crash.log` in the data folder. An exception thrown inside a pointer handler is
+therefore **swallowed**, the press is silently lost, and the control goes on
+hover-highlighting normally — which is exactly the reported symptom, and which
+this session reproduced by accident: a diagnostic line that read `_arcR[2]` on a
+`float[2]` made every press on the wheel vanish, with a stack in `crash.log`
+naming the line. **Read `crash.log` before concluding a control ignores its
+press.**
+
+### 20.4 Harness note — the foreground gate answers the wrong question
+
+The run-4 gate (`Q-Ensure` / `Q-Assert` on `GetForegroundWindow`) was kept and
+then replaced mid-run. On this machine **Concepts** — maximised, and holding the
+user's live handwriting — re-activated itself every ~1.5 s, and went on
+returning as the foreground window even while minimised, so the gate both
+refused valid work and, more importantly, never answered the question that
+matters. Injected mouse input is hit-tested by **z-order**, not by activation.
+The gate is now `WindowFromPoint(cursor)` resolved to its root window, plus
+Quill pinned `HWND_TOPMOST`: nothing is pressed unless the window under the
+cursor belongs to Quill. That is strictly stronger than the foreground assert,
+which says nothing about what is under the pointer. `scratchpad/vp5.ps1`,
+`top.ps1`, `fg.ps1`.
+
+Also on this machine: `GetLastInputInfo` resets continuously while the cursor
+never moves, so **the idle check is useless here** and was dropped from the
+gate.
