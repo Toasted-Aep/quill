@@ -5720,3 +5720,127 @@ which says nothing about what is under the pointer. `scratchpad/vp5.ps1`,
 Also on this machine: `GetLastInputInfo` resets continuously while the cursor
 never moves, so **the idle check is useless here** and was dropped from the
 gate.
+
+
+## 21 The dial's dock gets a Settings control — RESERVED, SECTION PENDING
+
+**Built and committed at `2e25193`. This number is taken; do not reuse it.**
+
+The section is deliberately unwritten because three of its five checks have not
+been seen on screen — the machine locked with the work stranded in the tree.
+Written up in full once they are:
+
+* the chosen dock survives a restart
+* dragging the rim updates the picker live (what `DockChanged` exists for, and
+  the first time both routes can be exercised against each other, since the
+  drag itself only started working at `6636a92`)
+* the Bar surface greys the picker out
+
+**Verified before the lock:** the picker renders with the live dock filled and
+matching the dial; clicking a cell moves the filled dot, writes `DialAnchor` on
+a direct read of the library, and the dial is visibly re-docked on the canvas
+when Settings closes.
+
+## 22 Fullscreen may not fold away the only undo in the app
+
+> §16.8's stranding, returning through a door §17.20 left open.
+
+`ApplyFullscreenChrome` computed `fold = fs && _chromeBars?.IsVisible == true`
+— **unconditional on the tool surface**. `ApplyToolbarVisibility` decides
+whether to SHOW `BtnUndo` / `BtnRedo` from
+`ToolSurfaceService.IsWheel || !ToolSurfaceService.LegacyBar`, so under **Bar +
+the legacy pen row** the top bar holds the only undo and redo in the app — and
+fullscreen folded that row away and took them with it.
+
+**Measured on screen**, sweeping the whole fullscreen top strip at 2x, both
+halves: notebook, `Study`, layers, precision, artboard, the pen row entire,
+exit-fullscreen, `91%`, `0°`, sparkle, download, upload, gear, `?`. **No undo.
+No redo. Anywhere.** The legacy row has none of its own and its Settings
+tooltip says so out loud. Two clicks from the default.
+
+**§17.20 framed this hole as being about TOOLS, and tools are the half that got
+fixed.** §17.17a gave the legacy row tool cells, so fullscreen no longer strands
+the user without an eraser or a lasso. What it strands them without is *undo*,
+which §17.20's text does not name — and which its own proposed one-expression
+fix would have carried along for free.
+
+The expression is hoisted to `MainWindow.SurfaceCarriesUndo` rather than
+restated, because two copies of it would have drifted: one deciding whether to
+show the pair, the other whether it is safe to hide the row carrying them. They
+are the same question.
+
+**The cost, stated rather than hidden.** In that one surface combination
+fullscreen now keeps a bar it would otherwise hide. That is a real price, and
+it is paid only there — every other surface folds exactly as before, because
+every other surface has a pair of its own. The alternative considered and
+rejected was giving the reveal strip or `ChromeBars` an undo pair, which
+invents chrome no section asks for to avoid a bar one combination needs.
+
+**NOT YET SEEN ON SCREEN.** The machine was locked. What to check, and what
+failure looks like:
+
+| check | pass | fail |
+|---|---|---|
+| Bar + legacy row, go fullscreen | the top bar STAYS, undo and redo on it | the row fades and they go with it |
+| Wheel surface, go fullscreen | the row folds exactly as before | the row now stays — the guard is inverted or too broad |
+| Bar + NEW row, go fullscreen | the row folds | it stays — `LegacyBar` is being misread |
+| flip the row switch while in fullscreen | the row appears / disappears live | it needs a restart — the self-correcting property is broken |
+
+That last row matters most: `fold` is deliberately self-correcting rather than
+change-guarded, because it also runs on `SizeChanged` and after every surface
+switch. A fix that made it stateful would pass the first three and fail this.
+
+## 23 The reveal strip's reservation reaches the bar that is actually under it
+
+§17.15's requirement is *"no live control under the strip"*, and its sideways
+reservation was applied to `FormatBar` and `TopBar`. But in fullscreen with the
+caption row folded and **no format bar up** — that is, every tool except Text,
+**the pen included** — the bar at the top right is `ChromeBars`, which got no
+reservation at all.
+
+Measured in a 1440x900 DIP viewport, against a strip at **x 1302..1440,
+y 0..33**:
+
+| | box (DIP) | inside the strip? |
+|---|---|---|
+| sparkle | x 1224..1257.5, y 14..47.5 | no |
+| download | x 1266..1299.5 | clears by **2.5** |
+| **upload** | x 1308..1341.5 | **yes** |
+| **gear** | x 1350..1383.5 | **yes** |
+| **help `?`** | x 1392..1425.5 | **yes** |
+
+Three controls overlapped by **19 of their 34 DIP**. With a format bar up the
+problem vanishes — that bar takes the top row and pushes this cluster down to
+y 57..90.5, clear by 24 — **which is exactly why the failing case is the one
+nobody looks at**: it is the default tool, and every test that raises a format
+bar hides it.
+
+It was an **occlusion, not a block**, and both halves of that were checked
+rather than assumed: hovering straight onto the gear does **not** arm the strip
+(the 10 DIP margin between the 4 DIP reveal band and the cluster's top edge at
+14.0 does its job), and arming the strip then walking down onto the gear
+retracts it. The controls were reachable. They were also cut in half to look
+at, and §17.15 does not say "reachable".
+
+The reserve goes on `ChromeBars.StripReserve`, applied in `ApplyDockInset`
+alongside the docked-panel inset that already lives there, and **only when the
+row is folded** — which is precisely when this cluster is the topmost thing on
+screen. Sideways, like every other §17.15 reservation: reserving HEIGHT is what
+cost the page 46 DIP on the axis text needs most.
+
+The Measurement panel's own offset takes the reserve too. It hangs off this
+cluster, so holding the cluster clear while leaving its panel behind would have
+moved the misalignment one control along rather than fixing it.
+
+**NOT YET SEEN ON SCREEN.** What to check:
+
+| check | pass | fail |
+|---|---|---|
+| fullscreen, PEN tool, look top right | upload / gear / `?` fully clear of the strip | any of them still clipped |
+| reveal the strip there | it lands on empty ground | it lands on a button |
+| fullscreen, TEXT tool | unchanged from before — cluster at y 57..90.5 | it has slid left as well, wasting 144 DIP |
+| open Measurement in fullscreen | the panel sits under its own cluster | it is offset by the reserve |
+| dock the Settings panel in fullscreen | cluster clears BOTH the panel and the strip | it clears one and not the other |
+
+That third row is the one to watch: the reserve must be zero when the cluster
+is not the topmost bar, or the unfolded case pays 144 DIP for nothing.
