@@ -615,6 +615,18 @@ public sealed class ColorWheel : UserControl
     private const float SelStroke = 2.5f;
     private CanvasGeometry? _tier1Geo, _tier2Geo;
     private bool _geoDirty = true;
+    // Every input ArcTile bakes into the cached tile paths. It lays them out
+    // through At(r, a) = _c + polar(r, a), so the cache holds ABSOLUTE canvas
+    // coordinates with the wheel's centre in them - and _geoDirty, which was
+    // the only thing that dropped it, is raised by SizeChanged alone. The
+    // centre moves with no resize at all: _c follows the dial's own dot through
+    // _hint, re-read on every Open, and the dial can now be dragged between
+    // eight docks. A cache built at one centre went on painting its tiles round
+    // THAT centre while DrawCode kept positioning every marker code live round
+    // the new one - which is the wheel "drawing its codes onto bare paper with
+    // no swatches under them", sampling the page colour byte for byte.
+    private (Vector2 C, float ROutBase, float Band,
+             float R1In, float R1Out, float R2In, float R2Out)? _geoKey;
 
     // ---- the reference's fixed column / arc tables ------------------------
     // Outer: 36 radial columns in angular order from -90°. Column i covers
@@ -1552,6 +1564,14 @@ public sealed class ColorWheel : UserControl
         if (w < 2 || h < 2) return;
         if (_geoDirty) { DisposeGeometry(); _geoDirty = false; }
         Layout(w, h);
+        // AFTER Layout, because these are the values Layout has just decided.
+        // Both tests are kept: a resize has to rebuild whether or not it happens
+        // to leave the centre and the radii equal, and a moved centre has to
+        // rebuild without one. _c is stable for the whole of an open - it is
+        // read from _hint, which only Open writes - so this costs one rebuild
+        // per open and nothing per frame.
+        var geoKey = (_c, _rOutBase, _band, _r1In, _r1Out, _r2In, _r2Out);
+        if (_geoKey != geoKey) { DisposeGeometry(); _geoKey = geoKey; }
         var ds = e.DrawingSession;
 
         // The clock starts on the first frame after BeginEnter, not on the
