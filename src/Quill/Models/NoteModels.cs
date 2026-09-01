@@ -262,6 +262,30 @@ public class TextElement
     // boxes keep their saved width so old notes never re-wrap (#15).
     public bool AutoWidth { get; set; }
     public string Rtf { get; set; } = "";
+    /// <summary>CONCEPTS-REF 25: THE BOX'S TEXT COLOUR. Null means "follow the
+    /// page's ink convention", which is what every box did before 25 and what
+    /// every box in an existing library still does - so the field is additive
+    /// and no stored note changes appearance by gaining it.
+    ///
+    /// <para><b>Why a field and not the RTF.</b> The RTF already carries a
+    /// colour - Quill writes the page ink into the default character format, so
+    /// it comes back as a colortbl plus cf1 (see InkSurface.ApplyTextVeil, which
+    /// states the same fact for its own reason). Honouring THAT would mean every
+    /// existing box exports in the ink of the page it was typed on rather than
+    /// the page it is on now, which is a silent regression on any note whose
+    /// background was changed after the words were typed. The field is the only
+    /// place a colour can live that means "the user chose this".</para>
+    ///
+    /// <para><b>And the field wins over the RTF, always.</b> BuildTextUi stamps
+    /// this colour across the whole document after SetText, so a disagreement
+    /// between the two cannot survive a box being built - which is the failure
+    /// mode a second source of truth would otherwise introduce. See 25.2.</para>
+    ///
+    /// <para>WHOLE BOX, not per run: 25.3 argues why, and the argument is that
+    /// per-run colour is not nearly free here - RtfRunParser skips the colour
+    /// table outright and PdfVectorText carries one colour per line.</para></summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TextColor { get; set; }
     public double Rotation { get; set; }
     // Cell membership for table shapes (#40): null = a free text box.
     public Guid? TableId { get; set; }
@@ -287,7 +311,7 @@ public class TextElement
     public TextElement Clone() => new()
     {
         X = X, Y = Y, Width = Width, WidthPinned = WidthPinned, MaxWidth = MaxWidth,
-        AutoWidth = AutoWidth, Rtf = Rtf, Rotation = Rotation,
+        AutoWidth = AutoWidth, Rtf = Rtf, TextColor = TextColor, Rotation = Rotation,
         TableId = TableId, TableRow = TableRow, TableCol = TableCol,
         FillColor = FillColor, BorderColor = BorderColor, BorderWidth = BorderWidth,
         CellColSpan = CellColSpan, CellRowSpan = CellRowSpan,
@@ -611,6 +635,12 @@ public class Library
     public string Language { get; set; } = "";
     public string DefaultFont { get; set; } = "Lora";
     public double DefaultFontSize { get; set; } = 16;
+    /// <summary>CONCEPTS-REF 25.5: the colour NEW text boxes are created in.
+    /// Null - the default - means "follow the page's ink convention", which is
+    /// exactly what a library written before 25 does, so an existing install
+    /// behaves identically until the user picks a colour. Deliberately its own
+    /// setting rather than the active pen's colour: see 25.5.</summary>
+    public string? DefaultTextColor { get; set; }
     public string PenDock { get; set; } = "Bottom";
     // Objects library (UI-SPEC-V3 L). Pack IDS only — never the objects
     // themselves: library.json is already ~50 MB and a pack's contents are code.

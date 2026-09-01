@@ -458,7 +458,13 @@ public static class PdfExporter
             b = Convert.ToByte(h.Substring(4, 2), 16);
         }
         catch { }
-        return $"{Num(r / 255.0)} {Num(g / 255.0)} {Num(b / 255.0)} {op}";
+        // CONCEPTS-REF 25.7: NumM, not Num. Num is "0.##" - two decimals - which
+        // quantises a channel to about 2.55 of the 255 levels it came from, so a
+        // chosen colour arrived in the PDF up to one level off on every channel.
+        // That was invisible while every text box on a page exported the same
+        // hardcoded black; it is not acceptable once the colour is the user's
+        // own choice. Coordinates keep Num: this is the colour operand only.
+        return $"{NumM(r / 255.0)} {NumM(g / 255.0)} {NumM(b / 255.0)} {op}";
     }
 
     private static string Num(double d) => d.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);

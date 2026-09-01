@@ -556,7 +556,8 @@ public static class LibraryStore
     private static readonly string[] SettingFields =
     {
         "DefaultBackground", "DefaultGrid", "DefaultGridSpacing", "DefaultPaper",
-        "Theme", "ThemeSource", "Language", "DefaultFont", "DefaultFontSize", "PenDock",
+        "Theme", "ThemeSource", "Language", "DefaultFont", "DefaultFontSize",
+        "DefaultTextColor", "PenDock",
         "NotebookPanelW", "NotebookPanelH", "StartMaximised", "StartOnGallery",
         "AccentColor", "TouchMode", "Liquidness", "RecentColors", "CustomColors",
         "Palettes", "ColorUses",

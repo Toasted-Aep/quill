@@ -3378,6 +3378,20 @@ Because almost nothing in the dial applies to a photo:
 - **The colour circle goes WHITE and becomes unusable**, in the dial *and* in
   the pen row. You cannot recolour a photograph, and a live-looking colour
   control that silently does nothing is worse than one that says so.
+
+  > **AMENDED BY §25 (2026-09-01), for TEXT ONLY — and by satisfying this rule
+  > rather than by carving an exception out of it.** The sentence above is not
+  > "grey the dot when something is selected"; it is *"you cannot recolour a
+  > photograph"*. Text used to be inside the white-and-inert set for exactly the
+  > same reason — a `TextElement` had a fill colour and a border colour and no
+  > text colour, so there was nowhere for a colour to go. §25 gives it one. A
+  > text box **can** now be recoloured, on the canvas and in both exported
+  > files, so the dot stays **live and coloured** for a text selection. Nothing
+  > about the rule moved: the flag is still `CanRecolour`, it is still asked of
+  > `SelectionSubject` by all three surfaces, and it is still false — white,
+  > inert, tap not wired — for **an attachment and for any other shape**. What
+  > changed is the answer text gives, not the question.
+
 - **Do NOT grey the per-pen colour arcs on the ring.** The user was explicit.
   Those arcs report which colour each pen carries; that fact is still true while
   an attachment is selected, and greying it would destroy information rather
@@ -6334,3 +6348,300 @@ that is the case that was broken.
 **The one to look hardest at:** row 1.5 and row 2.11. A paper change while the
 chrome is already up is the case every automated test misses, because tests
 change paper first and open the surface second.
+
+
+## 25 Text takes a colour, and the colour reaches the file — 2026-09-01
+
+*"make text colour get effected by the colour wheel in the pen row or radial
+dial"* — and, asked which of the two was meant, **both**: the colour selected
+text takes, and the colour new text is created in.
+
+**Nothing in this section was seen on a screen.** The machine was locked for the
+whole of the work. Everything below is either a compiled build, a console
+measurement against the real code, or a stated inference — and §25.10 says which
+is which, line by line.
+
+### 25.1 It was four places, and building two of them would have been the defect
+
+The colour dot was inert on a text selection because of one flag, and it was
+tempting to read the job as flipping it. That would have produced a text box that
+recoloured beautifully on the canvas and exported **black**, because:
+
+| | before §25 | why |
+|---|---|---|
+| the flag | `CanRecolour = pureInk`, `pureInk = ink && !text && !attach && !otherShape` | `InkSurface.PublishSelection` |
+| the write-back | `SetInk` was `null` for anything but pure ink | same object |
+| **the model** | `TextElement` had `Rtf`, `FillColor` (box fill) and `BorderColor`. **No text colour.** | `Models/NoteModels.cs` |
+| **the file** | `PdfVectorText` was fed `inkHex`, computed **once per page** as `IsDark(bg) ? "#FAF9F5" : "#141413"` — one hardcoded black-or-white for every box on the page | `InkSurface.BuildVectorPageAsync` |
+
+The last row is the one that bites. `HtmlSvgExporter` emits `fill="{t.Color}"`
+from the same `PdfVectorPage`, so the SVG inherited the hole rather than having
+one of its own — which is also why closing it took **one substitution, not two**.
+
+`tools/TextColourRoundTrip` builds the pre-§25 page alongside the new one and
+**requires the old one to fail**: three boxes, three colours on screen, one
+colour in the file. The defect is reproduced rather than described.
+
+### 25.2 Where the colour lives: a field, and the field wins
+
+`TextElement.TextColor` — nullable hex, `WhenWritingNull`, so a library that has
+never seen §25 gains no bytes and no behaviour.
+
+The alternative was to honour the colour **inside the RTF**, which is genuinely
+attractive: the RTF is what the live `RichEditBox` renders, it already
+round-trips through save and load, and it already carries a colour. That last
+fact is what killed it. Quill writes the page's ink into the box's *default
+character format*, so every Quill text box comes back with a `\colortbl` and a
+`\cf1` **naming the ink of the page it was typed on**. Honouring that would mean
+every note whose background was ever changed exports in the ink of a page it is
+no longer on. `InkSurface.ApplyTextVeil` already states this fact in its own
+remarks, for its own reason.
+
+So the field is the only place a colour can live that means *"the user chose
+this"*. And because a second source of truth is how surfaces come to disagree,
+the field is made to **win**:
+
+> `BuildTextUi` stamps the box's colour across the whole document *after*
+> `SetText(FormatRtf, …)` has restored the RTF — the default character format so
+> the next keystroke takes it, and `GetRange(0, int.MaxValue)` so the words
+> already there take it too. A disagreement between field and RTF cannot survive
+> a box being built.
+
+Only when the box **has** a colour. A box that has never been given one is left
+exactly as it was — which is what keeps every stored note byte-identical.
+
+Undo restores **the field and the RTF together** (`RecolourTextsAction`). It has
+to: the stamp writes the colour into the document, so putting the field back to
+null while leaving the document red would give a box that still looked red while
+the canvas and both exporters went back to the page's ink — §25's own defect,
+one level down.
+
+### 25.3 Whole box, not per run — and the collision that had to be settled
+
+**Whole box.** The brief asked for runs only if the RTF made them nearly free.
+It does not:
+
+- `RtfRunParser` **skips `{\colortbl` outright** and its `Fmt` struct carries
+  size, font index, bold and italic — no colour.
+- `PdfVectorText` carries **one colour per record**, and a record is one wrapped
+  *line*. Per-run colour means a `Color` on `PdfVectorTextRun`, a per-run `rg`
+  inside each `BT` block, a per-tspan `fill`, and — the large one — per-run
+  brushes on a `CanvasTextLayout` in `DrawTextElement`. Four emitters, on a
+  machine that cannot show whether any of them worked.
+
+**There is already a per-run picker, and the two had to be told apart.** The
+formatting flyout carries a `ColorPicker` (`TextColorPicker_ColorChanged`) that
+writes `Document.Selection.CharacterFormat.ForegroundColor`. Left alone it would
+fight §25's stamp in silence — a word coloured with it would look right until the
+next rebuild and then quietly go back. The rule is now one sentence:
+
+> **The last control you used wins.** Reaching for the per-run picker releases
+> the box's whole-box colour (`InkSurface.ClearActiveTextColour`), so the stamp
+> stops and the run's colour stands.
+
+What that costs is **not new** and is stated rather than buried: a run's colour
+has never reached the canvas raster or either exporter, because `RtfRunParser`
+skips the colour table. The named follow-up is to teach it — colour table into an
+index map, `\cf` per run, `Color` on `PdfVectorTextRun` — and that is the change
+that would make per-run colour export. It is not this one.
+
+### 25.4 Which ink a box with *no* colour of its own takes — and the brief was inverted here
+
+The brief flagged that `inkHex` uses `ColorUtil.IsDark`, which averages raw bytes
+and puts Brown Paper on the wrong side, and suggested `PageTheme.Luminance` as
+the gamma-correct test. **That is true of `PagePlate`'s judgement and false of
+this one**, and the difference is that this one is not asking whether a ground is
+blackish — it is asking which of *two specific inks* reads better on it.
+
+Measured, over sRGB at a step of 5 (140,608 colours), against the two writing
+inks `#141413` and `#FAF9F5`, scored by WCAG contrast ratio:
+
+| rule | picks the WORSE ink on | worst case | worst at |
+|---|---|---|---|
+| `ColorUtil.IsDark` (byte average, threshold 100) — *the shipped rule* | **8.25%** | loses 2.97 | `#00AA00`: 5.93:1 available, 2.95:1 chosen |
+| `PageTheme.Luminance < 0.5` — *the proposed replacement* | **40.06%** | loses 7.84 | `#BEC30A`: 9.66:1 available, 1.81:1 chosen |
+| **best-of-contrast — what shipped** | **0%**, by construction | — | — |
+
+The proposed swap would have flipped a Blueprint page from 4.37:1 to 4.00:1 and a
+Brown Paper page from 4.50:1 to 3.89:1 — the *lower*-contrast ink in both cases.
+It would have been a regression dressed as a correction.
+
+So `PageTheme.TextInk(background)` is a **best-of**, and it is in `PageTheme`
+rather than at a call site because it used to be **four copies of one ternary** —
+in the XAML editor, in the veil, in the Win2D raster and in the exporter — and
+four copies of "what colour is text" is precisely how a box comes out right on
+screen and black in the file.
+
+Two consequences, both measured by the harness:
+
+- **No stored note changes colour.** Best-of agrees with the shipped `IsDark` on
+  all nine paper grounds, on Quill's own page background and on four grounds
+  chosen to be awkward. 14 of 14.
+- **The floor is provable.** The two curves cross at Y = 0.18827, where both inks
+  give **4.183:1**, and the sweep confirms nothing in sRGB does worse (the sweep
+  floor is 4.183:1, at `#D23C8C`). That clears WCAG's 3:1 for a non-text mark
+  everywhere and falls short of 4.5:1 only inside a narrow band around the
+  crossing. Stated, not hidden.
+
+**What was deliberately not touched.** `ColorUtil.IsDark` itself, and its twenty
+other callers — grids, scrims, equation ink, the caret. This is a change to what
+colour *typed words* are, not a global re-derivation, and a global one is a
+different section with a different acceptance test. `PagePlate.Ink` also stays a
+luminance threshold on purpose: §7 rules that Blueprint, Brown Paper and
+Darkprint carry **white chrome**, and chrome is a different question from the
+legibility of the user's own prose.
+
+### 25.5 New text: its own remembered setting, not the pen's
+
+`InkSurface.PendingTextColor`, persisted as `Library.DefaultTextColor` through
+`InkSurface.TextColourChosen` → `MainWindow.OnTextColourChosen`. Null — the
+default, and what any existing library says — means *follow the page's ink*, so
+nothing changes until the user picks something.
+
+**Its own setting, not the active pen's**, and the reason is that a pen is a
+thing you *draw* with. Choosing a red pen to annotate a diagram is not a request
+for red prose, and binding the two would mean every pen switch silently retyped
+the next paragraph. It sits beside `PendingFontFamily` and `PendingFontSize`,
+which are the two settings that already answer *"what will the next box be
+like?"*, and it is remembered the same way they are.
+
+Two ways to set it, both of which also answer *"how do I colour text with nothing
+selected?"*:
+
+1. **Recolour a text selection.** The colour just chosen becomes the pending one.
+2. **The Text tool with nothing selected.** The wheel is then about the words the
+   user is about to type; if a box is already open under the caret it takes the
+   colour too, undoably and **in place** — never through `RebuildTextLayer`,
+   which clears `ActiveTextBox` and would take the caret out from under someone
+   mid-sentence.
+
+And the dot **reports** it: in the Text tool all three colour controls show
+`Surface.TextColourNow` instead of falling through to the *"this tool has no
+colour"* surface fill. A control that sets something has to show what it will
+set, which is §16.3's own logic.
+
+### 25.6 A mixed lasso takes one colour
+
+Ink **and** text in one selection: `CanRecolour` is now
+`(ink || text) && !attach && !otherShape`, and `SetInk` applies the one colour to
+both kinds in **one undo step** (`RestyleStrokesAction` + `RecolourTextsAction`
+inside a `CompositeAction`).
+
+Not refused and not split. The user picked one colour, with one gesture, over one
+selection; handing it to the strokes and leaving the words black would be the
+same *"the control did nothing"* failure §16.3 exists to prevent, one level down.
+Attachments and other shapes still take the selection out of the recolourable
+set entirely — they have no colour to give it to.
+
+The dot also **reads** the mixed subject: a box with no colour of its own reports
+the ink it is *actually drawn in*, so black strokes plus a default text box on a
+white page read as one colour rather than as a disagreement the dot would have to
+blank.
+
+### 25.7 The export, which is the row that matters
+
+`BuildVectorPageAsync` no longer computes a page-wide `inkHex` at all. Each box
+takes `TextInkFor(t)` — **the same function the editor, the veil and the raster
+ask** — so the file cannot disagree with the canvas without the canvas being
+wrong too. `HtmlSvgExporter` needed no change: both emitters read
+`PdfVectorText.Color`.
+
+One line of precision came with it. `PdfExporter.Rgb` formatted its operand with
+`Num` — `"0.##"`, two decimals — which quantises a channel to about **2.55 of the
+255 levels it came from**. `#C2185B`'s green (24) came out as 23. Invisible while
+every box on a page exported the same hardcoded black; not acceptable once the
+colour is the user's own choice. `Rgb` now uses `NumM` (six decimals). Coordinates
+keep `Num`; `tools/ExportRotRoundTrip`'s byte-identical content-stream check still
+holds, because both sides of that comparison carry the same colours.
+
+Measured end to end by `tools/TextColourRoundTrip`: two boxes, two colours, one
+page → the inflated PDF content stream carries **three distinct `rg` operands**
+exact to the byte, the SVG parsed as XML carries the three hexes exactly, the two
+agree with each other, and the pre-§25 page fails the same check.
+
+### 25.8 §16.3 is amended, not bypassed
+
+Written into §16.3 itself. The short form: the rule was never *"grey the dot when
+something is selected"* — it was *"you cannot recolour a photograph"*. Text was
+inside the inert set for the same reason a photograph is: there was nowhere to
+put a colour. §25 makes a text box genuinely recolourable, on the canvas **and**
+in both files, so the dot is live for it. The flag, the object it is asked of and
+the three surfaces that ask are all unchanged, and an attachment and any other
+shape stay white, inert and with the tap not wired.
+
+### 25.9 And the pen row was only half-implemented
+
+Found while wiring the second entry point, and worth naming because it is not
+what the brief expected. §16.9 has routed the dial's wheel at a recolourable
+**selection** since it was written. **The other two surfaces never did.**
+`PenBar.ShowColourPicker` and `MainWindow.PenRowColour_Click` both went straight
+to the active pen, so the identical gesture on the identical-looking dot did two
+different things depending on which palette you had switched on. Both now take
+the selection first, then the Text tool, then the pen — and both **report** the
+subject's colour on the dot, as the dial's has since §16.9.
+
+### 25.10 What was and was not seen — the honest record
+
+**The machine was locked for the whole of this work. Nothing below was watched
+happening.**
+
+| claim | how it stands |
+|---|---|
+| the tree compiles | **built**: `dotnet build -c Debug -p:Platform=x64 --no-incremental`, **0 warnings, 0 errors** |
+| `TextElement.Clone` carries the new field | **measured**: `tools/CloneRoundTrip`, 36 checks, reflection walk over the class |
+| the page-ink rule matches the shipped one everywhere a user can reach | **measured**: `tools/TextColourRoundTrip`, 14 of 14 grounds |
+| the sweep numbers in §25.4 | **measured**: recomputed from the real `PageTheme.TextInk` over 140,608 colours |
+| a recoloured box reaches the **PDF** in its colour | **measured**: real `PdfExporter`, content stream inflated, `rg` operands read back |
+| a recoloured box reaches the **SVG** in its colour | **measured**: real `HtmlSvgExporter`, parsed as XML |
+| the pre-§25 defect was real | **measured**: the old page is built and required to fail |
+| nothing else in export moved | **measured**: `tools/ExportRotRoundTrip` 37, `VeilRoundTrip` 29, `TextRotRoundTrip` 24, `LayerRoundTrip` 83 — all green |
+| the dot goes live and coloured on a text selection | **NOT SEEN.** Inferred from `CanRecolour` and the three call sites |
+| the wheel opens from the dial / from either pen row on a text selection | **NOT SEEN.** Inferred from the three `ShowColourPicker` paths |
+| the live `RichEditBox` shows the stamped colour | **NOT SEEN.** `RichEditBox.Document` cannot be driven headless |
+| the caret does not move when a box is stamped mid-sentence | **NOT SEEN.** The likeliest place for a surprise |
+| the Win2D raster (`DrawTextElement`) draws the box's colour | **NOT SEEN.** Needs a `CanvasDrawingSession` |
+| the 16.7 veil fades *from* the box's colour | **NOT SEEN** |
+| an attachment's dot is still white and inert | **NOT SEEN.** Unchanged code, but unchanged is not observed |
+
+### 25.11 The sweep
+
+**Canvas.**
+
+| # | gesture | PASS | FAIL |
+|---|---|---|---|
+| 1.1 | lasso a text box, open the wheel from the **radial dial** | the dot is **live and coloured**, the wheel opens, the box recolours | the dot is white and the tap is refused — §16.3's old answer |
+| 1.2 | the same from the **pen row** (`PenBar`) | identical behaviour | it retypes the active pen instead — the §25.9 defect |
+| 1.3 | the same from the **legacy pen row** (`PenRowColourBtn`) | identical behaviour | as 1.2 |
+| 1.4 | lasso an **attachment** | dot **white and inert**, tap not wired | it opened — §16.3 broken rather than amended |
+| 1.5 | lasso a **rectangle** | dot white and inert | as 1.4 |
+| 1.6 | lasso **strokes + a text box** | one colour lands on both, **one** undo step | only the strokes change, or two undos are needed |
+| 1.7 | recolour, then **Ctrl+Z** | the box goes back to its previous colour *and* its previous words | the box still shows the new colour — the RTF was not restored |
+| 1.8 | recolour, **Ctrl+Z**, **Ctrl+Y** | back to the new colour | drift on the second cycle |
+| 1.9 | Text tool, nothing selected, open the wheel | the dot shows the **pending text colour**; picking one does not touch the pen | the active pen changes colour |
+| 1.10 | …then type a new box | it is created in that colour | it is page-ink |
+| 1.11 | Text tool, **caret inside a box**, pick a colour | that box recolours too, **caret stays put** | the caret jumps, or focus is lost — the rebuild path leaked in |
+| 1.12 | restart the app | the pending text colour is remembered | it resets |
+| 1.13 | a box with **no** colour, on a **Darkprint** page | light ink, exactly as before | it moved — §25.4's agreement claim is wrong |
+| 1.14 | change the page background under an **uncoloured** box | the ink follows the page | it stays |
+| 1.15 | change the page background under a **coloured** box | the colour stays — it is the user's choice, not a derivation | it follows the page |
+| 1.16 | select a **table cell** and recolour | the cell's words take the colour | nothing, or the whole table |
+| 1.17 | colour a word with the **format bar's** picker inside a box that has a §25 colour | the word keeps its colour; the box's whole-box colour is released | the word reverts on the next rebuild — §25.3's rule did not fire |
+| 1.18 | **copy as image** a recoloured box | the capture carries the colour | it is black — `DrawTextElement` was missed |
+| 1.19 | select a recoloured box (the 16.7 veil) | the page fades, the box holds **its own** colour | it fades to page-ink and comes back page-ink |
+
+**Export — the row the brief named as the one that matters.**
+
+| # | gesture | PASS | FAIL |
+|---|---|---|---|
+| 2.1 | recolour a box, **export PDF** | the colour is in the file | **black** — perfect on screen, black in the file |
+| 2.2 | recolour a box, **export SVG** | the colour is in the file | as 2.1 |
+| 2.3 | **two** boxes, two colours, one page → PDF and SVG | two different colours in each file | both the same — the page-wide `inkHex` is still there |
+| 2.4 | an **uncoloured** box in the same export | the page's ink, unchanged from before §25 | it moved |
+| 2.5 | a **precise** colour (`#C2185B`) through PDF | exact per channel | one level off on a channel — §25.7's `Num`/`NumM` |
+| 2.6 | a recoloured box that is also **rotated** | colour *and* angle both survive | either one lost — the two changes touch the same record |
+| 2.7 | export a page of only uncoloured boxes | byte-identical to a pre-§25 export | the default path moved |
+
+Rows 2.1–2.5 and 2.7 are covered by `tools/TextColourRoundTrip`; 2.6's angle half
+is covered by `tools/ExportRotRoundTrip`. **Every row in the canvas table is
+UNSEEN.** The two to look hardest at are **1.11** (a stamp under a live caret is
+the likeliest surprise) and **1.17** (two colour controls, one box).

@@ -2786,6 +2786,21 @@ public sealed class ToolWheel
                 return;
             }
         }
+        // 25.5: TEXT TOOL, NOTHING SELECTED. The wheel is then about the words
+        // the user is about to type rather than about a pen they are not drawing
+        // with, and a box already open under the caret takes the colour too. This
+        // is the other half of what was asked for: the colour SELECTED text
+        // takes, and the colour NEW text is created in.
+        if (_h.ToolTag() == "Text")
+        {
+            void ApplyToText(Color c) { _surface.SetTextColour(c); Refresh(); }
+            if (ColourPickerHook != null)
+            {
+                ColourPickerHook(DotRootPoint(), _surface.TextColourNow, ApplyToText,
+                                 Refresh, PopOut * _scale);
+                return;
+            }
+        }
         if (ap == null) return;
         var start = ColorUtil.Parse(ap.Color);
         void Apply(Color c)
@@ -2972,7 +2987,12 @@ public sealed class ToolWheel
     /// of its own shows the surface, not white - white is a page colour on a
     /// blue page and the dot would vanish.</summary>
     private Color ActiveColour() =>
-        _h.ToolTag() == "Pen" && ActivePen() is { } p ? ColorUtil.Parse(p.Color) : PageTheme.SurfaceAlt;
+        _h.ToolTag() == "Pen" && ActivePen() is { } p ? ColorUtil.Parse(p.Color)
+        // 25.5: the Text tool HAS a colour of its own now - the one the next box
+        // will be created in - so the dot reports it rather than falling through
+        // to the "this tool has no colour" surface fill.
+        : _h.ToolTag() == "Text" ? _surface.TextColourNow
+        : PageTheme.SurfaceAlt;
 
     /// <summary>16.3 / 16.9: whether the colour circle is white and inert. True
     /// exactly when there is a subject and that subject cannot be recoloured -
