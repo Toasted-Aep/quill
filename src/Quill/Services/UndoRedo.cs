@@ -867,6 +867,55 @@ public class RestyleStrokesAction : IPageAction
     public Rect? AffectedBounds(NotePage page) => ActionBounds.Of(_strokes);
 }
 
+/// <summary>CONCEPTS-REF 25: RestyleStrokesAction's opposite number for typed
+/// text. One colour across each whole box - 25.3 argues why the unit is the box
+/// and not the run.
+///
+/// <para><b>It restores the RTF as well as the field, and that is not
+/// belt-and-braces.</b> InkSurface.BuildTextUi stamps a box's TextColor across
+/// its whole document, so a box that HAS a colour has that colour written into
+/// its RTF the moment it is rebuilt. Undoing back to "no colour of its own"
+/// therefore has to put the words back the way they were, or the field would say
+/// null while the document still said red - the box would keep showing red while
+/// the canvas and both exporters went back to the page's ink. That is precisely
+/// the on-screen/in-file split 25 exists to close, so the RTF is captured
+/// here.</para>
+///
+/// <para>TouchesText is TRUE: the live text is a XAML overlay, and only a
+/// rebuild re-reads what this changed.</para></summary>
+public class RecolourTextsAction : IPageAction
+{
+    private readonly List<TextElement> _texts;
+    private readonly List<(string? Colour, string Rtf)> _before = new();
+    private readonly string? _to;
+
+    public RecolourTextsAction(List<TextElement> texts, string? to)
+    {
+        _texts = texts; _to = to;
+        foreach (var t in texts) _before.Add((t.TextColor, t.Rtf));
+    }
+
+    public string Description => "Text colour";
+    public bool TouchesText => _texts.Count > 0;
+
+    public void Do(NotePage page)
+    {
+        foreach (var t in _texts) t.TextColor = _to;
+    }
+
+    public void Undo(NotePage page)
+    {
+        for (int i = 0; i < _texts.Count && i < _before.Count; i++)
+        {
+            _texts[i].TextColor = _before[i].Colour;
+            _texts[i].Rtf = _before[i].Rtf;
+        }
+    }
+
+    public Rect? AffectedBounds(NotePage page) =>
+        ActionBounds.Union(_texts.Select(t => (Rect?)ActionBounds.Of(t)).ToArray());
+}
+
 /// <summary>CONCEPTS-REF 16.2's padlock. Its own inverse in the same sense the
 /// mirror is: the flag's previous value is captured per element, so unlocking a
 /// mixed selection restores exactly what each element had.</summary>

@@ -1,0 +1,70 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- CONCEPTS-REF 25, PROVED as far as a console can prove it - and explicit
+       about where that stops.
+
+       25 makes a text box carry a colour and asks that colour to survive to
+       four places: the live XAML editor, the 16.7 veil, the Win2D raster and
+       the two vector exporters. THREE of those four need a window and cannot be
+       measured here. What can be measured is the fourth, and it is the one the
+       brief named as the row that matters most:
+
+         "recolour a text box, export to PDF and SVG, and confirm the colour
+          survives both. Failure there looks like perfect on screen and black in
+          the file."
+
+       So this tool measures two things, against the real code:
+
+         1. THE PAGE'S INK RULE (PageTheme.TextInk). The rule that decides what
+            colour a box with NO colour of its own is drawn in was four copies
+            of one ternary; it is now one function, and one function can be
+            swept. The sweep reproduces the numbers 25.4 quotes rather than
+            trusting them, and it runs the REJECTED alternative alongside so the
+            rejection is a measurement and not an opinion.
+
+         2. THE COLOUR REACHING THE FILE. Two boxes with two different colours
+            on one page, through the real PdfExporter and the real
+            HtmlSvgExporter, read back out of the inflated PDF content stream
+            and out of the SVG parsed as XML. The pre-25 behaviour - one
+            page-wide inkHex for every box - is built alongside and is REQUIRED
+            TO FAIL the same check, so the harness is shown to be able to go red
+            rather than merely observed to be green.
+
+       Nothing below is a re-typed copy. PageTheme, ColorUtil and both emitters
+       are <Compile Include>d straight out of src/Quill. Written to the pattern
+       tools/ExportRotRoundTrip set, and isolated the same way it is: this tool
+       never touches LibraryStore, so it has no library to be isolated from and
+       cannot reach the user's.
+
+       net8.0-windows10.0.19041.0 to match its siblings. Nothing here needs a
+       window - PageTheme, ColorUtil and the two emitters are plain BCL over
+       Windows.UI.Color, which is the reason this layer can be measured at
+       all. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Quill.Tools</RootNamespace>
+    <AssemblyName>TextColourRoundTrip</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <!-- The rule under test, and the ColorUtil.IsDark it replaces - the real
+         one, so "no existing note changes colour" is a comparison and not a
+         claim. -->
+    <Compile Include="..\..\src\Quill\Services\PageTheme.cs" Link="PageTheme.cs" />
+    <Compile Include="..\..\src\Quill\Helpers\Util.cs" Link="Util.cs" />
+    <!-- The two emitters, and the font resolver PdfExporter calls. -->
+    <Compile Include="..\..\src\Quill\Services\PdfExporter.cs" Link="PdfExporter.cs" />
+    <Compile Include="..\..\src\Quill\Services\HtmlSvgExporter.cs" Link="HtmlSvgExporter.cs" />
+    <Compile Include="..\..\src\Quill\Services\FontSubsetter.cs" Link="FontSubsetter.cs" />
+  </ItemGroup>
+
+</Project>

@@ -507,6 +507,13 @@ public sealed partial class MainWindow : Window
         SeedPens();
         Surface.PendingFontFamily = _library.DefaultFont;
         Surface.PendingFontSize = (float)_library.DefaultFontSize;
+        // 25.5: the colour NEW text boxes are created in, remembered across
+        // launches beside the font and the size. Null - a library written before
+        // 25, or a user who has never picked one - leaves every new box following
+        // the page's ink exactly as before.
+        Surface.PendingTextColor = _library.DefaultTextColor;
+        Surface.TextColourChosen -= OnTextColourChosen;
+        Surface.TextColourChosen += OnTextColourChosen;
         RefreshCalcHistory();   // history persists with the library (#47)
         RestoreCalcVars();      // user variables persist too (#A7)
 
@@ -3597,6 +3604,17 @@ public sealed partial class MainWindow : Window
         ToolUiChanged?.Invoke();
     }
 
+    /// <summary>25.5: the user picked a colour for typed words. InkSurface owns
+    /// the live value and has never known what a library is; this is the shell
+    /// remembering it, which is the same division the font and the size use.</summary>
+    private void OnTextColourChosen(string hex)
+    {
+        if (_library == null) return;
+        _library.DefaultTextColor = hex;
+        ScheduleSave();
+        SyncPenRowColour();
+    }
+
     /// <summary>The pen row's ink swatch (V3 K.9). It opens the same COPIC ring
     /// the dial's centre disc opens, centred on ITSELF - so with the radial dial
     /// switched off the wheel still arrives around the control that summoned it
@@ -3608,10 +3626,34 @@ public sealed partial class MainWindow : Window
         // section names, and it was the one that still opened the wheel on a
         // subject that cannot take a colour.
         if (ColourInert) return;
-        var p = ActivePreset() ?? _library.Pens.FirstOrDefault();
-        if (p == null) return;
         var tl = PenRowColourBtn.TransformToVisual(RootGrid).TransformPoint(new Point(0, 0));
         var at = new Point(tl.X + PenRowColourBtn.ActualWidth / 2, tl.Y + PenRowColourBtn.ActualHeight / 2);
+        var p = ActivePreset() ?? _library.Pens.FirstOrDefault();
+
+        // 16.9 / 25.1: a recolourable SELECTION takes the wheel before the pen
+        // does. This row, PenBar's dot and the dial's dot are the three surfaces
+        // 16.3 names, and until 25 only the dial actually recoloured a selection
+        // from them - the other two quietly retyped the pen instead.
+        var subject = SelectionState.Current;
+        if (subject is { Any: true, CanRecolour: true, SetInk: not null })
+        {
+            var from = subject.Ink ?? (p != null ? ColorUtil.Parse(p.Color) : PageTheme.OnSurface);
+            ColorPickerService.Open(at, from, c => subject.SetInk!(c),
+                                    SyncPenRowColour, centreOnPoint: true);
+            return;
+        }
+
+        // 25.5: Text tool with nothing selected - the wheel is about the words
+        // the user is about to type, and about the box open under the caret.
+        if (_toolTag == "Text")
+        {
+            ColorPickerService.Open(at, Surface.TextColourNow,
+                c => { Surface.SetTextColour(c); SyncPenRowColour(); },
+                null, centreOnPoint: true);
+            return;
+        }
+
+        if (p == null) return;
         ColorPickerService.Open(at, ColorUtil.Parse(p.Color), c =>
         {
             p.Color = ColorUtil.ToHex(c);
@@ -3632,6 +3674,21 @@ public sealed partial class MainWindow : Window
             if (ColourInert)
             {
                 PenRowColourDot.Fill = new SolidColorBrush(Microsoft.UI.Colors.White);
+                return;
+            }
+            // 16.9 / 25.1: with a recolourable subject in hand the dot reports
+            // THE SUBJECT'S colour, which is what the dial's dot has shown since
+            // 16.9. A control that opens on the selection has to report the
+            // selection, or the swatch is a promise about the wrong thing.
+            if (SelectionState.Current is { Any: true, CanRecolour: true, Ink: { } subjectInk })
+            {
+                PenRowColourDot.Fill = new SolidColorBrush(subjectInk);
+                return;
+            }
+            // 25.5: in the Text tool the dot is the colour the next box gets.
+            if (_toolTag == "Text")
+            {
+                PenRowColourDot.Fill = new SolidColorBrush(Surface.TextColourNow);
                 return;
             }
             var p = ActivePreset() ?? _library?.Pens.FirstOrDefault();
@@ -8831,7 +8888,16 @@ public sealed partial class MainWindow : Window
     private void TextColorPicker_ColorChanged(ColorPicker sender, ColorChangedEventArgs args)
     {
         var s = Surface.ActiveTextBox?.Document.Selection;
-        if (s != null) s.CharacterFormat.ForegroundColor = args.NewColor;
+        if (s == null) return;
+        // 25.3: THE LAST CONTROL YOU USED WINS. This picker colours a RUN inside
+        // the RTF; 25's colour is a property of the whole box and is stamped over
+        // the document every time the box is built. Left alone the two fight in
+        // silence - this run would look right until the next rebuild and then go
+        // back - so reaching for this one releases the box's whole-box colour.
+        // What that costs is stated in 25.3 and is not new: a run's colour has
+        // never reached the canvas raster or either exporter.
+        Surface.ClearActiveTextColour();
+        s.CharacterFormat.ForegroundColor = args.NewColor;
     }
 
     private void HighlightPicker_ColorChanged(ColorPicker sender, ColorChangedEventArgs args)

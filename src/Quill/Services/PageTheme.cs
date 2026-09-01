@@ -72,6 +72,73 @@ public static class PageTheme
     /// <inheritdoc cref="InkOnDark"/>
     public static readonly Color InkOnLight = Color.FromArgb(255, 0x14, 0x14, 0x14);
 
+    /// <summary>The ink TYPED WORDS take on a light page. Not the same pair as
+    /// <see cref="InkOnLight"/>/<see cref="InkOnDark"/>, and deliberately so:
+    /// those two are the CHROME's marks, these two are the page's own writing
+    /// ink and have been #141413 / #FAF9F5 since the first text box. Named here
+    /// so that the four surfaces which draw a text box - the XAML editor, the
+    /// 16.7 veil, the Win2D raster and the vector exporter - stop carrying four
+    /// copies of one ternary between them (CONCEPTS-REF 25.4).</summary>
+    public static readonly Color TextInkOnLight = Color.FromArgb(255, 0x14, 0x14, 0x13);
+
+    /// <inheritdoc cref="TextInkOnLight"/>
+    public static readonly Color TextInkOnDark = Color.FromArgb(255, 0xFA, 0xF9, 0xF5);
+
+    /// <summary>WCAG 2.x contrast ratio, 1..21, off <see cref="Luminance"/>.
+    /// Here rather than at a call site because this file already owns the
+    /// gamma-correct luminance the whole shell decides light from dark on, and a
+    /// ratio computed from a second one is how two surfaces come to disagree
+    /// about one page.</summary>
+    public static double Contrast(Color a, Color b)
+    {
+        double la = Luminance(a), lb = Luminance(b);
+        return (Math.Max(la, lb) + 0.05) / (Math.Min(la, lb) + 0.05);
+    }
+
+    /// <summary>CONCEPTS-REF 25.4: WHICH INK A TEXT BOX WITH NO COLOUR OF ITS
+    /// OWN IS DRAWN IN - whichever of the two writing inks contrasts BETTER with
+    /// the page behind it. Ties go to the dark ink, which is the ink a page with
+    /// no opinion has always had.
+    ///
+    /// <para><b>A best-of, not a threshold, and the threshold proposed instead
+    /// was tested and rejected.</b> The change that brought this here was asked
+    /// whether <c>ColorUtil.IsDark</c> should become <c>Luminance &lt; 0.5</c>
+    /// on the ground that IsDark averages raw bytes and puts Brown Paper on the
+    /// wrong side. That is true of the judgement <c>PagePlate.BaseIsDark</c>
+    /// makes and it is NOT true of this one, because this one is about contrast
+    /// against two specific inks rather than about whether a ground is blackish.
+    /// Swept over sRGB at a step of 5 - 140,608 colours - and scored against the
+    /// better of the two inks by the ratio above:</para>
+    ///
+    /// <list type="bullet">
+    /// <item><c>ColorUtil.IsDark</c> (weighted byte average, threshold 100)
+    /// picks the WORSE ink on 8.25% of the gamut, worst case losing 2.97 ratio
+    /// points - at #00AA00, 5.93:1 available and 2.95:1 chosen.</item>
+    /// <item><c>Luminance &lt; 0.5</c> picks the worse ink on <b>40.06%</b>,
+    /// worst case losing 7.84 - at #BEC30A, 9.66:1 available and 1.81:1 chosen.
+    /// It would flip a Blueprint page (4.37 -&gt; 4.00) and a Brown Paper page
+    /// (4.50 -&gt; 3.89) to the LOWER-contrast ink, which is the opposite of the
+    /// improvement it was proposed as. The suggestion was right about
+    /// <c>PagePlate</c> and wrong about here.</item>
+    /// <item>Best-of is right by construction, and it agrees with the shipped
+    /// IsDark on all nine paper grounds and on Quill's own page backgrounds - so
+    /// NO EXISTING NOTE CHANGES COLOUR. Its floor over the whole gamut is where
+    /// the two curves cross, at Y = 0.18827, where both inks give
+    /// <b>4.183:1</b>. That clears WCAG's 3:1 everywhere and falls short of
+    /// 4.5:1 only for backgrounds inside a narrow band around that crossing -
+    /// stated rather than hidden, and better than either threshold manages.</item>
+    /// </list>
+    ///
+    /// <para>Deliberately NOT <see cref="Quill.Controls.PagePlate.Ink"/>, which
+    /// is a luminance threshold ON PURPOSE: that one keeps 7's ruling that
+    /// Blueprint, Brown Paper and Darkprint carry WHITE CHROME. Chrome is a
+    /// different question from the legibility of the user's own prose, and 25.4
+    /// is the second question.</para></summary>
+    public static Color TextInk(Color background) =>
+        Contrast(TextInkOnLight, background) >= Contrast(TextInkOnDark, background)
+            ? TextInkOnLight
+            : TextInkOnDark;
+
     /// <summary>How much of the ground's colour a PANEL carries.
     ///
     /// <para>Panels used to be neutral by design - section 6 had them flat

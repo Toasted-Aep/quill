@@ -95,6 +95,29 @@ public sealed class InkSurface : UserControl
     // is honoured instead of falling back to the RichEdit default (#2, #8).
     public float PendingFontSize { get; set; } = 16f;
     public string PendingFontFamily { get; set; } = "Lora";
+    /// <summary>CONCEPTS-REF 25.5: THE COLOUR THE NEXT TEXT BOX IS CREATED IN.
+    /// Null - the default - means "follow the page's ink convention", which is
+    /// what every box did before 25. Its own remembered setting rather than the
+    /// active pen's colour, and 25.5 argues why: a pen is a thing you draw
+    /// with, and choosing a red pen to annotate a diagram is not a request for
+    /// red prose. Persisted as Library.DefaultTextColor through
+    /// <see cref="TextColourChosen"/>.</summary>
+    public string? PendingTextColor { get; set; }
+
+    /// <summary>Raised when the user picks a colour for TYPED WORDS, so the shell
+    /// can remember it across launches. Deliberately an event rather than a reach
+    /// into the library from here: this control has never known what a library
+    /// is, and 25 is not the section that should teach it.</summary>
+    public event Action<string>? TextColourChosen;
+
+    /// <summary>What the colour controls SHOW while the Text tool is in hand -
+    /// the pending colour, or the ink a box would actually be drawn in if it were
+    /// created right now. Never a bare white or a bare black: on a dark page the
+    /// honest answer is the light ink.</summary>
+    public Color TextColourNow =>
+        PendingTextColor is { Length: > 0 } hex
+            ? ColorUtil.Parse(hex)
+            : PageTheme.TextInk(_page != null ? ColorUtil.Parse(_page.Background) : Colors.White);
     public EraserMode EraserMode { get; set; } = EraserMode.Object;
     // How the point-eraser treats what it crosses (§7.c). Object mode always
     // removes whole strokes; these styles shape the Point-mode geometry result.
@@ -3590,6 +3613,32 @@ public sealed class InkSurface : UserControl
 
         var page = _page;
         var frozen = strokes.ToList();     // the closures below outlive this call
+        var frozenTexts = _selTexts.ToList();
+
+        // 25.1: A TEXT BOX CAN NOW TAKE A COLOUR, so the thing that greys the
+        // colour dot is no longer "anything that is not pure ink". 16.3's rule is
+        // unchanged and is now simply being applied to a subject whose
+        // capabilities changed: an ATTACHMENT still cannot be recoloured and
+        // neither can a drawn shape, so those two keep the white, inert dot. Ink
+        // and text together take ONE colour - 25.6 argues why that is the honest
+        // answer for a mixed lasso rather than refusing it.
+        bool canColour = (ink || text) && !attach && !otherShape;
+
+        // The selection's own colour, across BOTH kinds. A box with no colour of
+        // its own reports the ink it is ACTUALLY DRAWN IN, so black strokes plus
+        // a default text box on a white page read as one colour rather than as a
+        // disagreement the dot would have to blank.
+        Color? subjectInk = null;
+        if (canColour)
+        {
+            bool first = true;
+            foreach (var c in frozen.Select(s => ColorUtil.Parse(s.Color))
+                                    .Concat(frozenTexts.Select(TextInkFor)))
+            {
+                if (first) { subjectInk = c; first = false; }
+                else if (!subjectInk!.Value.Equals(c)) { subjectInk = null; break; }
+            }
+        }
 
         var subject = new SelectionSubject
         {
@@ -3599,11 +3648,11 @@ public sealed class InkSurface : UserControl
             HasStability = pureInk,
             // Opacity is the one property everything on the page has.
             HasOpacity = pureInk || attach || !anyShapeOrText,
-            CanRecolour = pureInk,
+            CanRecolour = canColour,
             Size = pureInk ? Common(frozen, s => s.Size) : null,
             Stability = pureInk ? Common(frozen, s => s.Sens) : null,
             Opacity = pureInk ? Common(frozen, s => s.Opacity ?? 1f) : null,
-            Ink = pureInk && Common(frozen, s => ColorUtil.Parse(s.Color)) is { } c ? c : null,
+            Ink = subjectInk,
             SetSize = pureInk && page != null
                 ? v => Restyle(frozen, RestyleStrokesAction.Field.Size, v)
                 : null,
@@ -3613,8 +3662,8 @@ public sealed class InkSurface : UserControl
             SetOpacity = pureInk && page != null
                 ? v => Restyle(frozen, RestyleStrokesAction.Field.Opacity, v)
                 : null,
-            SetInk = pureInk && page != null
-                ? c => Restyle(frozen, RestyleStrokesAction.Field.Colour, 0f, ColorUtil.ToHex(c))
+            SetInk = canColour && page != null
+                ? c => RecolourSelection(frozen, frozenTexts, c)
                 : null,
             // 16.7 is about an ATTACHMENT being selected, and its example is the
             // handwriting greyed beneath one. A selected stroke does not fade the
@@ -3637,6 +3686,134 @@ public sealed class InkSurface : UserControl
         PublishSelection();
         _canvas.Invalidate();
         ContentChanged?.Invoke();
+    }
+
+    // =======================================================================
+    // 25: TEXT COLOUR
+    // =======================================================================
+
+    /// <summary>The colour ONE box is drawn in: its own if it has one, the page's
+    /// ink convention if it does not. The single answer the editor, the veil, the
+    /// raster and both exporters take.</summary>
+    /// <para>25.4 puts the page's half of the answer in
+    /// <see cref="PageTheme.TextInk"/>, where it can be compiled into a console
+    /// harness and measured - see tools/TextColourRoundTrip.</para>
+    private Color TextInkFor(TextElement t) =>
+        t.TextColor is { Length: > 0 } hex
+            ? ColorUtil.Parse(hex)
+            : PageTheme.TextInk(_page != null ? ColorUtil.Parse(_page.Background) : Colors.White);
+
+    /// <summary>25.2: writes a colour ACROSS A WHOLE LIVE BOX - the default
+    /// character format so the next character typed takes it, and every existing
+    /// character so what is already there takes it too. Both are needed: the
+    /// default alone leaves the typed words behind, and the range alone leaves
+    /// the caret carrying the old colour.</summary>
+    private static void StampTextColour(RichEditBox box, Color ink)
+    {
+        try
+        {
+            var dcf = box.Document.GetDefaultCharacterFormat();
+            dcf.ForegroundColor = ink;
+            box.Document.SetDefaultCharacterFormat(dcf);
+        }
+        catch { }
+        try { box.Document.GetRange(0, int.MaxValue).CharacterFormat.ForegroundColor = ink; }
+        catch { }
+        try { box.Foreground = new SolidColorBrush(ink); } catch { }
+    }
+
+    /// <summary>25.1: ONE colour onto everything in the selection that can take
+    /// one - strokes and text boxes together, as a single undo step.
+    ///
+    /// <para>25.6: a lasso holding both is not refused and is not split. The user
+    /// picked one colour with one gesture over one selection; handing the strokes
+    /// that colour and leaving the words black would be the same "did nothing"
+    /// failure 16.3 exists to prevent, one level down.</para></summary>
+    private void RecolourSelection(List<PenStroke> strokes, List<TextElement> texts, Color c)
+    {
+        if (_page == null || (strokes.Count == 0 && texts.Count == 0)) return;
+        string hex = ColorUtil.ToHex(c);
+        // RecolourTextsAction captures each box's RTF so undo can put the words
+        // back exactly, so the words have to BE in the model first.
+        if (texts.Count > 0) FlushTexts();
+
+        var parts = new List<IPageAction>();
+        if (strokes.Count > 0)
+            parts.Add(new RestyleStrokesAction(strokes, RestyleStrokesAction.Field.Colour, 0f, hex));
+        if (texts.Count > 0)
+            parts.Add(new RecolourTextsAction(texts, hex));
+        PushAction(parts.Count == 1 ? parts[0] : new CompositeAction(parts, "Selection colour"), _page);
+
+        if (texts.Count > 0)
+        {
+            // 25.5: the wheel is the only place a text colour is ever chosen, so
+            // the colour just picked is also the one the NEXT box is created in.
+            PendingTextColor = hex;
+            try { TextColourChosen?.Invoke(hex); } catch { }
+            // The boxes are XAML, not Win2D: only a rebuild re-reads the field,
+            // and BuildTextUi's stamp is what puts the colour on the screen.
+            RebuildTextLayer();
+        }
+        _inkCacheDirty = true;
+        PublishSelection();
+        _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    /// <summary>25.3: the format bar's own per-run colour picker hands the box
+    /// back to its RTF.
+    ///
+    /// <para>Without this the two controls fight silently: a box with a whole-box
+    /// colour is re-stamped every time it is built, so a word coloured with the
+    /// format bar would look right until the next rebuild and then quietly go
+    /// back. The rule is "the last control you used wins", and it is the only one
+    /// of the two that can be stated in a sentence.</para>
+    ///
+    /// <para>What the user gives up by reaching for the per-run picker is stated
+    /// in 25.3 and is NOT new: per-run colour has never reached the canvas raster
+    /// or either exporter, because RtfRunParser skips the colour table.</para></summary>
+    public void ClearActiveTextColour()
+    {
+        if (_page == null || ActiveTextBox == null) return;
+        foreach (var (k, ui) in _textUi)
+        {
+            if (!ReferenceEquals(ui.Box, ActiveTextBox)) continue;
+            var t = _page.Texts.FirstOrDefault(x => x.Id == k);
+            if (t is { TextColor: { Length: > 0 } }) { t.TextColor = null; ContentChanged?.Invoke(); }
+            return;
+        }
+    }
+
+    /// <summary>25.5: the user chose a colour for TYPED WORDS with nothing
+    /// selected. It becomes the pending colour for the next box, and - if a box
+    /// is open under the caret - that box's colour too, undoably.
+    ///
+    /// <para>The open box is recoloured IN PLACE rather than through
+    /// RebuildTextLayer, because a rebuild clears ActiveTextBox and would take
+    /// the caret out from under someone who is mid-sentence.</para></summary>
+    public void SetTextColour(Color c)
+    {
+        string hex = ColorUtil.ToHex(c);
+        PendingTextColor = hex;
+        try { TextColourChosen?.Invoke(hex); } catch { }
+
+        var box = ActiveTextBox;
+        if (_page != null && box != null)
+        {
+            Guid id = Guid.Empty;
+            foreach (var (k, ui) in _textUi)
+                if (ReferenceEquals(ui.Box, box)) { id = k; break; }
+            var t = id == Guid.Empty ? null : _page.Texts.FirstOrDefault(x => x.Id == id);
+            if (t != null)
+            {
+                FlushTexts();                                  // capture the words as they stand
+                PushAction(new RecolourTextsAction(new List<TextElement> { t }, hex), _page);
+                StampTextColour(box, c);
+                FlushTexts();                                  // and store the stamped RTF
+                ContentChanged?.Invoke();
+            }
+        }
+        _canvas.Invalidate();
     }
 
     // =======================================================================
@@ -4041,9 +4218,10 @@ public sealed class InkSurface : UserControl
         {
             var model = _page.Texts.FirstOrDefault(x => x.Id == id);
             bool exempt = model != null && IsSubject(model);
-            var ink = ColorUtil.IsDark(ColorUtil.Parse(_page.Background))
-                ? Color.FromArgb(255, 0xFA, 0xF9, 0xF5)
-                : Color.FromArgb(255, 0x14, 0x14, 0x13);
+            // 25.4: fade FROM the box's own colour, not from the page's ink. A
+            // red box that greyed towards black and came back black would be the
+            // "visual nicety became data loss" this method's remarks forbid.
+            var ink = model != null ? TextInkFor(model) : PageTheme.TextInk(ColorUtil.Parse(_page.Background));
             var shown = exempt || t <= 0.0005
                 ? ink
                 : Color.FromArgb(255,
@@ -4644,12 +4822,11 @@ public sealed class InkSurface : UserControl
         var plain = RtfToPlainText(t.Rtf, out float size, out string font);
         if (string.IsNullOrWhiteSpace(plain)) return;
 
-        // Per-run colour doesn't survive RtfToPlainText, so fall back to the page's
-        // ink convention (dark ink on light paper and vice-versa), like the exporter.
-        var bg = _page != null ? ColorUtil.Parse(_page.Background) : Colors.White;
-        var ink = ColorUtil.IsDark(bg)
-            ? Color.FromArgb(255, 0xFA, 0xF9, 0xF5)
-            : Color.FromArgb(255, 0x14, 0x14, 0x13);
+        // 25.4: the box's OWN colour when it has one, and the page's ink
+        // convention when it does not - one expression, shared with the editor,
+        // the veil and both exporters. Per-run colour still does not survive
+        // RtfToPlainText; 25.3 states that limit rather than pretending it away.
+        var ink = TextInkFor(t);
 
         using var format = new CanvasTextFormat
         {
@@ -7102,7 +7279,13 @@ public sealed class InkSurface : UserControl
     {
         if (_page == null) return null;
         FlushTexts(); // save other boxes' live edits before adding a new one
-        var t = new TextElement { X = worldPos.X - 4, Y = worldPos.Y - 10, AutoWidth = true };
+        // 25.5: a new box is created in the remembered text colour. Null leaves
+        // it following the page's ink, which is what every box did before 25.
+        var t = new TextElement
+        {
+            X = worldPos.X - 4, Y = worldPos.Y - 10, AutoWidth = true,
+            TextColor = PendingTextColor,
+        };
         PushAction(new AddTextAction(t), _page);
         BuildTextUi(t); // add ONLY the new box so existing boxes keep their formatting
         if (_textUi.TryGetValue(t.Id, out var ui))
@@ -7977,7 +8160,6 @@ public sealed class InkSurface : UserControl
         var images = new List<PdfVectorImage>();
         var texts = new List<PdfVectorText>();
         var bgCol = ColorUtil.Parse(_page.Background);
-        string inkHex = ColorUtil.IsDark(bgCol) ? "#FAF9F5" : "#141413";
 
         // ---- images, decoded to pixels for embedding ----
         foreach (var sh in _page.Shapes)
@@ -8002,6 +8184,13 @@ public sealed class InkSurface : UserControl
         // ---- text boxes as selectable PDF text ----
         foreach (var t in _page.Texts)
         {
+            // 25: THE EXPORTER TAKES THE SAME ANSWER THE SCREEN TOOK. It used to
+            // compute one hardcoded black-or-white for the whole PAGE, outside
+            // this loop, so every box on it exported the same colour whatever was
+            // on the screen. TextInkFor is the one function the editor, the veil
+            // and the Win2D raster also ask, so the file cannot disagree with the
+            // canvas without the canvas being wrong too.
+            string boxHex = ColorUtil.ToHex(TextInkFor(t));
             var logical = RtfRunParser.Parse(t.Rtf, 16f, "Lora");
             // wrap at the box width less the 4px inset DrawTextElement lays out with
             var visual = WrapRunLines(logical, Math.Max(60, t.Width) - 8);
@@ -8021,9 +8210,15 @@ public sealed class InkSurface : UserControl
                 prevSize = size;
                 baseline += li == 0 ? size : size * 1.35;
                 if (line.Count == 0) continue;
+                // 25: THE COLOUR REACHES THE FILE. inkHex was one hardcoded
+                // black-or-white for every box on the page, so a recoloured box
+                // was perfect on screen and black in the PDF and the SVG both.
+                // PdfVectorText.Color is what BOTH emitters read - PdfExporter
+                // sets it as the rg/RG operand and HtmlSvgExporter as the text
+                // element's fill - so this one substitution covers them both.
                 texts.Add(new PdfVectorText(
                     (float)(t.X + 4), (float)baseline,
-                    size, inkHex, string.Concat(line.Select(r => r.Text)), line[0].Font, line,
+                    size, boxHex, string.Concat(line.Select(r => r.Text)), line[0].Font, line,
                     t.Rotation, tc.X, tc.Y));
             }
         }
@@ -8530,14 +8725,16 @@ public sealed class InkSurface : UserControl
         // Ink colour follows the PAGE background, not the app theme, so flipping
         // light/dark mode no longer recolours notes and new text is readable on
         // any page (#8/#16-batch3).
-        var pageInk = ColorUtil.IsDark(ColorUtil.Parse(_page?.Background ?? "#FFFFFF"))
-            ? Color.FromArgb(255, 0xFA, 0xF9, 0xF5)
-            : Color.FromArgb(255, 0x14, 0x14, 0x13);
-        box.Foreground = new SolidColorBrush(pageInk);
+        // 25.4: the box's OWN colour when it has one; otherwise the page's ink
+        // convention, through the one shared helper. Named boxInk rather than
+        // pageInk since 25 - it is no longer always the page's answer, and a
+        // name that says otherwise is how the next reader gets it wrong.
+        var boxInk = TextInkFor(t);
+        box.Foreground = new SolidColorBrush(boxInk);
         try
         {
             var dcf = box.Document.GetDefaultCharacterFormat();
-            dcf.ForegroundColor = pageInk;
+            dcf.ForegroundColor = boxInk;
             box.Document.SetDefaultCharacterFormat(dcf);
             // headroom for script fonts whose swashes overshoot the em box —
             // Amsterdam-style faces were getting clipped (#17-batch3)
@@ -8552,6 +8749,18 @@ public sealed class InkSurface : UserControl
         {
             try { box.Document.SetText(TextSetOptions.FormatRtf, t.Rtf); } catch { }
         }
+        // 25.2: THE FIELD WINS OVER THE RTF, AND THIS IS WHERE THAT IS DECIDED.
+        // The RTF carries a colour of its own - Quill writes the page ink into
+        // the default character format, so it comes back as a colortbl plus cf1 -
+        // and SetText above has just restored it. A box that has been given a
+        // colour therefore has to be stamped AFTER the words are in, or the RTF's
+        // stale colour would beat the field on screen while the canvas and both
+        // exporters used the field. That split is the whole defect 25 closes.
+        //
+        // Only when the box HAS a colour. A box that has never been given one is
+        // left exactly as it was, so the per-run colours the format bar's own
+        // picker can set still show, and no existing note changes.
+        if (t.TextColor is { Length: > 0 }) StampTextColour(box, boxInk);
 
         // table cells: no drag grip, and the box must not spill past its row (#24-batch3)
         bool isCell = t.TableId != null;

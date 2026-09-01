@@ -859,7 +859,10 @@ public sealed class PenBar
     private PenPreset? ToolPen() => _h.ToolTag() == "Pen" ? ActivePen() : null;
 
     private Color ActiveColour() =>
-        _h.ToolTag() == "Pen" && ActivePen() is { } p ? ColorUtil.Parse(p.Color) : PageTheme.Surface;
+        _h.ToolTag() == "Pen" && ActivePen() is { } p ? ColorUtil.Parse(p.Color)
+        // 25.5, the same answer the dial gives - the two surfaces ask one object.
+        : _h.ToolTag() == "Text" ? _surface.TextColourNow
+        : PageTheme.Surface;
 
     /// <summary>CONCEPTS-REF 16.3, the same sentence the dial answers: a subject
     /// that LACKS a property greys that property's control - never "something is
@@ -1010,7 +1013,36 @@ public sealed class PenBar
 
     private void ShowColourPicker()
     {
+        if (ColourInert) return;                    // 16.3, the same belt and braces the dial has
         var ap = ActivePen() ?? _h.Library().Pens.FirstOrDefault();
+
+        // 16.9, FINISHED HERE. The dial has routed the wheel at a recolourable
+        // SELECTION since 16.9; this row never did, so the identical gesture on
+        // the identical dot retyped the pen instead. 25 needs both entry points
+        // to recolour text, and a text selection would have gone to the pen.
+        var subject = SelectionState.Current;
+        if (subject is { Any: true, CanRecolour: true, SetInk: not null })
+        {
+            var from = subject.Ink ?? (ap != null ? ColorUtil.Parse(ap.Color) : PageTheme.OnSurface);
+            void ApplyToSelection(Color c) => subject.SetInk!(c);
+            if (ColourPickerHook != null)
+            {
+                ColourPickerHook(SettingsCentre(), from, ApplyToSelection, Refresh);
+                return;
+            }
+        }
+
+        // 25.5: Text tool, nothing selected - the wheel is about the next box.
+        if (_h.ToolTag() == "Text")
+        {
+            void ApplyToText(Color c) { _surface.SetTextColour(c); Refresh(); }
+            if (ColourPickerHook != null)
+            {
+                ColourPickerHook(SettingsCentre(), _surface.TextColourNow, ApplyToText, Refresh);
+                return;
+            }
+        }
+
         if (ap == null) return;
         var start = ColorUtil.Parse(ap.Color);
         void ApplyColour(Color c)

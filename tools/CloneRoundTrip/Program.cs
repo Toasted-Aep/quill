@@ -112,7 +112,7 @@ var srcShape = new ShapeElement
 var srcText = new TextElement
 {
     X = 64.5, Y = 128.25, Width = 311, WidthPinned = true, MaxWidth = 880, AutoWidth = true,
-    Rtf = @"{\rtf1\ansi hello\par}", Rotation = -63.125,
+    Rtf = @"{\rtf1\ansi hello\par}", TextColor = "#C2185B", Rotation = -63.125,
     TableId = Guid.Parse("0000aaaa-0000-0000-0000-00000000ab01"), TableRow = 2, TableCol = 1,
     FillColor = "#E8F0FF", BorderColor = "#123456", BorderWidth = 1.75f,
     CellColSpan = 2, CellRowSpan = 3,
