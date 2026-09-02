@@ -1,5 +1,174 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-02 (seventh screen run) — THE SWEEP RAN
+
+Branch `integration` @ `5822e0b`. Clean unpackaged x64 `--no-incremental` build,
+**0 warnings**. Scratch `QUILL_DATA_FOLDER` at `scratchpad/vp6data`. Captures in
+`scratchpad/vp6/`. Harness `scratchpad/vp6.ps1` (vp5's surface plus a live
+presence re-check folded into every press).
+
+### The presence gate, measured rather than inherited
+
+The dispatch figures were re-measured, not trusted:
+
+* First sample: cursor `869,312`, idle **486 s**, unlocked, nothing under the
+  pointer but the Claude window.
+* A 40 s watch at 8 Hz, **320 samples: zero cursor movement**, idle rising
+  monotonically 492 s → 537 s, **zero idle resets** — not even the phantom the
+  sixth run documented. Machine unlocked throughout.
+
+That is the "nobody at the keyboard" signature by the sixth run's own rule
+(cursor delta is the channel; idle corroborates). **The unsent composer line was
+not read, not relied on, and is not what cleared the gate** — the standing
+instruction relayed with the task plus this measurement is.
+
+Cursor was re-marked after every injection and re-checked before the next one
+(`Q-Presence` throws on any displacement the harness did not cause). It never
+tripped. **Concepts was not running this time**; the only other windows were
+Settings, Raycast, MyASUS, Realtek and Zen. Quill was pinned `HWND_TOPMOST` and
+every press gated on `WindowFromPoint(cursor)` resolving to Quill.
+
+### Two things about the harness worth knowing before the next run
+
+**`QUILL_DATA_FOLDER` pointed at an EMPTY folder does not give you an empty
+library.** `LibraryStore.MigrateFromLegacyIfNeeded` (LibraryStore.cs:435) fires
+whenever the target `library.json` is absent and copies
+`Documents\LectureInk` — the pre-rename anchor, which exists on this machine —
+into it, backups and recovery files included. Three seconds after launch
+`vp6data` held 25.4 MB and twelve July backups. It is **copy-only** and the
+originals are untouched, but the run is working on a copy of the user's real
+July notebooks, not a blank slate. This run therefore built its own
+**`Notebook 5 / Section 1 / Page 1`** and did every test there, so no capture
+shows the user's pages.
+
+**A `crash.log` DOES exist** — `C:\Users\irony\Documents\Quill\crash.log`,
+10,636 bytes, last written **2026-08-20 22:55 UTC**. The sixth run's "no
+crash.log anywhere in the tree" was true of the repo and missed the data folder.
+It is stale (a burst of `render region failed:` with empty detail, all one
+second, three weeks before this work) and nothing this run did added to it. The
+scratch folder never grew one.
+
+### The user's library — sealed before and after
+
+`C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256
+`0C32CE6C16A4310CDCEB4902C6FF5C9B6CBA7A11AA55BE4F88DAB5771F8E038A`, mtime
+2026-08-28 17:26:38.4039650 UTC** — measured at the start of the run and again
+at the end, **byte-identical**, and never opened for writing.
+
+### §21 the dial's dock picker — ALL THREE OWED CHECKS PASS
+
+The section can be written. Evidence for each:
+
+| check | result | capture |
+|---|---|---|
+| dock survives a restart | **PASS** | `25-restart-dock.png`, `26-restart-page.png`, `29-picker-wheel-crop.png` |
+| rim drag updates the picker live | **PASS** | `21-drag-mid.png`, `23-after-release.png` |
+| Bar greys the picker out | **PASS** | `31-picker-bar-crop.png` |
+
+**The drag and the picker were finally exercised against each other, and they
+agree.** Grabbed the rim 218 physical px below the dial's TopLeft centre
+(288, 363) — inside the measured grip band, `RingOut+2 … PopOut+2` = 200…237
+physical, confirmed off the capture: the drawn ring edge sits at r = 198 — and
+dragged 989 px straight down over 30 steps with the Settings panel open on
+`Tool Setup`. Mid-drag the dial tracks the pointer and **the picker does not
+move**, which is right: `DockChanged` fires on landing, not during. On release
+the dial **lands at BottomLeft and stays there**, and the picker's filled dot
+moves to the bottom-left cell **with Settings still open** — no reopen, no
+restart. `DialAnchor` reads `"BottomLeft"` out of the scratch library once the
+debounced save flushes (it reads `""` for a second or two after the drop; do not
+mistake that for the run-4 failure).
+
+**Restart:** killed and relaunched. The dial comes back **BottomLeft** on the
+canvas and the picker's filled dot is on the bottom-left cell.
+
+**Bar greys it out, and the greying is real.** With Bar chosen every marker and
+the frame drop to a muted grey and the caption swaps to the "Only takes effect
+with Wheel chosen above" wording. Clicked **two** greyed cells (TopRight,
+BottomCentre): `DialAnchor` stayed `BottomLeft`, and **no `crash.log` appeared
+in the scratch folder** — so this is a genuine disabled `Button`, not a live
+control whose handler is throwing into `App.xaml.cs`'s swallow.
+
+### §22 fullscreen and the only undo — ALL FOUR ROWS PASS
+
+| check | result |
+|---|---|
+| Bar + legacy row, go fullscreen | **PASS** — row stays, undo+redo on it (`43-fs-topstrip.png`) |
+| Wheel surface, go fullscreen | **PASS** — folds exactly as before (`57-fs-topstrip-wheel.png`) |
+| Bar + NEW row, go fullscreen | **PASS** — folds (`46-fs-topstrip-legacyoff.png`) |
+| flip the row switch IN fullscreen | **PASS both ways** (`46-…legacyoff.png` / `53-fs-topstrip-legacy-on.png`) |
+
+The last row is the one §22 said mattered most, and it holds **in both
+directions without leaving fullscreen**: switching Old pen row OFF folded the
+caption row away on the spot and brought up the vertical Concepts palette (which
+carries its own undo/redo at its foot); switching it back ON brought the caption
+row back, undo and redo with it, and restored the horizontal legacy strip. The
+guard is self-correcting, not stateful.
+
+### §23 the reveal strip's reservation — TWO PASS, TWO FAIL, ONE UNREACHABLE
+
+| # | check | result |
+|---|---|---|
+| 1 | fullscreen, PEN tool, cluster clear of the strip | **PASS** |
+| 2 | reveal the strip there | **PASS** — lands on empty ground |
+| 3 | fullscreen, TEXT tool | **FAIL** — it slid left as well |
+| 4 | open Measurement in fullscreen | **FAIL** — panel left behind by 144 DIP |
+| 5 | dock the Settings panel in fullscreen | **NOT REACHABLE** |
+
+**Rows 1 and 2 pass, measured.** In fullscreen with the pen, the cluster's glyph
+extents are sparkle 1089…1104.5, download 1132.5…1152.5, upload 1174.5…1187.5,
+gear 1215…1230.5, help 1260.5…1269 DIP — 42 DIP pitch, so help's 33.5 DIP box is
+1248…1281.5 against a strip whose left edge measures **1304** DIP. Clear by
+22.5. Revealing the strip puts minimise / exit-fullscreen / close on bare page
+(`63-strip-cluster.png`): nothing under it.
+
+**Row 3 fails, and it is the row §23 told the next run to watch.** With the Text
+tool up, the format bar takes the top row and the cluster correctly drops to
+y 57.5…92.5 DIP — but its x positions are **byte-identical to the pen case**,
+every run, to the pixel:
+
+```
+PEN  cluster  sparkle 1089.0..1104.5 … help 1260.5..1269.0 DIP
+TEXT cluster  sparkle 1089.0..1104.5 … help 1260.5..1269.0 DIP
+```
+
+So the cluster is still held 144 DIP clear of a strip it is no longer under.
+§23's own words: *"it has slid left as well, wasting 144 DIP"*.
+
+**The cause is a question mismatch, not a bad number.**
+`ChromeBars.StripReserve`'s doc says *"Zero unless this cluster is the topmost
+bar on screen"*, but `MainWindow` hands it `fold`
+(`ApplyFullscreenChrome`, MainWindow.xaml.cs:8300), and `fold` answers *"is the
+caption row folded"*. Those coincide only while no format bar is up. Line 8329
+gives `FormatBar` the same reserve, which is correct — with Text up the format
+bar **is** the topmost bar — but ChromeBars keeps it too, and only one of the
+two is under the strip. Nothing is clipped; 144 DIP of the cluster row is simply
+spent for nothing whenever a format bar is up in fullscreen.
+
+**Row 4 fails on the panel's FIRST open, and the mechanism is confirmed.**
+Opened the Measurement menu in fullscreen (pen tool): its ⓘ sits at
+**1410…1423.5 DIP** while its cluster's help box ends at **1281.5** — the panel
+is **144 DIP right of the cluster it hangs off**, i.e. exactly `StripReserve`,
+un-applied. §23 argued the panel had to take the reserve *"rather than moving
+the misalignment one control along"*; on a first open it does not take it at all.
+
+Confirmed by construction rather than asserted: with the panel still open, F11
+out and back in — which forces `SetStripReserve` 144 → 0 → 144 — and the ⓘ
+**snaps from 1410…1423.5 to 1266…1279.5 DIP**, flush under the help button.
+`ApplyDockInset` is the only writer of `_measure.RightDockWidth`;
+`SetStripReserve` early-returns when the value has not changed
+(ChromeBars.cs:542); and `_measure` is built lazily on first Toggle
+(ChromeBars.cs:1174). So a panel created *after* the reserve settled never
+receives it. Before/after: `69a-measure-MISALIGNED.png`, `69b-measure-ALIGNED.png`.
+
+**Row 5 cannot be run in this build.** `SettingsWindow.OccupiedRightWidth` is
+`=> 0`, documented *"Zero, permanently. The panel floats again (§3)"* — so
+`RightDockWidth()` is always 0 and there is no docked panel for the cluster to
+clear. The row was written against a docking behaviour this build no longer has.
+
+### §24.15 and §25.11
+
+See below in this entry — written as they were measured.
+
 ## RUN OF 2026-09-02 (sixth screen run) - ABORTED AT THE PRESENCE GATE
 
 **Nothing was injected. No row was tested. The app was never launched.** This
