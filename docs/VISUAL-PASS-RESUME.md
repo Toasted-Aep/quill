@@ -165,9 +165,173 @@ receives it. Before/after: `69a-measure-MISALIGNED.png`, `69b-measure-ALIGNED.pn
 `RightDockWidth()` is always 0 and there is no docked panel for the cluster to
 clear. The row was written against a docking behaviour this build no longer has.
 
-### §24.15 and §25.11
+### §24.15 the chrome's grounds — 25 of 26 PASS, and the failure is row 3.3
 
-See below in this entry — written as they were measured.
+Run on the built `Notebook 5 / Section 1 / Page 1`, `ThemeSource` left at its
+default, grid set to **Graph Paper** so the "grid stops at the plate's edge"
+clause is actually testable (with Dot Grid the 48 DIP pitch puts no dot on the
+plate row at all, so it proves nothing).
+
+**Ruling 1 — the corner plates. 8/8 PASS.**
+
+| # | result |
+|---|---|
+| 1.1 Plain White | **PASS** — every glyph dark on a near-white plate, **no dark square anywhere**; graph lines stop dead at the plate edge (`86-pw-graph-topleft.png`) |
+| 1.2 Blueprint | **PASS** — plates `#2E80C2`, glyphs stay white (`91-bp-topleft.png`) |
+| 1.3 Brown Paper | **PASS** — plates `#A9713F`, glyphs white (`93-brown-topleft.png`) |
+| 1.4 Darkprint | **PASS** — plates `#262B31`, glyphs white (`95-dark-topleft.png`) |
+| 1.5 **paper change with the chrome up** | **PASS** — see below |
+| 1.6 six papers, six hexes | **PASS**, and with eight |
+| 1.7 page name / readouts on Plain White | **PASS** — dark text |
+| 1.8 the 1x16 divider | **PASS** — visible on every paper |
+
+**Row 1.5 — the one every automated test misses — passes.** Plain White →
+Blueprint was clicked with the chrome already on screen and the capture taken
+immediately after, with **no other click in between**: the plates are fully
+blue with white ink on that frame. Same again for Blueprint → Darkprint and
+Darkprint → Plain White.
+
+**Row 1.6 measured on eight papers, all distinct** — including the four cream
+papers, which are the case a bucketed or rounded value would collapse:
+
+```
+Plain White #FCFCFC   Crumpled  #F0ECE3   Lightweight #F5F3EE   Heavyweight #E9E4D9
+Rippled     #F3F0E8   Blueprint #2E80C2   Brown Paper #A9713F   Darkprint   #262B31
+```
+
+On every paper the plate equals the page to within one level, which is §24.4's
+ruling working exactly as written. (The Background strip holds nine shipped
+papers; there is no "OLED black" among them — that is the Appearance **Theme**
+toggle, which is what the app boots into and where row 2.7's page comes from.)
+
+**Ruling 2 — the dial. 12/12 PASS.** Measured as contrast rather than eyeballed:
+
+| # | result |
+|---|---|
+| 2.1 Blueprint disc + seats | **PASS** — both exactly `#7E9FBA`, the value the row names |
+| 2.2 readouts on Blueprint | **PASS** — `#000000` on `#7E9FBA` = **7.56:1** (§24.6's failure case was 2.06:1) |
+| 2.3 the same on Darkprint | **PASS** — `#FFFFFF` on `#3C3E41` = **10.73:1** |
+| 2.4 pen cell vs tool cell | **PASS** — every seat `#7E9FBA`; pens 4 / 3.5 / 5 and eraser / lasso identical |
+| 2.5 pen inner arcs | **PASS** — red, orange, blue, black arcs still each pen's own |
+| 2.6 empty / unavailable cell | **PASS** — no seat at all, muted `+`, page showing through |
+| 2.7 OLED black | **PASS** — seats `#2D2D2D` on a `#000000` page, the row's own figure |
+| 2.8 Plain White | **PASS** — disc and seats `#D1D1D1`, the row's own figure |
+| 2.9 hover wash | **PASS** on Plain White *and* on mid-tone Brown Paper |
+| 2.10 undo / redo and the dot's ring | **PASS** — see the caveat below |
+| 2.11 **paper change with the dial open** | **PASS** — repainted on the frame |
+| 2.12 pop a sector | **PASS** — the seat travels out and keeps `#7E9FBA` exactly |
+
+**Row 2.10 needed a second look and would have been misreported.** On a blank
+page undo and redo measure **1.83:1 and 1.88:1** against the disc, which looks
+exactly like the washed-out failure the row describes. They are simply
+**disabled**. With a text box on the page the undo arrow measures `#050708` on
+`#7E9FBA` = **7.26:1** on Blueprint and **7.42:1** on Brown, while redo stays at
+1.88:1 because there is still nothing to redo. Anyone testing this on an empty
+page will file a defect that is not there.
+
+**A real caveat inside a passing row.** The pen colour dot is the pen's own
+colour by design, so on Blueprint with the blue pen selected it sits at
+**1.05:1 in luminance** against its own `#7E9FBA` plate, separated by hue alone;
+the 2 px rim that should rescue it is `#5B85AF`, only **1.39:1** against the
+plate. On Brown it is 1.08:1 with a 1.43:1 rim. It reads, but it is the weakest
+thing on the dial, and it is weakest precisely on the paper whose plate the dial
+now borrows. Not the row's stated failure — the dot is not keyed to the shell —
+so **PASS**, recorded rather than argued.
+
+**Regression watch — 5 PASS, 1 FAIL.**
+
+| # | result |
+|---|---|
+| 3.1 popped-sector fill and label | **PASS** — `#353536` on `#F2F2F2` = **10.94:1**, on every paper |
+| 3.2 ring separators and outer edge | **PASS** — present, single, on all nine |
+| 3.3 tool-options row | **FAIL under a light theme — see below** |
+| 3.4 panes / Export / Objects / Settings ink | **PASS** on the stated criterion, with a real problem |
+| 3.5 §17.1 hover pill | **PASS** — still a dark pill (`66-fs-measurement.png`) |
+| 3.6 flip ThemeSource to Page | **PASS for §24**, but it is what exposes 3.3 |
+
+#### Row 3.3 — the tool-options row goes dark-on-dark, 1.16:1
+
+Pick the lasso and a row of tool options appears at the foot of the screen —
+`Lasso | Partial | Include | All`. Under the default **Dark** theme it is
+`#F2F2F2` on `#222222` = **14.21:1**, perfect.
+
+Set **Theme → "The page"** (§24.15 row 3.6's own instruction) on a **Plain
+White** page and the pill keeps its pinned dark `#222222` ground while its ink
+follows the theme to `#141414`:
+
+```
+Theme = Dark        ink #F2F2F2 on #222222   14.21:1
+Theme = "The page"  ink #141414 on #222222    1.16:1   <- unreadable
+Theme = Light       ink #141414 on #222222    1.16:1   <- unreadable
+```
+
+Reproduced on both light routes, so it is the light theme and not "Page"
+specifically. The ground is pinned and the ink is not; they disagree the moment
+the theme goes light. §24.15 row 3.3's failure text is exactly *"its ink
+changed"*, and row 3.6 promises *"only the panels should differ"* — this is not
+a panel. Capture: `144-TOOLOPTIONS-DARK-ON-DARK.png.png`, `145-pill-theme-light.png`.
+
+#### Row 3.4 passes its own test and still leaves the panes worst off
+
+§24 deliberately did not touch `ChromeUi.Ink` (§24.12), and it did not: the
+Layers pane's headings are still `#F2F2F2` and its body still the muted
+`#D3B9A3`. But the panes have **no ground of their own** — they draw straight
+onto the page — so the unchanged ink now lands on a chrome-coloured world it no
+longer matches. On Brown Paper the Layers pane measures **3.66:1** for headings
+and **2.19:1** for body copy (`131-layers-brown.png`). §24 made the plates take
+the page and left the panes floating over it; the panes are now the least
+legible thing on a strongly coloured paper.
+
+### The standing item that is much worse than "muted grey"
+
+The brief lists *"the Measurement preset row reading muted grey on bright
+paper"*. On **Plain White** the entire Measurement panel is **white on white**,
+not muted:
+
+```
+title "Measurement"      #CFCFCF on #FCFCFC   1.52:1
+"Zoom" / "Rotation"      #CFCFCF on #FCFCFC   1.52:1
+presets 250% / 1600%     #CFCFCF on #FCFCFC   1.52:1
+the (i) icon             #F7F7F7 on #FCFCFC   1.04:1
+zoom value "100%"        #AAAAAA on #FCFCFC   2.26:1
+the SELECTED chip        #FCFCFC on #333234  12.43:1   <- the only legible thing
+```
+
+Only the two selected chips are readable, because they alone carry a dark pill.
+Everything else in the panel is invisible unless you know where to look.
+Capture: `137-MEASUREMENT-INVISIBLE-on-white.png`. Same root cause as 3.4 — a
+pane with no ground, keeping dark-theme ink over a white page. Setting
+Theme → "The page" fixes the panel (it goes light) and breaks the tool-options
+row instead.
+
+### The other two standing items
+
+* **"Custom Colo" clipped label — DID NOT REPRODUCE.** The Background strip's
+  first swatch reads **"Custom Color"** in full at this window size
+  (`11-customcolor-label.png`, and again in every later Canvas capture). If it
+  clips it needs a narrower panel than this run produced; recorded as
+  not-reproduced rather than fixed.
+* **Settings "Bar" icon — reads as the CURRENT Bar, not PenBar.** The icon is a
+  tall rounded rectangle split into three stacked segments, i.e. a *vertical*
+  strip; the default Bar surface is the vertical Concepts palette and the icon
+  matches it. The legacy `PenBar` this claim points at is the **horizontal**
+  strip, which the icon does not depict. Captured un-selected and selected in
+  `29-picker-wheel-crop.png` / `31-picker-bar-crop.png`. Recorded as
+  not-reproduced on the evidence; if the intent was that the icon should depict
+  the legacy row when "Old pen row" is on, that is a different (and unstated)
+  requirement — the icon does not change with that switch.
+
+### One more thing seen on screen, not on any list
+
+On **Plain White** the dial carries a noticeably heavy dark halo — its
+`_shadow` element, `(RingOut + 14) * 2` across — which on a white page reads as
+a grey smudge around the dial rather than a lift (`122-dial-plainwhite.png`,
+`139-sections.png`). It is invisible on the dark papers where it was presumably
+judged. Cosmetic, unfiled, offered as an observation.
+
+### §25.11
+
+See below in this entry — written as it was measured.
 
 ## RUN OF 2026-09-02 (sixth screen run) - ABORTED AT THE PRESENCE GATE
 
