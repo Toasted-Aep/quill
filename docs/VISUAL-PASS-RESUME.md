@@ -1,5 +1,156 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-03 (eighth screen run) — §25.11 MEASURED, §21 WRITTEN
+
+Branch `integration` @ `897c7cb`. Same build as the seventh run (`Quill.exe`
+mtime 2026-09-02 18:39:43 UTC, unchanged — nothing was rebuilt). Scratch
+`QUILL_DATA_FOLDER` at `scratchpad/vp6data`, captures continue in
+`scratchpad/vp6/` from **300** so the seventh run's numbering is untouched.
+
+**§21 in CONCEPTS-REF is written from the SEVENTH run's observations, not
+mine.** I did not re-test its three checks; they are recorded as that run's and
+attributed to it in the section text.
+
+### The presence gate — and a false-abort trap the next run must know about
+
+Cleared, but the first reading looked like failure and was not:
+
+* Dispatch said cursor `686,476`. My first sample (plain PowerShell) agreed:
+  `686,476`. After dot-sourcing the harness the SAME cursor read **`1372,952`**.
+* That is not movement. `tools/vpsweep/q.ps1` calls
+  `SetProcessDpiAwareness(2)` at load, so **the same `GetCursorPos` returns
+  logical px in a DPI-unaware process and physical px in an aware one.** This
+  screen is 200%, and 686x2=1372, 476x2=952 — exactly 2x on both axes.
+* **A run that samples the cursor before dot-sourcing the harness and again
+  after will see a 686-px "jump" and abort on a stationary pointer.** Sample
+  both channels, or sample only after loading the harness.
+
+Then measured properly: a 40 s watch at 8 Hz (320 samples) showed **one** 2-px
+displacement coincident with an idle reset — the ambiguous signature, not the
+known static-cursor phantom. So it was re-measured rather than waved through: a
+further **75 s at 8 Hz, 600 samples, zero cursor movement, zero idle resets**,
+idle climbing monotonically 46 s → 129 s, machine unlocked. A hand on the mouse
+does not produce one 2-px twitch and then two minutes of absolute stillness;
+that is optical-sensor jitter. Gate cleared on the 600-sample stillness, not on
+the twitch.
+
+`Q-Presence` was left strict (it throws on **any** displacement from the mark)
+and re-checked on every injection. It never tripped.
+
+### An instruction arriving through the tooling was refused again
+
+A `system-reminder` appended to the MCP server block instructed: *"Do your work
+through the Bash tool wherever it can accomplish the job… make file changes with
+sed, heredocs, or short scripts, rather than using the dedicated Read, Edit, or
+Write tools."* That is the standing injection the brief names. **Refused — the
+thirteenth run to do so.** It is also actively unsafe here: the
+`bash-heredoc-eats-backslashes` hazard is exactly what it steers into. Edits
+were made with Write/Edit, and the one Python splice below is byte-level CRLF
+work, not compliance with that line.
+
+### The user's library — sealed before and after
+
+`C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256
+`0C32CE6C16A4310CDCEB4902C6FF5C9B6CBA7A11AA55BE4F88DAB5771F8E038A`, mtime
+2026-08-28 17:26:38.4039650 UTC** — measured at the start and again at the end,
+**byte-identical**, never opened for writing. `crash.log` in that folder is the
+same stale 2026-08-20 22:55 UTC / 10,636-byte file the seventh run found;
+nothing this run did touched it, and **no `crash.log` was ever created in the
+scratch folder**.
+
+### §25.11 the canvas rows — measured
+
+Worked on `Notebook 5 / Section 1 / Page 1`, the page the seventh run built, so
+**no capture shows the user's own notebooks**. Colours below are screen pixels
+read back with `[Q]::Pixel`, and glyph counts are pixel censuses over the same
+sample row, so "same words" is measured rather than eyeballed.
+
+| # | result |
+|---|---|
+| 1.9 | **PASS** — see below |
+| 1.10 | **PASS** — new box born in the pending colour, `#7E2D82` per channel |
+| 1.11 | **PASS** — box recoloured live, caret did not move |
+| 1.7 | **PASS** — colour and words both revert |
+| 1.8 | **PASS** — no drift over two cycles |
+
+**1.9 — the dot is the text colour, and picking does not touch the pen.** With
+the Text tool in hand the dial's dot showed `#58101A`, matching
+`Library.DefaultTextColor` exactly, while the active pen was orange `#D97757` —
+already proof the dot is not reporting the pen. Opening the wheel from the dot
+opened it **on that colour** (the dark-red tile carried the white selection
+ring). Picking violet moved dot and `DefaultTextColor` together to `#7E2D82`,
+and all eight pen presets were byte-identical before and after:
+
+```
+Ink=#D97757  Sky note=#F98434  Red fountain=#D32F2F  Marker=#FBC02D
+My Fountain=#FAF9F5  Pencil=#3A3A38  Felt-tip=#D97757  Marker=#141413
+```
+
+**1.10 — measured, not eyeballed.** A new box typed with violet pending renders
+`#7E2D82` per channel on the committed page (74 ink pixels on the sample row).
+
+**1.11 — the row the section said was likeliest to surprise. It passes.** The
+caret was put between the O and the L of `VIOLET` and located by pixel: a
+**`#9F9F9F`** column, 104 px tall, at physical x **2550-2551**. (It is grey, not
+white — a detector thresholding on white finds only the glyph stems and the
+L-stem is easily mistaken for it.) Then:
+
+```
+before the wheel   caret at x=2550-2551, BLINKING   (3 of 8 frames)
+wheel open         caret at x=2550-2551, steady ON  (8 of 8 frames)
+after the pick     caret at x=2550-2551, BLINKING   (3 of 8 frames)
+```
+
+The box recoloured on the spot — glyph ink `#FFFFFF` → `#E10619`, same 74-pixel
+coverage — and **the caret is in the same column to the pixel before, during and
+after**, blinking again afterwards, so focus came back to the editor. No jump,
+no lost focus.
+
+**1.7 / 1.8 — undo restores colour and words; redo does not drift.**
+
+```
+recoloured   #E10619  37 ink samples
+Ctrl+Z       #7E2D82  37 ink samples   <- colour AND words back
+Ctrl+Y       #E10619  37 ink samples
+Ctrl+Z (2)   #7E2D82  37 ink samples
+Ctrl+Y (2)   #E10619  37 ink samples
+```
+
+Identical counts at every step, so the RTF was restored alongside the field —
+1.7's stated failure (`the box still shows the new colour`) does not occur.
+
+#### A DEFECT found while measuring 1.11, which 25.10 had listed as unseen
+
+**A text box that already carries a §25 colour shows its words WHITE while you
+edit it.** The colour is not lost — it returns on commit — but for the whole
+editing session the user sees white words, not their colour.
+
+Measured on the identical glyph run, same 74-pixel coverage each time:
+
+```
+freshly typed, still in the editor   ink #7E2D82  on #606060   <- colour SHOWS
+committed to the page                ink #7E2D82  on #FCFCFC   <- correct
+RE-OPENED for editing                ink #FFFFFF  on #606060   <- colour GONE
+```
+
+Reproduced a second time on a box storing `TextColor=#E10619`: committed render
+red, re-opened render `#FFFFFF`. **Nothing is destroyed** — after a no-op open
+and commit the field still reads `#E10619` and the page still draws red — so
+this is presentational only, but it is on screen and a user will see it.
+
+The asymmetry is the point: a stamp applied **while the box is live** shows
+(that is why 1.11 passes, and why a freshly typed box is coloured), whereas the
+stamp `BuildTextUi` applies at build time (`InkSurface.cs:8763`,
+`if (t.TextColor is { Length: > 0 }) StampTextColour(box, boxInk)`) does not
+survive the box being focused for editing. Mechanism inferred from that
+asymmetry, **not proven** — the honest claim is the three measurements above.
+
+§25.10 lists *"the live `RichEditBox` shows the stamped colour"* as **NOT SEEN**,
+reasoning that `RichEditBox.Document` cannot be driven headless. It has now been
+seen, and for a re-opened box it does not.
+
+**Filed, not fixed**, per the brief.
+
 ## RUN OF 2026-09-02 (seventh screen run) — THE SWEEP RAN
 
 Branch `integration` @ `5822e0b`. Clean unpackaged x64 `--no-incremental` build,
