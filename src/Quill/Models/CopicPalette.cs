@@ -7,21 +7,34 @@ namespace Quill.Models;
 /// <remarks>
 /// The hex values are the dialled-in set lifted verbatim from Quill's own
 /// working web colour wheel — the source of truth — rather than eyeballed
-/// swatch-chart guesses. Colours keep the reference's order inside each slice
+/// swatch-chart guesses. Colours keep the reference's order inside each column
 /// (index 0 is the innermost ring), which is what the concentric layout relies
-/// on: the blending number still runs light-to-dark down a family.
+/// on: the blending number still runs dark-to-light outward down a column.
 /// </remarks>
 public readonly record struct CopicSwatch(string Code, string Family, byte R, byte G, byte B);
 
 /// <summary>
-/// One 10° angular column of the outer wheel: its colours stack radially,
-/// index 0 innermost. <see cref="StartAngle"/>/<see cref="EndAngle"/> are the
-/// reference's SVG-style degrees (0° = east, clockwise, -90° = top).
+/// One radial column of the outer wheel: every marker of a single Copic code
+/// SERIES — the letter prefix plus the first digit of the blending number, so
+/// `R0` holds `R08 R05 R02 R01 R00 R000 R0000`. Colours stack outward from
+/// index 0, darkest first.
 /// </summary>
-public sealed record CopicSlice(double StartAngle, double EndAngle, CopicSwatch[] Colors);
+/// <remarks>
+/// This is the reference's own rule, measured rather than guessed. Decoding the
+/// Concepts capture's flat fills against its extracted colour table gives 71
+/// columns of 5.0704° (= 360/71), and generating the layout from that table by
+/// this rule alone reproduces every one of the 252 cells the capture actually
+/// shows on screen, with zero disagreements. See §26.2.
+///
+/// The column carries no angles. Where a column sits is <c>ColorWheel</c>'s
+/// business and is derived from the count; the old per-slice `StartAngle` /
+/// `EndAngle` pair asserted a 10° column, which is exactly twice the truth, and
+/// nothing ever read it.
+/// </remarks>
+public sealed record CopicColumn(string Series, CopicSwatch[] Colors);
 
-/// A colour family holding a contiguous run of 10° slices (R spans 3, BG 4, E 5).
-public sealed record CopicSector(string Id, string Name, CopicSlice[] Slices);
+/// One colour family — a contiguous run of code-series columns (R spans 7, E 9).
+public sealed record CopicSector(string Id, string Name, CopicColumn[] Columns);
 
 /// A grouped run of swatches on one of the two inner rings (accents/core, greys).
 public sealed record CopicCategory(string Name, CopicSwatch[] Colors);
@@ -34,9 +47,9 @@ public sealed record CopicCategory(string Name, CopicSwatch[] Colors);
 /// geometry is driven by that structure:
 ///   • Tier 1 (inner arc)  — accents + core, a 144° arc split into 3 groups.
 ///   • Tier 2 (grey ring)  — the four Copic grey families, a full circle.
-///   • Tier 3+ (outer)     — 11 colour families laid out as 36 contiguous 10°
-///                           slices running -90°→270°, each slice a radial
-///                           column whose depth is however many inks it holds.
+///   • Tier 3+ (outer)     — 11 colour families laid out as 72 contiguous
+///                           code-series columns, each column a radial stack of
+///                           however many inks that series holds.
 ///
 /// Each run is authored as compact "CODE:RRGGBB" tokens so the source stays
 /// readable; the parsed <see cref="CopicSwatch"/> arrays are what everything
@@ -61,78 +74,124 @@ public static class CopicPalette
         ("Cool",    "C10:0f1722 C9:202d3f C8:36465c C7:4f6178 C6:677b93 C5:8094ab C4:98abc1 C3:adbed0 C2:c1cfdc C1:d3dde6 C0:e2e9f0 C00:f0f4f8"),
     };
 
-    // ── Tier 3+ (outer rings): 11 families as 36 contiguous 10° slices ──
-    // Sequence R → RV → V → BV → B → BG → G → YG → Y → E → YR, -90°→270°.
-    private static readonly (string Id, string Name, (double A0, double A1, string Data)[] Slices)[] SectorsRaw =
+    // ── Tier 3+ (outer rings): 11 families, 72 code-series columns ──
+    // Family sequence R → RV → V → BV → B → BG → G → YG → Y → E → YR, and
+    // inside each family the series ascend (R0, R1, … R8) exactly as the
+    // reference lays them out.
+    //
+    // One source line per column is a READING convenience, not the authority:
+    // the columns are re-derived from the codes themselves in
+    // <see cref="BuildColumns"/>, so a marker written on the wrong line still
+    // lands in its own series' column and no line can silently go stale. The
+    // (code, hex) pairs below are the shipped set, unmoved — §11.27's ruling
+    // that the palette is never re-sourced still stands; only the grouping
+    // changed, from 36 arbitrary 10° slices to the reference's own 72.
+    private static readonly (string Id, string Name, string[] Columns)[] SectorsRaw =
     {
-        ("red", "Red", new (double, double, string)[]
+        ("red", "Red", new[]
         {
-            (-90, -80, "R89:58101a R59:9d2238 R46:d91d3c R39:b3224b R30:ffd7c9 R29:e10619 R17:ee543c R08:f43333 R02:ffac8f"),
-            (-80, -70, "R85:aa4257 R56:b85c6c R43:e86e7a R37:d6484e R27:ee322b R14:f59683 R12:f7aa9a R05:ed5d47"),
-            (-70, -60, "R83:c56b82 R81:e8a3b5 R35:e34e56 R32:f89a91 R24:f9685a R22:ff9f92 R21:ffb6ab R20:ffc9c2 R11:ffd7cf R01:ffb2b2 R00:ffd0d0 R000:ffe3e3 R0000:fff4f4"),
+            "R08:f43333 R05:ed5d47 R02:ffac8f R01:ffb2b2 R00:ffd0d0 R000:ffe3e3 R0000:fff4f4",
+            "R17:ee543c R14:f59683 R12:f7aa9a R11:ffd7cf",
+            "R29:e10619 R27:ee322b R24:f9685a R22:ff9f92 R21:ffb6ab R20:ffc9c2",
+            "R39:b3224b R37:d6484e R35:e34e56 R32:f89a91 R30:ffd7c9",
+            "R46:d91d3c R43:e86e7a",
+            "R59:9d2238 R56:b85c6c",
+            "R89:58101a R85:aa4257 R83:c56b82 R81:e8a3b5",
         }),
-        ("red-violet", "Red Violet", new (double, double, string)[]
+        ("red-violet", "Red Violet", new[]
         {
-            (-60, -50, "RV63:e8afd8 RV52:f9c9de RV32:f4abb4 RV29:d72866 RV25:ef7da3 RV23:f8b4cb RV14:ee6ea9 RV13:f59cc6 RV11:f8c2db RV10:fadbe9"),
-            (-50, -40, "RV42:ffa79b RV21:ffbcce RV19:ad2972 RV17:c5428a RV06:e55db1 RV04:ef87c8 RV02:f4b1dc RV00:f7d3ec RV000:fae6f4 RV0000:fdf2fa"),
-            (-40, -30, "RV99:614d4f RV95:bc8797 RV93:e0b0bc RV91:f3d8db RV69:81494a RV66:a95c8d RV55:e485b6 RV34:dd7c9c RV09:d2399a"),
+            "RV09:d2399a RV06:e55db1 RV04:ef87c8 RV02:f4b1dc RV00:f7d3ec RV000:fae6f4 RV0000:fdf2fa",
+            "RV19:ad2972 RV17:c5428a RV14:ee6ea9 RV13:f59cc6 RV11:f8c2db RV10:fadbe9",
+            "RV29:d72866 RV25:ef7da3 RV23:f8b4cb RV21:ffbcce",
+            "RV34:dd7c9c RV32:f4abb4",
+            "RV42:ffa79b",
+            "RV55:e485b6 RV52:f9c9de",
+            "RV69:81494a RV66:a95c8d RV63:e8afd8",
+            "RV99:614d4f RV95:bc8797 RV93:e0b0bc RV91:f3d8db",
         }),
-        ("violet", "Violet", new (double, double, string)[]
+        ("violet", "Violet", new[]
         {
-            (-30, -20, "V99:261b2a V95:775775 V93:a68ca2 V91:e0d3df"),
-            (-20, -10, "V28:5b3c67 V25:7f598b V22:b395bd V20:e1d5e6"),
-            (-10, 0, "V17:633d73 V15:8c5b9e V12:c7a3d1 V09:7e2d82 V06:ad67a6 V05:c48bbd V04:c78bb9 V01:e5c4de V000:f4e3f0 V0000:faeef7"),
+            "V09:7e2d82 V06:ad67a6 V05:c48bbd V04:c78bb9 V01:e5c4de V000:f4e3f0 V0000:faeef7",
+            "V17:633d73 V15:8c5b9e V12:c7a3d1",
+            "V28:5b3c67 V25:7f598b V22:b395bd V20:e1d5e6",
+            "V99:261b2a V95:775775 V93:a68ca2 V91:e0d3df",
         }),
-        ("blue-violet", "Blue Violet", new (double, double, string)[]
+        ("blue-violet", "Blue Violet", new[]
         {
-            (0, 10, "B45:4f7cc4 B41:b5cced B79:27386e B69:2a3b68 B66:4c5c8e B63:8797c4 B60:d3dded BV13:6a88c2 BV11:a4a2c3"),
-            (10, 20, "B52:859ec9 BV39:36374f BV29:1b2c45 BV17:595eb4 BV08:6850aa BV04:8774c4 BV02:a998da BV01:c5b6e6 BV00:ded3f2 BV000:eae3f7 BV0000:f4effa"),
-            (20, 30, "BV99:222838 BV97:3e485e BV95:63708a BV93:95a1b8 BV91:d2d9e6 BV34:8f93a8 BV31:cad2e3 BV25:7280a3 BV23:9aa5c4 BV20:d0d7e6"),
+            "BV08:6850aa BV04:8774c4 BV02:a998da BV01:c5b6e6 BV00:ded3f2 BV000:eae3f7 BV0000:f4effa",
+            "BV17:595eb4 BV13:6a88c2 BV11:a4a2c3",
+            "BV29:1b2c45 BV25:7280a3 BV23:9aa5c4 BV20:d0d7e6",
+            "BV39:36374f BV34:8f93a8 BV31:cad2e3",
+            "BV99:222838 BV97:3e485e BV95:63708a BV93:95a1b8 BV91:d2d9e6",
         }),
-        ("blue", "Blue", new (double, double, string)[]
+        ("blue", "Blue", new[]
         {
-            (30, 40, "B99:445465 B95:64a6c2 B91:b3dae4 B18:007bbd B16:00a3df B14:5bbfe6 B12:a6d8eb"),
-            (40, 50, "B29:00438c B28:1759a1 B26:2b7ec0 B24:519fd6 B23:76b1dd B21:cbe4f4"),
-            (50, 60, "B97:49768f B93:8bbfd3 B39:184768 B37:1c638a B34:63afd1 B32:bfe1ed"),
+            "B06:0085cc B05:1e9cd1 B04:4cb3dc B02:7ec9e6 B01:a1d9ee B00:c1e7f4 B000:d9f0f7 B0000:eaf6fa",
+            "B18:007bbd B16:00a3df B14:5bbfe6 B12:a6d8eb",
+            "B29:00438c B28:1759a1 B26:2b7ec0 B24:519fd6 B23:76b1dd B21:cbe4f4",
+            "B39:184768 B37:1c638a B34:63afd1 B32:bfe1ed",
+            "B45:4f7cc4 B41:b5cced",
+            "B52:859ec9",
+            "B69:2a3b68 B66:4c5c8e B63:8797c4 B60:d3dded",
+            "B79:27386e",
+            "B99:445465 B97:49768f B95:64a6c2 B93:8bbfd3 B91:b3dae4",
         }),
-        ("blue-green", "Blue Green", new (double, double, string)[]
+        ("blue-green", "Blue Green", new[]
         {
-            (60, 70, "BG34:66c4b8 BG49:009fae BG99:39694e BG23:7bdec1 BG18:408784 BG11:c2f2de BG07:00939f BG01:85e6ea B06:0085cc"),
-            (70, 80, "BG32:97d6cd BG45:6ac9d6 BG57:3cb0c1 BG96:689c7f BG15:00bfa4 BG10:d7f3e3 BG05:00bacb BG000:dbf7f1 B05:1e9cd1"),
-            (80, 90, "BG53:87cbd4 BG78:356a64 BG75:679b94 BG93:9dc2ab BG13:3ed1b9 BG09:00878e BG02:4cd9e8 BG0000:eaf9f0 B04:4cb3dc"),
-            (90, 100, "BG72:9bc2bc BG70:cfdedb BG90:d0ddd4 B02:7ec9e6 B01:a1d9ee B00:c1e7f4 B000:d9f0f7 B0000:eaf6fa"),
+            "BG09:00878e BG07:00939f BG05:00bacb BG02:4cd9e8 BG01:85e6ea BG000:dbf7f1 BG0000:eaf9f0",
+            "BG18:408784 BG15:00bfa4 BG13:3ed1b9 BG11:c2f2de BG10:d7f3e3",
+            "BG23:7bdec1",
+            "BG34:66c4b8 BG32:97d6cd",
+            "BG49:009fae BG45:6ac9d6",
+            "BG57:3cb0c1 BG53:87cbd4",
+            "BG78:356a64 BG75:679b94 BG72:9bc2bc BG70:cfdedb",
+            "BG99:39694e BG96:689c7f BG93:9dc2ab BG90:d0ddd4",
         }),
-        ("green", "Green", new (double, double, string)[]
+        ("green", "Green", new[]
         {
-            (100, 110, "G99:3b5c2a G97:52783d G95:77995c G93:a7c48c G91:d3e3be G46:67a950 G43:b8d6a4 G28:00793c G24:96ca9a G21:b9dbbc G20:eaf4e5"),
-            (110, 120, "G94:83946a G85:83926c G82:abbc7e G40:e8edbe G19:009d43 G17:37b54a G16:1bb55c G14:8cd585 G12:cee8cb"),
-            (120, 130, "G29:456150 G09:139828 G07:32b444 G05:61c86c G03:81d489 G02:a1dba7 G00:c5e8c9 G000:def2e0 G0000:eef8ef"),
+            "G09:139828 G07:32b444 G05:61c86c G03:81d489 G02:a1dba7 G00:c5e8c9 G000:def2e0 G0000:eef8ef",
+            "G19:009d43 G17:37b54a G16:1bb55c G14:8cd585 G12:cee8cb",
+            "G29:456150 G28:00793c G24:96ca9a G21:b9dbbc G20:eaf4e5",
+            "G46:67a950 G43:b8d6a4 G40:e8edbe",
+            "G85:83926c G82:abbc7e",
+            "G99:3b5c2a G97:52783d G95:77995c G94:83946a G93:a7c48c G91:d3e3be",
         }),
-        ("yellow-green", "Yellow Green", new (double, double, string)[]
+        ("yellow-green", "Yellow Green", new[]
         {
-            (130, 140, "YG99:4c5c2d YG97:63783a YG95:88a04c YG93:b5c482 YG91:e0e8b8 YG67:779e3d YG63:a6c76e YG61:d6deb0"),
-            (140, 150, "YG45:8ec449 YG41:cee9d6 YG25:d6e969 YG23:e7f394 YG21:f5fbbf YG13:cde497 YG11:e0f0c7 YG06:90d94b"),
-            (150, 160, "YG17:95c635 YG09:81b835 YG07:9fcd34 YG05:b7da53 YG03:cae37c YG01:dbeca1 YG00:e8f3c4 YG0000:f7fbe6"),
+            "YG09:81b835 YG07:9fcd34 YG06:90d94b YG05:b7da53 YG03:cae37c YG01:dbeca1 YG00:e8f3c4 YG0000:f7fbe6",
+            "YG17:95c635 YG13:cde497 YG11:e0f0c7",
+            "YG25:d6e969 YG23:e7f394 YG21:f5fbbf",
+            "YG45:8ec449 YG41:cee9d6",
+            "YG67:779e3d YG63:a6c76e YG61:d6deb0",
+            "YG99:4c5c2d YG97:63783a YG95:88a04c YG93:b5c482 YG91:e0e8b8",
         }),
-        ("yellow", "Yellow", new (double, double, string)[]
+        ("yellow", "Yellow", new[]
         {
-            (160, 170, "Y38:e69d37 Y28:dfb768 Y19:ffc125 Y18:ffcd00 Y17:ffd82c Y15:ffe763 Y13:fff397 Y11:fffac9"),
-            (170, 180, "Y08:fde000 Y06:ffe91e Y04:ffee47 Y02:fff074 Y00:fff6a4 Y000:fffbca Y0000:fffde6"),
-            (180, 190, "Y35:ffc125 Y32:ffd58f Y26:e8c576 Y23:ffe590 Y21:fff2bb"),
+            "Y08:fde000 Y06:ffe91e Y04:ffee47 Y02:fff074 Y00:fff6a4 Y000:fffbca Y0000:fffde6",
+            "Y19:ffc125 Y18:ffcd00 Y17:ffd82c Y15:ffe763 Y13:fff397 Y11:fffac9",
+            "Y28:dfb768 Y26:e8c576 Y23:ffe590 Y21:fff2bb",
+            "Y38:e69d37 Y35:ffc125 Y32:ffd58f",
         }),
-        ("earth", "Earth", new (double, double, string)[]
+        ("earth", "Earth", new[]
         {
-            (190, 200, "E99:5c310c E89:58101a E79:48203c E59:5a2512 E49:442216 E39:633215 E29:5f2710 E19:aa3110 E09:952a12 E08:ad4025 E07:bd533b E04:be8c89 E02:f2bd9d E01:f8d2b8 E00:fbe2cf E000:fceee2 E0000:fef7f1"),
-            (200, 210, "E97:6b3c16 E87:634739 E77:634739 E57:6b4c38 E47:775a48 E37:986128 E27:c57849 E18:5a2512 E17:873c24 E15:cb8153 E13:e2ac85 E11:f5d3b8"),
-            (210, 220, "E95:875324 E84:7a5e4b E74:806456 E55:967963 E44:8d7362 E35:bd8e57 E25:aa643a E23:e0a374 E21:fadbb8"),
-            (220, 230, "E93:ad7648 E81:a68c78 E71:9e8983 E53:b59a84 E43:dfcdb1 E34:cbb08d E33:dfb787 E31:eedbbd"),
-            (230, 240, "E70:dfd2cf E51:f5e8da E42:e8d7c3 E41:f4e7d7 E50:eee2e4 E40:f7ede2 E30:f3e1c6"),
+            "E09:952a12 E08:ad4025 E07:bd533b E04:be8c89 E02:f2bd9d E01:f8d2b8 E00:fbe2cf E000:fceee2 E0000:fef7f1",
+            "E19:aa3110 E18:5a2512 E17:873c24 E15:cb8153 E13:e2ac85 E11:f5d3b8",
+            "E29:5f2710 E27:c57849 E25:aa643a E23:e0a374 E21:fadbb8",
+            "E39:633215 E37:986128 E35:bd8e57 E34:cbb08d E33:dfb787 E31:eedbbd E30:f3e1c6",
+            "E49:442216 E47:775a48 E44:8d7362 E43:dfcdb1 E42:e8d7c3 E41:f4e7d7 E40:f7ede2",
+            "E59:5a2512 E57:6b4c38 E55:967963 E53:b59a84 E51:f5e8da E50:eee2e4",
+            "E79:48203c E77:634739 E74:806456 E71:9e8983 E70:dfd2cf",
+            "E89:58101a E87:634739 E84:7a5e4b E81:a68c78",
+            "E99:5c310c E97:6b3c16 E95:875324 E93:ad7648",
         }),
-        ("yellow-red", "Yellow Red", new (double, double, string)[]
+        ("yellow-red", "Yellow Red", new[]
         {
-            (240, 250, "YR68:e85309 YR61:ffc4a3 YR27:df621b YR21:ffc675 YR18:f48800 YR14:ff9048 YR09:f1640a"),
-            (250, 260, "YR82:e0a068 YR31:f7d391 YR24:f7aa43 YR20:ffdcae YR16:ffaa35 YR12:ffa457 YR07:f98434"),
-            (260, 270, "YR65:f27c24 YR30:f9e0b8 YR23:f4ba6d YR15:ffb54d YR04:ffa96b YR02:ffc69a YR01:ffd0aa YR00:ffdbbf YR000:ffeada YR0000:fff6ed"),
+            "YR09:f1640a YR07:f98434 YR04:ffa96b YR02:ffc69a YR01:ffd0aa YR00:ffdbbf YR000:ffeada YR0000:fff6ed",
+            "YR18:f48800 YR16:ffaa35 YR15:ffb54d YR14:ff9048 YR12:ffa457",
+            "YR27:df621b YR24:f7aa43 YR23:f4ba6d YR21:ffc675 YR20:ffdcae",
+            "YR31:f7d391 YR30:f9e0b8",
+            "YR68:e85309 YR65:f27c24 YR61:ffc4a3",
+            "YR82:e0a068",
         }),
     };
 
@@ -144,10 +203,10 @@ public static class CopicPalette
     public static readonly CopicCategory[] Tier2GrayCategories =
         Tier2Raw.Select(t => new CopicCategory(t.Name, ParseRow(t.Data))).ToArray();
 
-    /// The 11 outer colour families, each a run of 10° slices, in wheel order.
+    /// The 11 outer colour families, each a contiguous run of code-series
+    /// columns, in wheel order.
     public static readonly CopicSector[] Sectors =
-        SectorsRaw.Select(s => new CopicSector(s.Id, s.Name,
-            s.Slices.Select(sl => new CopicSlice(sl.A0, sl.A1, ParseRow(sl.Data))).ToArray())).ToArray();
+        SectorsRaw.Select(s => new CopicSector(s.Id, s.Name, BuildColumns(s.Columns))).ToArray();
 
     /// Every swatch across all three tiers, flattened — for nearest-colour lookup.
     public static readonly CopicSwatch[] All = BuildAll();
@@ -158,9 +217,54 @@ public static class CopicPalette
         foreach (var c in Tier1Categories) list.AddRange(c.Colors);
         foreach (var c in Tier2GrayCategories) list.AddRange(c.Colors);
         foreach (var s in Sectors)
-            foreach (var sl in s.Slices)
-                list.AddRange(sl.Colors);
+            foreach (var col in s.Columns)
+                list.AddRange(col.Colors);
         return list.ToArray();
+    }
+
+    /// <summary>Re-derives one family's columns from its markers: one column per
+    /// code series, series ascending, and inside a column the blending number
+    /// descending so the darkest ink is the innermost ring.</summary>
+    private static CopicColumn[] BuildColumns(string[] rows)
+    {
+        var by = new Dictionary<string, List<CopicSwatch>>();
+        foreach (var row in rows)
+            foreach (var sw in ParseRow(row))
+            {
+                string key = SeriesOf(sw.Code);
+                if (!by.TryGetValue(key, out var list)) by[key] = list = new List<CopicSwatch>();
+                list.Add(sw);
+            }
+        return by.OrderBy(kv => SeriesDigit(kv.Key))
+                 .Select(kv => new CopicColumn(
+                     kv.Key,
+                     kv.Value.OrderByDescending(sw => BlendOf(sw.Code)).ToArray()))
+                 .ToArray();
+    }
+
+    /// The column a marker belongs to: its letters plus the FIRST digit of the
+    /// blending number ("RV09" → `RV0`, "E0000" → `E0`, "B79" → `B7`).
+    private static string SeriesOf(string code)
+    {
+        int i = 0;
+        while (i < code.Length && char.IsLetter(code[i])) i++;
+        return i < code.Length ? code[..(i + 1)] : code;
+    }
+
+    private static int SeriesDigit(string series) =>
+        char.IsDigit(series[^1]) ? series[^1] - '0' : 0;
+
+    /// <summary>Where a marker sits inside its column: bigger is darker, hence
+    /// further in. Two-digit codes give their second digit (`R29` → 9); the
+    /// extra-pale `00`-prefixed ones run past zero by their length, so `R000`
+    /// (−1) and `R0000` (−2) fall outside `R00` (0) in the right order.</summary>
+    private static int BlendOf(string code)
+    {
+        int i = 0;
+        while (i < code.Length && char.IsLetter(code[i])) i++;
+        string digits = code[i..];
+        if (digits.Length == 0) return 0;
+        return digits.Length == 2 ? digits[1] - '0' : -(digits.Length - 2);
     }
 
     private static CopicSwatch[] ParseRow(string data)
