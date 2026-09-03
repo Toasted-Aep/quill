@@ -121,7 +121,43 @@ public sealed class ColorWheel : UserControl
     // nothing else moves: 1.6470 * 1.20 = 1.9764, and 21 * 0.9004 * 1.9764 =
     // 37.37 DIP of cell. 11.21 item 2 then lets the outer edge go wherever 17
     // rings of that put it, which is 1009 DIP.
-    private const float CellScale = 1.9764f;
+    //
+    // 26.2 RESETS THIS AGAINST THE REFERENCE SCREENSHOT, MEASURED.
+    // "make copic wheel smaller by 20% and make it exactly as the reference
+    // photo". The reference is Quill's own output from before 11.20, so the
+    // target is a number that can be read off it rather than argued about.
+    // Quill_KbFldw0iXN.png is 2880x1800 at 200%, so 2 px = 1 DIP; the wheel's
+    // centre solves to (1341, 900) and its ring boundaries land at
+    //
+    //     r = 736.4 + 62.417 k  px      (least squares over rings 2..8)
+    //
+    // so one column band is 62.417 px = 31.21 DIP, against the 41.50 this
+    // constant was producing at s = 1. The shipped wheel is therefore 33%
+    // deeper per cell than the reference - NOT the 3x it looks, and the
+    // difference between those two figures is why this is measured and not
+    // eyeballed. 31.21 / 21 = 1.4862 matches the reference's cell EXACTLY,
+    // and that is what ships. The user withdrew the 20% shrink they had first
+    // asked for - "make copic same size as reference, forget 20% shrink" - so
+    // there is no factor between the measurement and the constant any more:
+    //
+    //     21 * 1.4862 = 31.21 DIP of cell, the reference's own figure.
+    //
+    // The hole does not scale with it. 11.2 item 15 pins the hole to the dial
+    // that sits in it, and the reference's own hole measures 280.4 DIP against
+    // the 285 here - already a match, and never something the user asked to
+    // move.
+    //
+    // THE WHEEL IS STILL BIGGER THAN THE REFERENCE, AND THAT IS OUR PALETTE
+    // RATHER THAN THIS SCALE. Outer edge: 369.2 + 17 * 31.21 = 899.7 DIP,
+    // against 750 DIP of ink measured on the reference. The CELL matches to the
+    // hundredth; the extra is five more rings, because the reference's deepest
+    // column carries ~12 swatches and ours carries 17 after 11.27 added 49
+    // codes. Matching the outer extent AS WELL would mean drawing fewer
+    // colours, and the user has already ruled on that exact trade:
+    //
+    //   "increase radius to facilitate cell depth, do not remove any cell, the
+    //    cells can go out of the screen, thats why rotation is there."
+    private const float CellScale = 1.4862f;
     // 11.21 RETIRES the outer target. 11.15 item 1 asked for a 15% smaller
     // outer extent; holding a target radius while item 4 deepened every cell
     // meant flooring to the last WHOLE cell that fitted, and at the settled
@@ -187,17 +223,61 @@ public sealed class ColorWheel : UserControl
     //
     // 11.21 restates this as settled ("cell depth is equalised to the outermost
     // ring and then deepened"), so it is not a fork - it is the ruling.
-    private const float SpineGapScale = 1.0f;
+    // 26.2: solved from the reference, not chosen. The gap between Tier 1 and
+    // Tier 2 measures 21.5 px = 10.75 DIP there, against a 31.21 DIP band, and
+    // this scale is what turns the 5 reference units into that:
+    //     5 * (31.21 / 21) * SpineGapScale = 10.75  ->  1.4467
+    // Being a ratio it is independent of CellScale: at the shipped 1.4862 it
+    // comes to 5 * 1.4862 * 1.4467 = 10.75 DIP, which is the reference's own
+    // measurement rather than a fraction of it.
+    private const float SpineGapScale = 1.4467f;
     // 11.17: "then a band of bare background" between the spine and the family
     // fans - "a real margin, not an artefact". The 5-unit reference gap is not
     // that; it is a hairline. Nine tenths of a family cell is, and it is the
     // one band in the wheel whose only job is to be empty.
-    private const float SpineGap = 0.90f;
+    //
+    // 26.2 REVERSES THE 0.90, AND ONLY BECAUSE THE REFERENCE SETTLES IT.
+    // 11.17 argued the number instead of measuring it. On the reference this
+    // band is 22.0 px = 11.01 DIP against a 31.21 DIP cell, i.e. 0.3526 of a
+    // cell, and it is still plainly "a real margin, not an artefact" there -
+    // it is the ONE separator that survives in the reference's coloured
+    // region, which is exactly the role 11.17 wanted for it. 0.90 of a cell
+    // was 3.4x that. Kept as a PROPORTION of a cell rather than a DIP figure,
+    // so it tracks the scale instead of having to be re-solved beside it:
+    // 31.21 * 0.3526 = 11.01 DIP, the reference's own measurement.
+    private const float SpineGap = 0.3526f;
     // 11.17: "families are separated by visible gaps" of background, while
     // cells TOUCH within a family. Taken off the trailing edge of each family's
     // last column, so the leading edge - where 11.18's cornered code sits - is
     // never the side that moves.
-    private const float FamGap = 1.7f * Deg;
+    //
+    // 26.1 SETS THIS TO ZERO, and this is the user's defect, twice over.
+    //
+    // Measured on the reference at ring 0, 14400 bearings, two independent
+    // radial slices: the background covers 0.000% of the circle and there is
+    // not one background run wider than a tenth of a degree. The reference's
+    // coloured region is a CONTINUOUS QUILT - "see how there's no gap between
+    // the rows in the outer circle?" - and the only dark inside it is past a
+    // column's last swatch. There is no family gap there to reproduce.
+    //
+    // It also fixes the complaint the user opened with. The gap used to be cut
+    // out of the family's LAST COLUMN rather than left between two whole ones,
+    // so 11 of the 36 columns were ColStep - FamGap and the other 25 were
+    // ColStep. Measured on the shipped build (C5-clean-copic-tl-AFTERMOVE.png,
+    // exact-colour extents of R83..R0000 against R85..R05):
+    //
+    //     red slice 3, last of its family : 8.16 deg
+    //     red slice 2, mid-family         : 9.84 deg
+    //     rv  slice 1, first of its family: 9.84 deg
+    //
+    // - a 17.1% notch, once per family, in every ring, which is precisely
+    // "the cells are different sizes in the same row". At zero the two faults
+    // have one cure: every column is 360/36 = 10 deg and every one abuts.
+    //
+    // KEPT AS A NAMED CONSTANT rather than deleted. The column table below is
+    // derived from it, so a future gap re-enters through ONE number and all
+    // four readers - fill, outline, draw loop, hit-test - move together.
+    private const float FamGap = 0f * Deg;
     // How much annulus the hub's own chrome needs between the caller and
     // Tier 1: the recents row, the current-colour puck and the mode-plate arc.
     //
@@ -219,7 +299,23 @@ public sealed class ColorWheel : UserControl
     // Deliberately sub-pixel: the hit-test still divides the band exactly.
     private const float Weld = 0.5f;
     // The outer ring is 36 contiguous 10° columns starting at the top (-90°).
-    private const float ColStep = 10f * Deg;
+    //
+    // 26.1: ColStep and ColStart below are THE ONLY description of where a
+    // column is. They are computed once, in the static constructor, and every
+    // reader - OuterCell's fill, OuterSel's outline, DrawOuter's loop and
+    // SwatchAt's hit-test - takes its angles from them. This is not tidiness.
+    // The comment at OuterCell records the drawn tile and the hit-test having
+    // "stopped describing the same shape" once already, and the hit-test was
+    // still carrying its own hardcoded 10.0 alongside ColStep, so ANY change
+    // to the column layout mis-aimed every cell by an offset that grew round
+    // the wheel. There is now nothing left for the two to disagree about.
+    private static readonly float ColStep;
+    // Where each column STARTS, in radians from OuterStart. Not col * ColStep:
+    // a family gap pushes every later column along, so once FamGap is non-zero
+    // the positions stop being a multiple of anything and have to be a table.
+    // At the shipped FamGap of 0 this is exactly i * 10°, and the table costs
+    // 36 floats to make that a fact rather than an assumption.
+    private static readonly float[] ColStart;
     private const float OuterStart = -90f * Deg;
 
     private readonly CanvasControl _canvas = new();
@@ -650,6 +746,31 @@ public sealed class ColorWheel : UserControl
 
     static ColorWheel()
     {
+        // ---- 26.1: the outer ring's column layout, derived once ------------
+        // The circle pays for the family boundaries FIRST, and whatever is
+        // left divides evenly across every column - so a gap is space BETWEEN
+        // two whole cells instead of a bite taken out of one, and no cell is
+        // narrower than any other. Boundaries are COUNTED off ColEndsFamily
+        // rather than written down: the palette's sector table is the only
+        // authority on how many families there are, and a change to it must
+        // not be able to leave this stale. At the shipped FamGap of 0 the
+        // subtraction vanishes and ColStep is 360/36 = 10° exactly.
+        int cols = OuterColumns.Length;
+        int boundaries = 0;
+        for (int i = 0; i < ColEndsFamily.Length; i++) if (ColEndsFamily[i]) boundaries++;
+        ColStep = (360f * Deg - boundaries * FamGap) / cols;
+        ColStart = new float[cols];
+        float acc = 0f;
+        for (int i = 0; i < cols; i++)
+        {
+            ColStart[i] = acc;
+            acc += ColStep;
+            // The gap goes AFTER a family's last column, so column 0 still
+            // starts exactly at OuterStart and the wrap-around gap lands just
+            // before the top - which is where 11.17 put it too.
+            if (ColEndsFamily[i]) acc += FamGap;
+        }
+
         // Tier 1: a 144° arc, 3 groups, 4.5° dividers between groups only.
         (Tier1Cells, Tier1Width) = BuildInnerCells(
             CopicPalette.Tier1Categories, start: -128f, span: 144f, gap: 4.5f, gapAfterLast: false);
@@ -1499,12 +1620,18 @@ public sealed class ColorWheel : UserControl
         var slot = endsFamily ? _outerGeoEnd : _outerGeo;
         if (slot[ring] is { } cached) return cached;
         float r0 = _rOutBase + ring * _band;
+        // 26.1: EVERY column is ColStep wide now - the two variants differ only
+        // in the WELD. A family's last column has a neighbour to overlap when
+        // FamGap is 0 and none when it is not, so the weld follows the gap and
+        // the span never does. This is the line that made 11 of the 36 cells
+        // 17% narrow.
+        bool abuts = !endsFamily || FamGap <= 0f;
         // Welded outward and clockwise: rings are drawn inner-to-outer and
         // columns in increasing angle, so the overlap is always covered by the
         // neighbour drawn next. A family's last column is the one place where
         // there IS no next neighbour to cover it - 11.17 wants background
-        // showing there - so that variant is short by FamGap and unwelded.
-        float span = endsFamily ? ColStep - FamGap : ColStep + Weld / MathF.Max(r0, 1f);
+        // showing there - so that variant is unwelded. It is NOT shortened.
+        float span = abuts ? ColStep + Weld / MathF.Max(r0, 1f) : ColStep;
         return slot[ring] = ArcTile(rc, r0, r0 + _band + Weld, 0f, span);
     }
 
@@ -1528,17 +1655,22 @@ public sealed class ColorWheel : UserControl
     // stroke cannot reach a neighbour's territory (9.4.1).
     private const float SelInset = SelStroke * 0.5f + 0.25f;
 
-    // Not cached per family-end variant: the outline is inset on every side
-    // anyway, so the widest it can be is the narrow cell's own painted extent
-    // less the inset, and one shape that never reaches past a short cell is
-    // preferable to two that each only fit one of them.
+    // Still one shape rather than a family-end variant, and now for a better
+    // reason than before: 26.1 makes every column exactly ColStep wide, so
+    // there is no narrow cell left for a second variant to fit. The inset is
+    // on every side, so the outline lies strictly inside whichever cell it is
+    // rotated onto.
+    //
+    // The old ColStep - FamGap here was sized to the SHORT cell. Left alone it
+    // would now draw the selection 1.7deg narrow on all 36 - a marker that no
+    // longer matches the cell under it, which is 9.4.1's fault in miniature.
     private CanvasGeometry OuterSel(ICanvasResourceCreator rc, int ring)
     {
         if (_outerSelGeo[ring] is { } cached) return cached;
         float r0 = _rOutBase + ring * _band;
         float da = SelInset / MathF.Max(r0, 1f);
         return _outerSelGeo[ring] =
-            ArcTile(rc, r0 + SelInset, r0 + _band - SelInset, da, ColStep - FamGap - da);
+            ArcTile(rc, r0 + SelInset, r0 + _band - SelInset, da, ColStep - da);
     }
 
     private CanvasGeometry Tier1Sel(ICanvasResourceCreator rc)
@@ -1654,8 +1786,11 @@ public sealed class ColorWheel : UserControl
             float p = TierProgress(ColOpenDelay[col], ColCloseDelay[col]);
             if (p <= 0.002f) continue;              // not arrived yet / already gone
             bool endsFam = ColEndsFamily[col];
-            float span = endsFam ? ColStep - FamGap : ColStep;
-            float a0 = Norm(OuterStart + col * ColStep + _rot);
+            // 26.1: one width for every column, and the start comes off the
+            // table - col * ColStep is only right while there are no gaps, and
+            // silently drifts by one gap per family the moment there are.
+            float span = ColStep;
+            float a0 = Norm(OuterStart + ColStart[col] + _rot);
             float midA = a0 + span * 0.5f;
             if (!WedgeVisible(a0, a0 + span, _rOutBase, p, view)) continue;
 
@@ -2378,15 +2513,34 @@ public sealed class ColorWheel : UserControl
         // painted set is what the pointer is aiming at and the two have to
         // describe the same shape (9.4.1's rule, applied to depth).
         if (ring < 0 || ring >= _rings) return null;
-        // Fold the angle into [0, 360) measured from the -90° start, then
-        // one division lands the 10° column.
-        double deg = a / Deg + 90.0;
-        deg = ((deg % 360) + 360) % 360;
-        int col = (int)Math.Floor(deg / 10.0) % OuterColumns.Length;
+        // Fold the angle into [0, 2π) measured from the -90° start, then walk
+        // the SAME table the tiles were drawn from.
+        //
+        // 26.1: this used to divide by a hardcoded 10.0 while comparing against
+        // ColStep, so the drawn shape and the answer agreed only for as long as
+        // ColStep happened to be 10°. That is the exact failure the comment on
+        // OuterCell records having already happened once, and it is the reason
+        // the column layout is a table now. The division is gone; the estimate
+        // below is a starting guess that is then CHECKED against ColStart, so
+        // it cannot be wrong even if the columns are unevenly spaced.
+        float rel = (float)(((a / Deg + 90.0) % 360 + 360) % 360) * Deg;
+        int n = OuterColumns.Length;
+        int col = Math.Clamp((int)(rel / ColStep), 0, n - 1);
+        while (col > 0 && rel < ColStart[col]) col--;
+        while (col < n - 1 && rel >= ColStart[col + 1]) col++;
         // 11.17's gap is background, and background is not a swatch: a tap that
         // lands between two families answers null rather than handing over the
-        // ink whose column it merely points at.
-        if (ColEndsFamily[col] && (deg - col * 10.0) * Deg > ColStep - FamGap) return null;
+        // ink whose column it merely points at. At the shipped FamGap of 0
+        // there is no gap to land in and this never fires - but it is written
+        // against ColStart/ColStep, so it stays correct if one comes back.
+        //
+        // The 1e-4 rad of slack is for ColStart being a RUNNING SUM: 36 float
+        // additions land a few parts in 10^7 short of 2π, and without it the
+        // last sliver of the last column would answer null. At the wheel's
+        // outer edge 1e-4 rad is 0.08 DIP; the smallest gap this test has ever
+        // had to catch is 1.7°, which is 300x that, so the slack cannot hide
+        // a real one.
+        if (rel - ColStart[col] > ColStep + 1e-4f) return null;
         var stack = OuterColumns[col];
         return ring < stack.Length ? stack[ring] : null;
     }
