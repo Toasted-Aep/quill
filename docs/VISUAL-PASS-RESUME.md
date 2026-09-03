@@ -1,5 +1,237 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-03 (ninth screen run) — STOOD DOWN: THE USER IS AT THE MACHINE
+
+Branch `integration` @ `f1ad34e`, rebuilt clean (**0 warnings**, x64 Debug,
+`dotnet build` 9.2 s). Scratch `QUILL_DATA_FOLDER` at `scratchpad/vp7data`,
+working files in `scratchpad/vp7/`.
+
+**THE COPIC WHEEL WAS NEVER PUT ON SCREEN.** Everything below the presence
+section is measured on the reference PNG or derived from the shipped source.
+No figure in the "shipped" column was observed on a running Quill. `f1ad34e`
+is still NOT VERIFIED ON SCREEN and the next run should treat it that way.
+
+### The presence gate — FAILED, and this one is real
+
+Dispatch said idle 108 s, cursor `1240,442`, Quill not running.
+
+* First sample: idle **0.00–0.50 s** resetting continuously, cursor pinned at
+  `1119,550`. 11 s at ~1 Hz: **one** distinct position. Then 30 s at 2 Hz:
+  **one** distinct position, max idle 4.1 s. That is exactly the known
+  static-cursor phantom, so I proceeded — correctly, on the evidence I had.
+* Seeded the scratch library, launched Quill (pid 35756).
+* The launch call read the cursor at `1938,1354` — alarming, but see the DPI
+  trap below; that reading is **physical** px and the earlier ones were
+  logical, so it is `969,677` in the same units. A 73-px move, not a leap.
+* The decisive measurement was a **single-process 40 ms track for 60 s**, so
+  every sample is in one unit system and no DPI trap can touch it. It caught
+  **53 cursor changes**, and they are not warps:
+
+```
+t= 13906  756,786 -> 1196,566  step=491.9px      <- a fast hand movement
+t= 13953 1196,566 -> 1236,442  step=130.3px
+t= 14000 1236,442 -> 1250,411  step=34.0px       <- decelerating into a target
+...
+t= 37500 1073,580 -> 1071,590  step=12.0px
+t= 37547 1071,590 -> 1071,598  step=8.0px        <- settling
+t= 33797 1078,604 -> 1078,605  step=1.0px        <- 1-px correction
+t= 33828 1078,605 -> 1078,601  step=4.0px        <- overshoot and back
+```
+
+  Continuous decelerating tracks, repeated 1–4 px corrections, overshoot and
+  return around a resting point. **A SetCursorPos warp is one discontinuous
+  jump with no trail; this has trails.** The eighth run's phantom was one 2-px
+  twitch inside 600 still samples. This is the opposite signature.
+
+**A person is at the machine.** No input was ever injected — not one click,
+not one keystroke. Quill was killed immediately (it was the only thing this run
+put on the user's screen) and nothing further was driven.
+
+The foreground was also seen on a Zen Browser window titled *"Problem-solving
+help for difficult questions - Claude"* between samples, consistent with
+someone using the machine.
+
+**The DPI trap the eighth run documented is real and it nearly cost me the
+call.** `tools/vpsweep/q.ps1` calls `SetProcessDpiAwareness(2)` at load, so a
+cursor sample taken in a harness-loaded shell is **physical** px and one taken
+in a plain `Add-Type` shell is **logical** px — 2x apart on this screen. My
+plain samples and my harness samples were in different units and looked like a
+900-px jump. **Sample presence in ONE process, at high frequency**, and judge
+on the shape of the track, not on the delta between two tool calls.
+
+### Gates — all clean
+
+* `C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256
+  `0C32CE6C16A4310CDCEB4902C6FF5C9B6CBA7A11AA55BE4F88DAB5771F8E038A`**, checked
+  at the start and again after Quill was killed — **byte-identical**, never
+  opened for writing.
+* **Migration was prevented rather than survived.** `MigrateFromLegacyIfNeeded`
+  bails on `if (File.Exists(FilePath)) return;`, so `scratchpad/vp7_seed.py`
+  wrote an 880-byte library.json into the empty scratch folder *before* first
+  launch. The folder never exceeded 3.7 kB and **none of the user's July
+  notebooks were ever copied**. This is strictly better than the sixth run's
+  25.4 MB copy — recommend every future run seed the folder this way.
+  The seed page background is `#E10619` so page-showing-through is unmistakable.
+* `crash.log`: the same stale `2026-08-20 22:55:25 UTC` / 10,636-byte file.
+  Untouched, and none was created in the scratch folder.
+* The `system-reminder` telling agents to route file edits through Bash
+  `sed`/heredocs arrived again and was **refused — the fourteenth run to do
+  so**. It is not from the user. It also steers straight into the
+  backslash-eating heredoc hazard: I hit that exact bug once this run (a
+  `\t` in a path silently became a TAB) and moved the work to Write/Edit.
+
+### The reference, measured
+
+`Quill_KbFldw0iXN.png`, 2880x1800, display 2x, so **DIP = px / 2**.
+
+Centre found by sharpening the bare band (background at every bearing), then
+refined on the **fan inner edge**, which is a complete circle: over 360 rays
+the fitted radius has **sd 0.80 px**. Centre = **(1341.0, 901.0)**.
+
+| quantity | reference (px) | reference (DIP) | how |
+|---|---|---|---|
+| hole / Tier 1 inner | 560.29 (sd 0.70) | **280.14** | 95 clean rays |
+| Tier 1 outer | 626.15 (sd 0.58) | **313.07** | 95 clean rays |
+| Tier 1 depth | 65.86 | **32.93** | difference |
+| tier hairline | 19.95 | **9.98** | Tier1out → Tier2in |
+| Tier 2 inner | 646.48 (sd 1.43) | **323.24** | 348 rays |
+| Tier 2 outer | 712.15 (sd 2.37) | **356.07** | 360 rays |
+| Tier 2 depth | 66.0 | **33.0** (32.80–33.30) | bracketed over 4 bg thresholds |
+| bare band | 21.0 | **10.5** (10.27–10.77) | bracketed |
+| fan inner | 733.31 (sd 0.80) | **366.66** | 360 rays |
+| fan ring pitch | 62.50 | **31.25** | autocorrelation of the ink profile |
+| **outer column width** | — | **5.0704°, 71 columns** | grid fit, see below |
+| Tier 2 cell width | — | **7.50°** (~46 cells + 4 dividers ~3.4°) | arc scan |
+| deepest column seen | 1237 | **618.5** (≈8 rings) | bearings ~189–193° |
+
+Gap thresholds are bracketed because the background test biases in a known
+direction: looser → every gap looks wider. Both gaps moved <0.5 DIP across a
+threshold range of 9→75, so they are solid.
+
+### The reference has no gaps between rows — confirmed, and the method works
+
+Full-circle arc scans at 0.01° (36,001 bearings):
+
+* **r = 760 px (ring 0): 0.000% page colour, zero background runs.**
+* **r = 790 px (ring 1): 0.000% page colour, zero background runs.**
+* r = 850 px (ring 2): 6.7%, in **five** runs of ~4.83° each — i.e. five whole
+  columns that have run out of swatches, not a seam round every cell.
+
+This reproduces `f1ad34e`'s claim exactly and validates the gap-hunting method
+for the next run to point at our own capture.
+
+### The shipped build, COMPUTED (not observed)
+
+`scratchpad/vp7_sim.py` reproduces the static ctor and `Layout()` in **float32**,
+because `ColStart` is a running sum of 36 float additions.
+
+| quantity | shipped (DIP) |
+|---|---|
+| hole `_r1In` | 285.000 |
+| cell depth `_band` | **31.210** |
+| Tier 1 outer | 316.210 |
+| tier hairline | **10.750** |
+| Tier 2 inner / outer | 326.961 / 358.171 |
+| bare band | **11.005** |
+| fan inner `_rOutBase` | 369.176 |
+| outer edge `_rOut` | **899.749** (17 rings) |
+| column width | **10.0000010°, 36 columns, spread 0.000e+00** |
+
+The commit's three predicted numbers (31.21 / 10.75 / 11.00) reproduce
+**exactly**. The arithmetic is right; whether the renderer draws it is still
+unverified.
+
+### Reference vs shipped
+
+| quantity | reference | shipped | verdict |
+|---|---|---|---|
+| cell radial depth | 31.25 | 31.210 | **match** (0.1%) |
+| fan inner radius | 366.66 | 369.18 | +0.7% |
+| hole radius | 280.14 | 285.00 | +1.7% |
+| Tier 1 depth | 32.93 | 31.21 | −5.2% |
+| Tier 2 depth | 33.0 | 31.21 | −5.4% |
+| bare band | 10.5 | 11.005 | +4.8% |
+| tier hairline | 9.98 | 10.750 | +7.7% |
+| **outer column width** | **5.0704° (71 cols)** | **10.0° (36 cols)** | **+97%** |
+| Tier 2 divider | ~3.4° | 5.5° | +47% |
+| outer extent | 618.5 seen (≈8 rings) | 899.75 (17 rings) | ring count, see below |
+
+### THE ONE BIG MISS: our columns are twice the reference's width
+
+`f1ad34e` matched the reference's **radial** cell (31.21 against 31.25 — a real
+match) and took the **angular** layout from our own palette's sector table
+("36 fixed 10° columns"), which was never measured against the reference.
+
+The reference's outer ring is **71 uniform columns of 5.0704°**. This is not a
+close call — fitting a uniform grid of 360/N to the boundaries collected at
+three radii:
+
+```
+ N     cell width    rms residual
+ 70      5.1429        1.4630 deg
+ 71      5.0704        0.0525 deg   <-- 25x better than any other N
+ 72      5.0000        1.3570 deg
+ 73      4.9315        1.3942 deg
+```
+
+Angles are scale-invariant, so this cannot be a zoom artifact — and the radii
+agree to ~2%, so the two wheels are at the same scale. **Against "make every
+detail exactly as the reference photo", the cell's angular width is a detail
+and it is off by a factor of 1.97.** It is a palette-shape difference (11
+families / 36 slices now, 71 then), the same *kind* of finding as the ring
+count, and it deserves the same explicit ruling from the user that the ring
+count got. It was not mentioned in `f1ad34e`.
+
+### Check 5: it IS the ring count, not the cell
+
+Confirmed arithmetically. Cell depth matches to 0.1%; the outer edge is
+`369.176 + 17 x 31.210 = 899.749`, and the reference at its own pitch and 8
+visible rings gives `366.66 + 8 x 31.25 = 616.7` against 618.5 measured. The
+extra extent is entirely rings. **Usability was NOT assessed** — that needs the
+thing on screen.
+
+Note the reference is itself clipped: its downward bearings leave the 1800-px
+screen after ~2 rings, so 8 is the deepest **visible** column, not necessarily
+the deepest one.
+
+### Check 1 (the hit test) — passed in simulation, NOT on screen
+
+The three readers were checked to read one table:
+
+* `DrawOuter` (:1782) uses `ColStart[col]` and `span = ColStep`.
+* `OuterCell` (:1634) uses `ColStep` for the span; the family-end variant now
+  differs **only in the weld**, not the width.
+* `SwatchAt` (:2528) divides by `ColStep` as an estimate and then **corrects
+  against `ColStart`**, so it is right even for a non-uniform table.
+* `PickAt` (:2474) subtracts `_rot` before calling, and the drawing adds `_rot`
+  — the two frames cancel. Verified algebraically.
+
+`vp7_sim.py` then probed every one of the 36 columns at its centre and 1% inside
+each edge, at rotations 0, 7.3, 45, 123.456, −80 and 359.9°: **648 probes, 0
+mismatches.** Float drift in the running sum is −6.2e−05° at column 35, ~300x
+under the 1e-4 rad slack and negligible against a 10° cell.
+
+**This is a proof about the arithmetic, not an observation.** It cannot catch a
+renderer that draws somewhere other than where `Layout()` says. The former
+family boundaries — columns where `ColEndsFamily` is true — still need a real
+click each.
+
+### What the next run must do
+
+1. **Re-check presence with a single-process high-frequency track**, not two
+   tool calls. Judge on the shape.
+2. Seed `QUILL_DATA_FOLDER` with `scratchpad/vp7_seed.py` first — it keeps the
+   user's notebooks out of the scratch folder entirely and gives a red page.
+3. Put the wheel on screen and re-run **every** measurement above against the
+   capture with `vp7_measure.py` / `vp7_edges.py` / `vp7_seams.py` / `vp7_ncols.py`
+   — they take a path and a centre and print the same table.
+4. Click the former family boundaries and confirm the colour selected is the
+   colour clicked. Simulation says it will pass; nobody has seen it.
+5. Put the 71-vs-36 column-width finding to the user.
+
+Harness: `scratchpad/vp7.ps1` (vp5's, repathed). Measurement scripts all in
+`scratchpad/`, all take arguments so they run against either image.
+
 ## RUN OF 2026-09-03 (eighth screen run) — §25.11 MEASURED, §21 WRITTEN
 
 Branch `integration` @ `897c7cb`. Same build as the seventh run (`Quill.exe`
