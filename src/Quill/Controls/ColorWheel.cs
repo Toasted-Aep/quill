@@ -69,10 +69,11 @@ public enum ColorWheelMode { Copic, Hsl, Rgb }
 /// Three concentric tiers, exactly as the dialled-in web wheel:
 ///   • Tier 1 — a 144° inner arc of accents + core (13 chips, 3 groups).
 ///   • Tier 2 — a full grey ring (Toner/Warm/Neutral/Cool, 46 chips).
-///   • Tier 3+ — 36 fixed 10° columns grouped into 11 colour families, each
-///     column a radial stack whose depth is however many inks it holds (up to
-///     17 in the deep Earth column). Family widths are the reference's own:
-///     R/RV/V/BV/B/G/YG/Y/YR span 30° each, BG 40°, E 50°.
+///   • Tier 3+ — one fixed column per Copic code SERIES, grouped into 11 colour
+///     families, each column a radial stack whose depth is however many inks
+///     that series holds (up to 9 in `E0`). For the shipped palette that is 72
+///     columns of 5°, and a family is as wide as its own series count: V and BV
+///     span 20°, R 35°, E and B 45°. §26.2 measures the rule off the reference.
 /// The whole ring rotates as one; a wheel-scroll or flick spins it and it
 /// settles square on a 10° column boundary.
 ///
@@ -272,7 +273,12 @@ public sealed class ColorWheel : UserControl
     //
     // - a 17.1% notch, once per family, in every ring, which is precisely
     // "the cells are different sizes in the same row". At zero the two faults
-    // have one cure: every column is 360/36 = 10 deg and every one abuts.
+    // have one cure: every column is 360/N deg and every one abuts.
+    //
+    // 26.2 re-measured the reference's own boundaries and found no family gap
+    // there either: over its 71 columns the boundary pitch is 5.0704 deg with
+    // an sd of 0.046, and the step across a family boundary is the same as the
+    // step inside a family. So zero is not merely tolerable, it is the value.
     //
     // KEPT AS A NAMED CONSTANT rather than deleted. The column table below is
     // derived from it, so a future gap re-enters through ONE number and all
@@ -298,7 +304,8 @@ public sealed class ColorWheel : UserControl
     // then paints over the overlap — the chips read as one continuous sheet.
     // Deliberately sub-pixel: the hit-test still divides the band exactly.
     private const float Weld = 0.5f;
-    // The outer ring is 36 contiguous 10° columns starting at the top (-90°).
+    // The outer ring is 72 contiguous 5° columns starting at the top (-90°) —
+    // one per Copic code series, which is the reference's own rule (§26.2).
     //
     // 26.1: ColStep and ColStart below are THE ONLY description of where a
     // column is. They are computed once, in the static constructor, and every
@@ -313,8 +320,8 @@ public sealed class ColorWheel : UserControl
     // Where each column STARTS, in radians from OuterStart. Not col * ColStep:
     // a family gap pushes every later column along, so once FamGap is non-zero
     // the positions stop being a multiple of anything and have to be a table.
-    // At the shipped FamGap of 0 this is exactly i * 10°, and the table costs
-    // 36 floats to make that a fact rather than an assumption.
+    // At the shipped FamGap of 0 this is exactly i * ColStep, and the table
+    // costs one float per column to make that a fact rather than an assumption.
     private static readonly float[] ColStart;
     private const float OuterStart = -90f * Deg;
 
@@ -685,8 +692,9 @@ public sealed class ColorWheel : UserControl
     // the single biggest object out of the centre the user has now flagged
     // twice as crowded (10.4 item 15).
 
-    // Cached tile geometry: one 10° cell per outer ring band (reused across all
-    // 36 columns by rotation), plus one cell each for the two inner tiers.
+    // Cached tile geometry: one ColStep-wide cell per outer ring band (reused
+    // across every column by rotation), plus one cell each for the two inner
+    // tiers.
     private readonly CanvasGeometry?[] _outerGeo = new CanvasGeometry?[MaxRings];
     // 11.17: a family's LAST column is short by FamGap and carries no weld, so
     // the gap it opens is background rather than a hairline the next family's
@@ -725,14 +733,20 @@ public sealed class ColorWheel : UserControl
              float R1In, float R1Out, float R2In, float R2Out)? _geoKey;
 
     // ---- the reference's fixed column / arc tables ------------------------
-    // Outer: 36 radial columns in angular order from -90°. Column i covers
-    // [-90+10i, -80+10i]°; entry 0 of a column is its innermost ink.
+    // Outer: one radial column per Copic code SERIES, in angular order from
+    // -90°. Column i covers [-90 + i*ColStep, -90 + (i+1)*ColStep]°; entry 0 of
+    // a column is its innermost (darkest) ink.
+    //
+    // 26.2: the count comes from the palette, not from a number written here.
+    // It is 72 for the shipped palette - 71 series the reference draws, plus
+    // BV9, which exists only because §11.27's ten invented codes were kept.
     private static readonly CopicSwatch[][] OuterColumns = BuildOuterColumns();
     private static readonly int MaxRings = OuterColumns.Max(c => c.Length);
     // 11.17: "cells touch edge to edge within a family; families are separated
-    // by visible gaps". The palette already groups the 36 columns into its 11
-    // sectors, so the boundary is data, not a guess - this simply records which
-    // column is the last of its sector.
+    // by visible gaps". The palette groups its columns into 11 sectors, so the
+    // boundary is data, not a guess - this simply records which column is the
+    // last of its sector. (The reference turns out to draw no gap at all, so
+    // FamGap ships at 0; see the note there.)
     private static readonly bool[] ColEndsFamily = BuildFamilyEnds();
 
     // Inner arcs: each cell carries its own [A0, A1] because the group dividers
@@ -754,7 +768,7 @@ public sealed class ColorWheel : UserControl
         // rather than written down: the palette's sector table is the only
         // authority on how many families there are, and a change to it must
         // not be able to leave this stale. At the shipped FamGap of 0 the
-        // subtraction vanishes and ColStep is 360/36 = 10° exactly.
+        // subtraction vanishes and ColStep is 360/72 = 5° exactly.
         int cols = OuterColumns.Length;
         int boundaries = 0;
         for (int i = 0; i < ColEndsFamily.Length; i++) if (ColEndsFamily[i]) boundaries++;
@@ -779,10 +793,18 @@ public sealed class ColorWheel : UserControl
             CopicPalette.Tier2GrayCategories, start: -90f, span: 360f, gap: 5.5f, gapAfterLast: true);
 
         // ---- the entrance cascade's per-column delay table ----------------
-        // The reference shuffles the 36 columns ONCE at module load and uses a
+        // The reference shuffles its columns ONCE at module load and uses a
         // column's rank in that shuffle as its slot in the cascade, so the ring
         // assembles as a scatter rather than a sweep. Same here: one shuffle
-        // per process, and the two delay formulae verbatim from the reference.
+        // per process, and the two delay formulae from the reference.
+        //
+        // 26.2: both formulae divide by the COLUMN COUNT, which used to be
+        // written as the literal 36. The spans they are named for - 30..120 ms
+        // out and ~49..0 ms back - are properties of the whole cascade, not of
+        // any column count, so at n = 36 these are the identical numbers and at
+        // n = 72 they still fill the same two windows. With the literal left in
+        // place the open delay would have run to 207 ms and half the close
+        // delays would have gone negative.
         int n = OuterColumns.Length;
         var order = Enumerable.Range(0, n).ToArray();
         var rng = new Random();
@@ -796,8 +818,8 @@ public sealed class ColorWheel : UserControl
         for (int rank = 0; rank < n; rank++)
         {
             int colIdx = order[rank];
-            ColOpenDelay[colIdx] = (int)Math.Round(30 + rank / 36.0 * 90);     // 30..120 ms
-            ColCloseDelay[colIdx] = (int)Math.Round((35 - rank) / 36.0 * 50);  // ~49..0 ms
+            ColOpenDelay[colIdx] = (int)Math.Round(30 + rank / (double)n * 90);        // 30..120 ms
+            ColCloseDelay[colIdx] = (int)Math.Round((n - 1 - rank) / (double)n * 50);  // ~49..0 ms
         }
         EnterSpan = EnterMs + ColOpenDelay.Max();                              // 280 ms
         ExitSpan = ExitMs + Math.Max(Tier1CloseDelay, ColCloseDelay.Max());    // 180 ms
@@ -805,19 +827,19 @@ public sealed class ColorWheel : UserControl
 
     private static CopicSwatch[][] BuildOuterColumns()
     {
-        var cols = new List<CopicSwatch[]>(36);
+        var cols = new List<CopicSwatch[]>(72);
         foreach (var sector in CopicPalette.Sectors)
-            foreach (var slice in sector.Slices)
-                cols.Add(slice.Colors);   // already -90°→270° in reference order
+            foreach (var column in sector.Columns)
+                cols.Add(column.Colors);   // already -90°→270° in reference order
         return cols.ToArray();
     }
 
     private static bool[] BuildFamilyEnds()
     {
-        var ends = new List<bool>(36);
+        var ends = new List<bool>(72);
         foreach (var sector in CopicPalette.Sectors)
-            for (int i = 0; i < sector.Slices.Length; i++)
-                ends.Add(i == sector.Slices.Length - 1);
+            for (int i = 0; i < sector.Columns.Length; i++)
+                ends.Add(i == sector.Columns.Length - 1);
         return ends.ToArray();
     }
 
@@ -1607,14 +1629,15 @@ public sealed class ColorWheel : UserControl
         return CanvasGeometry.CreatePath(b);
     }
 
-    // One 10° outer cell at ring band `ring`, FLUSH with its neighbours. The
+    // One ColStep-wide outer cell at ring band `ring`, FLUSH with its
+    // neighbours. The
     // reference hands createArcTilePath() the slice's own [startAngle, endAngle]
     // and rInner = 333 + ring*21, rOuter = rInner + 21 — no inset anywhere, so
     // chips share edges and the wheel reads as one sheet of colour. The gutter
     // this used to carry was doing two kinds of harm: it looked like a gap
     // round every swatch, and it put the painted tile a pixel inside the band
     // the hit-test answers for, so the two stopped describing the same shape.
-    // Cached and re-used for all 36 columns.
+    // Cached and re-used for every column.
     private CanvasGeometry OuterCell(ICanvasResourceCreator rc, int ring, bool endsFamily)
     {
         var slot = endsFamily ? _outerGeoEnd : _outerGeo;
@@ -1623,7 +1646,7 @@ public sealed class ColorWheel : UserControl
         // 26.1: EVERY column is ColStep wide now - the two variants differ only
         // in the WELD. A family's last column has a neighbour to overlap when
         // FamGap is 0 and none when it is not, so the weld follows the gap and
-        // the span never does. This is the line that made 11 of the 36 cells
+        // the span never does. This is the line that made 11 of the columns
         // 17% narrow.
         bool abuts = !endsFamily || FamGap <= 0f;
         // Welded outward and clockwise: rings are drawn inner-to-outer and
@@ -1662,7 +1685,7 @@ public sealed class ColorWheel : UserControl
     // rotated onto.
     //
     // The old ColStep - FamGap here was sized to the SHORT cell. Left alone it
-    // would now draw the selection 1.7deg narrow on all 36 - a marker that no
+    // would now draw the selection 1.7deg narrow on every one - a marker that no
     // longer matches the cell under it, which is 9.4.1's fault in miniature.
     private CanvasGeometry OuterSel(ICanvasResourceCreator rc, int ring)
     {
@@ -1775,7 +1798,8 @@ public sealed class ColorWheel : UserControl
         DrawInnerTier(ds, view, Tier2Cells, Tier2Cell(rc), Tier2Sel(rc), _r2In, (_r2In + _r2Out) * 0.5f,
             near, labels, TierProgress(Tier2OpenDelay, Tier2CloseDelay));
 
-        // Tier 3+ (outer family columns): 36 fixed 10° columns, each a radial
+        // Tier 3+ (outer family columns): one fixed ColStep column per code
+        // series (72 of 5° for the shipped palette), each a radial
         // stack of its own depth. At rest most of them run off the window — by
         // design; the deep inks are brought back by spinning the column round to
         // the horizontal, where the viewport reaches furthest.
@@ -2534,7 +2558,7 @@ public sealed class ColorWheel : UserControl
         // there is no gap to land in and this never fires - but it is written
         // against ColStart/ColStep, so it stays correct if one comes back.
         //
-        // The 1e-4 rad of slack is for ColStart being a RUNNING SUM: 36 float
+        // The 1e-4 rad of slack is for ColStart being a RUNNING SUM: 72 float
         // additions land a few parts in 10^7 short of 2π, and without it the
         // last sliver of the last column would answer null. At the wheel's
         // outer edge 1e-4 rad is 0.08 DIP; the smallest gap this test has ever
@@ -2596,7 +2620,7 @@ public sealed class ColorWheel : UserControl
     //
     // …with transform-origin at the wheel centre and a per-group
     // animation-delay that makes the ring assemble in tiers: the inner chips
-    // first, the grey ring 20ms behind, then the 36 family columns rippling in
+    // first, the grey ring 20ms behind, then the family columns rippling in
     // over the next 90ms. 280ms end to end.
     //
     // Win2D is immediate mode, so there is nothing for a Storyboard to hang

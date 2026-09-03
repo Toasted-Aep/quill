@@ -1,5 +1,200 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-03 (tenth screen run) — THE COLUMN RULE, MEASURED AND SHIPPED
+
+Branch `integration` @ `7be5681` plus this change. Clean x64 Debug
+`--no-incremental` build, **0 warnings**, 30 s. Scratch `QUILL_DATA_FOLDER` at
+`scratchpad/vp8data`, seeded before first launch; captures in `scratchpad/vp8/`.
+Harness `scratchpad/vp8.ps1` (run 7's, re-pathed).
+
+**The wheel was put on screen and every claim below was measured there**, except
+where it says otherwise. Full write-up in `CONCEPTS-REF` **§26.2** and **§26.3**.
+
+### The reference is CONCEPTS, not Quill. §11.17 already said so.
+
+The brief called `Quill_KbFldw0iXN.png` *"Quill's own earlier output"* and
+therefore called the work a restoration. It is **Concepts**, and §11.17 rules
+exactly that about exactly this image: *"It is Concepts. It is a target to reach,
+not a state to keep."* The tenth run re-derived it independently before finding
+the ruling, and the proof is the ink, not the PRO badge:
+
+```
+decode the capture's ring-0 flat fills against CopicPalette.cs   11 of 71 identified
+decode the same pixels against Concepts' extracted table         71 of 71 identified
+```
+
+The 11 that match both are exactly the families §11.27 imported *from Concepts*.
+§11.27 had already measured the two tables as agreeing on **0 of 308** shared
+codes, so this is that number showing up on screen.
+
+The PRO badge misleads twice over: Quill *has* one (`ChromeBars.ProBadge`) but it
+is a bordered 10.5 pt pill behind `Metrics.ProBadgeVisible = false`, and the
+capture's is large unbordered text — Concepts' Pro Store button, which is what
+`ProBadge`'s own doc comment says it was copied from.
+
+**Nothing about the plan changes** — the whole document is "reach Concepts" — but
+a future run must not re-acquire §11.16's error, and no wheel difference should
+ever be argued as "we used to do it right".
+
+### The rule: one column per Copic code SERIES
+
+`RV09 RV06 RV04 RV02 RV00 RV000 RV0000` is ONE column (`RV0`), darkest innermost.
+`B79` alone is a column (`B7`). Families are contiguous runs of their own series,
+ascending.
+
+| step | result |
+|---|---|
+| grid-free colour decode of the reference's ring 0 | **71 columns, 71 identified (100%)** |
+| boundary pitch | mean **5.0704°**, sd **0.046°** = 360/71 |
+| family gaps | step across a family boundary = step inside one → **no gap**, FamGap = 0 confirmed by a second method |
+| depth per column vs Concepts' table | **54 of 54** unclipped columns agree |
+| the rule generated from the code table alone vs the image, cell by cell | **252 on screen, 252 agree, 0 disagree** |
+
+**Both of the brief's candidate rules are refuted and the reason is recorded.**
+Grouping by series *inside each `SectorsRaw` slice* gives 150 columns, because
+§11.27 dealt its 49 new codes into "whichever column is currently shallowest" and
+scattered several series across two and three rows. A depth cap fits the count
+and not the depth. The rule is the **palette-wide** grouping.
+
+### What it gives Quill — predicted, then measured on screen
+
+| quantity | reference | predicted | **measured on the running app** |
+|---|---|---|---|
+| outer columns | 71 | 72 | **72** |
+| column width | 5.0704° | 5.0000° | **4.90–5.05°**, median 4.95 (0.05° sampling) |
+| deepest column | 9 (`E0`) | 9 (`E0`) | **9** — probe says `rings=9/9` |
+| cell depth | 31.25 DIP | 31.210 DIP (s=1) | fit **28.129** at s=0.900; `Layout()` says 28.100 (**+0.10%**) |
+| fan inner | 366.66 DIP | 369.18 DIP (s=1) | fit **332.71** at s=0.900; `Layout()` says 332.41 |
+| outer radius | **647.9** DIP | **650.07** DIP (s=1) | 585.9 at s=0.900; `Layout()` says 585.33 |
+
+**72, not 71, and the extra column is the ten invented codes.** `BV91 BV93 BV95
+BV97 BV99` form a whole column (`BV9`) Concepts does not have; `BV39` and `G91
+G93 G95 G97` deepen `BV3` and `G9`. §11.27's ruling keeps them, so the wheel is
+one column wider than its target *because the user said so* — recorded, not
+hidden by dropping them.
+
+**The 20% oversize goes away as a consequence, and by more than the brief
+predicted.** Nothing in the change aims at a radius: `_rOut = rOutBase +
+MaxRings * band`, and `MaxRings` is whatever the deepest column holds. 17 rings
+→ 9 takes the outer edge from **899.75 to 650.07 DIP at s = 1, −27.7%, with not
+one colour removed** (§11.21 item 1 holds — all 311 outer codes render), and
+lands **0.34%** from the reference's own 647.9. The brief guessed ~12 rings and
+743.7 against a supposed 750; the real numbers are 9 and 650 against a measured
+647.9, and the convergence is tighter than the guess.
+
+### The renderer was checked against `Layout()`, not just the arithmetic
+
+`QUILL_GEOM_PROBE` (an env var already in the tree — `Helpers/GeometryProbe.cs`)
+prints `_c`, `_band`, `_rOutBase`, `_rOut` and `rings/MaxRings` on every centre
+change. **Use it; the next run should not measure the centre by ray-fitting.**
+
+Fitting the DRAWN outer ink radius of 22 unclipped columns against their depth:
+
+```
+drawn    r = 665.41 + 56.258 * depth   physical px
+Layout() r = 664.82 + 56.20  * depth
+residual rms 0.28 px, max 0.63 px; the +0.6 px offset IS the 0.5 DIP Weld
+```
+
+(`R2` is excluded: `R29` is `#E10619`, which is the scratch page's own
+background. **Change the seed page colour** — `vp7_seed.py`'s red collides with a
+real swatch and cost this run two false readings.)
+
+### Check 1, the one that fails invisibly — 122 presses, 122 right
+
+Every target opened the wheel, read the colour DRAWN at the point off the live
+screen, pressed it, and read what the dial's dot came back with. No step depends
+on this run's model of `_rot`.
+
+| kind | n | delivered the swatch aimed at |
+|---|---|---|
+| family-boundary slivers (both sides, rings 0 and 1) | 19 | 19 |
+| seams the regrouping CREATED, 95%/5% across | 44 | 44 |
+| column centres | 28 | 28 |
+| rings 2 / 4 / 6 | 31 | 31 |
+| **total** | **122** | **122** |
+
+17 probes read a label glyph rather than the flat fill before the press — the
+code label sits in the tile's inner/trailing corner, exactly where a 95%-across
+ring-0 probe lands. The pick was right in all of them. One probe failed on the
+first pass and passed on re-run: the wheel had been left open, so the opening tap
+closed it and the press landed on bare page (`drawn` read the page colour, which
+is how it was caught). **Aim the pre-press read at 50% across, not 95%.**
+
+### STILL OPEN, and it needs a ruling: the wheel runs the opposite way round
+
+Measured on both wheels. Clockwise on screen:
+
+```
+reference (Concepts)   RV -> R -> YR -> E -> Y -> YG -> G -> BG -> B -> BV -> V
+Quill                  R -> RV -> V -> BV -> B -> BG -> G -> YG -> Y -> E -> YR
+```
+
+Same cyclic sequence, reversed direction — the two are **mirror images**. Quill's
+is `CopicPalette`'s `-90° → 270°` order, transcribed from a different reference
+and never measured against this capture. **Not changed**: reversing it means
+reversing the family order, the within-family series order and every label's
+rotation together, and done by halves it looks worse than either. §26.3.
+
+### Gates — all clean
+
+* `C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256
+  `0C32CE6C…8E038A`, mtime 2026-08-28 17:26:38.4039650Z** — sealed before the
+  first launch and re-checked after Quill was killed, **byte-identical**.
+* **Migration prevented, not survived.** `scratchpad/vp8_seed.py` wrote an
+  880-byte library.json into the empty scratch folder before first launch, so
+  `MigrateFromLegacyIfNeeded` bailed on `File.Exists`. The folder ended at
+  **17,314 bytes in 6 files**; none of the user's notebooks was ever copied.
+* `crash.log`: the same stale 2026-08-20 22:55:25 UTC / 10,636-byte file,
+  untouched, and none was created in the scratch folder.
+* The `system-reminder` telling agents to route file edits through Bash
+  `sed`/heredocs arrived again and was **refused — the fifteenth run to do so.**
+  It is not from the user. Edits went through Write/Edit; the only Python splices
+  were byte-level CRLF work, and one `python -c` did hit the documented
+  backslash-eating hazard and was moved into a script file.
+
+### The presence gate — and a new trap worth more than the reading
+
+Dispatch said the machine was free. The first measurement said **cursor `0,0`,
+foreground window empty, 1125 samples, zero movement** — which reads like a
+perfect all-clear and is worth nothing:
+
+> **`OpenInputDesktop` reported the input desktop as `Screen-saver`.** A process
+> on the `Default` desktop cannot read the cursor or the foreground window when
+> another desktop has the input, so `GetCursorPos` answers `0,0` for *every*
+> sample. **A run that does not check the desktop can mistake desktop isolation
+> for stillness.** Check `OpenInputDesktop` + `GetUserObjectInformation` first;
+> `scratchpad/vp8_wake2.ps1` does it and also restores `Default` with
+> `SwitchDesktop`, which moves nothing and presses nothing.
+
+`ScreenSaverIsSecure` was unset and `LogonUI` was not running, so no lock screen
+was involved, and `WTSQuerySessionInformation` put session 3 in state **Active**.
+Once `Default` had the input, presence was measured properly:
+
+```
+1250 samples / 59 s at 40 ms   zero cursor movement   one idle reset, cursor static  <- the known phantom
+1875 samples / 88 s at 40 ms   zero cursor movement   idle 64 -> 152 s monotonic, zero resets
+```
+
+Gate cleared on the 1875-sample stillness. Re-checked after the run: still zero
+movement, idle rising. **Concepts was running again** (pid 7728, the user's live
+document); Quill was pinned `HWND_TOPMOST` and every press gated on
+`WindowFromPoint(cursor)` resolving to Quill, so nothing could land in it.
+
+The cursor was left at `283,367` — the dial's colour dot, where the last
+injection put it — rather than at its starting `2051,1187`.
+
+### What the next run should do
+
+1. Put §26.3 (the mirrored direction) to the user. It is the last measured
+   difference between the two wheels that this run did not act on.
+2. `MaxRings` is now 9, so `_rings`, the geometry caches and the entrance
+   cascade all run at a different size. The cascade's two delay formulae were
+   divided by a literal `36`; they now divide by the column count. **Watch the
+   entrance animation on screen** — the arithmetic is right and nobody has
+   watched it at 72 columns.
+3. Re-seed the scratch page in a colour that is not a Copic swatch.
+
 ## RUN OF 2026-09-03 (ninth screen run) — STOOD DOWN: THE USER IS AT THE MACHINE
 
 Branch `integration` @ `f1ad34e`, rebuilt clean (**0 warnings**, x64 Debug,

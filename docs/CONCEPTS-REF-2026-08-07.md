@@ -6645,3 +6645,137 @@ Rows 2.1–2.5 and 2.7 are covered by `tools/TextColourRoundTrip`; 2.6's angle h
 is covered by `tools/ExportRotRoundTrip`. **Every row in the canvas table is
 UNSEEN.** The two to look hardest at are **1.11** (a stamp under a live caret is
 the likeliest surprise) and **1.17** (two colour controls, one box).
+
+## 26 The COPIC wheel's outer columns — 2026-09-03
+
+### 26.1 lives in the code
+
+`f1ad34e` settled the *radial* cell and the family gap, and its ruling is
+written where it is read — the `FamGap` / `ColStep` / `ColStart` block at the
+top of `ColorWheel.cs`. Nothing here supersedes it; 26.2 measured the reference
+again and found the same answer for the gap (zero) by a second method.
+
+### 26.2 The columns are code SERIES, not slices — measured, 2026-09-03
+
+**The question.** The reference wheel has roughly twice as many outer columns as
+Quill's. Quill drew 36 columns of 10°, one per `CopicPalette` slice, each a deep
+stack; the reference's are half as wide and much shallower.
+
+**FIRST, A CORRECTION THAT MATTERS MORE THAN THE ANSWER.** The brief for this
+run described `Quill_KbFldw0iXN.png` as *"Quill's own earlier output — its top
+bar still carries the PRO button, removed later"*, and therefore as a
+restoration. **It is not Quill. It is Concepts**, and §11.17 already ruled
+exactly that about exactly this image: *"§11.16 was framed wrongly… It is
+Concepts. It is a target to reach, not a state to keep."* The ShareX filename
+and the PRO badge both mislead — Quill's own `ProBadge` is a bordered pill at
+10.5 pt behind `Metrics.ProBadgeVisible = false`, while the capture's `PRO` is
+large unbordered text, which is Concepts' Pro Store button (the very thing
+`ChromeBars.ProBadge`'s doc comment says it was copied from).
+
+The proof is not the badge, it is the ink. Decoding the capture's flat fills
+against `CopicPalette.cs` identifies **11 of 71** ring-0 columns; decoding the
+same pixels against Concepts' extracted table (`copic_out/concepts_palette.json`,
+the 357 codes `copic_concepts_extract.py` pulled out of `TopHatch.Concepts.dll`)
+identifies **71 of 71, exactly**. The 11 that matched both are precisely the
+families §11.27 imported *from Concepts* — the only codes where the two tables
+agree. §11.27 measured Concepts and `copicColors.js` as agreeing on **0 of 308**
+shared codes, and that is what the decode sees.
+
+This does not weaken the reference. The whole document is "reach Concepts". It
+does mean the wheel is being *built toward* a target, never *restored*, and a
+future run must not re-acquire §11.16's error.
+
+**The rule.** One column per Copic code **series** — the letter prefix plus the
+**first** digit of the blending number, so `RV09 RV06 RV04 RV02 RV00 RV000
+RV0000` is one column named `RV0`, and `B79` alone is the column `B7`. Inside a
+column the blending number runs **descending outward**, the darkest ink
+innermost, with `000` and `0000` falling outside `00`. Families are contiguous
+runs of their own series, ascending.
+
+**The evidence, in the order it was taken.**
+
+| step | result |
+|---|---|
+| flat-run segmentation of ring 0 | 62 runs quantised at ~5°, nine of them double-width where neighbours share a colour |
+| grid-free colour decode of ring 0 | **71 columns, 71 identified (100%)** against Concepts' table |
+| boundary pitch | mean **5.0704°**, sd **0.046°** — 360/71 exactly, and run 7's grid fit independently |
+| family gaps | the step across a family boundary is the same as inside one — **no family gap**, confirming FamGap = 0 by a second method |
+| depth per column | for all **54** unclipped columns the depth equals the series' size in Concepts' table (the two apparent misses are columns whose next ring is half off the 1800 px screen) |
+| the rule generated from the code table alone, compared cell by cell with the image | **252 cells on screen, 252 agree, 0 disagree** |
+
+**Two candidate rules were tried first and both were wrong, and the record is
+worth keeping.** Grouping by series *within each `SectorsRaw` slice* gives 150
+columns (it splits a series wherever the palette's own slice boundary cuts it).
+Capping a column's depth gives roughly the right count and the wrong depth.
+Neither survives; the rule above is the palette-wide grouping, and the reason
+the first attempt over-split by 2x is that `SectorsRaw`'s 36 rows were never
+series — §11.27 dealt its 49 new codes into "whichever column is currently
+shallowest", which scattered several series across two and three rows.
+
+**What it gives Quill.** 311 outer codes → **72 columns of 5.0000°**, deepest
+column **9** (`E0`). Not 71, and the difference is exactly §11.27's ten invented
+codes: `BV91 BV93 BV95 BV97 BV99` form a whole column, `BV9`, that Concepts does
+not have, and `BV39`, `G91 G93 G95 G97` deepen `BV3` and `G9`. **Those codes are
+the user's ruling and they stay**; the wheel is simply one column wider than its
+target because of them, which is the honest consequence and is recorded here
+rather than hidden by dropping them.
+
+**No swatch is dropped** — §11.21 item 1 holds. All 311 outer codes render;
+`MaxRings` falls from 17 to 9 because the deepest *column* is shallower, not
+because anything was trimmed to fit.
+
+| quantity | reference (Concepts) | Quill, predicted | Quill, measured on screen |
+|---|---|---|---|
+| outer columns | 71 | 72 | **72** |
+| column width | 5.0704° (sd 0.046) | 5.0000° | **4.90–5.05°**, median 4.95 at 0.05° sampling |
+| deepest column | 9 (`E0`) | 9 (`E0`) | **9** (`rings=9/9` from the geometry probe) |
+| fan inner radius | 366.66 DIP | 369.18 DIP (s=1) | fit **332.71** DIP at s=0.900 → Layout says 332.41 |
+| cell depth | 31.25 DIP | 31.210 DIP (s=1) | fit **28.129** DIP at s=0.900 → Layout says 28.100 (+0.10%) |
+| outer radius | 647.9 DIP | 650.07 DIP (s=1) | **585.9** DIP at s=0.900 → Layout says 585.33 |
+
+The last row is the one to keep. The outer edge is **not** a target and was never
+set; it is `rOutBase + MaxRings * band`, and `MaxRings` is whatever the deepest
+column holds. Getting the column rule right takes the wheel from 17 rings to 9
+and the outer edge from 899.75 to **650.07** DIP at s = 1 — **27.7% smaller,
+without removing a single colour** — and lands within **0.34%** of the
+reference's own 647.9. That convergence is the reason to believe the mechanism:
+nothing in the change aims at a radius.
+
+**The renderer was checked against `Layout()`, not just the arithmetic.** Fitting
+the drawn outer ink radius of 22 unclipped columns against their depth gives
+`r = 665.41 + 56.258 × depth` physical px, against `Layout()`'s own
+`664.82 + 56.20 × depth` from the geometry probe: **residual rms 0.28 px, max
+0.63 px**, and the +0.6 px offset is the documented 0.5 DIP `Weld`. (The 23rd
+column, `R2`, is excluded because `R29` is `#E10619`, which is the scratch page's
+own background — a collision in the measurement, not in the wheel.)
+
+**The hit test was checked on screen, one press at a time.** 122 targets — both
+sides of every reachable family boundary, both sides of 22 seams the regrouping
+*created*, column centres, and rings 2/4/6 — each opened the wheel, read the
+colour drawn at the point off the live screen, pressed it, and read the colour
+the dial's dot came back with. **122 of 122 delivered the swatch that was aimed
+at.** In 17 of them the pre-press pixel read a label glyph rather than the flat
+fill (the code label sits in the tile's inner/trailing corner, which is where a
+95%-across probe lands); the pick was right in every one of those too.
+
+### 26.3 STILL OPEN: the wheel runs the opposite way round from the reference
+
+Measured on both, not inferred. Taking bearings clockwise on screen:
+
+```
+reference (Concepts)   RV -> R -> YR -> E -> Y -> YG -> G -> BG -> B -> BV -> V
+Quill                  R -> RV -> V -> BV -> B -> BG -> G -> YG -> Y -> E -> YR
+```
+
+The cyclic sequence is the same; the direction is reversed, so the two wheels
+are **mirror images**. Quill's is `CopicPalette`'s own `-90° → 270°` order,
+which was transcribed from a different reference and has never been measured
+against this capture. Inside a family the same mirror shows: the reference's
+series ascend in its direction of travel (`RV0 … RV9`), and this change makes
+Quill's ascend in **its** direction, so each family reads the same way locally
+while the wheel as a whole reads the other way round.
+
+**Not changed, because it is not this run's question and it needs a ruling.**
+Reversing it means reversing the family order, the within-family series order and
+the sense of every label's rotation together; done by halves it would look worse
+than either. Put to the user.
