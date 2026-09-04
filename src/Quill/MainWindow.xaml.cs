@@ -8276,6 +8276,26 @@ public sealed partial class MainWindow : Window
     private static bool SurfaceCarriesUndo =>
         ToolSurfaceService.IsWheel || !ToolSurfaceService.LegacyBar;
 
+    /// <summary>CONCEPTS-REF 23 / 17.15 - whether the FORMAT BAR is up. This is
+    /// the other half of "is ChromeBars the topmost bar", and the half the
+    /// reserve was missing.
+    ///
+    /// <para>Hoisted out of <see cref="UpdateFormatBarVisibility"/> for exactly
+    /// the reason <see cref="SurfaceCarriesUndo"/> was hoisted out of
+    /// ApplyToolbarVisibility: the question is now asked by the code that SHOWS
+    /// the bar and by the code that decides which bar is under the strip, and
+    /// two copies of the expression would have drifted.</para>
+    ///
+    /// <para><b>It asks the STATE, not the element.</b> Reading
+    /// <c>FormatBar.Visibility</c> would have been wrong by a frame:
+    /// <see cref="FadeOut"/> passes <c>collapseAtEnd: true</c>, so the bar stays
+    /// Visible for the whole 120 ms of its fade. A reserve computed off the
+    /// element would therefore keep the padding on the format bar - and off
+    /// ChromeBars - for one animation after the bar had gone, which is the same
+    /// "held for a strip it is no longer under" defect one layer along.</para></summary>
+    private bool FormatBarUp =>
+        !_uiHidden && (Surface.Tool == ToolType.Text || Surface.ActiveTextBox != null);
+
     /// <summary>CONCEPTS-REF 15.3 — the chrome changes SHAPE in fullscreen.
     ///
     /// <para>Windowed, <c>TopBar</c> IS the caption bar: the system one is
@@ -8335,10 +8355,23 @@ public sealed partial class MainWindow : Window
             // case is the one nobody looks at.
             //
             // Sideways, like every other 17.15 reservation: reserving HEIGHT is
-            // what cost the page 46 DIP on the axis text needs most. And only
-            // when folded, because that is precisely when this cluster is the
-            // topmost thing on screen.
-            _chromeBars?.SetStripReserve(fold ? StripReserve : 0);
+            // what cost the page 46 DIP on the axis text needs most.
+            //
+            // 23 ROW 3, AND THE CONDITION IS "TOPMOST", NOT "FOLDED". This read
+            // `fold` alone, and `fold` answers "is the caption row away" - which
+            // coincides with "is this cluster topmost" only while no format bar
+            // is up. With one up BOTH bars held the reserve, and only one of them
+            // can be under the strip: the format bar takes the top row and pushes
+            // this cluster down to y 57..90.5, where it then spent 144 DIP
+            // holding itself clear of a strip it is not under. Measured on screen
+            // before the change - the cluster's nine boxes were byte-identical
+            // with and without a format bar, sparkle 1089.0..1104.5 through help
+            // 1260.5..1269.0 DIP in both - and 23's own table calls that out as
+            // the row to watch: "it has slid left as well, wasting 144 DIP".
+            //
+            // StripReserve's own doc has always said "Zero unless this cluster is
+            // the topmost bar on screen". This is that sentence, implemented.
+            _chromeBars?.SetStripReserve(fold && !FormatBarUp ? StripReserve : 0);
 
             // CONCEPTS-REF 17.15 - THE FORMAT BAR MOVES OUT FROM UNDER THE STRIP
             // SIDEWAYS, NOT DOWNWARD. See StripReserve for the whole argument;
@@ -8872,8 +8905,17 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     private void UpdateFormatBarVisibility()
     {
-        bool show = !_uiHidden && (Surface.Tool == ToolType.Text || Surface.ActiveTextBox != null);
+        bool show = FormatBarUp;
         if (show) FadeIn(FormatBar, 150, pop: false, slideY: -14); else FadeOut(FormatBar, 120);
+        // 23 row 3: WHICH BAR IS TOPMOST HAS JUST CHANGED, so the strip reserve
+        // has to be recomputed. ApplyFullscreenChrome is self-correcting and
+        // idempotent, and it was already reached on a surface switch, a resize
+        // and a presenter change - but never on the format bar coming or going,
+        // which is precisely the transition that moves ChromeBars between the
+        // top row and the row below it. Without this the reserve would be
+        // correct only until the user picked Text, and then stale until
+        // something else happened to call it.
+        ApplyFullscreenChrome();
     }
 
     private ITextSelection? Sel()

@@ -7201,3 +7201,236 @@ the screen. The next occurrence will name itself.
 
 Items 1–4 are the user's original report and its immediate neighbours; 7 and 8
 are the two things this section flagged rather than decided.
+
+## 28 The strip's reserve follows the bar that is topmost, and a panel built late reads it — 2026-09-04
+
+Three defects were filed against this run. **Two were real and are fixed; the
+third names the wrong control, and the defect it describes had already been
+closed by §27 one commit earlier.** All three were reproduced or refuted on
+screen first, in the 1440x900 DIP viewport §23's table was written in, before
+any line was changed.
+
+### 28.1 §23 row 3 — `fold` answers the wrong question
+
+`ApplyFullscreenChrome` handed the reserve to `ChromeBars` on `fold` alone:
+
+```csharp
+_chromeBars?.SetStripReserve(fold ? StripReserve : 0);
+```
+
+`fold` answers *"is the caption row away"*. `ChromeBars.StripReserve`'s own doc
+has always asked a different question — *"Zero unless this cluster is the
+topmost bar on screen"* — and the two coincide only while **no format bar is
+up**. With one up the format bar takes the top row, `ChromeBars` drops to the
+row beneath it, and both bars held the reserve. Only one of them can be under
+the strip.
+
+**Measured before the change**, fullscreen, the cluster's nine mark-groups in
+DIP:
+
+```
+PEN  (no format bar)   893.0..908.5 … 1089.0..1104.5 … 1260.5..1269.0
+TEXT (format bar up)   identical in all nine groups, to the pixel
+```
+
+144 DIP of the cluster row spent for nothing whenever a format bar is up —
+which §23's own table calls out as the row to watch: *"it has slid left as
+well, wasting 144 DIP"*.
+
+**The vertical geometry is what settles it**, and it was measured rather than
+assumed. Taking the gear's own columns:
+
+| case | gear, y (DIP) | strip is y 0..33 | so |
+|---|---|---|---|
+| pen, no format bar | **23.0..38.5** | **overlaps** | the cluster must clear the strip in x — reserve needed |
+| text, format bar up | **66.0..81.5** | clear by 33 | nothing to clear — reserve is waste |
+
+The fix conditions the reserve on being topmost, which needs both halves:
+
+```csharp
+_chromeBars?.SetStripReserve(fold && !FormatBarUp ? StripReserve : 0);
+```
+
+`FormatBarUp` is hoisted out of `UpdateFormatBarVisibility` for exactly the
+reason `SurfaceCarriesUndo` was hoisted out of `ApplyToolbarVisibility`: two
+copies of the expression would have drifted, and the question is now asked both
+by the code that shows the bar and by the code that decides which bar is under
+the strip.
+
+**It asks the STATE, not the element.** Reading `FormatBar.Visibility` would
+have been wrong by a frame: `FadeOut` passes `collapseAtEnd: true`, so the bar
+stays `Visible` for the whole 120 ms of its fade, and a reserve computed off the
+element would have kept the padding on the wrong bar for one animation after the
+bar had gone — the same defect one layer along.
+
+**`UpdateFormatBarVisibility` now calls `ApplyFullscreenChrome`.** It had only
+two callers — `ApplyToolbarVisibility` and `UpdateFullscreenIcon` — so it was
+reached on a surface switch, a resize and a presenter change, but **never on the
+format bar coming or going**, which is precisely the transition that moves
+`ChromeBars` between rows. Without this the reserve would have been right until
+the user picked Text and stale thereafter. No cycle is introduced:
+`ApplyFullscreenChrome` does not call back into the format bar.
+
+**The self-correcting property is intact and was verified live**, three flips
+without leaving fullscreen:
+
+```
+pen  893.0..1269.0    text 1037.0..1413.0    pen  893.0..1269.0
+text 1037.0..1413.0   pen  893.0..1269.0
+```
+
+Exactly 144.0 DIP, in both directions, every time. `FormatBar.Padding` and
+`TopBar.Padding` are untouched: the format bar is topmost when folded, so it
+keeps its own reserve, and its controls still stop at DIP ~1251 — clear of the
+strip's x 1302.
+
+### 28.2 §23 row 4 — the guard makes the reserve a PUSH, and a late child has to PULL
+
+`SetStripReserve` early-returns when the value has not moved, and
+`ApplyDockInset` — the only writer of `_measure.RightDockWidth` — runs only from
+there. **That guard is correct and stays**: `ApplyFullscreenChrome` is
+self-correcting and calls it far more often than it changes. The consequence is
+that the reserve is only ever *pushed*, and `MeasurementMenu` is built lazily on
+first use, so a panel that did not exist when the value last moved never hears
+about it.
+
+Measured before the change: fullscreen, pen, reserve settled at 144, Measurement
+opened for the first time — its ⓘ landed at **1410.0..1423.5 DIP** while the
+cluster's help button ends at **1269.0**. Exactly `StripReserve` adrift.
+
+The fix is at the construction site, not in the guard: the panel reads the
+current value once, through the one writer.
+
+```csharp
+_layout.Register("measurement", _measure.Root);
+ApplyDockInset();
+```
+
+**After, on the panel's first open in a fresh process: ⓘ at 1266.0..1279.5 DIP**
+— flush under the help button, and precisely where run 7's forced 144 → 0 → 144
+cycle had put it. `RightDockWidth` still has exactly one writer.
+
+Row 5 of §23's table (dock the Settings panel) remains **unrunnable**:
+`SettingsWindow.OccupiedRightWidth` is `=> 0`, documented *"Zero, permanently.
+The panel floats again (§3)"*, so there is no docked panel for the cluster to
+clear. Unchanged from run 7's finding.
+
+### 28.3 §24.15 row 3.3 — the brief names the wrong control, and §27 had already fixed the real one
+
+Row 3.3 was filed against `ToolWheel.cs:1394`,
+`BuildToolOptions(onSurface, outline, surface)`, on the reasoning that §24's
+comment three lines above — undo and redo *"would have been the only marks on it
+still keyed to the shell"* — was false.
+
+**That is not the control that was photographed.** `BuildToolOptions` emits
+**three text-only** toggles: `Freeform`/`Square`, `Partial`/`Complete`, `Layer`.
+Run 7's own capture shows **four cells with icons** —
+`Lasso | Partial | Include | All`. Those strings are `MainWindow.BuildToolMenu`
+(§17.10's mouse-tool menu), drawn by `BottomMenu.Plate` and `BottomMenu.Cell`:
+a different class, in a different file, reached by a different tool.
+
+Measured off run 7's own captures rather than argued:
+
+```
+vp6/144 (the defect)      ground #222222   ink #141414    1.16:1
+vp6/147 (dark restored)   ground #222222   ink #F2F2F2   14.21:1
+```
+
+`#141414` is `PageTheme.InkOnLight` exactly. The mechanism was a **split pair**:
+`Plate` already took its ground from `PageTheme.Panel`, derived from the PAGE,
+while `Cell` took its ink from `PageTheme.OnSurface`, selected by `IsDark` off
+the SHELL. Set the shell light and the ink flips while the page-derived ground
+stays put. §17.4 for the fourth time, and §0's trap precisely.
+
+**§27 closed it at `0d87e8b`, one commit before this run's HEAD:**
+
+```
+-  var ink = live ? PageTheme.OnSurface : PageTheme.WithAlpha(PageTheme.OnSurface, 70);
++  var ink = live ? PageTheme.OnPanel   : PageTheme.WithAlpha(PageTheme.OnPanel, 70);
+```
+
+Ground and ink are now both page-derived and cannot be split by any theme.
+
+**Verified on screen rather than inferred, and the verification needed care:**
+the pill does **not** repaint on a shell-theme change — correctly, since `Panel`
+follows the page and the page did not move — so a stale pill would have measured
+"pass" for the wrong reason. It was forced to rebuild under each theme by
+pressing a cell, which re-runs `BuildToolMenu`:
+
+```
+Theme = Dark          ground #393939  ink #F2F2F2  10.32:1
+Theme = Light         ground #393939  ink #F2F2F2  10.32:1   (rebuilt)
+Theme = "The page"    ground #393939  ink #F2F2F2  10.32:1   (rebuilt)
+```
+
+The ground is `#393939` rather than run 7's `#222222` because this run's scratch
+page is a saturated red; `Panel` follows the page, which is the point.
+
+**§24.15 row 3.3's wording should be read as satisfied by §27, not by §24.** The
+row sits under *"things that must NOT have changed"* and its failure text is
+*"its ink changed"* — which is exactly what §27 did, deliberately and correctly.
+The row was written before `OnPanel` existed. It is superseded, not violated.
+
+`ToolWheel.BuildToolOptions` was **left alone**, on purpose: `onSurface` and
+`surface` are a matched pair by construction — `OnSurface` is by definition the
+ink for `Surface` — so it cannot be split the way `BottomMenu` was. It is not
+the reported defect and changing it would have been a change with no measured
+fault behind it.
+
+### 28.4 One thing under 3:1, flagged rather than shipped — and it is a HOVER state
+
+With the pointer resting on a `BottomMenu` cell under `Theme = Light`, the
+cell's plate measures `#999999` and the app's `#F2F2F2` ink on it is **2.54:1**.
+
+That plate is **not Quill's**. `BottomMenu.Cell` sets
+`Background = Transparent` and the selected wash is `Accent` at alpha 46; the
+`#999999` is WinUI's default `ButtonBackgroundPointerOver`, which follows the
+ELEMENT theme while the ink follows the page. It is the same split-pair shape
+§27 just closed, one layer further down — in a stock control template rather
+than in Quill's own code.
+
+With the pointer parked away the same cell is `#393939` at **10.32:1**, and
+under `Theme = "The page"` the hovered cell is `#494949` at **8.04:1**. So it is
+transient and theme-specific, not a shipped-state failure — but it is under the
+floor and §0 does not exempt hover states.
+
+**Not fixed here**, because it is outside the three filed defects and a fix
+means giving `BottomMenu.Cell` an explicit `PointerOver` brush, which is a
+visual decision this run has no ruling for. Whoever takes it: the brush wants to
+be `OnPanel` at a low alpha over `Panel`, so it stays on the page's side of the
+split like everything else §27 moved.
+
+### 28.5 The worst contrast this run could produce, after the change
+
+| mark | on | ratio |
+|---|---|---|
+| `BottomMenu` ink, any theme, at rest | its own `Panel` plate | **10.32:1** |
+| `BottomMenu` ink, hovered, `Theme = "The page"` | WinUI hover plate `#494949` | 8.04:1 |
+| **`BottomMenu` ink, hovered, `Theme = Light`** | **WinUI hover plate `#999999`** | **2.54:1 — under the floor, flagged in 28.4** |
+
+Nothing this run *changed* moved any contrast: §23's two fixes are pure
+geometry, and the one colour defect was already fixed before the run started.
+
+### 28.6 Working conditions, for the record
+
+- **Nothing was seen that was not measured.** Every number above came off a
+  capture through `scratchpad/vp8_cluster.py` (mark detection by blue channel
+  against the red scratch page) or `scratchpad/vp8_pill.py` (WCAG contrast from
+  a colour histogram), not off an eye.
+- **The theme does not live in `library.json`.** Its `Theme` / `ThemeSource`
+  keys are a stale mirror; the live values are `settings.json` →
+  `Settings.Theme` and `Ui.Theme`. Editing the library field has no effect and
+  cost this run a confounded before/after until it was caught. All final
+  measurements were retaken under a matched `Theme = Dark`.
+- **The user's `library.json` was never opened for writing.** Sealed at
+  53 582 459 bytes / SHA-256 `0C32CE6C…` / mtime 2026-08-28, re-checked
+  identical on all three counts after the run. A scratch `QUILL_DATA_FOLDER`
+  with `library.json` seeded before first launch kept
+  `MigrateFromLegacyIfNeeded` from copying anything.
+- **`crash.log` gained nothing.** The only one on the machine is the stale
+  2026-08-21 file, still in the pre-§27.5 uninformative form (`render region
+  failed:` with an empty detail), which is itself evidence it predates that
+  change. No handler swallowed anything this run.
+- **`MainWindow.xaml.cs` and `ChromeBars.cs` are both CRLF**, measured
+  immediately before and after every write: 12 394 → 12 436 and 1 620 → 1 648
+  CRLF, zero bare LF on either side.
