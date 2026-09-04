@@ -1,5 +1,115 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-04 (eleventh screen run) — `integration` @ `4d846c9`, §28
+
+Clean x64 Debug `--no-incremental` build, **0 warnings**, before and after.
+Scratch `QUILL_DATA_FOLDER = scratchpad/vp8data` with `library.json` seeded
+before first launch, so `MigrateFromLegacyIfNeeded` returned early; the user's
+real `library.json` was sealed at 53 582 459 bytes / SHA-256 `0C32CE6C…` and
+re-checked byte-identical at the end.
+
+**Machine conditions.** The cursor was static at `1710,1699` physical
+(`855,850` logical — the 2x DPI trap, sampled inside the harness process) across
+8 samples, idle climbing past 218 s, Quill not running, screen 2880x1800
+physical = **1440x900 DIP**, which is the viewport §23's table was measured in.
+The cursor never moved anywhere this run did not put it.
+
+### The three filed defects, as found rather than as briefed
+
+| # | brief's diagnosis | what the screen showed |
+|---|---|---|
+| §23 r3 | ChromeBars holds the strip reserve when the format bar is topmost | **CONFIRMED, byte-identical** |
+| §23 r4 | a late-built Measurement panel never gets the reserve | **CONFIRMED, 144.0 DIP exactly** |
+| §24.15 r3.3 | `ToolWheel.BuildToolOptions` is keyed to shell tokens | **WRONG CONTROL, and the real one was already fixed** |
+
+#### §23 row 3 — CONFIRMED, and the two cases are byte-identical
+
+Fullscreen, caption row folded. The ChromeBars right cluster, measured off the
+capture by thresholding the blue channel against the red scratch page
+(`scratchpad/vp8_cluster.py`), in DIP:
+
+```
+PEN  (no format bar)  893.0..908.5  925.0  950.5..978.5  1022.5..1032.5
+                      1089.0..1104.5  1132.5..1145.5  1174.5..1187.5
+                      1215.0..1230.5  1260.5..1269.0
+TEXT (format bar up)  identical in all nine groups, to the pixel
+```
+
+That reproduces run 7's own figures exactly (`sparkle 1089.0..1104.5 … help
+1260.5..1269.0`). With a format bar up the format bar is the topmost row and
+ChromeBars sits a row below it at y 57..90.5 — and still spends 144 DIP holding
+itself clear of a strip it is not under. Captures `b02-fs-pen.png`,
+`b04-fs-text.png`.
+
+#### §23 row 4 — CONFIRMED, 144.0 DIP, on the panel's first open
+
+Fullscreen with the pen (reserve settled at 144), Measurement never opened this
+session, then tapped the zoom readout. Its ⓘ landed at **1410.0..1423.5 DIP**
+while the cluster's help button ends at **1269.0** — the panel is exactly
+`StripReserve` right of the cluster it hangs off. Run 7 measured the same
+1410…1423.5. Capture `b07-measure-first-open.png`.
+
+#### §24.15 row 3.3 — THE BRIEF NAMES THE WRONG CONTROL, AND THE REAL ONE IS ALREADY FIXED
+
+The brief sends this to `ToolWheel.cs:1394`, `BuildToolOptions(onSurface,
+outline, surface)`. **That is not the control run 7 photographed.**
+`BuildToolOptions` emits **three text-only** toggles — `Freeform`/`Square`,
+`Partial`/`Complete`, `Layer`. Run 7's own capture
+`vp6/144-TOOLOPTIONS-DARK-ON-DARK.png.png` shows **four cells with icons** —
+`Lasso | Partial | Include | All`. Those strings are
+`MainWindow.BuildToolMenu()` (§17.10's mouse-tool menu), drawn by
+`BottomMenu.Plate`/`Cell`, and they are a different class in a different file.
+
+Measured off run 7's own captures, which settles it rather than arguing it:
+
+```
+vp6/144 (the defect)          ground #222222   ink #141414   1.16:1
+vp6/147 (dark restored)       ground #222222   ink #F2F2F2  14.21:1
+```
+
+`#141414` is `PageTheme.InkOnLight` exactly. The mechanism was a **split pair**:
+`BottomMenu.Plate` already took its ground from `PageTheme.Panel`, which is
+derived from the PAGE, while `Cell` took its ink from `PageTheme.OnSurface`,
+which is selected by `IsDark` off the SHELL. Set the shell light and the ink
+flips to `#141414` while the page-derived ground stays put. That is §17.4 once
+more, and §0's trap exactly.
+
+**§27 fixed it, one commit before the HEAD this run was given.** `git show
+0d87e8b -- src/Quill/Controls/BottomMenu.cs`:
+
+```
+-        var ink = live ? PageTheme.OnSurface : PageTheme.WithAlpha(PageTheme.OnSurface, 70);
++        var ink = live ? PageTheme.OnPanel   : PageTheme.WithAlpha(PageTheme.OnPanel, 70);
+```
+
+so ground and ink are now both page-derived and cannot be split by any theme.
+Verified on screen rather than inferred — the pill was **forced to rebuild**
+under each theme (pressing a cell re-runs `BuildToolMenu`), because the pill
+does not repaint on a shell-theme change and a stale pill would have measured
+"pass" for the wrong reason:
+
+```
+Theme = Dark          ground #393939  ink #F2F2F2  10.32:1
+Theme = Light         ground #393939  ink #F2F2F2  10.32:1   (rebuilt)
+Theme = "The page"    ground #393939  ink #F2F2F2  10.32:1   (rebuilt)
+```
+
+The ground is `#393939` rather than run 7's `#222222` because this run's scratch
+page is the seed's red; `Panel` follows the page, which is the point.
+Captures `b09-pill-dark.png`, `b16-pill-light-rebuilt.png`,
+`b17-pill-theme-page.png`, `b18-pill-light-nohover.png`.
+
+**One thing under 3:1 was found on that pill, and it is a HOVER state.** With
+the pointer resting on a cell under `Theme = Light`, the cell's plate is
+`#999999` and the app's `#F2F2F2` ink on it is **2.54:1**. That plate is not
+Quill's — `BottomMenu.Cell` sets `Background = Transparent` and the selected
+wash is `Accent` at alpha 46 — it is WinUI's default `ButtonBackgroundPointerOver`,
+which follows the ELEMENT theme while the ink follows the page. With the pointer
+parked away the same cell is `#393939` at 10.32:1, and under `Theme = "The page"`
+the hovered cell is `#494949` at 8.04:1. Flagged rather than shipped silently;
+it is the same split-pair shape §27 just closed, one layer further down, and it
+is **not** one of the three filed defects.
+
 ## RUN OF 2026-09-04 (NO SCREEN RUN) — §26.3 MIRRORED IN CODE, §21 WRITTEN
 
 Branch `integration` @ `c287553` plus this change. Clean x64 Debug
