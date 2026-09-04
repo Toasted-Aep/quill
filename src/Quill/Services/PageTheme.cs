@@ -27,6 +27,23 @@ public static class PageTheme
     /// for Blueprint / Brown Paper / Darkprint. Everything else derives from it.</summary>
     public static Color Ground { get; private set; } = Color.FromArgb(255, 0xFA, 0xFA, 0xFA);
 
+    /// <summary>§27: THE PAGE THE USER IS ACTUALLY DRAWING ON, which is NOT
+    /// <see cref="Ground"/>.
+    ///
+    /// <para>The two are the same colour only when <c>ThemeSource == "Page"</c>,
+    /// and that field defaults to <c>"Manual"</c> - so on a default install
+    /// <see cref="Ground"/> is a pinned shell colour that knows nothing about
+    /// the paper. §24 fixed that for the chrome by reading the page directly at
+    /// each call site. <see cref="Panel"/> could not do the same, because a
+    /// panel's ground is read from static factories with no page in reach
+    /// (<c>BottomMenu.Plate</c> is the plainest case), so the page is published
+    /// here instead - once, by <c>MainWindow.PushGround</c>, through
+    /// <see cref="SetGrounds"/>.</para>
+    ///
+    /// <para>Falls back to the shell's ground with no page: the gallery and
+    /// startup, where there is no paper to read.</para></summary>
+    public static Color PageGround { get; private set; } = Color.FromArgb(255, 0xFA, 0xFA, 0xFA);
+
     /// <summary>True when the ground is dark enough that chrome must invert.
     /// Threshold is relative luminance 0.5, which puts Blueprint (0.21) and
     /// Brown Paper (0.20) on the dark side exactly as the reference shows.</summary>
@@ -49,10 +66,51 @@ public static class PageTheme
     /// <summary>Hairline dividers, sector separators, unselected swatch rings.</summary>
     public static Color Outline { get; private set; }
 
-    /// <summary>Floating window fill: Settings, Export, Brushes, Objects. Unlike
-    /// <see cref="Surface"/> this is near-neutral - the reference panels are a
-    /// flat #F7F7F7 or #141414 regardless of the page's hue.</summary>
+    /// <summary>Floating window fill: Settings, Export, Brushes, Objects, the
+    /// bottom mode bar, the grid editor's bar and the selection pill.
+    ///
+    /// <para><b>§27: DERIVED FROM <see cref="PageGround"/>, not from
+    /// <see cref="Ground"/>.</b> It used to be a ramp off the shell's ground,
+    /// which is how a default install came to show a BLACK Settings panel on
+    /// white graph paper - the user's report, verbatim: <i>"the app theme is
+    /// black in a white page what is this?"</i>. The ruling was <i>"Follow the
+    /// page, but stay heavier"</i>, and that is
+    /// <see cref="Quill.Controls.PagePlate.Panel(Color)"/>: §24's one formula at
+    /// a third endpoint, with a separation floor so a mid-tone paper cannot
+    /// swallow it.</para>
+    ///
+    /// <para>What was lost with the old ramp, said plainly: it carried 0.85 of
+    /// the page's a/b and sat in an L* 95..97.5 band, so a warm paper's panel
+    /// was cream. The mix runs toward a neutral grey, so the new panel carries
+    /// 0.30 of the cast and is a tinted grey instead. That is the price of
+    /// "heavier" and it is one constant - see <c>PagePlate.PanelT</c>.</para></summary>
     public static Color Panel { get; private set; }
+
+    /// <summary>§0/§24.6: the mark for <see cref="Panel"/>, judged against
+    /// <see cref="Panel"/>.
+    ///
+    /// <para>NOT <see cref="OnSurface"/>. That one is selected by
+    /// <see cref="IsDark"/>, i.e. keyed to the SHELL's ground - the ground the
+    /// panel has just stopped using. A panel-standing mark that keeps it is
+    /// §17.4's defect wearing a new name, and on the default install it is the
+    /// worst case there is: white ink on a light panel.</para></summary>
+    public static Color OnPanel { get; private set; }
+
+    /// <summary>Secondary ink on a panel - the same relation
+    /// <see cref="OnSurfaceMuted"/> has to <see cref="OnSurface"/>.</summary>
+    public static Color OnPanelMuted { get; private set; }
+
+    /// <summary>Hairlines and dividers on a panel.</summary>
+    public static Color PanelOutline { get; private set; }
+
+    /// <summary>Which side of the line <see cref="Panel"/> is on, for the stock
+    /// WinUI controls inside a panel (TextBox, Slider, ComboBox) which resolve
+    /// their own brushes from <c>ElementTheme</c> and not from this class.
+    ///
+    /// <para>Defined as "<see cref="OnPanel"/> is the light ink" rather than as
+    /// a second luminance test, so the element theme and the ink this class
+    /// hands out can never disagree about one panel near the crossover.</para></summary>
+    public static bool PanelIsDark { get; private set; }
 
     /// <summary>Links and primary buttons. The user's accent, untouched by the
     /// page - it is their choice, not the paper's.</summary>
@@ -139,47 +197,45 @@ public static class PageTheme
             ? TextInkOnLight
             : TextInkOnDark;
 
-    /// <summary>How much of the ground's colour a PANEL carries.
-    ///
-    /// <para>Panels used to be neutral by design - section 6 had them flat
-    /// whatever the page's hue, unlike Surface which carries it. The user asked
-    /// for the opposite: cream on a warm paper, and the equivalent elsewhere.
-    /// Light panels take most of the ground's a/b, because that is where cream
-    /// lives and where a tint reads easily at all; dark panels take far less, so
-    /// a dark surface only hints at its page instead of becoming a coloured
-    /// slab.</para></summary>
-    private const double LightPanelChroma = 0.85;
-    private const double DarkPanelChroma = 0.35;
+    // §27 REMOVED THE PANEL RAMP that used to live here: LightPanelChroma 0.85 /
+    // DarkPanelChroma 0.35, and the two L* bands 95..97.5 and 13..29. Those
+    // numbers were the user's and they are not withdrawn on their merits - they
+    // are withdrawn because they were applied to `Ground`, the SHELL's colour,
+    // and a panel that follows the shell is the defect §27 exists to fix. The
+    // ruling that replaces them - "follow the page, but stay heavier" - is one
+    // formula with two constants, and both live in PagePlate beside §24's.
 
-    /// <summary>The light panel band, in L*.
-    ///
-    /// <para>The user supplied a swatch - a near-white neutral, about #F5F5F5,
-    /// L* 96 - and asked for the light grey to be that colour. The band was
-    /// 90..97, which still left the greyer papers visibly below white. At
-    /// 95..97.5 a typical paper lands on the supplied value, a mid-light ground
-    /// on about #F1F1F1 and pure white on about #F9F9F9 - narrow, but not flat,
-    /// so the papers stay distinguishable from one another.</para></summary>
-    private const double LightPanelFloor = 95.0;
-    private const double LightPanelRange = 2.5;
-
-    /// <summary>The dark panel band, in L*. The floor is what keeps Darkprint a
-    /// dark GREY rather than something indistinguishable from the black case
-    /// beneath it.</summary>
-    private const double DarkPanelFloor = 13.0;
-    private const double DarkPanelRange = 16.0;
-
-    /// <summary>Raised whenever the ground changes and every surface must repaint.</summary>
+    /// <summary>Raised whenever either ground changes and every surface must repaint.</summary>
     public static event Action? Changed;
 
     static PageTheme() => Apply(Ground);
 
-    /// <summary>Point every surface at a new page ground. Cheap and idempotent;
+    /// <summary>Point every surface at a new shell ground, leaving
+    /// <see cref="PageGround"/> where it is. Cheap and idempotent;
     /// <see cref="Changed"/> only fires when the ground actually moved.</summary>
-    public static void SetGround(Color ground)
+    public static void SetGround(Color ground) => SetGrounds(ground, PageGround);
+
+    /// <summary>§27: BOTH GROUNDS AT ONCE, and <see cref="Changed"/> fires at
+    /// most once for the pair.
+    ///
+    /// <para>They have to move together. A page turn under
+    /// <c>ThemeSource = "Page"</c> moves both; under the default <c>"Manual"</c>
+    /// it moves only the page. Setting them one at a time would either repaint
+    /// twice on the first case - which is the cost §24.9's guard was written to
+    /// avoid - or repaint the panels from the previous page on the second.</para>
+    ///
+    /// <para>Returns whether it raised <see cref="Changed"/>, so a caller that
+    /// keeps its own stale-page guard can tell whether the subscription has
+    /// already done the work.</para></summary>
+    public static bool SetGrounds(Color shell, Color page)
     {
-        if (ground.R == Ground.R && ground.G == Ground.G && ground.B == Ground.B) return;
-        Apply(ground);
+        bool shellMoved = shell.R != Ground.R || shell.G != Ground.G || shell.B != Ground.B;
+        bool pageMoved = page.R != PageGround.R || page.G != PageGround.G || page.B != PageGround.B;
+        if (!shellMoved && !pageMoved) return false;
+        PageGround = page;
+        Apply(shell);
         Changed?.Invoke();
+        return true;
     }
 
     private static void Apply(Color g)
@@ -197,51 +253,31 @@ public static class PageTheme
         OnSurface = IsDark ? InkOnDark : InkOnLight;
         OnSurfaceMuted = WithAlpha(OnSurface, 140);
         Outline = WithAlpha(OnSurface, 36);
-        // A RAMP, not a switch. Panel used to be one of two constants, so an
-        // ivory page and a pure white one produced an identical panel and so did
-        // a near-black page and a merely dark one. It now tracks the ground:
-        // white -> L* 97, black -> L* 8, everything between interpolated on
-        // relative luminance. Luminance rather than L* because that is the axis
-        // IsDark is decided on, so the panel's shade and the text's colour can
-        // never disagree about which side of the middle a page sits.
+        // §27: THE PANEL IS DERIVED FROM THE PAGE, NOT FROM THE SHELL.
         //
-        // The clamps are a legibility floor, not taste: they hold the panel away
-        // from the text that will sit on it, which is at its worst exactly at
-        // the middle where IsDark flips.
+        // It used to be a ramp off `g` - the shell's ground - carrying 0.85 of
+        // its a/b into an L* 95..97.5 band (light) or 13..29 (dark). Every
+        // number in that ramp was the user's, and every one of them was applied
+        // to the wrong colour: `g` is the paper only when ThemeSource is "Page",
+        // and that field defaults to "Manual". A pinned dark shell over white
+        // graph paper therefore produced a BLACK Settings panel, which is the
+        // report this section exists for.
         //
-        // Panels also CARRY THE GROUND'S HUE now. They were neutral by design -
-        // section 6 had them flat whatever the page's colour, unlike Surface -
-        // and the user asked for the opposite: cream on a warm paper, and the
-        // equivalent elsewhere. Light panels take most of the ground's a/b,
-        // because that is where cream lives and where a tint reads easily; dark
-        // panels take less, so a dark surface hints at its page rather than
-        // becoming a coloured slab.
-        double gy = Luminance(g);
-        if (IsDark)
-        {
-            // Only a ground that IS black gets a black panel. The threshold was
-            // 0.05, which swallowed Darkprint at 0.024 and turned it black; the
-            // user has since asked for Darkprint to be a dark GREY, so this now
-            // catches a true #000000-class ground and nothing else. Black keeps
-            // ZERO chroma - black asked for is black, not near-black wearing a
-            // cast - and the band's floor sits high enough that the darkest real
-            // paper still reads as grey.
-            Panel = gy <= 0.004
-                ? Color.FromArgb(255, 0, 0, 0)
-                : FromLab(DarkPanelFloor + DarkPanelRange * Math.Min(1.0, gy / 0.5),
-                          a * DarkPanelChroma, b * DarkPanelChroma);
-        }
-        else
-        {
-            // L* 90..97 across the top half of the luminance range. The previous
-            // 84..97 put Heavyweight on #D1D1D1 - grey rather than off-white -
-            // and the user asked for the light end to be lighter. The papers
-            // stay distinguishable from one another inside the narrower band,
-            // and the carried chroma is what turns a warm paper's panel cream.
-            double t = Math.Clamp((gy - 0.5) / 0.5, 0.0, 1.0);
-            Panel = FromLab(LightPanelFloor + LightPanelRange * t,
-                            a * LightPanelChroma, b * LightPanelChroma);
-        }
+        // No adjustment to the ramp could have fixed that, for the same reason
+        // §24.1 gives about the corner plates: it was the wrong SOURCE, and no
+        // value read off the wrong source is right on more than one paper at a
+        // time. So the ramp is gone and the panel is PagePlate's one formula at
+        // its third endpoint, with a separation floor - "follow the page, but
+        // stay heavier", which is the whole of the ruling.
+        //
+        // The marks follow in the same breath, because §0 says they must: a
+        // ground that moved and a mark that did not is §17.4, and it has already
+        // fired twice in this file's history.
+        Panel = Quill.Controls.PagePlate.Panel(PageGround);
+        OnPanel = Quill.Controls.PagePlate.PanelInk(Panel);
+        PanelIsDark = OnPanel.R == InkOnDark.R && OnPanel.G == InkOnDark.G && OnPanel.B == InkOnDark.B;
+        OnPanelMuted = WithAlpha(OnPanel, 140);
+        PanelOutline = WithAlpha(OnPanel, 36);
         Probe();
     }
 
@@ -253,7 +289,11 @@ public static class PageTheme
     public static string Describe() =>
         $"ground={Hex(Ground)} isDark={(IsDark ? 1 : 0)} lum={Luminance(Ground):F4} " +
         $"surface={Hex(Surface)} surfaceAlt={Hex(SurfaceAlt)} onSurface={Hex(OnSurface)} " +
-        $"onSurfaceMuted={Hex(OnSurfaceMuted)} outline={Hex(Outline)} panel={Hex(Panel)} accent={Hex(Accent)}";
+        $"onSurfaceMuted={Hex(OnSurfaceMuted)} outline={Hex(Outline)} panel={Hex(Panel)} accent={Hex(Accent)} " +
+        // §27's fields are APPENDED, never inserted: the scratchpad probes that
+        // read this line key off position for the older fields.
+        $"pageGround={Hex(PageGround)} panelIsDark={(PanelIsDark ? 1 : 0)} onPanel={Hex(OnPanel)} " +
+        $"panelSep={Math.Abs(Lightness(Panel) - Lightness(PageGround)):F2}";
 
     private static string Hex(Color c) => $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
 
@@ -284,6 +324,27 @@ public static class PageTheme
     /// there is already exactly one CIELAB implementation in this file and a
     /// second copy is how two surfaces come to disagree about one page.</para></summary>
     public static double Lightness(Color c) => ToLab(c).L;
+
+    /// <summary>The same colour at a different CIE lightness - a/b, i.e. hue and
+    /// chroma, are carried through untouched.
+    ///
+    /// <para>§27's separation floor needs exactly this: a panel whose mix has
+    /// collapsed onto its page has to be pushed OFF the page without being
+    /// repainted grey. Shifting L* in CIELAB keeps hue and saturation put;
+    /// shifting it in HSL does not, which is the reason this file has a CIELAB
+    /// implementation at all - and the reason this helper lives here rather than
+    /// beside the caller, where it would be the second copy of it.</para>
+    ///
+    /// <para>The round trip is not exact at the gamut edge: a colour whose a/b
+    /// cannot be realised at the requested L* is clipped by <c>FromLab</c>'s
+    /// per-channel clamp, so the result can come back a shade off the L* asked
+    /// for. Callers that need the guarantee must re-measure, and §27's harness
+    /// does.</para></summary>
+    public static Color WithLightness(Color c, double lStar)
+    {
+        var (_, a, b) = ToLab(c);
+        return FromLab(Math.Clamp(lStar, 0, 100), a, b);
+    }
 
     /// <summary>Relative luminance, gamma-correct. Averaging the raw bytes is
     /// wrong by enough to put Brown Paper on the wrong side of the threshold.</summary>

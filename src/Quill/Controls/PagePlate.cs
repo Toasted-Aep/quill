@@ -93,6 +93,73 @@ public static class PagePlate
     /// this class's remarks.</summary>
     public const double Tint = 0.40;
 
+    /// <summary>§27: PANELS. Three tenths of the page's colour - the third
+    /// endpoint of the same formula, and the FURTHEST of the three from the
+    /// page.
+    ///
+    /// <para><b>The ruling.</b> Asked what a panel should do on a white page
+    /// after §24 left panels out of scope and the user found a black Settings
+    /// slab on white graph paper, the answer was <i>"Follow the page, but stay
+    /// heavier."</i> Follow = it is derived from the page like everything else
+    /// §24 touched. Heavier = it sits FURTHER from the page than the chrome
+    /// does, so it still reads as a surface floating over the paper rather than
+    /// blending into it. <see cref="Full"/> is the page exactly and
+    /// <see cref="Tint"/> is four tenths of the way back to it; this is three
+    /// tenths, and lower <i>t</i> is literally "further from the page".</para>
+    ///
+    /// <para><b>Where 0.30 comes from - it is the largest value the floor
+    /// allows, not a taste.</b> <see cref="PanelSeparation"/> fixes the minimum
+    /// lightness gap a panel may have from its page. <i>t</i> is then chosen as
+    /// the LARGEST value at which no shipped paper has to be rescued by that
+    /// floor - largest, because every hundredth of <i>t</i> given up is a
+    /// hundredth of the page's colour the panel stops carrying. Darkprint binds
+    /// first: its ground is L* 17.28 and its base grey <see cref="DarkBase"/> is
+    /// L* 31.89, so the gap the mix leaves shrinks as t rises and crosses the
+    /// floor at <b>t = 0.328</b>, bisected by <c>tools/PanelProof</c> against
+    /// this very method. 0.30 is the round number under that. At 0.30 the worst
+    /// gap over all nine shipped papers is <b>10.23 L* (Darkprint)</b> and the
+    /// clamp never fires on shipped stock; at 0.35 it would be 9.69 and
+    /// Darkprint's panel would be a clamped colour rather than a mixed one. §27
+    /// of docs/CONCEPTS-REF-2026-08-07.md has the table.</para>
+    ///
+    /// <para><b>What it costs, stated rather than hidden.</b> The mix runs
+    /// toward a NEUTRAL grey, so t is a chroma dial as well as a lightness one:
+    /// a panel now carries three tenths of the page's cast where the superseded
+    /// <c>PageTheme</c> ramp carried 0.85 of its a/b. A warm paper's panel is
+    /// warm-tinted grey rather than cream. That is the direct price of
+    /// "heavier", it is one constant, and raising it is safe because the floor
+    /// below catches whatever the raise would have collapsed.</para></summary>
+    public const double PanelT = 0.30;
+
+    /// <summary>§27: THE SEPARATION FLOOR - the minimum L* a panel may sit from
+    /// its page, in either direction.
+    ///
+    /// <para><b>Why a floor exists at all.</b> The mix collapses wherever the
+    /// page happens to land on the base grey's own lightness: a page at L* 73
+    /// takes <see cref="LightBase"/> (#B4B4B4, L* 73.31) and <c>Of</c> returns
+    /// very nearly the page itself at every <i>t</i>. That is a mid-tone paper,
+    /// and it is exactly the case the chrome does not have - §17.2's corner
+    /// plates are MEANT to disappear into the page and are stated that way
+    /// (1.33:1 to 1.52:1 findability, §24.7), while a Settings panel that
+    /// disappears is a defect. Without a floor, "follow the page" would ship a
+    /// panel with no edge on any paper near L* 73.31 or L* 31.89
+    /// (<see cref="DarkBase"/>). A custom page colour reaches both, and
+    /// <c>tools/PanelProof</c> section 3 shows the clamp firing on exactly those
+    /// two greys and on nothing else in its list.</para>
+    ///
+    /// <para>This paragraph read <i>"a page at L* 72 takes LightBase (L*
+    /// 72.4)"</i> and both figures were about one L* out. §27's harness asserts
+    /// them on every run now (section 7), which is how that was found - the
+    /// comment was written from the intended value rather than measured.</para>
+    ///
+    /// <para><b>10.0, and it is a perceptual number.</b> A just-noticeable L*
+    /// step is about 2.3; 10 is a little over four of them, which is a step
+    /// nobody has to hunt for across a large flat area and is still far short of
+    /// the ~30 L* a 3:1 mark-versus-ground contrast would demand. It is a
+    /// SEPARATION floor, not a contrast floor: the panel has to be findable
+    /// against the page, not legible against it.</para></summary>
+    public const double PanelSeparation = 10.0;
+
     /// <summary>The grey a LIGHT page's plates are built on. #B4B4B4, solved from
     /// the user's Blueprint example.</summary>
     public static readonly Color LightBase = Color.FromArgb(255, 0xB4, 0xB4, 0xB4);
@@ -131,9 +198,67 @@ public static class PagePlate
     public static bool BaseIsDark(Color ground) => PageTheme.Lightness(ground) < BaseSplit;
 
     /// <summary>THE FORMULA. <paramref name="t"/> is <see cref="Full"/> for
-    /// §17.2's corner plates and <see cref="Tint"/> for the dial's.</summary>
+    /// §17.2's corner plates, <see cref="Tint"/> for the dial's and
+    /// <see cref="PanelT"/> for a panel's.</summary>
     public static Color Of(Color ground, double t) =>
         Mix(BaseIsDark(ground) ? DarkBase : LightBase, ground, t);
+
+    /// <summary>§27: A PANEL'S GROUND - the formula at <see cref="PanelT"/>,
+    /// held at least <see cref="PanelSeparation"/> L* away from the page.
+    ///
+    /// <para>The clamp keeps the panel's a/b and moves only its L*, so a page
+    /// that would have collapsed the mix still gets a panel in its own hue - it
+    /// is pushed off the page, not repainted grey. The direction is whichever
+    /// way the mix was already leaning, because that lean is the one the base
+    /// grey chose and reversing it would put a light panel on a lighter page.
+    /// A dead tie (page exactly on the base) leans AWAY from the page's own end
+    /// of the axis, and if that would run off 0..100 it takes the other side.</para>
+    ///
+    /// <para>Fully opaque, like every other endpoint here: a panel establishes
+    /// its own ground or the marks on it are being judged against the paper.</para></summary>
+    public static Color Panel(Color ground) => Panel(ground, PanelT, PanelSeparation);
+
+    /// <inheritdoc cref="Panel(Color)"/>
+    /// <remarks>The parameterised form exists so the acceptance harness can
+    /// sweep <paramref name="t"/> and <paramref name="separation"/> against the
+    /// SHIPPED arithmetic rather than against a transcription of it - §24.7's
+    /// method, and the reason the two constants above can be quoted as
+    /// measurements.</remarks>
+    public static Color Panel(Color ground, double t, double separation)
+    {
+        var panel = Of(ground, t);
+        double lg = PageTheme.Lightness(ground);
+        double gap = PageTheme.Lightness(panel) - lg;
+        if (Math.Abs(gap) >= separation) return panel;
+
+        double dir = gap > 0 ? 1 : gap < 0 ? -1 : (lg >= BaseSplit ? -1 : 1);
+        double want = lg + dir * separation;
+        if (want < 0 || want > 100) want = lg - dir * separation;
+        return PageTheme.WithLightness(panel, Math.Clamp(want, 0, 100));
+    }
+
+    /// <summary>§0/§24.6: THE MARK FOR A PANEL, JUDGED AGAINST THE PANEL.
+    ///
+    /// <para>Moving a ground moves every mark standing on it, and panels used to
+    /// take <c>PageTheme.OnSurface</c> - which is selected by the SHELL's
+    /// luminance, the very ground a panel has just stopped using. Left alone
+    /// that is §17.4's defect a fourth time, and the default install is its
+    /// worst case: a pinned dark shell puts <c>InkOnDark</c> (#F2F2F2) on a
+    /// panel that is now light-grey-derived-from-white paper, which is around
+    /// 1.5:1 - invisible.</para>
+    ///
+    /// <para>A best-of rather than <see cref="Ink"/>'s luminance threshold, and
+    /// the difference is deliberate. <see cref="Ink"/> keeps §7's ruling that
+    /// Blueprint, Brown Paper and Darkprint carry WHITE chrome; that ruling is
+    /// about chrome standing on the paper. A panel is not the paper - it is a
+    /// surface the formula has already moved off the paper - so the only
+    /// question left is which of the two marks reads on it, and §17.19's sweep
+    /// is what makes a best-of safe: it can never do worse than 4.583:1 for
+    /// pure black/white, and 4.31:1 for the two inks actually used.</para></summary>
+    public static Color PanelInk(Color panel) =>
+        Contrast(PageTheme.InkOnLight, panel) >= Contrast(PageTheme.InkOnDark, panel)
+            ? PageTheme.InkOnLight
+            : PageTheme.InkOnDark;
 
     /// <summary>The mark for a plate at <see cref="Full"/> - i.e. for a mark
     /// standing on the page's own colour.

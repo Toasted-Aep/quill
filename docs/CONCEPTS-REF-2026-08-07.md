@@ -6969,3 +6969,235 @@ Bearings clockwise from 3 o'clock, clock-face reading in brackets:
 | 4 | read any code label | upright, tops toward the centre, exactly as before | mirror-written, or upside down — part 3 was *not* the no-op this section claims |
 | 5 | read a column inward-to-outward | dark → pale, unchanged | pale → dark — the radial sort was flipped too |
 | 6 | spin the ring, then press | picks still land | picks drift with `_rot` — nothing here touches `_rot`, so this would be pre-existing |
+
+### 27 Panels follow the page — 2026-09-04
+
+> **NOTHING IN THIS SECTION WAS SEEN ON SCREEN.** The user was at the machine and
+> the run was code-only: no launch, no injected input, no capture. Everything
+> below is arithmetic from `tools/PanelProof`, which links the shipping source,
+> plus a clean build. The screen checks it does **not** replace are set out at
+> the end.
+
+**The report, verbatim:** *"the app theme is black in a white page what is
+this?"* — a black Settings slab on white graph paper. **The ruling:** *"Follow
+the page, but stay heavier."*
+
+**Why it happened.** §24 made the *chrome's* grounds page-derived and left
+panels out of scope, so `PageTheme.Panel` stayed a ramp off `PageTheme.Ground` —
+the SHELL's colour. `Ground` is the paper only when `ThemeSource == "Page"`, and
+that field defaults to `"Manual"`. On a default install the shell is a pinned
+dark `#0F0E10` and the panel was derived from it, measured:
+
+```
+default install: shell #0F0E10 pinned dark, page #FCFCFC Plain White (L* 98.96)
+BEFORE: panel #222222 (L* 13.23) — 85.7 L* below the paper. The black slab.
+AFTER : panel #CACACA (L* 81.33) — 17.6 L* below the paper.
+mark on it: #F2F2F2 at 1.46:1  ->  #141414 at 11.24:1
+```
+
+`#222222` is the slab the user saw, and it is not a bug in the ramp — every
+number in that ramp was the user's own. It is the wrong SOURCE, which is §24.1's
+finding about the corner plates arriving a second time.
+
+#### 27.1 What was already in the tree, and what this run added
+
+The previous run was cut off by a rate limit with uncommitted work in
+`PagePlate.cs` and `PageTheme.cs`. That half made `PageTheme.Panel` page-derived
+at `PagePlate.PanelT = 0.30` with a separation floor, and added four tokens —
+`OnPanel`, `OnPanelMuted`, `PanelOutline`, `PanelIsDark`.
+
+**`Panel` propagated on its own; the tokens did not.** `PageTheme.Panel` is
+already consumed by `BottomMenu`, `FloatingWindow`, `GridPointEditor`,
+`SelectionChrome`, `BrushesWindow` and `SettingsWindow`, so the *ground* moved
+everywhere the moment it changed. **Nothing consumed `OnPanel`.** Every mark on
+every one of those panels was still `PageTheme.OnSurface`, keyed to the shell.
+Left there, the tree shipped **white ink on a light panel at 1.46:1** — worse
+than the black slab it replaced, because the slab was at least legible. That is
+§0's trap on its third outing in this file's history, after §17.4 and §24.6.
+
+**Two further gaps were found while wiring it, neither of which was in the
+brief.**
+
+1. **`SetGrounds` had no production caller.** `PageTheme.PageGround` never left
+   its `#FAFAFA` construction default, so every panel in the app would have been
+   the same fixed light grey whatever paper was up — including a light grey panel
+   on Darkprint. `MainWindow.PushGround` now publishes both grounds, and
+   `ApplyTheme` does too (it is reachable by manual routes that never go through
+   `PushGround`).
+2. **`PagePlate.PanelSeparation`'s remarks were wrong by about one L\***: they
+   said *"a page at L\* 72 takes LightBase (L\* 72.4)"*. `LightBase` is
+   `#B4B4B4`, **L\* 73.31**. Found by the assertion block added in 27.4, not by
+   reading.
+
+#### 27.2 Every mark that was re-keyed, and every one deliberately left
+
+The rule applied: **a mark takes the token of the ground it is actually standing
+on.** A mark on `PageTheme.Panel` takes `OnPanel` / `OnPanelMuted` /
+`PanelOutline` / `PanelIsDark`; a mark on the shell keeps `OnSurface` /
+`OnSurfaceMuted` / `Outline` / `IsDark`. The two legitimately disagree —
+`PanelProof` section 6 now prints a case in **each** direction.
+
+| file | site | was | now |
+|---|---|---|---|
+| `BottomMenu` | `Plate` border | `Outline` | `PanelOutline` |
+| `BottomMenu` | `Cell` ink (and its dead 70-alpha) | `OnSurface` | `OnPanel` |
+| `BottomMenu` | `Divider` fill | `Outline` | `PanelOutline` |
+| `FloatingWindow` | drag pill, at build and in `PaintPanel` | `OnSurface` @0x66 | `OnPanel` @0x66 |
+| `FloatingWindow` | `_title` | `OnSurface` | `OnPanel` |
+| `FloatingWindow` | `_tabRow` rule | `Outline` | `PanelOutline` |
+| `FloatingWindow` | tab label, on and off | `OnSurface` / `OnSurfaceMuted` | `OnPanel` / `OnPanelMuted` |
+| `FloatingWindow` | tab underline | `OnSurface` | `OnPanel` |
+| `FloatingWindow` | `GripBrush` | `OnSurface` @0x8C | `OnPanel` @0x8C |
+| `FloatingWindow` | `PaintCornerMark` (close, info) | `OnSurface` | `OnPanel` |
+| `FloatingWindow` | `_panel.RequestedTheme` | `Theme` (`IsDark`) | new `PanelTheme` (`PanelIsDark`) |
+| `GridPointEditor` | `_barLabel` in `Begin` | `OnSurface` | `OnPanel` |
+| `GridPointEditor` | bar label in `BuildBar` | `OnSurface` | `OnPanel` |
+| `SelectionChrome` | `_bar` / `_row` rules | `Outline` | `PanelOutline` |
+| `SelectionChrome` | `BuildEditingBar` ink | `OnSurface` | `OnPanel` |
+| `SelectionChrome` | `BuildSelectionBar` ink | `OnSurface` | `OnPanel` |
+| `SelectionChrome` | `Divider` fill | `Outline` | `PanelOutline` |
+| `SelectionChrome` | `CancelRed` selector | `IsDark` | `PanelIsDark` |
+| `SettingsWindow` | `Ink` / `Muted` / `Line` shorthands | `OnSurface` / `OnSurfaceMuted` / `Outline` | `OnPanel` / `OnPanelMuted` / `PanelOutline` |
+| `SettingsWindow` | grid page root `RequestedTheme` | `IsDark` | `PanelIsDark` |
+| `SettingsWindow` | `Body` border `RequestedTheme` | `IsDark` | `PanelIsDark` |
+| `BrushesWindow` | `Ink` / `Muted` / `Line` shorthands | `OnSurface` / `OnSurfaceMuted` / `Outline` | `OnPanel` / `OnPanelMuted` / `PanelOutline` |
+
+Re-keying the two `Ink`/`Muted`/`Line` shorthand blocks re-keys about sixty call
+sites between them, which is the reason those shorthands exist. `PanelAlt`
+follows `Ink` and needed no edit.
+
+**Deliberately left, with the reason.**
+
+| file | site | why it stays on the shell's tokens |
+|---|---|---|
+| `ChromeUi.Ink` / `Dim` / `Hairline` | the floating bars | their plate is `PageTheme.Surface`, not `Panel` — shell ground, shell ink, internally consistent |
+| `PenBar`, `ToolWheel`, `ChromeBars`, `ValuePopover`, `ColorWheel` | all marks | same: `Surface`/`SurfaceAlt` plates, or transparent over the page |
+| `MeasurementMenu.PaintChip` | chip fill and text | its own remarks say it: *"this chip sits on the page and not on a surface — the panel has no ground of its own"* |
+| `SelectionChrome` guides and handles | `OnSurface` @`GuideAlpha`, @150; `Surface` fill | drawn straight onto the page over the subject. Three lines above the plate code and correctly a different token |
+| `BrushesWindow.CurrentColor` fallback | `OnSurface` | a default DRAWING ink for the pen, a mark destined for the canvas, not for the panel |
+| `FullscreenChrome` strip and border | fixed dark fill, `Outline` rule | the user already ruled this file out of §0's derivation: *"These are the OS window controls, borrowed."* Its border separates the strip from the PAGE and arguably wants a page token; not touched, because reopening it needs the screen |
+| `FloatingWindow.Theme` / `ThemeDictionaryKey` | kept as the SHELL's answer | still correct for shell chrome. Its only live consumer is `ChromeUi.Res`, and that is called once, with `themed: false` |
+| `SettingsWindow.FieldFill` / `FieldInk` | `Ground` + `IsDark` | **a judgement call, flagged.** The pair is self-consistent — `FieldInk` is derived from `FieldFill`, so it cannot fail §0's trap. But its own remarks say it derives *"from the GROUND … because what §12.2 is describing is paper"*, and since §24 `PageTheme.Ground` is the shell, not the paper. Making it `PageGround` is a one-word change and a visible one; it needs an eye on it, so it is named here rather than done blind |
+
+#### 27.3 The measurements — the nine shipped papers
+
+From `tools/PanelProof` section 2, at the shipped constants:
+
+| paper | ground | L\* | base | panel | L\* | sep ΔL\* | clamp | ink | ink:panel | muted:panel |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Plain White | `#FCFCFC` | 98.96 | light | `#CACACA` | 81.33 | 17.64 | – | `#141414` | 11.24:1 | 3.50:1 |
+| Transparent | `#F2F2F2` | 95.49 | light | `#C7C7C7` | 80.24 | 15.25 | – | `#141414` | 10.90:1 | 3.45:1 |
+| Crumpled | `#F0ECE3` | 93.48 | light | `#C6C5C2` | 79.52 | 13.96 | – | `#141414` | 10.67:1 | 3.44:1 |
+| Lightweight | `#F5F3EE` | 95.87 | light | `#C8C7C5` | 80.27 | 15.60 | – | `#141414` | 10.91:1 | 3.45:1 |
+| Heavyweight | `#E9E4D9` | 90.70 | light | `#C4C2BF` | 78.51 | 12.19 | – | `#141414` | 10.37:1 | 3.42:1 |
+| Rippled | `#F3F0E8` | 94.82 | light | `#C7C6C4` | 79.91 | 14.92 | – | `#141414` | 10.79:1 | 3.46:1 |
+| Blueprint | `#2E80C2` | 51.74 | light | `#8CA4B8` | 66.20 | 14.46 | – | `#141414` | 7.12:1 | **2.95:1** |
+| Brown Paper | `#A9713F` | 52.51 | light | `#B1A091` | 66.93 | 14.41 | – | `#141414` | 7.29:1 | **2.98:1** |
+| Darkprint | `#262B31` | 17.28 | **dark** | `#404143` | 27.51 | 10.23 | – | `#F2F2F2` | 9.13:1 | 4.01:1 |
+
+- worst separation **10.23 L\*** (Darkprint), floor 10.0 — **PASS**
+- worst ink:panel **7.12:1** (Blueprint), floor 3.0:1 — **PASS**
+- the clamp **never fires on shipped stock**; on the wider list it fires on
+  exactly the two greys sitting on the base greys (`#B4B4B4`, `#4B4B4B`)
+
+**FLAG — the muted variant is under 3:1 on two shipped papers, and this is not
+being shipped quietly.** Worst muted-on-panel over the nine is **2.949:1
+(Blueprint)**, with **2.981:1 (Brown Paper)** beside it. Both are the composite
+of `OnPanelMuted` — `OnPanel` at alpha **140** — resolved onto its own panel.
+
+This is stated separately from §27's own sweep (section 4), which reports a worst
+of **2.726:1** over 636 056 arbitrary sRGB page colours at `#0CC91E`. That is a
+different question: an arbitrary colour is not a shipped paper, and the shipped
+number is the one that ships.
+
+**Not fixed, and the reason.** The harness computes that alpha **143** — three
+steps — is the smallest that clears 3:1 on all nine. It is a one-character change
+in `PageTheme.Apply`. It was not applied because 140 is inherited from
+`OnSurfaceMuted`'s relation to `OnSurface` and changing it changes the visual
+weight of every piece of secondary text in Settings and Brushes, which is a
+decision for the user with the panel in front of them, not for a run that cannot
+see it. The harness now prints the flag and the remedy on every run.
+
+#### 27.4 The derivation figure was verified, not trusted
+
+`PagePlate.PanelT`'s remarks claim `t` was chosen as the largest value at which
+no shipped paper needs the floor. `PanelProof` section 7 now re-measures every
+figure in that paragraph on each run, so the comment cannot drift from the
+arithmetic — which is the exact failure §24's uncommitted harness had.
+
+```
+[OK  ] "Darkprint binds first" - it is the worst paper at every t in 0.10..0.50
+[OK  ] "crossing the floor at t = 0.328" - bisected 0.328
+[OK  ] "0.30 is the round number under it" - 0.30 < 0.328
+[OK  ] "worst gap 10.23 L* (Darkprint) at 0.30" - 10.23 (Darkprint)
+[OK  ] "at 0.35 it would be 9.69" - 9.69
+[OK  ] "Darkprint ground is L* 17.28" - 17.28
+[OK  ] "DarkBase is L* 31.89" - 31.89
+[OK  ] "LightBase is L* 73.31" - 73.31
+[OK  ] "the clamp never fires on shipped stock"
+```
+
+Every claim in the `PanelT` paragraph held. The one that did **not** was in
+`PanelSeparation` next door — `LightBase` at "L\* 72.4" against a measured
+**73.31** — and the comment is corrected. It was written from the intended value
+rather than measured, which is what an assertion block is for.
+
+Section 8 adds the before/after baseline the previous run said it intended. It
+transcribes the deleted ramp (`LightPanelChroma` 0.85 / `DarkPanelChroma` 0.35,
+bands L\* 95–97.5 and 13–29, `gy <= 0.004` → pure black) rather than linking it,
+because §27 deleted the code; the header says so, and `git show
+8b1050a:src/Quill/Services/PageTheme.cs` is the original. It shows the defect had
+**two** faces, not one:
+
+- a dark shell over white paper gave a panel **85.74 L\*** from its page — the slab;
+- a **light** shell over white paper gave `#F8F7F2`, **1.78 L\*** from the page —
+  a panel with no edge at all. The floor is why the new panel cannot do either.
+
+#### 27.5 The render-failure log now says what failed
+
+`InkSurface.OnRegionsInvalidated` guards what its own comment calls *"the
+'invisible ink' failure class"*: a dropped region shows BLANK content, so it logs
+and invalidates the whole canvas to self-heal. `scratchpad/vp6data/crash.log`
+holds **472 of those lines in a 29-second window, every message empty** — five
+distinct timestamps, 116/118/46/72/120 lines apiece.
+
+Two faults, both fixed, and the failure is **not** silenced.
+
+1. **The message was empty.** `ex.Message` alone. It now logs the exception
+   **type** and the **HRESULT**, and asks Win2D's own
+   `CanvasDevice.IsDeviceLost(hresult)` whether that HRESULT is a device loss —
+   `0x887A0005 DEVICE_REMOVED` / `_HUNG` / `_RESET` carry their detail there and
+   not in the message, which is why 472 lines said nothing. It **reports** the
+   device-loss verdict and does not act on it: recovery is already wired at the
+   `CreateResources` / `NewDevice` handler in the constructor.
+2. **It was a feedback loop, and the burst shape says so.** Every failing region
+   logged its own line *and* enqueued its own full-canvas invalidate, so one bad
+   frame of ~120 regions wrote ~120 identical lines and asked for ~120 identical
+   repaints, each of which re-entered the same path. Failures are now counted
+   **per pass**: one line and at most one invalidate per pass, and after
+   `RenderHealAttempts = 8` consecutive failing passes the repaint backs off.
+   **The logging never backs off** — a dropped region that goes quiet is strictly
+   worse than one that shouts — and the line says in as many words that it has
+   stopped repainting. Any clean pass rearms it, as does any pan, zoom, resize or
+   edit.
+
+The underlying render fault was **not** chased. It cannot be reproduced without
+the screen. The next occurrence will name itself.
+
+#### 27.6 What still needs the screen, and what failure looks like
+
+| # | check | pass | fail |
+|---|---|---|---|
+| 1 | Default install (`ThemeSource` Manual, Theme Dark), Plain White paper. Open **Settings** | a light grey panel, `#CACACA`, carrying **near-black** text | white or pale text on that light panel — `OnPanel` did not reach that mark; this is the 1.46:1 case and it looks like an empty panel, not like a bug |
+| 2 | Same, but read the panel against the paper | the panel reads as a distinct plate ~17 L\* below `#FCFCFC` | a black or near-black slab — `PageGround` never moved, so `PushGround`'s new `SetGrounds` call is not running |
+| 3 | Same, then switch paper to **Darkprint** without touching Theme | the panel turns dark `#404143` and its text turns **white** | the panel stays light grey — the page-only move is not reaching `PageTheme`; **this is the exact case the old `SetGround` could not see** |
+| 4 | With Settings open on white paper, look at a **TextBox, Slider and ComboBox** | stock controls in their LIGHT theme on the light panel | dark-theme stock controls on a light panel — grey-on-grey fields. `PanelIsDark` did not reach `RequestedTheme` |
+| 5 | Select something, then edit a text box, and look at the **Cancel Editing X** | red, and clearly red, on whichever panel is up | the X is nearly invisible — `CancelRed` picked the wrong end. `#C42B1C` on a dark panel is 1.72:1 |
+| 6 | Read the **bottom mode bar** and the selection bar on Blueprint and Brown Paper | marks and dividers legible on the tinted panel | washed-out dividers, or a mode bar whose ink matches its plate |
+| 7 | **The muted flag.** Read the CAPTION text under a Settings field on **Blueprint** and on **Brown Paper** | legible, if deliberately secondary | too faint to read — this is the **2.95:1 / 2.98:1** measured above. If it reads as too faint, alpha 140 → **143** in `PageTheme.Apply` clears 3:1 on all nine papers |
+| 8 | `SettingsWindow`'s value fields and the Back pill, on Blueprint | a paper-like light field, in a hue that belongs to the page | a field in the SHELL's hue on a page-tinted panel — the `FieldFill` question left open in 27.2 |
+| 9 | Turn pages / swap papers repeatedly with the chrome bars up | bars repaint once per change | bars flicker or double-rebuild — `PushGround`'s guard now tests `raised` rather than `shellMoved`, and this is what would show if that reasoning is wrong |
+| 10 | Whatever provoked the 472 crash-log lines, if it can be provoked | `crash.log` gains ONE line per pass, naming the exception type and an HRESULT | still-empty messages (the describe path is not reached) or hundreds of lines again (the per-pass counting is not) |
+
+Items 1–4 are the user's original report and its immediate neighbours; 7 and 8
+are the two things this section flagged rather than decided.

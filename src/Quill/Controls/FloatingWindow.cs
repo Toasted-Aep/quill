@@ -343,7 +343,10 @@ public sealed class FloatingWindow
             // so a pen or finger still has a real target
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(0, 7, 0, 0),
-            Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 0x66)),
+            // §27: OnPanel. Repainted by PaintPanel a few lines below, but this
+            // initial value is what shows for the frame between construction and
+            // that call, and it has to be the same answer.
+            Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnPanel, 0x66)),
         };
         _dragPill = bar;
         grab.Children.Add(bar);
@@ -427,11 +430,17 @@ public sealed class FloatingWindow
     // Theme
     // =======================================================================
 
-    /// <summary>§7: the floating windows (Settings, Export, Brushes, Objects)
-    /// take PageTheme.Panel, which is deliberately NEAR-NEUTRAL - the reference
-    /// panels are a flat #F7F7F7 or #141414 whatever hue the page is. What the
-    /// page decides here is WHICH of the two, and on Blueprint, Brown Paper and
-    /// Darkprint that is the dark one with white text.</summary>
+    /// <summary>§7/§27: the floating windows (Settings, Export, Brushes,
+    /// Objects) take <see cref="PageTheme.Panel"/>, and §27 made that colour
+    /// PAGE-derived - three tenths of the page toward a base grey, held at least
+    /// 10 L* off the page. It is no longer "a flat #F7F7F7 or #141414 whatever
+    /// hue the page is": it carries the paper's cast, and which of the two inks
+    /// it takes is decided against the PANEL rather than against the shell.
+    ///
+    /// <para>So every mark this method paints is an <c>OnPanel</c> token. Any
+    /// one of them left on <c>OnSurface</c> is judged against a ground it is not
+    /// standing on, which on the default install is white ink on a light panel
+    /// (1.46:1) - the report §27 exists for.</para></summary>
     private void PaintPanel()
     {
         // A brush-level assignment: CardBrushFloat is a SHARED acrylic that
@@ -439,16 +448,16 @@ public sealed class FloatingWindow
         // repaint surfaces this window does not own.
         _panel.Background = new SolidColorBrush(PageTheme.Panel);
         if (_dragPill != null)
-            _dragPill.Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 0x66));
-        _title.Foreground = new SolidColorBrush(PageTheme.OnSurface);
+            _dragPill.Background = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnPanel, 0x66));
+        _title.Foreground = new SolidColorBrush(PageTheme.OnPanel);
         // The corner marks are re-inked HERE and not only at construction. They
         // used to take their colour from a one-shot theme-dictionary fetch, so a
         // page change repainted the ground, the title and the tab rule and left
         // these two marks inked for the page before it.
         PaintCornerMark(_closeMark, Icons.Close, stroked: true);
         PaintCornerMark(_infoMark, Icons.Info, stroked: false);
-        _tabRow.BorderBrush = new SolidColorBrush(PageTheme.Outline);
-        try { _panel.RequestedTheme = Theme; } catch { }
+        _tabRow.BorderBrush = new SolidColorBrush(PageTheme.PanelOutline);
+        try { _panel.RequestedTheme = PanelTheme; } catch { }
     }
 
     private void OnGroundChanged()
@@ -594,14 +603,15 @@ public sealed class FloatingWindow
                 FontSize = 17,
                 Margin = new Thickness(0, 0, 0, 7),
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(on ? PageTheme.OnSurface : PageTheme.OnSurfaceMuted),
+                // §27: the tab strip is inside _tabRow, which is inside _panel.
+                Foreground = new SolidColorBrush(on ? PageTheme.OnPanel : PageTheme.OnPanelMuted),
             };
             var underline = new Border
             {
                 Height = 2,
                 CornerRadius = new CornerRadius(1),
                 VerticalAlignment = VerticalAlignment.Bottom,
-                Background = new SolidColorBrush(PageTheme.OnSurface),
+                Background = new SolidColorBrush(PageTheme.OnPanel),
                 Visibility = on ? Visibility.Visible : Visibility.Collapsed,
             };
 
@@ -951,7 +961,9 @@ public sealed class FloatingWindow
                 Math.Clamp(top, TopBand, Math.Max(TopBand, hostH - h - EdgeGap)));
     }
 
-    private static SolidColorBrush GripBrush() => new(PageTheme.WithAlpha(PageTheme.OnSurface, 0x8C));
+    // §27: the grips live in _gripLayer, which is a child of the panel's shell
+    // grid - so they stand on Panel and take its ink.
+    private static SolidColorBrush GripBrush() => new(PageTheme.WithAlpha(PageTheme.OnPanel, 0x8C));
 
     private void AddCorner(HorizontalAlignment h, VerticalAlignment v, InputSystemCursorShape shape, int sx, int sy)
     {
@@ -1209,7 +1221,7 @@ public sealed class FloatingWindow
     /// marks inked for the page before it. On a light-to-dark turn that is a mark
     /// the same colour as the plate it sits on.</para></summary>
     private static void PaintCornerMark(ContentControl host, string geometry, bool stroked) =>
-        host.Content = Icons.Mark(geometry, PageTheme.OnSurface, CornerMarkSize,
+        host.Content = Icons.Mark(geometry, PageTheme.OnPanel, CornerMarkSize,
                                   stroked, CornerMarkStroke);
 
     /// <summary>The XamlRoot the app is showing in; the window records it so the
@@ -1226,6 +1238,24 @@ public sealed class FloatingWindow
     /// the byte-average one put Brown Paper on opposite sides.</para></summary>
     internal static ElementTheme Theme =>
         PageTheme.IsDark ? ElementTheme.Dark : ElementTheme.Light;
+
+    /// <summary>§27: the same question asked about a PANEL, which since §27 is a
+    /// different surface with a different ground.
+    ///
+    /// <para><see cref="Theme"/> answers for the shell and is still right for the
+    /// shell's chrome. It is wrong for the stock WinUI controls inside a floating
+    /// window - a TextBox, Slider or ComboBox resolves its own brushes from the
+    /// element theme, so telling it "dark" while the panel behind it is a light
+    /// page-derived grey hands it light-on-light. Under the default
+    /// ThemeSource = "Manual" a pinned dark shell over white paper is exactly
+    /// that case.</para>
+    ///
+    /// <para>Read from <see cref="PageTheme.PanelIsDark"/>, which is defined as
+    /// "OnPanel is the light ink" rather than as a second luminance test - so the
+    /// stock controls and the ink this window paints by hand can never disagree
+    /// about one panel sitting near the crossover.</para></summary>
+    internal static ElementTheme PanelTheme =>
+        PageTheme.PanelIsDark ? ElementTheme.Dark : ElementTheme.Light;
 
     /// <summary>"Default" (the dark dictionary) or "Light", for the manual theme
     /// dictionary lookups the code-built surfaces do.</summary>

@@ -2238,8 +2238,30 @@ public sealed partial class MainWindow : Window
     /// turn is the cost ApplyTheme's gate has always existed to avoid.</para></summary>
     private void PushGround()
     {
-        var was = PageTheme.Ground;
-        PageTheme.SetGround(ResolveGround());   // idempotent; raises Changed only on a real move
+        // §27: THE PAGE IS PUBLISHED HERE, ALONGSIDE THE SHELL, AND THIS IS THE
+        // ONLY PLACE THAT DOES IT.
+        //
+        // PageTheme.Panel is derived from the PAGE now, and a panel's ground is
+        // read from static factories (BottomMenu.Plate, SettingsWindow.PanelFill)
+        // that have no page in reach - so unlike §24's chrome, which reads the
+        // page at each call site, the panels need it published. Without this line
+        // PageTheme.PageGround never leaves its #FAFAFA construction default and
+        // every panel in the app is a fixed light grey whatever paper is up.
+        //
+        // ONE call, not two: SetGrounds raises Changed at most once for the pair,
+        // so a page turn under ThemeSource = "Page" - which moves both - still
+        // costs one repaint rather than two.
+        //
+        // The shell is resolved FIRST and is the no-page fallback, rather than
+        // letting PagePlate.Ground(null) supply it. That overload falls back to
+        // PageTheme.Ground, which at this instant is still the ground we are
+        // about to replace - so in the gallery, where _curPage is null, taking it
+        // would publish the PREVIOUS shell colour as the page and leave every
+        // panel one theme change behind.
+        var shellGround = ResolveGround();
+        var pageGround = _curPage == null ? shellGround : PagePlate.Ground(_curPage);
+        // idempotent; raises Changed only on a real move of either ground
+        bool raised = PageTheme.SetGrounds(shellGround, pageGround);
         if (_appliedDark != PageTheme.IsDark) ApplyTheme();
         // 17.19, and §24 has only widened it: the dial's plates come from THE
         // PAGE, not from the shell - and those two part company the moment
@@ -2265,16 +2287,26 @@ public sealed partial class MainWindow : Window
         // GUARDED, unlike the dial's. ToolWheel.Refresh is a re-render;
         // ChromeBars.Refresh rebuilds both clusters, re-measures the inset and
         // repaints four panes, and it is ALREADY subscribed to PageTheme.Changed
-        // - which has run synchronously inside SetGround by the time we get here.
-        // So this fires only in the case that subscription cannot see, and a page
-        // turn does not pay for two rebuilds.
+        // - which has run synchronously inside SetGrounds by the time we get
+        // here. So this fires only in the case that subscription cannot see, and
+        // a page turn does not pay for two rebuilds.
+        //
+        // §27 SHRANK THAT CASE ALMOST TO NOTHING, and the guard is rewritten to
+        // say so honestly. It used to test "did the SHELL stand still?", because
+        // a paper change under ThemeSource = "Manual" moved nothing PageTheme
+        // could see. It moves PageGround now, so SetGrounds raises Changed and
+        // the subscription has already done the work - which is exactly what its
+        // return value reports. Testing `raised` instead of `shellMoved` is
+        // therefore the same guard asking the question that is now decidable,
+        // and it stops a paper change costing two full ChromeBars rebuilds.
+        //
+        // It is NOT deleted: _curPage can be null (gallery, startup) or throw,
+        // in which case PagePlate.Ground falls back to the shell's ground and
+        // the page genuinely did not move for PageTheme even though the bars'
+        // §17.2 plates did.
         try
         {
-            var pageGround = PagePlate.Ground(_curPage);
-            bool shellMoved = was.R != PageTheme.Ground.R
-                              || was.G != PageTheme.Ground.G
-                              || was.B != PageTheme.Ground.B;
-            if (!shellMoved && _pushedPageGround != pageGround) _chromeBars?.Refresh();
+            if (!raised && _pushedPageGround != pageGround) _chromeBars?.Refresh();
             _pushedPageGround = pageGround;
         }
         catch { }
@@ -2308,7 +2340,16 @@ public sealed partial class MainWindow : Window
         // at the right ground already or they all rebuild from the old one. This
         // also covers every MANUAL route in (the theme combo, the sun/moon pill,
         // the OLED toggle), none of which goes through SyncThemeToPage.
-        PageTheme.SetGround(ResolveGround());
+        //
+        // §27: BOTH grounds here too. SetGround alone would leave PageGround at
+        // whatever it last held, which is right on the PushGround path (that call
+        // has just set it) and wrong on the manual routes, where ApplyTheme can
+        // be the first thing to touch PageTheme after a page opened - leaving
+        // every panel derived from the previous page, or from the #FAFAFA
+        // default if there was no previous page. Same no-page fallback as
+        // PushGround's, and for the same reason.
+        var applyShell = ResolveGround();
+        PageTheme.SetGrounds(applyShell, _curPage == null ? applyShell : PagePlate.Ground(_curPage));
         bool dark = PageTheme.IsDark;
         _appliedDark = dark;   // the anti-thrash baseline SyncThemeToPage compares against
         ApplyOledBlack(dark && _library.OledBlack);

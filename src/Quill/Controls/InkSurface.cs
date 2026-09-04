@@ -4972,12 +4972,67 @@ public sealed class InkSurface : UserControl
         return true;
     }
 
+    /// <summary>§27: consecutive <see cref="OnRegionsInvalidated"/> passes in
+    /// which at least one region threw. Zeroed by the first clean pass.</summary>
+    private int _renderFailStreak;
+
+    /// <summary>§27: how many times a failing canvas may answer itself with a
+    /// full invalidate before it stops trying.
+    ///
+    /// <para>The self-heal is worth having - a dropped region is BLANK content
+    /// and a repaint usually fixes a transient - but it is a repaint scheduled
+    /// BY the failure, so a persistent fault makes it a feedback loop. It has
+    /// already run in the field: <c>crash.log</c> holds 472 of these across five
+    /// bursts in 29 seconds, ~120 to a burst, which is one burst per pass with
+    /// every region failing and every region enqueuing its own full
+    /// invalidate.</para>
+    ///
+    /// <para>Eight is enough for a transient and short enough that a real fault
+    /// stops costing frames. Backing off does NOT stop the logging - a dropped
+    /// region that goes quiet is strictly worse than one that shouts - and any
+    /// later clean pass rearms it, as does any pan, zoom, resize or edit, since
+    /// those invalidate on their own account.</para></summary>
+    private const int RenderHealAttempts = 8;
+
+    /// <summary>§27: what actually failed, in the terms the failure carries it.
+    ///
+    /// <para><c>Message</c> alone produced 472 EMPTY log lines. A Win2D device
+    /// loss is the obvious suspect for a whole viewport of regions failing at
+    /// once, and it arrives as a <c>COMException</c> whose detail is the
+    /// HRESULT - <c>0x887A0005 DXGI_ERROR_DEVICE_REMOVED</c>,
+    /// <c>0x887A0006 _HUNG</c>, <c>0x887A0007 _RESET</c> - with the message
+    /// empty or a generic localisation. So the type and the HRESULT are logged
+    /// whatever the exception is, and Win2D is asked directly whether that
+    /// HRESULT is a device loss.</para>
+    ///
+    /// <para>It only REPORTS the device-loss verdict; it does not act on it.
+    /// Recovery is already wired, at the <c>CreateResources</c> handler in the
+    /// constructor, which is where Win2D delivers a replacement device.</para></summary>
+    private string DescribeRenderFailure(Exception ex)
+    {
+        string message = string.IsNullOrWhiteSpace(ex.Message) ? "(no message)" : ex.Message.Trim();
+        string lost = "";
+        try
+        {
+            if (_canvas.Device is { } dev && dev.IsDeviceLost(ex.HResult)) lost = " DEVICE-LOST";
+        }
+        catch { }
+        return $"{ex.GetType().Name} hresult=0x{ex.HResult:X8}{lost}: {message}";
+    }
+
     private void OnRegionsInvalidated(CanvasVirtualControl sender, CanvasRegionsInvalidatedEventArgs args)
     {
         EnsureRefFrame();
         float blur = CurrentBlurRadius();
+        // §27: counted per PASS, not per region. Every region used to log its own
+        // line and enqueue its own full-canvas invalidate, so one bad frame wrote
+        // ~120 identical lines and asked for ~120 identical repaints. One line and
+        // one repaint say the same thing.
+        int failed = 0, total = 0;
+        Exception? first = null;
         foreach (var region in args.InvalidatedRegions)
         {
+            total++;
             try
             {
                 using var ds = sender.CreateDrawingSession(region);
@@ -4987,18 +5042,29 @@ public sealed class InkSurface : UserControl
             catch (Exception ex)
             {
                 // A silently dropped region shows BLANK content — the "invisible
-                // ink" failure class. Log it and schedule a full repaint so the
-                // canvas self-heals instead of staying wrong (#inkfix3).
-                try
-                {
-                    System.IO.File.AppendAllText(
-                        System.IO.Path.Combine(LibraryStore.Dir, "crash.log"),
-                        $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] render region failed: {ex.Message}" + Environment.NewLine);
-                }
-                catch { }
-                try { DispatcherQueue.TryEnqueue(() => _canvas.Invalidate()); } catch { }
+                // ink" failure class (#inkfix3). Nothing here swallows it.
+                failed++;
+                first ??= ex;
             }
         }
+
+        if (failed == 0) { _renderFailStreak = 0; return; }
+
+        _renderFailStreak++;
+        bool heal = _renderFailStreak <= RenderHealAttempts;
+        // ALWAYS logged, including after the self-heal has given up - the point
+        // of this log is that the failure class is invisible on screen.
+        try
+        {
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(LibraryStore.Dir, "crash.log"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] render region failed: {failed}/{total} regions, " +
+                $"pass {_renderFailStreak}, {(heal ? "repainting" : $"NOT repainting (over {RenderHealAttempts})")}; " +
+                DescribeRenderFailure(first!) + Environment.NewLine);
+        }
+        catch { }
+        if (heal)
+            try { DispatcherQueue.TryEnqueue(() => _canvas.Invalidate()); } catch { }
     }
 
     // ---- motion blur (#A5) ------------------------------------------------

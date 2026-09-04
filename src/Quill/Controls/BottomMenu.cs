@@ -353,7 +353,12 @@ public sealed class BottomMenu
     // =====================================================================
 
     /// <summary>The standard plate. Every page uses it, so a page cannot end up
-    /// a different height from the one it covers.</summary>
+    /// a different height from the one it covers.
+    ///
+    /// <para>§27: the plate is <see cref="PageTheme.Panel"/>, so its rule is
+    /// <see cref="PageTheme.PanelOutline"/> and not <c>Outline</c>. Outline is
+    /// OnSurface at alpha 36 - keyed to the SHELL - and this plate stopped
+    /// standing on the shell's ground when Panel became page-derived.</para></summary>
     public static Border Plate(StackPanel items) => new()
     {
         Child = items,
@@ -363,7 +368,7 @@ public sealed class BottomMenu
         // NEVER null: a null Background is transparent to hit-testing and every
         // press on this plate would land on the page behind it.
         Background = new SolidColorBrush(PageTheme.Panel),
-        BorderBrush = new SolidColorBrush(PageTheme.Outline),
+        BorderBrush = new SolidColorBrush(PageTheme.PanelOutline),
         HorizontalAlignment = HorizontalAlignment.Center,
         VerticalAlignment = VerticalAlignment.Bottom,
     };
@@ -389,7 +394,14 @@ public sealed class BottomMenu
     public static Button Cell(string mark, string? word, bool on, Action click,
                               string? tip = null, bool stroked = false, bool live = true)
     {
-        var ink = live ? PageTheme.OnSurface : PageTheme.WithAlpha(PageTheme.OnSurface, 70);
+        // §27: OnPanel, not OnSurface. A cell is only ever added to Items(),
+        // and Items() is only ever handed to Plate() - so this mark stands on
+        // PageTheme.Panel without exception, and Panel is derived from the PAGE
+        // while OnSurface is picked by the SHELL's luminance. Under the default
+        // ThemeSource = "Manual" those two are different colours, and the pair
+        // that fails hardest is the one the user reported: a pinned dark shell
+        // over white paper put #F2F2F2 on a #CACACA plate, 1.46:1.
+        var ink = live ? PageTheme.OnPanel : PageTheme.WithAlpha(PageTheme.OnPanel, 70);
         var art = Icons.Mark(mark, ink, Metrics.MarkSize, stroked: stroked, thickness: 2);
         art.VerticalAlignment = VerticalAlignment.Center;
 
@@ -450,7 +462,8 @@ public sealed class BottomMenu
         Width = 1,
         Height = Metrics.DividerHeight,
         VerticalAlignment = VerticalAlignment.Center,
-        Fill = new SolidColorBrush(PageTheme.Outline),
+        // §27: on the plate, so the plate's hairline. Same reason as Cell's ink.
+        Fill = new SolidColorBrush(PageTheme.PanelOutline),
         // Decoration. This is the ONE place in this file the flag belongs - it
         // propagates to the whole subtree, and a divider has no subtree and no
         // business intercepting a press meant for the cell beside it.
