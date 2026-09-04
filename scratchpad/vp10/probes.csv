@@ -1,0 +1,89 @@
+kind,a,ring,col,family,series,code,hex,x,y
+seam R|YR,9.2,0,71,red,R0,R08,#F43333,969,477
+seam R|YR,9.2,1,71,red,R0,R05,#ED5D47,1025,486
+seam R|YR,10.8,0,0,yellow-red,YR8,YR82,#E0A068,966,496
+seam YR|E,39.2,0,5,yellow-red,YR0,YR09,#F1640A,822,804
+seam YR|E,39.2,1,5,yellow-red,YR0,YR07,#F98434,866,839
+seam YR|E,40.8,0,6,earth,E9,E99,#5C310C,810,819
+seam YR|E,40.8,1,6,earth,E9,E97,#6B3C16,852,855
+seam E|Y,84.2,0,14,earth,E0,E09,#952A12,355,1055
+seam E|Y,84.2,1,14,earth,E0,E08,#AD4025,361,1111
+seam E|Y,85.8,0,15,yellow,Y3,Y38,#E69D37,336,1057
+seam E|Y,85.8,1,15,yellow,Y3,Y35,#FFC125,340,1113
+seam Y|YG,104.2,0,18,yellow,Y0,Y08,#FDE000,115,1038
+seam Y|YG,104.2,1,18,yellow,Y0,Y06,#FFE91E,101,1092
+seam Y|YG,105.8,0,19,yellow-green,YG9,YG99,#4C5C2D,97,1033
+seam Y|YG,105.8,1,19,yellow-green,YG9,YG97,#63783A,81,1087
+centre,12.5,0,0,yellow-red,YR8,YR82,#E0A068,962,516
+centre,17.5,0,1,yellow-red,YR6,YR68,#E85309,946,574
+centre,22.5,0,2,yellow-red,YR3,YR31,#F7D391,925,631
+centre,27.5,0,3,yellow-red,YR2,YR27,#DF621B,900,686
+centre,32.5,0,4,yellow-red,YR1,YR18,#F48800,870,738
+centre,37.5,0,5,yellow-red,YR0,YR09,#F1640A,835,788
+centre,42.5,0,6,earth,E9,E99,#5C310C,796,834
+centre,47.5,0,7,earth,E8,E89,#58101A,753,877
+centre,52.5,0,8,earth,E7,E79,#48203C,707,916
+centre,57.5,0,9,earth,E5,E59,#5A2512,658,950
+centre,62.5,0,10,earth,E4,E49,#442216,605,981
+centre,67.5,0,11,earth,E3,E39,#633215,550,1006
+centre,72.5,0,12,earth,E2,E29,#5F2710,494,1027
+centre,77.5,0,13,earth,E1,E19,#AA3110,435,1042
+centre,82.5,0,14,earth,E0,E09,#952A12,376,1053
+centre,87.5,0,15,yellow,Y3,Y38,#E69D37,315,1058
+centre,92.5,0,16,yellow,Y2,Y28,#DFB768,255,1058
+centre,97.5,0,17,yellow,Y1,Y19,#FFC125,195,1053
+centre,102.5,0,18,yellow,Y0,Y08,#FDE000,135,1042
+centre,107.5,0,19,yellow-green,YG9,YG99,#4C5C2D,77,1027
+centre,342.5,0,66,red,R5,R59,#9D2238,946,158
+centre,347.5,0,67,red,R4,R46,#D91D3C,962,216
+centre,352.5,0,68,red,R3,R39,#B3224B,972,276
+centre,357.5,0,69,red,R2,R29,#E10619,978,336
+centre,362.5,0,70,red,R1,R17,#EE543C,978,396
+centre,367.5,0,71,red,R0,R08,#F43333,972,456
+radial E0,82.5,1,14,earth,E0,E08,#AD4025,383,1109
+radial E0,82.5,2,14,earth,E0,E07,#BD533B,390,1164
+radial E0,82.5,3,14,earth,E0,E04,#BE8C89,398,1220
+radial E0,82.5,4,14,earth,E0,E02,#F2BD9D,405,1276
+radial E0,82.5,5,14,earth,E0,E01,#F8D2B8,412,1332
+radial E0,82.5,6,14,earth,E0,E00,#FBE2CF,420,1387
+radial E0,82.5,7,14,earth,E0,E000,#FCEEE2,427,1443
+radial E0,82.5,8,14,earth,E0,E0000,#FEF7F1,434,1499
+ring 2,17.5,2,1,yellow-red,YR6,YR61,#FFC4A3,1053,608
+ring 2,27.5,2,3,yellow-red,YR2,YR23,#F4BA6D,1000,738
+ring 4,27.5,4,3,yellow-red,YR2,YR20,#FFDCAE,1099,790
+ring 2,32.5,2,4,yellow-red,YR1,YR15,#FFB54D,964,799
+ring 4,32.5,4,4,yellow-red,YR1,YR12,#FFA457,1059,859
+ring 2,37.5,2,5,yellow-red,YR0,YR04,#FFA96B,924,856
+ring 4,37.5,4,5,yellow-red,YR0,YR01,#FFD0AA,1013,925
+ring 6,37.5,6,5,yellow-red,YR0,YR000,#FFEADA,1102,993
+ring 2,42.5,2,6,earth,E9,E95,#875324,879,910
+ring 2,47.5,2,7,earth,E8,E84,#7A5E4B,829,960
+ring 2,52.5,2,8,earth,E7,E74,#806456,775,1005
+ring 4,52.5,4,8,earth,E7,E70,#DFD2CF,844,1094
+ring 2,57.5,2,9,earth,E5,E55,#967963,718,1045
+ring 4,57.5,4,9,earth,E5,E51,#F5E8DA,778,1140
+ring 2,62.5,2,10,earth,E4,E44,#8D7362,657,1080
+ring 4,62.5,4,10,earth,E4,E42,#E8D7C3,709,1180
+ring 6,62.5,6,10,earth,E4,E40,#F7EDE2,761,1280
+ring 2,67.5,2,11,earth,E3,E35,#BD8E57,593,1110
+ring 4,67.5,4,11,earth,E3,E33,#DFB787,636,1214
+ring 6,67.5,6,11,earth,E3,E30,#F3E1C6,679,1318
+ring 2,72.5,2,12,earth,E2,E25,#AA643A,527,1134
+ring 4,72.5,4,12,earth,E2,E21,#FADBB8,561,1241
+ring 2,77.5,2,13,earth,E1,E17,#873C24,460,1152
+ring 4,77.5,4,13,earth,E1,E13,#E2AC85,484,1262
+ring 2,87.5,2,15,yellow,Y3,Y32,#FFD58F,320,1171
+ring 2,92.5,2,16,yellow,Y2,Y23,#FFE590,250,1171
+ring 2,97.5,2,17,yellow,Y1,Y17,#FFD82C,180,1164
+ring 4,97.5,4,17,yellow,Y1,Y13,#FFF397,165,1276
+ring 2,102.5,2,18,yellow,Y0,Y04,#FFEE47,111,1152
+ring 4,102.5,4,18,yellow,Y0,Y00,#FFF6A4,87,1262
+ring 6,102.5,6,18,yellow,Y0,Y0000,#FFFDE6,62,1372
+ring 2,352.5,2,68,red,R3,R35,#E34E56,1084,261
+ring 4,352.5,4,68,red,R3,R30,#FFD7C9,1195,246
+ring 2,357.5,2,69,red,R2,R24,#F9685A,1090,331
+ring 4,357.5,4,69,red,R2,R21,#FFB6AB,1202,326
+ring 2,362.5,2,70,red,R1,R12,#F7AA9A,1090,401
+ring 2,367.5,2,71,red,R0,R02,#FFAC8F,1084,471
+ring 4,367.5,4,71,red,R0,R00,#FFD0D0,1195,486
+ring 6,367.5,6,71,red,R0,R0000,#FFF4F4,1307,500

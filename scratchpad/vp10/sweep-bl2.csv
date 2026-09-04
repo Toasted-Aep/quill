@@ -1,0 +1,6 @@
+idx,kind,col,ring,code,expectHex,x,y,drawn,dot,drawnOk,pickOk
+1,seam@red,65,0,R89,#58101A,917,1071,#58101A,#58101A,1,1
+2,seam@red,65,1,R85,#AA4257,969,1048,#AA4257,#AA4257,1,1
+3,centre,65,0,R89,#58101A,925,1090,#58101A,#58101A,1,1
+4,ring1,65,1,R85,#AA4257,977,1068,#AA4257,#AA4257,1,1
+5,ring2,65,2,R83,#C56B82,1029,1047,#C56B82,#C56B82,1,1

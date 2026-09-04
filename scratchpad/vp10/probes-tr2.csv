@@ -1,0 +1,6 @@
+kind,a,ring,col,family,series,code,hex,x,y
+centre,112.5,0,20,yellow-green,YG6,YG67,#779E3D,2330,1006
+ring1,112.5,1,20,yellow-green,YG6,YG63,#A6C76E,2308,1058
+ring2,112.5,2,20,yellow-green,YG6,YG61,#D6DEB0,2287,1110
+centre,142.5,0,26,green,G8,G85,#83926C,2045,788
+ring1,142.5,1,26,green,G8,G82,#ABBC7E,2000,822

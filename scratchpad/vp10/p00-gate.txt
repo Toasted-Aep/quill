@@ -1,0 +1,11 @@
+INPUT DESKTOP : Default
+LogonUI       : not running - unlocked
+Quill         : 0 process(es)
+
+samples            : 1270 over 60 s at 40 ms
+cursor start       : 1252,1359
+cursor end         : 1252,1359
+distinct positions : 1
+cursor changes     : 0
+idle resets        : 0   (idle now 195.36 s)
+foreground window  : 'Claude'
