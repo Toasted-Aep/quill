@@ -527,16 +527,25 @@ public sealed class ChromeBars
         _layout.Invalidate();
     }
 
-    /// <summary>CONCEPTS-REF 17.15 - how far the right cluster is held clear of
-    /// the fullscreen reveal strip. Zero unless this cluster is the topmost bar
-    /// on screen; MainWindow owns that question because it is the one that
-    /// computes the fold.</summary>
+    /// <summary>CONCEPTS-REF 17.15 / 23 - how far the right cluster is held
+    /// clear of the fullscreen reveal strip. Zero unless this cluster is the
+    /// topmost bar on screen; MainWindow owns that question, because being
+    /// topmost needs both the caption row folded AND no format bar up, and
+    /// MainWindow is the only place that knows the second.</summary>
     public double StripReserve { get; private set; }
 
     /// <summary>Set by ApplyFullscreenChrome. Guarded on a real change because
     /// ApplyFullscreenChrome is self-correcting and runs on SizeChanged and
     /// after every surface switch, so this is called far more often than it
-    /// changes.</summary>
+    /// changes.
+    ///
+    /// <para><b>The guard makes this a PUSH, and anything built later has to
+    /// PULL.</b> 23 row 4: the Measurement panel is constructed lazily on first
+    /// use, so a panel that did not exist when the value last moved never
+    /// receives it and hangs <see cref="StripReserve"/> clear of its own
+    /// cluster. The panel therefore calls <see cref="ApplyDockInset"/> once at
+    /// construction; see the note there. Any future child whose position is
+    /// derived from this value owes the same call.</para></summary>
     public void SetStripReserve(double px)
     {
         if (Math.Abs(StripReserve - px) < 0.5) return;
@@ -1217,6 +1226,25 @@ public sealed class ChromeBars
             // matters, because its own position is derived from the bar's metrics
             // and a solver that re-homed it would fight that.
             _layout.Register("measurement", _measure.Root);
+            // 23 ROW 4 - A PANEL BUILT AFTER THE RESERVE SETTLED HAS TO READ IT.
+            //
+            // ApplyDockInset is the only writer of _measure.RightDockWidth, and
+            // it runs from SetStripReserve, which early-returns unless the value
+            // MOVED. That guard is right and stays: ApplyFullscreenChrome is
+            // self-correcting and calls it far more often than it changes. But it
+            // means the reserve is pushed, never pulled - so a panel that did not
+            // exist at the moment the value last moved never hears about it, and
+            // this one is built lazily on first use.
+            //
+            // Measured before the change: in fullscreen with the reserve settled
+            // at 144, the panel's first open put its info glyph at
+            // 1410.0..1423.5 DIP while the cluster's help button ended at 1269.0
+            // - exactly StripReserve adrift. F11 out and back in, which forces
+            // 144 -> 0 -> 144, snapped it home, which is what named the guard.
+            //
+            // So the fix is here rather than in the guard: the panel reads the
+            // current value once, at construction, through the one writer.
+            ApplyDockInset();
             return _measure;
         }
     }

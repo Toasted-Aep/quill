@@ -110,6 +110,82 @@ the hovered cell is `#494949` at 8.04:1. Flagged rather than shipped silently;
 it is the same split-pair shape §27 just closed, one layer further down, and it
 is **not** one of the three filed defects.
 
+### What was changed, and what the screen said afterwards
+
+Written up as **§28** in `CONCEPTS-REF`. Clean build, **0 warnings**, before and
+after. Two files touched, both CRLF, endings measured immediately before and
+after each write (`MainWindow.xaml.cs` 12 394 → 12 436 CRLF / 0 bare LF;
+`ChromeBars.cs` 1 620 → 1 648 CRLF / 0 bare LF).
+
+**§23 row 3 — FIXED, verified.** `SetStripReserve(fold ? …)` became
+`SetStripReserve(fold && !FormatBarUp ? …)`, with `FormatBarUp` hoisted out of
+`UpdateFormatBarVisibility` (state, not `FormatBar.Visibility` — `FadeOut`
+passes `collapseAtEnd: true`, so the element lags its state by a 120 ms fade),
+and `UpdateFormatBarVisibility` now calls `ApplyFullscreenChrome`, which it
+never did — the format bar coming or going was the one transition that moved
+ChromeBars between rows and never recomputed the reserve.
+
+```
+                        BEFORE                    AFTER
+pen  (no format bar)    893.0..1269.0 DIP         893.0..1269.0 DIP
+text (format bar up)    893.0..1269.0  <- same    1037.0..1413.0  <- +144.0
+```
+
+Every one of the nine mark-groups moved by exactly 144.0.
+
+**The vertical geometry that justifies it**, measured off the gear's own
+columns — this is the part that makes the fix safe rather than merely
+different:
+
+```
+pen  case   gear y 23.0..38.5 DIP   OVERLAPS the strip (y 0..33)  -> reserve needed
+text case   gear y 66.0..81.5 DIP   clear by 33 DIP               -> reserve is waste
+```
+
+**§23 row 3 regression — the fold still flips live, both directions.** Five
+switches inside fullscreen, never leaving it:
+
+```
+pen 893.0..1269.0  text 1037.0..1413.0  pen 893.0..1269.0
+text 1037.0..1413.0  pen 893.0..1269.0
+```
+
+`FormatBar.Padding` and `TopBar.Padding` were not touched; the format bar keeps
+its own reserve and its controls still stop at DIP ~1251, clear of the strip's
+x 1302.
+
+**§23 row 4 — FIXED, verified on a first open in a fresh process.**
+`ApplyDockInset()` is now called once at `MeasurementMenu` construction. The
+early-return guard in `SetStripReserve` was **not** removed — it is right for
+its stated purpose; the bug was that the reserve is only ever pushed and a
+lazily-built child has to pull it.
+
+```
+BEFORE   info glyph 1410.0..1423.5 DIP   (help button ends 1269.0)  -> 144.0 adrift
+AFTER    info glyph 1266.0..1279.5 DIP                              -> flush
+```
+
+which is exactly where run 7's forced 144 → 0 → 144 cycle had put it.
+`RightDockWidth` still has exactly one writer. Captures
+`g02-measure-first-open.png`, `g06-measure-aligned-clean.png`.
+
+**§24.15 row 3.3 — NOT CHANGED, because it was already fixed.** See above and
+§28.3. `ToolWheel.BuildToolOptions` was deliberately left alone: `onSurface` and
+`surface` are a matched pair by construction, so it cannot split the way
+`BottomMenu` did, and there is no measured fault behind changing it.
+
+**Gates.** The user's `library.json` re-sealed **byte-identical** — 53 582 459
+bytes, SHA-256 `0C32CE6C…`, mtime 2026-08-28 unchanged on all three counts.
+`crash.log` gained nothing; the only one present is the stale 2026-08-21 file,
+still in the pre-§27.5 empty-detail form. The cursor never moved anywhere this
+run did not put it.
+
+**A trap worth the next run's time:** the live theme is **not** `library.json`'s
+`Theme` / `ThemeSource` — those are a stale mirror. It is `settings.json` →
+`Settings.Theme` and `Ui.Theme`. Editing the library field silently does
+nothing, and it confounded this run's first before/after until it was caught;
+all final numbers were retaken under a matched `Theme = Dark`.
+
 ## RUN OF 2026-09-04 (NO SCREEN RUN) — §26.3 MIRRORED IN CODE, §21 WRITTEN
 
 Branch `integration` @ `c287553` plus this change. Clean x64 Debug
