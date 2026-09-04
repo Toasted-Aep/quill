@@ -1,0 +1,11 @@
+INPUT DESKTOP : Default
+LogonUI       : not running - unlocked
+Quill         : 1 process(es)
+
+samples            : 1260 over 60 s at 40 ms
+cursor start       : 2782,553
+cursor end         : 2782,553
+distinct positions : 1
+cursor changes     : 0
+idle resets        : 0   (idle now 81.34 s)
+foreground window  : 'Quill'
