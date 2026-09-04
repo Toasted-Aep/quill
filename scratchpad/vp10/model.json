@@ -1,0 +1,1560 @@
+[
+ {
+  "col": 0,
+  "family": "yellow-red",
+  "series": "YR8",
+  "endsFamily": false,
+  "a0": 10.0,
+  "aMid": 12.5,
+  "depth": 1,
+  "codes": [
+   "YR82"
+  ],
+  "hexes": [
+   "#E0A068"
+  ]
+ },
+ {
+  "col": 1,
+  "family": "yellow-red",
+  "series": "YR6",
+  "endsFamily": false,
+  "a0": 15.0,
+  "aMid": 17.5,
+  "depth": 3,
+  "codes": [
+   "YR68",
+   "YR65",
+   "YR61"
+  ],
+  "hexes": [
+   "#E85309",
+   "#F27C24",
+   "#FFC4A3"
+  ]
+ },
+ {
+  "col": 2,
+  "family": "yellow-red",
+  "series": "YR3",
+  "endsFamily": false,
+  "a0": 20.0,
+  "aMid": 22.5,
+  "depth": 2,
+  "codes": [
+   "YR31",
+   "YR30"
+  ],
+  "hexes": [
+   "#F7D391",
+   "#F9E0B8"
+  ]
+ },
+ {
+  "col": 3,
+  "family": "yellow-red",
+  "series": "YR2",
+  "endsFamily": false,
+  "a0": 25.0,
+  "aMid": 27.5,
+  "depth": 5,
+  "codes": [
+   "YR27",
+   "YR24",
+   "YR23",
+   "YR21",
+   "YR20"
+  ],
+  "hexes": [
+   "#DF621B",
+   "#F7AA43",
+   "#F4BA6D",
+   "#FFC675",
+   "#FFDCAE"
+  ]
+ },
+ {
+  "col": 4,
+  "family": "yellow-red",
+  "series": "YR1",
+  "endsFamily": false,
+  "a0": 30.0,
+  "aMid": 32.5,
+  "depth": 5,
+  "codes": [
+   "YR18",
+   "YR16",
+   "YR15",
+   "YR14",
+   "YR12"
+  ],
+  "hexes": [
+   "#F48800",
+   "#FFAA35",
+   "#FFB54D",
+   "#FF9048",
+   "#FFA457"
+  ]
+ },
+ {
+  "col": 5,
+  "family": "yellow-red",
+  "series": "YR0",
+  "endsFamily": true,
+  "a0": 35.0,
+  "aMid": 37.5,
+  "depth": 8,
+  "codes": [
+   "YR09",
+   "YR07",
+   "YR04",
+   "YR02",
+   "YR01",
+   "YR00",
+   "YR000",
+   "YR0000"
+  ],
+  "hexes": [
+   "#F1640A",
+   "#F98434",
+   "#FFA96B",
+   "#FFC69A",
+   "#FFD0AA",
+   "#FFDBBF",
+   "#FFEADA",
+   "#FFF6ED"
+  ]
+ },
+ {
+  "col": 6,
+  "family": "earth",
+  "series": "E9",
+  "endsFamily": false,
+  "a0": 40.0,
+  "aMid": 42.5,
+  "depth": 4,
+  "codes": [
+   "E99",
+   "E97",
+   "E95",
+   "E93"
+  ],
+  "hexes": [
+   "#5C310C",
+   "#6B3C16",
+   "#875324",
+   "#AD7648"
+  ]
+ },
+ {
+  "col": 7,
+  "family": "earth",
+  "series": "E8",
+  "endsFamily": false,
+  "a0": 45.0,
+  "aMid": 47.5,
+  "depth": 4,
+  "codes": [
+   "E89",
+   "E87",
+   "E84",
+   "E81"
+  ],
+  "hexes": [
+   "#58101A",
+   "#634739",
+   "#7A5E4B",
+   "#A68C78"
+  ]
+ },
+ {
+  "col": 8,
+  "family": "earth",
+  "series": "E7",
+  "endsFamily": false,
+  "a0": 50.0,
+  "aMid": 52.5,
+  "depth": 5,
+  "codes": [
+   "E79",
+   "E77",
+   "E74",
+   "E71",
+   "E70"
+  ],
+  "hexes": [
+   "#48203C",
+   "#634739",
+   "#806456",
+   "#9E8983",
+   "#DFD2CF"
+  ]
+ },
+ {
+  "col": 9,
+  "family": "earth",
+  "series": "E5",
+  "endsFamily": false,
+  "a0": 55.0,
+  "aMid": 57.5,
+  "depth": 6,
+  "codes": [
+   "E59",
+   "E57",
+   "E55",
+   "E53",
+   "E51",
+   "E50"
+  ],
+  "hexes": [
+   "#5A2512",
+   "#6B4C38",
+   "#967963",
+   "#B59A84",
+   "#F5E8DA",
+   "#EEE2E4"
+  ]
+ },
+ {
+  "col": 10,
+  "family": "earth",
+  "series": "E4",
+  "endsFamily": false,
+  "a0": 60.0,
+  "aMid": 62.5,
+  "depth": 7,
+  "codes": [
+   "E49",
+   "E47",
+   "E44",
+   "E43",
+   "E42",
+   "E41",
+   "E40"
+  ],
+  "hexes": [
+   "#442216",
+   "#775A48",
+   "#8D7362",
+   "#DFCDB1",
+   "#E8D7C3",
+   "#F4E7D7",
+   "#F7EDE2"
+  ]
+ },
+ {
+  "col": 11,
+  "family": "earth",
+  "series": "E3",
+  "endsFamily": false,
+  "a0": 65.0,
+  "aMid": 67.5,
+  "depth": 7,
+  "codes": [
+   "E39",
+   "E37",
+   "E35",
+   "E34",
+   "E33",
+   "E31",
+   "E30"
+  ],
+  "hexes": [
+   "#633215",
+   "#986128",
+   "#BD8E57",
+   "#CBB08D",
+   "#DFB787",
+   "#EEDBBD",
+   "#F3E1C6"
+  ]
+ },
+ {
+  "col": 12,
+  "family": "earth",
+  "series": "E2",
+  "endsFamily": false,
+  "a0": 70.0,
+  "aMid": 72.5,
+  "depth": 5,
+  "codes": [
+   "E29",
+   "E27",
+   "E25",
+   "E23",
+   "E21"
+  ],
+  "hexes": [
+   "#5F2710",
+   "#C57849",
+   "#AA643A",
+   "#E0A374",
+   "#FADBB8"
+  ]
+ },
+ {
+  "col": 13,
+  "family": "earth",
+  "series": "E1",
+  "endsFamily": false,
+  "a0": 75.0,
+  "aMid": 77.5,
+  "depth": 6,
+  "codes": [
+   "E19",
+   "E18",
+   "E17",
+   "E15",
+   "E13",
+   "E11"
+  ],
+  "hexes": [
+   "#AA3110",
+   "#5A2512",
+   "#873C24",
+   "#CB8153",
+   "#E2AC85",
+   "#F5D3B8"
+  ]
+ },
+ {
+  "col": 14,
+  "family": "earth",
+  "series": "E0",
+  "endsFamily": true,
+  "a0": 80.0,
+  "aMid": 82.5,
+  "depth": 9,
+  "codes": [
+   "E09",
+   "E08",
+   "E07",
+   "E04",
+   "E02",
+   "E01",
+   "E00",
+   "E000",
+   "E0000"
+  ],
+  "hexes": [
+   "#952A12",
+   "#AD4025",
+   "#BD533B",
+   "#BE8C89",
+   "#F2BD9D",
+   "#F8D2B8",
+   "#FBE2CF",
+   "#FCEEE2",
+   "#FEF7F1"
+  ]
+ },
+ {
+  "col": 15,
+  "family": "yellow",
+  "series": "Y3",
+  "endsFamily": false,
+  "a0": 85.0,
+  "aMid": 87.5,
+  "depth": 3,
+  "codes": [
+   "Y38",
+   "Y35",
+   "Y32"
+  ],
+  "hexes": [
+   "#E69D37",
+   "#FFC125",
+   "#FFD58F"
+  ]
+ },
+ {
+  "col": 16,
+  "family": "yellow",
+  "series": "Y2",
+  "endsFamily": false,
+  "a0": 90.0,
+  "aMid": 92.5,
+  "depth": 4,
+  "codes": [
+   "Y28",
+   "Y26",
+   "Y23",
+   "Y21"
+  ],
+  "hexes": [
+   "#DFB768",
+   "#E8C576",
+   "#FFE590",
+   "#FFF2BB"
+  ]
+ },
+ {
+  "col": 17,
+  "family": "yellow",
+  "series": "Y1",
+  "endsFamily": false,
+  "a0": 95.0,
+  "aMid": 97.5,
+  "depth": 6,
+  "codes": [
+   "Y19",
+   "Y18",
+   "Y17",
+   "Y15",
+   "Y13",
+   "Y11"
+  ],
+  "hexes": [
+   "#FFC125",
+   "#FFCD00",
+   "#FFD82C",
+   "#FFE763",
+   "#FFF397",
+   "#FFFAC9"
+  ]
+ },
+ {
+  "col": 18,
+  "family": "yellow",
+  "series": "Y0",
+  "endsFamily": true,
+  "a0": 100.0,
+  "aMid": 102.5,
+  "depth": 7,
+  "codes": [
+   "Y08",
+   "Y06",
+   "Y04",
+   "Y02",
+   "Y00",
+   "Y000",
+   "Y0000"
+  ],
+  "hexes": [
+   "#FDE000",
+   "#FFE91E",
+   "#FFEE47",
+   "#FFF074",
+   "#FFF6A4",
+   "#FFFBCA",
+   "#FFFDE6"
+  ]
+ },
+ {
+  "col": 19,
+  "family": "yellow-green",
+  "series": "YG9",
+  "endsFamily": false,
+  "a0": 105.0,
+  "aMid": 107.5,
+  "depth": 5,
+  "codes": [
+   "YG99",
+   "YG97",
+   "YG95",
+   "YG93",
+   "YG91"
+  ],
+  "hexes": [
+   "#4C5C2D",
+   "#63783A",
+   "#88A04C",
+   "#B5C482",
+   "#E0E8B8"
+  ]
+ },
+ {
+  "col": 20,
+  "family": "yellow-green",
+  "series": "YG6",
+  "endsFamily": false,
+  "a0": 110.0,
+  "aMid": 112.5,
+  "depth": 3,
+  "codes": [
+   "YG67",
+   "YG63",
+   "YG61"
+  ],
+  "hexes": [
+   "#779E3D",
+   "#A6C76E",
+   "#D6DEB0"
+  ]
+ },
+ {
+  "col": 21,
+  "family": "yellow-green",
+  "series": "YG4",
+  "endsFamily": false,
+  "a0": 115.0,
+  "aMid": 117.5,
+  "depth": 2,
+  "codes": [
+   "YG45",
+   "YG41"
+  ],
+  "hexes": [
+   "#8EC449",
+   "#CEE9D6"
+  ]
+ },
+ {
+  "col": 22,
+  "family": "yellow-green",
+  "series": "YG2",
+  "endsFamily": false,
+  "a0": 120.0,
+  "aMid": 122.5,
+  "depth": 3,
+  "codes": [
+   "YG25",
+   "YG23",
+   "YG21"
+  ],
+  "hexes": [
+   "#D6E969",
+   "#E7F394",
+   "#F5FBBF"
+  ]
+ },
+ {
+  "col": 23,
+  "family": "yellow-green",
+  "series": "YG1",
+  "endsFamily": false,
+  "a0": 125.0,
+  "aMid": 127.5,
+  "depth": 3,
+  "codes": [
+   "YG17",
+   "YG13",
+   "YG11"
+  ],
+  "hexes": [
+   "#95C635",
+   "#CDE497",
+   "#E0F0C7"
+  ]
+ },
+ {
+  "col": 24,
+  "family": "yellow-green",
+  "series": "YG0",
+  "endsFamily": true,
+  "a0": 130.0,
+  "aMid": 132.5,
+  "depth": 8,
+  "codes": [
+   "YG09",
+   "YG07",
+   "YG06",
+   "YG05",
+   "YG03",
+   "YG01",
+   "YG00",
+   "YG0000"
+  ],
+  "hexes": [
+   "#81B835",
+   "#9FCD34",
+   "#90D94B",
+   "#B7DA53",
+   "#CAE37C",
+   "#DBECA1",
+   "#E8F3C4",
+   "#F7FBE6"
+  ]
+ },
+ {
+  "col": 25,
+  "family": "green",
+  "series": "G9",
+  "endsFamily": false,
+  "a0": 135.0,
+  "aMid": 137.5,
+  "depth": 6,
+  "codes": [
+   "G99",
+   "G97",
+   "G95",
+   "G94",
+   "G93",
+   "G91"
+  ],
+  "hexes": [
+   "#3B5C2A",
+   "#52783D",
+   "#77995C",
+   "#83946A",
+   "#A7C48C",
+   "#D3E3BE"
+  ]
+ },
+ {
+  "col": 26,
+  "family": "green",
+  "series": "G8",
+  "endsFamily": false,
+  "a0": 140.0,
+  "aMid": 142.5,
+  "depth": 2,
+  "codes": [
+   "G85",
+   "G82"
+  ],
+  "hexes": [
+   "#83926C",
+   "#ABBC7E"
+  ]
+ },
+ {
+  "col": 27,
+  "family": "green",
+  "series": "G4",
+  "endsFamily": false,
+  "a0": 145.0,
+  "aMid": 147.5,
+  "depth": 3,
+  "codes": [
+   "G46",
+   "G43",
+   "G40"
+  ],
+  "hexes": [
+   "#67A950",
+   "#B8D6A4",
+   "#E8EDBE"
+  ]
+ },
+ {
+  "col": 28,
+  "family": "green",
+  "series": "G2",
+  "endsFamily": false,
+  "a0": 150.0,
+  "aMid": 152.5,
+  "depth": 5,
+  "codes": [
+   "G29",
+   "G28",
+   "G24",
+   "G21",
+   "G20"
+  ],
+  "hexes": [
+   "#456150",
+   "#00793C",
+   "#96CA9A",
+   "#B9DBBC",
+   "#EAF4E5"
+  ]
+ },
+ {
+  "col": 29,
+  "family": "green",
+  "series": "G1",
+  "endsFamily": false,
+  "a0": 155.0,
+  "aMid": 157.5,
+  "depth": 5,
+  "codes": [
+   "G19",
+   "G17",
+   "G16",
+   "G14",
+   "G12"
+  ],
+  "hexes": [
+   "#009D43",
+   "#37B54A",
+   "#1BB55C",
+   "#8CD585",
+   "#CEE8CB"
+  ]
+ },
+ {
+  "col": 30,
+  "family": "green",
+  "series": "G0",
+  "endsFamily": true,
+  "a0": 160.0,
+  "aMid": 162.5,
+  "depth": 8,
+  "codes": [
+   "G09",
+   "G07",
+   "G05",
+   "G03",
+   "G02",
+   "G00",
+   "G000",
+   "G0000"
+  ],
+  "hexes": [
+   "#139828",
+   "#32B444",
+   "#61C86C",
+   "#81D489",
+   "#A1DBA7",
+   "#C5E8C9",
+   "#DEF2E0",
+   "#EEF8EF"
+  ]
+ },
+ {
+  "col": 31,
+  "family": "blue-green",
+  "series": "BG9",
+  "endsFamily": false,
+  "a0": 165.0,
+  "aMid": 167.5,
+  "depth": 4,
+  "codes": [
+   "BG99",
+   "BG96",
+   "BG93",
+   "BG90"
+  ],
+  "hexes": [
+   "#39694E",
+   "#689C7F",
+   "#9DC2AB",
+   "#D0DDD4"
+  ]
+ },
+ {
+  "col": 32,
+  "family": "blue-green",
+  "series": "BG7",
+  "endsFamily": false,
+  "a0": 170.0,
+  "aMid": 172.5,
+  "depth": 4,
+  "codes": [
+   "BG78",
+   "BG75",
+   "BG72",
+   "BG70"
+  ],
+  "hexes": [
+   "#356A64",
+   "#679B94",
+   "#9BC2BC",
+   "#CFDEDB"
+  ]
+ },
+ {
+  "col": 33,
+  "family": "blue-green",
+  "series": "BG5",
+  "endsFamily": false,
+  "a0": 175.0,
+  "aMid": 177.5,
+  "depth": 2,
+  "codes": [
+   "BG57",
+   "BG53"
+  ],
+  "hexes": [
+   "#3CB0C1",
+   "#87CBD4"
+  ]
+ },
+ {
+  "col": 34,
+  "family": "blue-green",
+  "series": "BG4",
+  "endsFamily": false,
+  "a0": 180.0,
+  "aMid": 182.5,
+  "depth": 2,
+  "codes": [
+   "BG49",
+   "BG45"
+  ],
+  "hexes": [
+   "#009FAE",
+   "#6AC9D6"
+  ]
+ },
+ {
+  "col": 35,
+  "family": "blue-green",
+  "series": "BG3",
+  "endsFamily": false,
+  "a0": 185.0,
+  "aMid": 187.5,
+  "depth": 2,
+  "codes": [
+   "BG34",
+   "BG32"
+  ],
+  "hexes": [
+   "#66C4B8",
+   "#97D6CD"
+  ]
+ },
+ {
+  "col": 36,
+  "family": "blue-green",
+  "series": "BG2",
+  "endsFamily": false,
+  "a0": 190.0,
+  "aMid": 192.5,
+  "depth": 1,
+  "codes": [
+   "BG23"
+  ],
+  "hexes": [
+   "#7BDEC1"
+  ]
+ },
+ {
+  "col": 37,
+  "family": "blue-green",
+  "series": "BG1",
+  "endsFamily": false,
+  "a0": 195.0,
+  "aMid": 197.5,
+  "depth": 5,
+  "codes": [
+   "BG18",
+   "BG15",
+   "BG13",
+   "BG11",
+   "BG10"
+  ],
+  "hexes": [
+   "#408784",
+   "#00BFA4",
+   "#3ED1B9",
+   "#C2F2DE",
+   "#D7F3E3"
+  ]
+ },
+ {
+  "col": 38,
+  "family": "blue-green",
+  "series": "BG0",
+  "endsFamily": true,
+  "a0": 200.0,
+  "aMid": 202.5,
+  "depth": 7,
+  "codes": [
+   "BG09",
+   "BG07",
+   "BG05",
+   "BG02",
+   "BG01",
+   "BG000",
+   "BG0000"
+  ],
+  "hexes": [
+   "#00878E",
+   "#00939F",
+   "#00BACB",
+   "#4CD9E8",
+   "#85E6EA",
+   "#DBF7F1",
+   "#EAF9F0"
+  ]
+ },
+ {
+  "col": 39,
+  "family": "blue",
+  "series": "B9",
+  "endsFamily": false,
+  "a0": 205.0,
+  "aMid": 207.5,
+  "depth": 5,
+  "codes": [
+   "B99",
+   "B97",
+   "B95",
+   "B93",
+   "B91"
+  ],
+  "hexes": [
+   "#445465",
+   "#49768F",
+   "#64A6C2",
+   "#8BBFD3",
+   "#B3DAE4"
+  ]
+ },
+ {
+  "col": 40,
+  "family": "blue",
+  "series": "B7",
+  "endsFamily": false,
+  "a0": 210.0,
+  "aMid": 212.5,
+  "depth": 1,
+  "codes": [
+   "B79"
+  ],
+  "hexes": [
+   "#27386E"
+  ]
+ },
+ {
+  "col": 41,
+  "family": "blue",
+  "series": "B6",
+  "endsFamily": false,
+  "a0": 215.0,
+  "aMid": 217.5,
+  "depth": 4,
+  "codes": [
+   "B69",
+   "B66",
+   "B63",
+   "B60"
+  ],
+  "hexes": [
+   "#2A3B68",
+   "#4C5C8E",
+   "#8797C4",
+   "#D3DDED"
+  ]
+ },
+ {
+  "col": 42,
+  "family": "blue",
+  "series": "B5",
+  "endsFamily": false,
+  "a0": 220.0,
+  "aMid": 222.5,
+  "depth": 1,
+  "codes": [
+   "B52"
+  ],
+  "hexes": [
+   "#859EC9"
+  ]
+ },
+ {
+  "col": 43,
+  "family": "blue",
+  "series": "B4",
+  "endsFamily": false,
+  "a0": 225.0,
+  "aMid": 227.5,
+  "depth": 2,
+  "codes": [
+   "B45",
+   "B41"
+  ],
+  "hexes": [
+   "#4F7CC4",
+   "#B5CCED"
+  ]
+ },
+ {
+  "col": 44,
+  "family": "blue",
+  "series": "B3",
+  "endsFamily": false,
+  "a0": 230.0,
+  "aMid": 232.5,
+  "depth": 4,
+  "codes": [
+   "B39",
+   "B37",
+   "B34",
+   "B32"
+  ],
+  "hexes": [
+   "#184768",
+   "#1C638A",
+   "#63AFD1",
+   "#BFE1ED"
+  ]
+ },
+ {
+  "col": 45,
+  "family": "blue",
+  "series": "B2",
+  "endsFamily": false,
+  "a0": 235.0,
+  "aMid": 237.5,
+  "depth": 6,
+  "codes": [
+   "B29",
+   "B28",
+   "B26",
+   "B24",
+   "B23",
+   "B21"
+  ],
+  "hexes": [
+   "#00438C",
+   "#1759A1",
+   "#2B7EC0",
+   "#519FD6",
+   "#76B1DD",
+   "#CBE4F4"
+  ]
+ },
+ {
+  "col": 46,
+  "family": "blue",
+  "series": "B1",
+  "endsFamily": false,
+  "a0": 240.0,
+  "aMid": 242.5,
+  "depth": 4,
+  "codes": [
+   "B18",
+   "B16",
+   "B14",
+   "B12"
+  ],
+  "hexes": [
+   "#007BBD",
+   "#00A3DF",
+   "#5BBFE6",
+   "#A6D8EB"
+  ]
+ },
+ {
+  "col": 47,
+  "family": "blue",
+  "series": "B0",
+  "endsFamily": true,
+  "a0": 245.0,
+  "aMid": 247.5,
+  "depth": 8,
+  "codes": [
+   "B06",
+   "B05",
+   "B04",
+   "B02",
+   "B01",
+   "B00",
+   "B000",
+   "B0000"
+  ],
+  "hexes": [
+   "#0085CC",
+   "#1E9CD1",
+   "#4CB3DC",
+   "#7EC9E6",
+   "#A1D9EE",
+   "#C1E7F4",
+   "#D9F0F7",
+   "#EAF6FA"
+  ]
+ },
+ {
+  "col": 48,
+  "family": "blue-violet",
+  "series": "BV9",
+  "endsFamily": false,
+  "a0": 250.0,
+  "aMid": 252.5,
+  "depth": 5,
+  "codes": [
+   "BV99",
+   "BV97",
+   "BV95",
+   "BV93",
+   "BV91"
+  ],
+  "hexes": [
+   "#222838",
+   "#3E485E",
+   "#63708A",
+   "#95A1B8",
+   "#D2D9E6"
+  ]
+ },
+ {
+  "col": 49,
+  "family": "blue-violet",
+  "series": "BV3",
+  "endsFamily": false,
+  "a0": 255.0,
+  "aMid": 257.5,
+  "depth": 3,
+  "codes": [
+   "BV39",
+   "BV34",
+   "BV31"
+  ],
+  "hexes": [
+   "#36374F",
+   "#8F93A8",
+   "#CAD2E3"
+  ]
+ },
+ {
+  "col": 50,
+  "family": "blue-violet",
+  "series": "BV2",
+  "endsFamily": false,
+  "a0": 260.0,
+  "aMid": 262.5,
+  "depth": 4,
+  "codes": [
+   "BV29",
+   "BV25",
+   "BV23",
+   "BV20"
+  ],
+  "hexes": [
+   "#1B2C45",
+   "#7280A3",
+   "#9AA5C4",
+   "#D0D7E6"
+  ]
+ },
+ {
+  "col": 51,
+  "family": "blue-violet",
+  "series": "BV1",
+  "endsFamily": false,
+  "a0": 265.0,
+  "aMid": 267.5,
+  "depth": 3,
+  "codes": [
+   "BV17",
+   "BV13",
+   "BV11"
+  ],
+  "hexes": [
+   "#595EB4",
+   "#6A88C2",
+   "#A4A2C3"
+  ]
+ },
+ {
+  "col": 52,
+  "family": "blue-violet",
+  "series": "BV0",
+  "endsFamily": true,
+  "a0": 270.0,
+  "aMid": 272.5,
+  "depth": 7,
+  "codes": [
+   "BV08",
+   "BV04",
+   "BV02",
+   "BV01",
+   "BV00",
+   "BV000",
+   "BV0000"
+  ],
+  "hexes": [
+   "#6850AA",
+   "#8774C4",
+   "#A998DA",
+   "#C5B6E6",
+   "#DED3F2",
+   "#EAE3F7",
+   "#F4EFFA"
+  ]
+ },
+ {
+  "col": 53,
+  "family": "violet",
+  "series": "V9",
+  "endsFamily": false,
+  "a0": 275.0,
+  "aMid": 277.5,
+  "depth": 4,
+  "codes": [
+   "V99",
+   "V95",
+   "V93",
+   "V91"
+  ],
+  "hexes": [
+   "#261B2A",
+   "#775775",
+   "#A68CA2",
+   "#E0D3DF"
+  ]
+ },
+ {
+  "col": 54,
+  "family": "violet",
+  "series": "V2",
+  "endsFamily": false,
+  "a0": 280.0,
+  "aMid": 282.5,
+  "depth": 4,
+  "codes": [
+   "V28",
+   "V25",
+   "V22",
+   "V20"
+  ],
+  "hexes": [
+   "#5B3C67",
+   "#7F598B",
+   "#B395BD",
+   "#E1D5E6"
+  ]
+ },
+ {
+  "col": 55,
+  "family": "violet",
+  "series": "V1",
+  "endsFamily": false,
+  "a0": 285.0,
+  "aMid": 287.5,
+  "depth": 3,
+  "codes": [
+   "V17",
+   "V15",
+   "V12"
+  ],
+  "hexes": [
+   "#633D73",
+   "#8C5B9E",
+   "#C7A3D1"
+  ]
+ },
+ {
+  "col": 56,
+  "family": "violet",
+  "series": "V0",
+  "endsFamily": true,
+  "a0": 290.0,
+  "aMid": 292.5,
+  "depth": 7,
+  "codes": [
+   "V09",
+   "V06",
+   "V05",
+   "V04",
+   "V01",
+   "V000",
+   "V0000"
+  ],
+  "hexes": [
+   "#7E2D82",
+   "#AD67A6",
+   "#C48BBD",
+   "#C78BB9",
+   "#E5C4DE",
+   "#F4E3F0",
+   "#FAEEF7"
+  ]
+ },
+ {
+  "col": 57,
+  "family": "red-violet",
+  "series": "RV9",
+  "endsFamily": false,
+  "a0": 295.0,
+  "aMid": 297.5,
+  "depth": 4,
+  "codes": [
+   "RV99",
+   "RV95",
+   "RV93",
+   "RV91"
+  ],
+  "hexes": [
+   "#614D4F",
+   "#BC8797",
+   "#E0B0BC",
+   "#F3D8DB"
+  ]
+ },
+ {
+  "col": 58,
+  "family": "red-violet",
+  "series": "RV6",
+  "endsFamily": false,
+  "a0": 300.0,
+  "aMid": 302.5,
+  "depth": 3,
+  "codes": [
+   "RV69",
+   "RV66",
+   "RV63"
+  ],
+  "hexes": [
+   "#81494A",
+   "#A95C8D",
+   "#E8AFD8"
+  ]
+ },
+ {
+  "col": 59,
+  "family": "red-violet",
+  "series": "RV5",
+  "endsFamily": false,
+  "a0": 305.0,
+  "aMid": 307.5,
+  "depth": 2,
+  "codes": [
+   "RV55",
+   "RV52"
+  ],
+  "hexes": [
+   "#E485B6",
+   "#F9C9DE"
+  ]
+ },
+ {
+  "col": 60,
+  "family": "red-violet",
+  "series": "RV4",
+  "endsFamily": false,
+  "a0": 310.0,
+  "aMid": 312.5,
+  "depth": 1,
+  "codes": [
+   "RV42"
+  ],
+  "hexes": [
+   "#FFA79B"
+  ]
+ },
+ {
+  "col": 61,
+  "family": "red-violet",
+  "series": "RV3",
+  "endsFamily": false,
+  "a0": 315.0,
+  "aMid": 317.5,
+  "depth": 2,
+  "codes": [
+   "RV34",
+   "RV32"
+  ],
+  "hexes": [
+   "#DD7C9C",
+   "#F4ABB4"
+  ]
+ },
+ {
+  "col": 62,
+  "family": "red-violet",
+  "series": "RV2",
+  "endsFamily": false,
+  "a0": 320.0,
+  "aMid": 322.5,
+  "depth": 4,
+  "codes": [
+   "RV29",
+   "RV25",
+   "RV23",
+   "RV21"
+  ],
+  "hexes": [
+   "#D72866",
+   "#EF7DA3",
+   "#F8B4CB",
+   "#FFBCCE"
+  ]
+ },
+ {
+  "col": 63,
+  "family": "red-violet",
+  "series": "RV1",
+  "endsFamily": false,
+  "a0": 325.0,
+  "aMid": 327.5,
+  "depth": 6,
+  "codes": [
+   "RV19",
+   "RV17",
+   "RV14",
+   "RV13",
+   "RV11",
+   "RV10"
+  ],
+  "hexes": [
+   "#AD2972",
+   "#C5428A",
+   "#EE6EA9",
+   "#F59CC6",
+   "#F8C2DB",
+   "#FADBE9"
+  ]
+ },
+ {
+  "col": 64,
+  "family": "red-violet",
+  "series": "RV0",
+  "endsFamily": true,
+  "a0": 330.0,
+  "aMid": 332.5,
+  "depth": 7,
+  "codes": [
+   "RV09",
+   "RV06",
+   "RV04",
+   "RV02",
+   "RV00",
+   "RV000",
+   "RV0000"
+  ],
+  "hexes": [
+   "#D2399A",
+   "#E55DB1",
+   "#EF87C8",
+   "#F4B1DC",
+   "#F7D3EC",
+   "#FAE6F4",
+   "#FDF2FA"
+  ]
+ },
+ {
+  "col": 65,
+  "family": "red",
+  "series": "R8",
+  "endsFamily": false,
+  "a0": 335.0,
+  "aMid": 337.5,
+  "depth": 4,
+  "codes": [
+   "R89",
+   "R85",
+   "R83",
+   "R81"
+  ],
+  "hexes": [
+   "#58101A",
+   "#AA4257",
+   "#C56B82",
+   "#E8A3B5"
+  ]
+ },
+ {
+  "col": 66,
+  "family": "red",
+  "series": "R5",
+  "endsFamily": false,
+  "a0": 340.0,
+  "aMid": 342.5,
+  "depth": 2,
+  "codes": [
+   "R59",
+   "R56"
+  ],
+  "hexes": [
+   "#9D2238",
+   "#B85C6C"
+  ]
+ },
+ {
+  "col": 67,
+  "family": "red",
+  "series": "R4",
+  "endsFamily": false,
+  "a0": 345.0,
+  "aMid": 347.5,
+  "depth": 2,
+  "codes": [
+   "R46",
+   "R43"
+  ],
+  "hexes": [
+   "#D91D3C",
+   "#E86E7A"
+  ]
+ },
+ {
+  "col": 68,
+  "family": "red",
+  "series": "R3",
+  "endsFamily": false,
+  "a0": 350.0,
+  "aMid": 352.5,
+  "depth": 5,
+  "codes": [
+   "R39",
+   "R37",
+   "R35",
+   "R32",
+   "R30"
+  ],
+  "hexes": [
+   "#B3224B",
+   "#D6484E",
+   "#E34E56",
+   "#F89A91",
+   "#FFD7C9"
+  ]
+ },
+ {
+  "col": 69,
+  "family": "red",
+  "series": "R2",
+  "endsFamily": false,
+  "a0": 355.0,
+  "aMid": 357.5,
+  "depth": 6,
+  "codes": [
+   "R29",
+   "R27",
+   "R24",
+   "R22",
+   "R21",
+   "R20"
+  ],
+  "hexes": [
+   "#E10619",
+   "#EE322B",
+   "#F9685A",
+   "#FF9F92",
+   "#FFB6AB",
+   "#FFC9C2"
+  ]
+ },
+ {
+  "col": 70,
+  "family": "red",
+  "series": "R1",
+  "endsFamily": false,
+  "a0": 360.0,
+  "aMid": 362.5,
+  "depth": 4,
+  "codes": [
+   "R17",
+   "R14",
+   "R12",
+   "R11"
+  ],
+  "hexes": [
+   "#EE543C",
+   "#F59683",
+   "#F7AA9A",
+   "#FFD7CF"
+  ]
+ },
+ {
+  "col": 71,
+  "family": "red",
+  "series": "R0",
+  "endsFamily": true,
+  "a0": 365.0,
+  "aMid": 367.5,
+  "depth": 7,
+  "codes": [
+   "R08",
+   "R05",
+   "R02",
+   "R01",
+   "R00",
+   "R000",
+   "R0000"
+  ],
+  "hexes": [
+   "#F43333",
+   "#ED5D47",
+   "#FFAC8F",
+   "#FFB2B2",
+   "#FFD0D0",
+   "#FFE3E3",
+   "#FFF4F4"
+  ]
+ }
+]
