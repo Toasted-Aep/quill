@@ -276,7 +276,7 @@ public static class PageTheme
         Panel = Quill.Controls.PagePlate.Panel(PageGround);
         OnPanel = Quill.Controls.PagePlate.PanelInk(Panel);
         PanelIsDark = OnPanel.R == InkOnDark.R && OnPanel.G == InkOnDark.G && OnPanel.B == InkOnDark.B;
-        OnPanelMuted = WithAlpha(OnPanel, 140);
+        OnPanelMuted = WithAlpha(OnPanel, 143);
         PanelOutline = WithAlpha(OnPanel, 36);
         Probe();
     }

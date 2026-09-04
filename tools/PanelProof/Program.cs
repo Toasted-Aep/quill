@@ -86,6 +86,12 @@ Console.WriteLine();
 Console.WriteLine("== 2. THE NINE SHIPPED PAPERS, at the shipped constants ==");
 Console.WriteLine("| paper | ground | L* | base | panel | L* | sep dL* | clamp | ink | ink:panel | muted:panel |");
 Console.WriteLine("|---|---|---|---|---|---|---|---|---|---|---|");
+// The alpha is READ from the shipped token, not retyped here: this file
+// links PageTheme.cs so its numbers are the ones the app uses, and a
+// hardcoded copy defeated exactly that - it went on reporting 140 after
+// PageTheme.Apply had been raised to 143, which is the harness failing in
+// the same way as the code it checks.
+int mutedAlpha = PageTheme.OnPanelMuted.A;
 double worstSep = double.MaxValue, worstInk = double.MaxValue, worstMuted = double.MaxValue;
 string worstSepWho = "", worstInkWho = "", worstMutedWho = "";
 foreach (var (name, kind) in papers)
@@ -95,7 +101,7 @@ foreach (var (name, kind) in papers)
     var raw = PagePlate.Panel(g, PagePlate.PanelT, 0.0);
     bool clamped = !panel.Equals(raw);
     var ink = PagePlate.PanelInk(panel);
-    var muted = Over(Color.FromArgb(140, ink.R, ink.G, ink.B), panel);
+    var muted = Over(Color.FromArgb((byte)mutedAlpha, ink.R, ink.G, ink.B), panel);
     double sep = Math.Abs(L(panel) - L(g));
     double ri = Ratio(ink, panel), rm = Ratio(muted, panel);
     if (sep < worstSep) { worstSep = sep; worstSepWho = name; }
@@ -121,7 +127,7 @@ foreach (var (name, kind) in papers)
     var g = GroundOf(kind);
     var panel = PagePlate.Panel(g);
     var ink = PagePlate.PanelInk(panel);
-    double rm = Ratio(Over(Color.FromArgb(140, ink.R, ink.G, ink.B), panel), panel);
+    double rm = Ratio(Over(Color.FromArgb((byte)mutedAlpha, ink.R, ink.G, ink.B), panel), panel);
     if (rm < PagePlate.MarkFloor)
         Console.WriteLine($"      FLAG: {name} muted-on-panel {rm:F3}:1 is under {PagePlate.MarkFloor:F1}:1");
 }
@@ -133,8 +139,8 @@ if (worstMuted < PagePlate.MarkFloor)
     // chosen for a panel. This is the smallest alpha that clears the floor on
     // every shipped paper. NOT applied: it is a visual weight decision about
     // secondary text and it belongs to the user, not to the harness.
-    int need = 140;
-    for (int alpha = 140; alpha <= 255; alpha++)
+    int need = mutedAlpha;
+    for (int alpha = mutedAlpha; alpha <= 255; alpha++)
     {
         double lo2 = double.MaxValue;
         foreach (var (_, kind) in papers)
@@ -160,7 +166,7 @@ foreach (var (name, g) in extra)
     var panel = PagePlate.Panel(g);
     var raw = PagePlate.Panel(g, PagePlate.PanelT, 0.0);
     var ink = PagePlate.PanelInk(panel);
-    var muted = Over(Color.FromArgb(140, ink.R, ink.G, ink.B), panel);
+    var muted = Over(Color.FromArgb((byte)mutedAlpha, ink.R, ink.G, ink.B), panel);
     Console.WriteLine($"| {name} | {L(g):F2} | {(PagePlate.BaseIsDark(g) ? "dark" : "light")} | `{Hex(panel)}` | " +
                       $"{Math.Abs(L(panel) - L(g)):F2} | {(panel.Equals(raw) ? "-" : "**fired**")} | " +
                       $"{Ratio(ink, panel):F2}:1 | {Ratio(muted, panel):F2}:1 |");
@@ -187,7 +193,7 @@ Console.WriteLine("== 4. EVERY PAGE COLOUR IN sRGB, step 3 ==");
                 var ink = PagePlate.PanelInk(panel);
                 double ri = Ratio(ink, panel);
                 if (ri < minInk) { minInk = ri; inkAt = g; }
-                var muted = Over(Color.FromArgb(140, ink.R, ink.G, ink.B), panel);
+                var muted = Over(Color.FromArgb((byte)mutedAlpha, ink.R, ink.G, ink.B), panel);
                 double rm = Ratio(muted, panel);
                 if (rm < minMuted) { minMuted = rm; mutedAt = g; }
             }
