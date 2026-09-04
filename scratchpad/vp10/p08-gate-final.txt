@@ -1,0 +1,11 @@
+INPUT DESKTOP : Default
+LogonUI       : not running - unlocked
+Quill         : 0 process(es)
+
+samples            : 944 over 45 s at 40 ms
+cursor start       : 700,1300
+cursor end         : 700,1300
+distinct positions : 1
+cursor changes     : 0
+idle resets        : 0   (idle now 150.45 s)
+foreground window  : '4.1.c - C - Cursor'
