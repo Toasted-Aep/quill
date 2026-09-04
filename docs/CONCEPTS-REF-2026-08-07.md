@@ -5753,24 +5753,84 @@ never moves, so **the idle check is useless here** and was dropped from the
 gate.
 
 
-## 21 The dial's dock gets a Settings control — RESERVED, SECTION PENDING
+## 21 The dial's dock gets a Settings control — built 2026-09-01, closed 2026-09-02
 
-**Built and committed at `2e25193`. This number is taken; do not reuse it.**
+> **Written from the SEVENTH screen run's observations, on 2026-09-04, by a run
+> that saw nothing on screen at all.** Every "PASS" below is that run's reading,
+> not this one's. The evidence lives in `docs/VISUAL-PASS-RESUME.md` under
+> *"§21 the dial's dock picker — ALL THREE OWED CHECKS PASS"*, with the captures
+> named there in `scratchpad/vp6/`. Built and committed at `2e25193`.
 
-The section is deliberately unwritten because three of its five checks have not
-been seen on screen — the machine locked with the work stranded in the tree.
-Written up in full once they are:
+**The defect.** `Library.DialAnchor` had exactly one writer in the whole app —
+`ToolWheel.SetAnchor` — and exactly one route to it: a drag on the dial's
+18.6 DIP rim. There was no UI for it anywhere. And the drag did not *land* until
+`6636a92`: before that the dial sprang back to the dock it started from and
+`DialAnchor` was never written (run 4 measured `""` after every attempt), so
+**only `TopLeft` and `TopRight` were ever reachable** and the bottom half of the
+viewport went months without being seen. A gesture on an 18.6 DIP band should
+not be the only route to a persisted setting.
 
-* the chosen dock survives a restart
-* dragging the rim updates the picker live (what `DockChanged` exists for, and
-  the first time both routes can be exercised against each other, since the
-  drag itself only started working at `6636a92`)
-* the Bar surface greys the picker out
+*A correction the commit message needs.* `2e25193` says that untested half is
+"how a hard rendering failure sat in it unseen", meaning the COPIC wheel drawing
+no tiles. **That attribution was wrong and run 7 disproved it**: a bottom dock
+renders perfectly, and the real fault — `ArcTile` caching tile paths in absolute
+coordinates through `At()`, with only `SizeChanged` dropping the cache — fires at
+**any** dock, and was captured failing at `TopLeft`. The unreachable docks were a
+real gap in coverage; they were not the cause of that bug.
 
-**Verified before the lock:** the picker renders with the live dock filled and
-matching the dial; clicking a cell moves the filled dot, writes `DialAnchor` on
-a direct read of the library, and the dial is visibly re-docked on the canvas
-when Settings closes.
+**The control.** A "Dial dock" sub-section in Settings → Workspace → Tool Setup,
+under the Wheel/Bar circles: a 3×3 window-frame diagram with eight circles at the
+corners and edge midpoints and the centre left empty. No text labels — the
+geometry is the label, and the names ride on tooltips and
+`AutomationProperties`.
+
+**Writes still go through `SetAnchor`.** `ToolWheel` gained `Dock`
+(`CurrentAnchor`, including its `PenDock`-derived default so an unset library
+still reads honestly), `SetDock`, and a `DockChanged` event fired from
+`SetAnchor` after `Place()`/`Refresh()`. The picker calls `SetDock`; it does not
+write `Library.DialAnchor` itself. Two writers would desync the picker from the
+drag, and `SetAnchor` deliberately saves only when the name actually changes.
+
+**The three checks the section was held back for.** All three pass, as run 7
+took them:
+
+| check | result | evidence |
+|---|---|---|
+| rim drag updates the picker live | **PASS** | `vp6/21-drag-mid.png`, `vp6/23-after-release.png` |
+| the chosen dock survives a restart | **PASS** | `vp6/25-restart-dock.png`, `26-restart-page.png`, `29-picker-wheel-crop.png` |
+| the Bar surface greys the picker out | **PASS** | `vp6/31-picker-bar-crop.png` |
+
+**The drag and the picker were finally exercised against each other, and they
+agree.** Run 7 grabbed the rim 218 physical px below the `TopLeft` dial centre
+(288, 363) — inside the measured grip band `RingOut+2 … PopOut+2` = 200…237
+physical, confirmed off the capture, where the drawn ring edge sits at r = 198 —
+and dragged 989 px straight down over 30 steps **with Settings open on Tool
+Setup**. Mid-drag the dial tracks the pointer and **the picker does not move**,
+which is correct: `DockChanged` fires on landing, not during. On release the dial
+lands at `BottomLeft` and stays, and the picker's filled dot moves to the
+bottom-left cell **with Settings still open** — no reopen, no restart.
+
+> `DialAnchor` reads `""` for a second or two after the drop and then
+> `"BottomLeft"` once the debounced save flushes. **Do not mistake that window
+> for run 4's failure**, which was the drag never landing at all.
+
+**Restart:** killed and relaunched — the dial comes back `BottomLeft` on the
+canvas and the picker's filled dot is on the bottom-left cell.
+
+**Bar greys it out, and the greying is real.** With Bar chosen, every marker and
+the frame drop to a muted grey and the caption swaps to *"Only takes effect with
+Wheel chosen above"*. Run 7 then clicked **two** greyed cells (`TopRight`,
+`BottomCentre`): `DialAnchor` stayed `BottomLeft`, and **no `crash.log` appeared
+in the scratch folder** — that folder held none at all on 2026-09-02, and the
+one in it now is the *eighth* run's, dated 2026-09-03 14:32 and 472 lines of
+`render region failed:`. That is the distinction §17.1's padlock lesson asks for
+— a genuinely disabled `Button`, not a live control whose handler is throwing
+into `App.xaml.cs`'s swallow, and not a hit-test trick either.
+
+**Verified before the lock** (at build time, and unchanged): the picker renders
+with the live dock filled and matching the dial; clicking a cell moves the filled
+dot, writes `DialAnchor` on a direct read of the library, and the dial is visibly
+re-docked on the canvas when Settings closes.
 
 ## 22 Fullscreen may not fold away the only undo in the app
 
@@ -6758,24 +6818,154 @@ at.** In 17 of them the pre-press pixel read a label glyph rather than the flat
 fill (the code label sits in the tile's inner/trailing corner, which is where a
 95%-across probe lands); the pick was right in every one of those too.
 
-### 26.3 STILL OPEN: the wheel runs the opposite way round from the reference
+### 26.3 The wheel is mirrored — 2026-09-04
 
-Measured on both, not inferred. Taking bearings clockwise on screen:
+> **NOTHING IN THIS SECTION WAS SEEN ON SCREEN.** The user was at the machine and
+> the run was code-only: no launch, no injected input, no capture. Everything
+> below is arithmetic, a build, and a dump of the compiled table. The screen
+> check it does **not** replace is set out at the end.
+
+**The finding, restated from where §26.3 was left open.** Taking bearings
+clockwise on screen:
 
 ```
 reference (Concepts)   RV -> R -> YR -> E -> Y -> YG -> G -> BG -> B -> BV -> V
-Quill                  R -> RV -> V -> BV -> B -> BG -> G -> YG -> Y -> E -> YR
+Quill, as it shipped   R -> RV -> V -> BV -> B -> BG -> G -> YG -> Y -> E -> YR
+Quill, mirrored        YR -> E -> Y -> YG -> G -> BG -> B -> BV -> V -> RV -> R
 ```
 
-The cyclic sequence is the same; the direction is reversed, so the two wheels
-are **mirror images**. Quill's is `CopicPalette`'s own `-90° → 270°` order,
-which was transcribed from a different reference and has never been measured
-against this capture. Inside a family the same mirror shows: the reference's
-series ascend in its direction of travel (`RV0 … RV9`), and this change makes
-Quill's ascend in **its** direction, so each family reads the same way locally
-while the wheel as a whole reads the other way round.
+Checked as *cycles*, not as lists: the shipped order is the reference's cycle
+**reversed**, and the mirrored order **is** the reference's cycle, entered nine
+families along. The user ruled: *"yes I want it mirrored as you said."*
 
-**Not changed, because it is not this run's question and it needs a ruling.**
-Reversing it means reversing the family order, the within-family series order and
-the sense of every label's rotation together; done by halves it would look worse
-than either. Put to the user.
+**A mirror has to be whole, and it has exactly three parts.** The previous run's
+reason for leaving it — *"reversing means reversing family order, within-family
+series order and every label's rotation together, and done by halves it reads
+worse than either"* — is the specification, so each part is accounted for
+separately here.
+
+| part | what changed | where |
+|---|---|---|
+| 1. family order round the circle | the eleven blocks of `SectorsRaw` reversed | `CopicPalette.cs` |
+| 2. within-family series order | `BuildColumns`' series sort `OrderBy` → `OrderByDescending` | `CopicPalette.cs` |
+| 3. every label's rotation | **nothing — and that is a finding, not an omission** | `ColorWheel.DrawCode` |
+
+**Part 3, because it is the one that looks skipped.** `DrawCode` rotates the
+text by `midA − π/2`, and `midA` is *the angle the cell is drawn at* — it is not
+derived from the column's index, its family, or the direction of travel. A
+swatch that moves to the mirrored side of the wheel is therefore handed the
+rotation belonging to its new position automatically. The label's offset inside
+its tile is expressed in that same rotated **local** frame (local −Y is radially
+inward, local −X the higher-angle edge), so it stays in the same corner of its
+own cell on either handedness. Measured rather than argued: over 11 rotations ×
+72 angular slots, the float32 rotation `DrawCode` applies at each slot is
+**bit-identical** before and after — max difference exactly `0.000e+00` rad.
+
+The reason it comes out free is *how* the mirror was implemented. Reflecting the
+renderer's angle — negating θ in the transform — would have mirrored the glyphs
+too and produced mirror-written text, which is the failure the previous run was
+describing. Reversing the **table** instead moves the swatches and leaves the
+drawing rule alone.
+
+**Why reversing the table is exactly a reflection.** `ColorWheel` lays column *i*
+clockwise at `OuterStart + i·ColStep`, and with `FamGap = 0` that is a uniform
+5.0000°. The column whose centre sat *p* degrees clockwise of `OuterStart` sits
+at *−p* after the reversal — `360 − 5i − 2.5 = 5(71 − i) + 2.5` — so the axis of
+reflection is the `OuterStart` diameter itself. At the default `_rot = 100°` that
+is screen bearing **10°** (3:20 ↔ 9:20 on a clock face), which is the R↔YR seam.
+Worst departure from an exact reflection over all 72 columns: **7.565e-07 rad**
+(0.156 arcsec, 4.9 × 10⁻⁴ DIP at the 650 DIP outer edge) — the float32
+running-sum residual in `ColStart`, and nothing else.
+
+**One list, so the hit test cannot drift.** The wheel's drawing, its selection
+outline and `SwatchAt`'s hit test all read `OuterColumns`/`ColStart`, and
+`OuterColumns` is flattened straight out of `CopicPalette.Sectors`. That is why
+the mirror is in the palette and not in `BuildOuterColumns`: reversing there
+would have left `CopicPalette.All` un-reversed and the two descriptions of the
+wheel disagreeing again — the failure `OuterCell`'s comment records having
+already happened once.
+
+**The arithmetic proof, in place of the presses.** Run 7 verified this hit test
+with **122 presses, 122 correct**. This run could press nothing, so
+`scratchpad/mirror/geoproof.py` reproduces `Layout`/`OnDraw`/`PickAt`/`SwatchAt`
+in float32 — the `ColStart` running sum, `Norm`'s `Tau` loop, the `rel` fold —
+takes the screen point the renderer *would* draw each swatch at, and pushes it
+back through the pick path:
+
+| probe | count | failures |
+|---|---|---|
+| 11 rotations × 72 columns × every ring × 9 bearings across the cell | 30 789 | **0** |
+| a bearing 0.2% either side of **every** column boundary, at every shared ring | 6 842 | **0** |
+| — of those, straddling a **family** boundary | 1 408 | **0** |
+| **total, on the mirrored table** | **37 631** | **0** |
+
+Worst angular residual between where the draw pass puts a bearing inside its
+column and where the hit test resolves it: **1.890e-06 rad** — 0.39 arcsec,
+1.2 × 10⁻³ DIP at the outer edge, against the 1e-4 rad of slack `SwatchAt`
+already carries. The identical suite run against the shipped table gives the
+identical residual, so the mirror neither improved nor degraded the agreement.
+
+**This proves the arithmetic and cannot prove the picture.** It shows `Layout`'s
+angle for a swatch and `SwatchAt`'s inverse of that angle are the same number. It
+**cannot** catch a renderer drawing somewhere other than where `Layout()` says —
+which is the whole reason §26.2's radius check was fitted against drawn ink and
+not against the constants, and the reason the screen check below still stands.
+
+**The reordering is a reordering.** Verified byte-exactly, twice over. The
+`SectorsRaw` edit was made as a byte-level block move with `sorted(out) ==
+sorted(d)` asserted, so no token was retyped. Then the **compiled** `Quill.dll`
+was dumped through a 20-line console reader — the static table only; the app was
+never launched — and compared with the shipped table:
+
+* 72 columns, and the flattened table is the **exact element-for-element
+  reversal** of the one that shipped, each column's internal stack unmoved;
+* outer `(code, hex)` multiset **311 → 311, identical**; inner **59 → 59,
+  identical** and in the **same order** (the two inner tiers were not touched);
+  `All` **370 → 370, identical**;
+* `ColEndsFamily` still marks 11 boundaries; `MaxRings` still 9; `ColStep` still
+  360/72 = 5.0000°; the outer radius is unchanged at 650.07 DIP.
+
+The radial order is deliberately **not** reversed. A reflection preserves radius,
+so the darkest ink stays innermost — flipping that too would have been a third
+kind of half-mirror.
+
+**One consequence, stated because it is real and would otherwise be found by
+accident.** `CopicPalette.Nearest` keeps the *first* strict minimum, so a tie is
+settled by position in `All` — which is wheel order, now reversed for the 311
+outer swatches. Enumerating the entire 16 777 216-colour sRGB cube: **186 350
+queries (1.1107%) now name a different code**. Every one is a genuine tie, the
+same distance away as the code it replaces, so the colour is as close as it ever
+was and only the label moves (`rgb(0,101,147)` outlines `B37` where it outlined
+`B28`; `rgb(0,6,120)` outlines `B79` where it outlined `B29`). Six pairs share a
+hex outright and tie at every query: `FB2`/`B06`, `R89`/`E89`, `E18`/`E59`,
+`E77`/`E87`, `Y19`/`Y35`, `0`/`White`. This is the right behaviour, not a
+tolerated one: the outline has to land on a cell the wheel actually draws, and
+the tie-break following the wheel's own order is what keeps them agreeing.
+
+**Family runs at the default `_rot = 100°`**, for whoever checks this on screen.
+Bearings clockwise from 3 o'clock, clock-face reading in brackets:
+
+| family | cols | span | clock |
+|---|---|---|---|
+| YR | 6 | 10° → 40° | 3:20 → 4:20 |
+| E | 9 | 40° → 85° | 4:20 → 5:50 |
+| Y | 4 | 85° → 105° | 5:50 → 6:30 |
+| YG | 6 | 105° → 135° | 6:30 → 7:30 |
+| G | 6 | 135° → 165° | 7:30 → 8:30 |
+| BG | 8 | 165° → 205° | 8:30 → 9:50 |
+| B | 9 | 205° → 250° | 9:50 → 11:20 |
+| BV | 5 | 250° → 275° | 11:20 → 12:10 |
+| V | 4 | 275° → 295° | 12:10 → 12:50 |
+| RV | 8 | 295° → 335° | 12:50 → 2:10 |
+| R | 7 | 335° → 10° | 2:10 → 3:20 |
+
+**WHAT STILL NEEDS THE SCREEN, and what failure looks like.** In priority order:
+
+| # | check | pass | fail |
+|---|---|---|---|
+| 1 | press a swatch a hair **each side of a family boundary** — R↔YR at 3:20 is the reflection axis and the one to do first — and read the colour back off the dial's dot | the dot takes the ink that was drawn under the finger | the dot takes ink from **the opposite side of the circle** — a mirrored draw against an unmirrored pick. This looks perfect in a screenshot and is worse than not mirroring at all |
+| 2 | read the family order off the ring, clockwise from the top | YR, E, Y, YG, G, BG, B, BV, V, RV, R | still R, RV, V, … — the build did not take, or something caches the old order |
+| 3 | read the series inside one family, clockwise | descending: `E9 E8 E7 E5 E4 E3 E2 E1 E0` | ascending — part 2 of the mirror did not land and this is the half-mirror the previous run warned of |
+| 4 | read any code label | upright, tops toward the centre, exactly as before | mirror-written, or upside down — part 3 was *not* the no-op this section claims |
+| 5 | read a column inward-to-outward | dark → pale, unchanged | pale → dark — the radial sort was flipped too |
+| 6 | spin the ring, then press | picks still land | picks drift with `_rot` — nothing here touches `_rot`, so this would be pre-existing |

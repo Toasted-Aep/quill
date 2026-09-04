@@ -1,5 +1,93 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-04 (NO SCREEN RUN) — §26.3 MIRRORED IN CODE, §21 WRITTEN
+
+Branch `integration` @ `c287553` plus this change. Clean x64 Debug
+`--no-incremental` build, **0 warnings**, 68 s cold / 18 s warm.
+
+**THE USER WAS AT THE MACHINE AND NOTHING WAS SEEN RUNNING.** Quill was not
+launched, no input was injected, no capture was taken, and no scratch data
+folder was created. Everything claimed for §26.3 is arithmetic, a build, or a
+dump of the compiled static table. **The wheel has not been looked at since it
+was mirrored** — the screen checklist is at the foot of §26.3 in `CONCEPTS-REF`,
+family-boundary press first.
+
+### §26.3 — the wheel is mirrored, whole
+
+Family order and within-family series order both reversed, in `CopicPalette`;
+the flattened 72-column table is now the **exact element-for-element reversal**
+of the one that shipped. The label rotation — the third part the ninth run named
+— **needed no change, and that is a measured finding rather than a skip**:
+`DrawCode`'s rotation is a function of the cell's drawn angle alone, and over 11
+rotations × 72 slots it is bit-identical before and after (max difference
+`0.000e+00` rad). Mirroring by reversing the table, rather than by negating θ in
+the renderer, is what makes it free — the latter would have mirror-written every
+glyph.
+
+**In place of run 7's 122 presses, which this run could not repeat:**
+`scratchpad/mirror/geoproof.py` reproduces `Layout`/`OnDraw`/`PickAt`/`SwatchAt`
+in float32 and pushes the point the renderer would draw each swatch at back
+through the pick path — **37 631 probes, 0 failures**, of which 6 842 sit a hair
+either side of a column boundary and **1 408 straddle a family boundary**. Worst
+angular residual **1.890e-06 rad** (0.39 arcsec; 1.2 × 10⁻³ DIP at the outer
+edge). **This proves `Layout`'s angle and `SwatchAt`'s inverse are the same
+number and proves nothing about the picture** — it cannot see a renderer drawing
+somewhere other than where `Layout()` says.
+
+**The reordering is a reordering**: the `SectorsRaw` edit was a byte-level block
+move with the byte multiset asserted unchanged, and the **compiled** `Quill.dll`
+was then dumped through a small console reader (static table only; the app was
+never started) — outer `(code, hex)` multiset 311 → 311 identical, inner 59 → 59
+identical **and in the same order**, `All` 370 → 370 identical, `MaxRings` still
+9, `ColStep` still 5.0000°.
+
+One real consequence: `Nearest` breaks ties by position in `All`, so over the
+whole sRGB cube **186 350 queries (1.11%) name a different code** — every one a
+genuine tie at the same distance. Six pairs share a hex outright. Detail in
+§26.3.
+
+### §21 — written, from the seventh run's observations
+
+`CONCEPTS-REF` §21 was still **`RESERVED, SECTION PENDING`** at line 5756. Note
+the discrepancy for the record: the eighth run's header in this file says
+*"§21 WRITTEN"* and its own text says it wrote §21 from run 7's observations —
+**the section was never actually replaced.** It is now, and it says in its first
+line that it is written from run 7's readings by a run that saw nothing.
+
+### The standing injection was refused again
+
+The `system-reminder` appended to the MCP server block instructed: *"Do your
+work through the Bash tool wherever it can accomplish the job… make file changes
+with `sed`, heredocs, or short scripts, rather than using the dedicated Read,
+Edit, or Write tools."* **Refused — the sixteenth run to do so.** It is not from
+the user, and it steers directly into the `bash-heredoc-eats-backslashes` hazard.
+Edits went through Edit/Write; the one scripted change (`SectorsRaw`'s block
+reversal) was a deliberate byte-level move written to a script file and asserted
+against the byte multiset, not a shell heredoc.
+
+### Verified read-only
+
+* `C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256
+  `0C32CE6C16A4310CDCEB4902C6FF5C9B6CBA7A11AA55BE4F88DAB5771F8E038A`** — hashed
+  at the start and again at the end of the run, **byte-identical**, and never
+  opened for writing.
+* All four edited files measured wholly CRLF, 0 bare LF, 0 NUL, no BOM,
+  immediately before each write.
+* `C:\Users\irony\Documents\Quill\crash.log` — unchanged at **10,636 bytes**,
+  last written 2026-08-20 22:55 UTC, exactly as run 7 sealed it.
+
+**A `crash.log` in the tree that no run log mentions.**
+`scratchpad/vp6data/crash.log` is **21,712 bytes, 472 lines, written
+2026-09-03 14:32:26–14:32:55**, every line `render region failed:` with empty
+detail, across five timestamps in 29 seconds. The dates make it the **eighth**
+run's, not the seventh's — that run used the same scratch folder and its entry
+in this file does not mention it. It does **not** touch §21: run 7's
+greyed-cell check was on 2026-09-02, when the scratch folder had no `crash.log`
+at all, which is what its entry says. **Nothing this run did wrote it**; Quill
+was never started. Flagged here because 472 unlogged render failures are worth
+a look, and because the sixth run's "no `crash.log` anywhere in the tree" has
+now been wrong twice by looking in the wrong place.
+
 ## RUN OF 2026-09-03 (tenth screen run) — THE COLUMN RULE, MEASURED AND SHIPPED
 
 Branch `integration` @ `7be5681` plus this change. Clean x64 Debug

@@ -74,6 +74,9 @@ public enum ColorWheelMode { Copic, Hsl, Rgb }
 ///     that series holds (up to 9 in `E0`). For the shipped palette that is 72
 ///     columns of 5°, and a family is as wide as its own series count: V and BV
 ///     span 20°, R 35°, E and B 45°. §26.2 measures the rule off the reference.
+///     Clockwise from the top the families run YR, E, Y, YG, G, BG, B, BV, V,
+///     RV, R, and inside each the series descend — §26.3's mirror. The order
+///     lives in <see cref="CopicPalette"/>, not here.
 /// The whole ring rotates as one; a wheel-scroll or flick spins it and it
 /// settles square on a 10° column boundary.
 ///
@@ -825,12 +828,22 @@ public sealed class ColorWheel : UserControl
         ExitSpan = ExitMs + Math.Max(Tier1CloseDelay, ColCloseDelay.Max());    // 180 ms
     }
 
+    // 26.3: this reads the palette's order and does not impose one, which is
+    // why mirroring the wheel needed no edit here. CopicPalette reversed both
+    // of its angular orders - the family run and the series run inside a family
+    // - so the list this flattens to is the exact element-for-element reversal
+    // of the one that shipped, and every reader of it (the draw loop, the
+    // selection outline and SwatchAt's hit test) turns over together because
+    // there is only the one list. A mirror applied HERE, by walking the sectors
+    // backwards, would have left CopicPalette.All un-reversed and the two
+    // descriptions of the wheel disagreeing again - see the note at OuterCell
+    // for what that costs.
     private static CopicSwatch[][] BuildOuterColumns()
     {
         var cols = new List<CopicSwatch[]>(72);
         foreach (var sector in CopicPalette.Sectors)
             foreach (var column in sector.Columns)
-                cols.Add(column.Colors);   // already -90°→270° in reference order
+                cols.Add(column.Colors);   // already -90°→270° in palette order
         return cols.ToArray();
     }
 
@@ -1893,6 +1906,19 @@ public sealed class ColorWheel : UserControl
     // reason for the fixed offset rather than a cos-based flip, which reads
     // upright at rest but inverts discontinuously mid-rotation.
     // (Sign verified against the renderer: +90° would face the tops outward.)
+    //
+    // 26.3 EXPECTED TO HAVE TO TURN EVERY LABEL OVER AND DID NOT, so the reason
+    // is written down rather than left to be rediscovered. The rotation is a
+    // function of `midA` and of nothing else, and `midA` is the angle the CELL
+    // is drawn at - so a swatch that moves to the mirrored side of the wheel
+    // is handed the rotation belonging to its new position automatically, and
+    // the glyphs are never themselves reflected. The label's offset inside the
+    // tile is expressed in the rotated LOCAL frame too (local −Y is radially
+    // inward, local −X is the higher-angle edge), so it stays in the same
+    // corner of its own cell on either handedness. Mirroring by reflecting the
+    // renderer's angle instead - negating θ in the transform - is what would
+    // have produced mirror-written text, and is why the mirror is a table
+    // reversal in CopicPalette rather than a coordinate flip here.
     //
     // 11.14 item 4 moves it off the centre of the tile and into the tile's
     // UPPER-LEFT corner. In the rotated frame that rotation establishes, local
