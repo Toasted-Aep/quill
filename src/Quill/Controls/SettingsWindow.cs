@@ -176,16 +176,30 @@ public sealed class SettingsWindow
     private static readonly Color ToggleOnColor = Color.FromArgb(0xFF, 0x78, 0xA1, 0x9C);
 
     // ---- theme shorthands. Never a hardcoded grey. ------------------------
-    private static Color Ink => PageTheme.OnSurface;
-    private static Color Muted => PageTheme.OnSurfaceMuted;
-    private static Color Line => PageTheme.Outline;
+    //
+    // §27: THESE ARE THE PANEL'S TOKENS, NOT THE SHELL'S. Every surface this
+    // class builds is a child of the floating window's plate, and that plate is
+    // PanelFill. They read OnSurface/OnSurfaceMuted/Outline, which are picked by
+    // the SHELL's luminance - the ground this window stopped standing on when
+    // §27 made Panel page-derived. Under the default ThemeSource = "Manual" the
+    // two part company, and the worst pair is the one the user reported: a
+    // pinned dark shell over white graph paper gave Ink = #F2F2F2 on a #CACACA
+    // panel, 1.46:1.
+    //
+    // Re-keying the three accessors re-keys ~60 call sites in this file at once,
+    // which is the reason the shorthands exist.
+    private static Color Ink => PageTheme.OnPanel;
+    private static Color Muted => PageTheme.OnPanelMuted;
+    private static Color Line => PageTheme.PanelOutline;
     private static Color Accent => PageTheme.Accent;
     private static Color PanelFill => PageTheme.Panel;
 
     /// <summary>One step off the panel, for a selected chip. §3.1 says
-    /// "SurfaceAlt", but SurfaceAlt carries the PAGE's hue while this window is
-    /// deliberately neutral (§7) — so the faithful reading is a panel-relative
-    /// step of the same size, not a blue chip on a grey panel.</summary>
+    /// "SurfaceAlt", but SurfaceAlt carries the SHELL's hue while this window is
+    /// built on the PAGE-derived panel (§27) — so the faithful reading is a
+    /// panel-relative step of the same size, not a shell-tinted chip on a
+    /// page-tinted panel. It mixes toward Ink, which is now OnPanel, so the step
+    /// is always toward whatever actually reads on this panel.</summary>
     private static Color PanelAlt => Mix(PanelFill, Ink, 0.10);
 
     private static Color Mix(Color a, Color b, double t) => Color.FromArgb(
@@ -986,7 +1000,9 @@ public sealed class SettingsWindow
         var root = new Grid
         {
             Background = B(PanelFill),
-            RequestedTheme = PageTheme.IsDark ? ElementTheme.Dark : ElementTheme.Light,
+            // §27: PanelIsDark, not IsDark. The Background on the line above is
+            // the panel's; asking IsDark asks the shell.
+            RequestedTheme = PageTheme.PanelIsDark ? ElementTheme.Dark : ElementTheme.Light,
         };
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(PreviewH) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -3181,7 +3197,13 @@ public sealed class SettingsWindow
         // Stock controls inside (TextBox, Slider, ComboBox, Button) resolve their
         // own brushes from the element theme, not from PageTheme — so tell them
         // which side of the line this panel is on.
-        border.RequestedTheme = PageTheme.IsDark ? ElementTheme.Dark : ElementTheme.Light;
+        //
+        // §27: and THIS PANEL is what PanelIsDark answers about. This line said
+        // "which side this panel is on" while asking IsDark, which is the shell's
+        // side. It was right whenever the two agreed and silently wrong whenever
+        // they did not — a dark-pinned shell over white paper gave every TextBox
+        // in Settings dark-theme brushes on a light grey panel.
+        border.RequestedTheme = PageTheme.PanelIsDark ? ElementTheme.Dark : ElementTheme.Light;
         return border;
     }
 

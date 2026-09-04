@@ -254,8 +254,7 @@ public sealed class SelectionChrome
     /// <para><c>#C42B1C</c> is the red this app already carries - it is
     /// <c>FullscreenChrome.CloseHot</c>, Windows' own close-hover red - and
     /// reusing it beats introducing a second red. But one red cannot serve both
-    /// ends of the panel ramp. <c>PageTheme.Panel</c> runs L* 95..97.5 light and
-    /// L* 13..29 dark (section 13.1), and against the WORST case at each end the
+    /// ends of the panel range, and against the WORST case at each end the
     /// contrast is:</para>
     ///
     /// <code>
@@ -267,15 +266,26 @@ public sealed class SelectionChrome
     /// <para>So the light end keeps the app's red and the dark end takes the
     /// same Lab hue and chroma lifted +22 L*, which is the smallest lift that
     /// clears the 3:1 floor for a non-text mark against an L* 29 panel. Both
-    /// worst cases are stated because the middle of the ramp is not where a
+    /// worst cases are stated because the middle of a range is not where a
     /// palette fails - the ends are.</para>
+    ///
+    /// <para><b>§27 restated the range and re-keyed the pick.</b> The L* 95..97.5
+    /// light / 13..29 dark figures above were the SUPERSEDED <c>PageTheme</c>
+    /// ramp's and are kept only because the two contrast measurements were taken
+    /// against them; §27's panel is a page-derived mix and over the nine shipped
+    /// papers it runs L* 27.51 (Darkprint) to L* 81.33 (Plain White), which is
+    /// wider at the light end and lands inside the dark figure above. What
+    /// actually changed here is the SELECTOR: <c>PageTheme.IsDark</c> asks about
+    /// the SHELL, and this red stands on <c>_bar</c>, which is Panel. On the
+    /// default install those two disagree, and the disagreement picks the red
+    /// that fails.</para>
     ///
     /// <para>Deliberately not derived from <see cref="PageTheme.Accent"/>: the
     /// accent is the user's own choice and can be any hue, including green. A
     /// mark 11.9 specifies as red has to be red.</para></summary>
     private static readonly Color CancelRedLight = Color.FromArgb(0xFF, 0xC4, 0x2B, 0x1C);
     private static readonly Color CancelRedDark = Color.FromArgb(0xFF, 0xFF, 0x6C, 0x50);
-    private static Color CancelRed => PageTheme.IsDark ? CancelRedDark : CancelRedLight;
+    private static Color CancelRed => PageTheme.PanelIsDark ? CancelRedDark : CancelRedLight;
 
     private readonly Grid _host;
     private readonly InkSurface _surface;
@@ -408,10 +418,14 @@ public sealed class SelectionChrome
             e.Fill = new SolidColorBrush(PageTheme.Surface);
             e.Stroke = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 150));
         }
+        // §27: the two PLATES are Panel, so their rules are PanelOutline. The
+        // guides and handles above are NOT - they are drawn straight onto the
+        // page over the subject, and they keep OnSurface/Surface. The two groups
+        // are three lines apart and take different tokens on purpose.
         foreach (var p in new[] { _bar, _row })
         {
             p.Background = new SolidColorBrush(PageTheme.Panel);
-            p.BorderBrush = new SolidColorBrush(PageTheme.Outline);
+            p.BorderBrush = new SolidColorBrush(PageTheme.PanelOutline);
         }
         Build();
     }
@@ -447,7 +461,9 @@ public sealed class SelectionChrome
     private void BuildEditingBar()
     {
         bool locked = _surface.EditingTextLocked;
-        var ink = PageTheme.OnSurface;
+        // §27: every mark below is added to _barItems, which is _bar's child, and
+        // _bar is Panel.
+        var ink = PageTheme.OnPanel;
 
         _barItems.Children.Clear();
         // STROKED, and through Icons.Mark rather than Icons.Stroked: Close IS
@@ -482,7 +498,8 @@ public sealed class SelectionChrome
         var s = SelectionState.Current;
         bool locked = _surface.SelectionLocked;
         bool attach = _surface.SelectedAttachment != null;
-        var ink = PageTheme.OnSurface;
+        // §27: same as BuildEditingBar - _barItems is inside the Panel plate.
+        var ink = PageTheme.OnPanel;
 
         _barItems.Children.Clear();
         // 16.2's order, left to right — WITH DELETE MOVED TO THE END, at the
@@ -569,7 +586,8 @@ public sealed class SelectionChrome
         Height = Metrics.DividerHeight,
         Margin = new Thickness(5, 0, 5, 0),
         VerticalAlignment = VerticalAlignment.Center,
-        Fill = new SolidColorBrush(PageTheme.Outline),
+        // §27: a fence between marks that are themselves on the Panel plate.
+        Fill = new SolidColorBrush(PageTheme.PanelOutline),
         IsHitTestVisible = false,
     };
 

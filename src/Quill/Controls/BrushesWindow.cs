@@ -192,9 +192,13 @@ public sealed class BrushesWindow
     private double FontScale => PanelFonts.ScaleFor(_h.Library(), "Brushes");
     private double T(double dip) => Math.Round(dip * FontScale, 1);
 
-    private static Color Ink => PageTheme.OnSurface;
-    private static Color Muted => PageTheme.OnSurfaceMuted;
-    private static Color Line => PageTheme.Outline;
+    // §27: the panel's tokens, not the shell's - this whole window is built
+    // inside a FloatingWindow whose plate is PanelFill, and since §27 that plate
+    // follows the PAGE while OnSurface/OnSurfaceMuted/Outline follow the SHELL.
+    // See SettingsWindow's copy of this block for the measurement.
+    private static Color Ink => PageTheme.OnPanel;
+    private static Color Muted => PageTheme.OnPanelMuted;
+    private static Color Line => PageTheme.PanelOutline;
     private static Color PanelFill => PageTheme.Panel;
     private static SolidColorBrush B(Color c) => new(c);
 

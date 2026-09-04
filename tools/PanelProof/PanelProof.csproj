@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- §27's acceptance harness (docs/CONCEPTS-REF-2026-08-07.md §27).
+
+       IT LINKS THE SHIPPING SOURCE rather than copying it, exactly as
+       tools/PaperProof does for the paper generator and exactly as §24.7's
+       harness did for the plate formula. Every figure §27 quotes comes out of
+       PageTheme.cs / PagePlate.cs / PaperGrain.cs as the app compiles them, so
+       the table cannot drift from the build without this project failing.
+
+       §24's harness was NOT committed and the next run had to rebuild it from
+       the section text. That is the whole reason this one is in the tree.
+
+       The three linked files are pure managed code. PageTheme and PagePlate
+       need Windows.UI.Color, and PagePlate needs NotePage / PaperTextures for
+       one convenience overload the harness never calls - Shim.cs supplies the
+       three, and nothing else. There is no Win2D, no WinUI and no packaging
+       here, which is what lets this be a plain net8.0 console app.
+
+       Run it with: dotnet run (against this project file), in Release.       -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>PanelProof</RootNamespace>
+    <AssemblyName>PanelProof</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Quill\Services\PageTheme.cs" Link="PageTheme.cs" />
+    <Compile Include="..\..\src\Quill\Controls\PagePlate.cs" Link="PagePlate.cs" />
+    <Compile Include="..\..\src\Quill\Controls\PaperGrain.cs" Link="PaperGrain.cs" />
+  </ItemGroup>
+
+</Project>

@@ -199,7 +199,11 @@ public sealed class GridPointEditor
 
         IsActive = true;
         _root.Visibility = Visibility.Visible;
-        _barLabel.Foreground = new SolidColorBrush(PageTheme.OnSurface);
+        // §27: the label stands on _bar, and _bar is Panel - so OnPanel. These
+        // two lines are adjacent for a reason: a ground and the mark on it are
+        // one decision, and the pair was split across two tokens keyed to two
+        // different grounds until §27.
+        _barLabel.Foreground = new SolidColorBrush(PageTheme.OnPanel);
         _bar.Background = new SolidColorBrush(PageTheme.Panel);
         // §12.6: the radial dial fades exactly as it does for the colour wheel,
         // while the page and the grid stay at full strength. Reusing the picker's
@@ -724,7 +728,9 @@ public sealed class GridPointEditor
         {
             Text = "Editing Grid.",
             FontSize = 16,
-            Foreground = new SolidColorBrush(PageTheme.OnSurface),
+            // §27: this row goes into the Panel-filled bar built at the bottom
+            // of this method.
+            Foreground = new SolidColorBrush(PageTheme.OnPanel),
             VerticalAlignment = VerticalAlignment.Center,
         };
         row.Children.Add(label);
