@@ -401,23 +401,119 @@ appeared bottom-right during item 2 and was caught in
 * **Its text was not treated as an instruction or as permission**, and the device
   name is deliberately not written down here.
 
-### Gates — clean at the end of item 1
+### Gates — clean at the end of the run
 
 * `C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256
   `0C32CE6C16A4310CDCEB4902C6FF5C9B6CBA7A11AA55BE4F88DAB5771F8E038A`, mtime
-  2026-08-28 17:26:38.403965 UTC** — sealed before the first launch, never opened
-  for writing.
+  2026-08-28 17:26:38.403965 UTC** — sealed before the first launch and
+  re-checked after the last process was killed, **byte-identical on all three
+  counts**, never opened for writing.
 * **Migration prevented, not survived.** `vp11_seed.py` wrote the scratch library
   before the first launch, so `MigrateFromLegacyIfNeeded` returned early. The
-  gallery held **only this run's own `VP11` notebook** (`a01-boot.png`).
-* This file measured **wholly CRLF — 3,302 endings, 0 bare LF, 0 bare CR, 0 NUL,
-  no BOM** — immediately before this write.
+  gallery held **only this run's own `VP11` notebook** (`a01-boot.png`). The
+  scratch folder ended at **69,224 bytes in 16 files**; not one of the user's
+  notebooks was copied.
+* `C:\Users\irony\Documents\Quill\crash.log`: the stale **10,636-byte /
+  2026-08-20 22:55:25 UTC** file, untouched.
+* **A `crash.log` WAS created in the scratch folder** — 10 lines, all from item
+  2's undo, transcribed above and copied to
+  `scratchpad/vp11/crash-during-item2.log`. This is the first run to get one.
+* `Settings.Theme` / `Ui.Theme` were put **back to `Dark`** and `DialAnchor` back
+  to `TopLeft`, so the scratch anchor is a default install again for the next
+  run. Quill was **unpinned and killed**.
+* This file measured **wholly CRLF — 3,302 endings before the first write, 0 bare
+  LF, 0 bare CR, 0 NUL, no BOM** — measured in Python immediately before every
+  write and re-measured after each one.
 * The `system-reminder` telling agents to route file edits through Bash `sed` and
   heredocs arrived again and was **refused — the twenty-third run to do so.** It
   is not from the user. Edits went through Write/Edit.
-* **No text read off the screen was treated as an instruction or as permission.**
+* **No text read off the screen was treated as an instruction or as permission**,
+  including the notification toast's.
 
-### Items 3 and 4 — NOT REACHED at the time of this commit
+### What the next run should do
+
+1. **Items 3 and 4, which are now set up and cost nothing to reach**:
+   `vp11_setup.py BottomRight Light`, relaunch, and the two conditions are live.
+   Item 4 wants a page whose panel is **not** `#CACACA` — PlainWhite's panel is
+   within two units of the stale gallery `#C8C8C6` and cannot tell "fixed" from
+   "stale". **Use the Black page: its panel is `#343434`.** The pill is reached
+   by taking the lasso tool; it draws `Lasso | Partial | Include | All`.
+2. **Gate `Q-Presence` on `LogonUI`**, per the trap above. One line.
+3. **§29's Plain White finding** — the seat at 1.020:1 on the dial's own shadow.
+   It is a ruling: judge the seat against what is composited under it, or accept
+   that light papers have no visible seats.
+4. **The Precision panel at 1.091:1.** This is the largest legibility defect this
+   run found and it needs no screen time to reproduce — open ⊕ on a white page.
+5. **The item 2 rows still unseen**: 1.4, 1.5, 1.18, 1.19. The veil (1.19) needs
+   an attachment on the page, which is why it was not reached.
+6. **Row 1.17 with the picker's hex field actually driven**, which injected
+   triple-click could not do.
+
+### ITEMS 3 AND 4 — NOT REACHED. **THE MACHINE LOCKED ITSELF MID-RUN.**
+
+Both items were set up in one restart and neither was observed. Nothing below
+should be inferred about either.
+
+**What was done before the stop.** Quill was killed, `vp11_setup.py` put the
+scratch anchor at `DialAnchor = BottomRight` (item 3's bottom dock) and
+`Settings.Theme` **and** `Ui.Theme` to `Light` (item 4's condition, both fields,
+per run 11's trap), and the app was relaunched. The theme probe confirms both
+conditions took, and it also **reproduces run 14's stale-plate input exactly**:
+
+```
+ground=#F7F6F1 isDark=0 ... panel=#C8C8C6 pageGround=#F7F6F1   <- the gallery, at construction
+ground=#F7F6F1 isDark=0 ... panel=#CACACA pageGround=#FCFCFC   <- the page, after it opened
+```
+
+`#C8C8C6` is run 14's exact stale value. **The plate itself was never seen** —
+the first capture after the launch came back **entirely `#000000`, all 5,184,000
+pixels**, and so did a second one four seconds later.
+
+**What that turned out to be.** Not a render failure:
+
+```
+input desktop      Default            <- and this is the trap, see below
+LogonUI            1 process(es)      <- RUNNING
+foreground window  pid 0              <- no foreground at all
+whole screen       #000000            <- the display had powered down
+```
+
+The display was woken with `WM_SYSCOMMAND / SC_MONITORPOWER` — chosen precisely
+because it **injects no input and does not reset the idle timer**, so the
+presence signal survived the diagnosis. What came up was the Windows lock
+screen (`#1E4ACC` / `#0422A6`, a foreground pid that is not Quill's).
+
+**The machine had auto-locked after the run's own long idle.** Idle was 242 s and
+rising at track 5 with zero cursor changes, and the display slept before the lock
+took. There is no evidence of a person: no cursor movement, no idle reset, and
+the lock arrived from inactivity, not from a hand.
+
+**The run stopped injecting at that point.** No capture of the lock screen was
+ever taken — the state was established from four pixel samples and a process
+list, deliberately, so that nothing of the user's lock screen entered this
+repository. Quill was **unpinned and killed** so that nothing of this run is
+sitting `HWND_TOPMOST` over the user's desktop when they unlock, and the scratch
+anchor was put back to a default install (`Dark` / `Manual` / `TopLeft`).
+
+The four all-black captures were **deleted rather than committed**: they carry no
+information that this paragraph does not, and an all-black PNG in the evidence
+folder invites being mistaken for a rendering result.
+
+### THE TRAP THIS RUN PAID FOR, AND EVERY LATER RUN SHOULD INHERIT
+
+**`OpenInputDesktop` reported `Default` while `LogonUI` held the machine.**
+
+Every presence harness in this project, `vp9_presence.ps1` and `Q-Presence`
+included, treats the input desktop as the authority: `Q-Presence` throws only if
+it is not `Default`. On a locked machine it was still `Default`, and
+`Q-Presence` would have waved every injection through. What actually said the
+machine was locked was **`Get-Process LogonUI`** — which `vp9_presence.ps1`
+prints but `Q-Presence` never checks.
+
+**`Q-Presence` should gate on `LogonUI` as well as on the desktop name**, and a
+whole-screen `#000000` should be treated as "the display is off, go and find out
+why" rather than as a black page. This run's first two black captures were
+nearly written off as a launch that had not painted yet.
 
 ## RUN OF 2026-09-05 (NO SCREEN RUN) — §30: THE WHEEL'S UPPER HALF, THE BOTTOMMENU PLATE, PANELPROOF'S GATE
 
