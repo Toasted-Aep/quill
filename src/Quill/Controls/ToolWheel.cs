@@ -1072,6 +1072,38 @@ public sealed class ToolWheel
         var plateMuted = PageTheme.WithAlpha(plateInk, 140);
         var plateOutline = PageTheme.WithAlpha(plateInk, 36);
 
+        // ---- §29: THE SEAT'S OWN GROUND, AND IT IS NO LONGER THE DISC'S ----
+        //
+        // "the 10 tools displayed have a transparent bg when in dark ui mode",
+        // set against "the opacity, stability, size, redo and undo backgrounds
+        // are perfect" - which is the disc, three lines below. Both were this
+        // one `plate` value. §29 splits them: the DISC keeps Of(page, Tint) byte
+        // for byte on every page, and the SEAT takes the same expression under a
+        // contrast floor that bites only on the dark base's branch. On all six
+        // white stocks, on Blueprint and on Brown Paper the two are still the
+        // identical colour, so §24's "one colour for the disc and every cell
+        // alike" survives everywhere it was ever visible.
+        //
+        // WHY THEY HAD TO SPLIT, since the colour was never the disc's problem:
+        // a seat is SeatSize 26 DIP across carrying a MarkBox of 23, so the
+        // seat's grey shows as a ~1.5 DIP fringe around a mark BestInk has just
+        // driven to 10:1 or better against it. The disc is 113 DIP of the same
+        // grey carrying five small readouts. One value cannot be both the
+        // largest flat area in the dial and its smallest, and the user has now
+        // reported each end of that - one as perfect, one as absent.
+        //
+        // WHAT WAS CHECKED AND FOUND FALSE, because the obvious diagnosis is:
+        // the seat is NOT collapsing into the page. On a black page it is 18.47
+        // L* off the page, the largest separation of any ground the dial ships
+        // against, and 1.525:1, the highest ratio of any of them. See
+        // PagePlate.SeatFloor - the reason an L* floor cannot fix this.
+        var seatPlate = SeatFor();
+        // §0's rule, and this is the FOURTH time it applies in this file - the
+        // three earlier ones are quoted above. The seat's ground moved, so the
+        // mark standing on it is resolved against the SEAT. plateInk stays with
+        // the disc's glyphs, readouts and undo/redo, which did not move.
+        var seatInk = BestInk(seatPlate);
+
         // §1.1: "Sector fill is Surface lightened toward the ground - near-white
         // on a paper page." §7: on a Blueprint / Brown Paper / Darkprint page the
         // RING goes fully transparent, and only separators, marks and labels
@@ -1221,7 +1253,7 @@ public sealed class ToolWheel
             // nothing" that section rules out. An EMPTY one keeps 11.2 item 11's
             // bare muted + on the sector: an unassigned sector must not read as
             // an assigned one, which is the one thing the + exists to prevent.
-            Color? seat = empty || !live ? null : plate;
+            Color? seat = empty || !live ? null : seatPlate;
             _seat[i].Fill = new SolidColorBrush(seat ?? Colors.Transparent);
             _seat[i].Opacity = seat is null ? 0 : 1;
 
@@ -1247,7 +1279,7 @@ public sealed class ToolWheel
             Color fg = onSurface;
             if (seat is { } pc)
             {
-                fg = plateInk;
+                fg = seatInk;
                 if (PenOf(id) is { } iconPen && PenColourInIcon) fg = SafeInk(iconPen.Color);
             }
             _mark[i].Children.Clear();
@@ -3067,6 +3099,26 @@ public sealed class ToolWheel
     /// "background that mimics the page colour" came to be measured
     /// byte-identical on six papers.</para></summary>
     private Color PlateFor() => PagePlate.Of(PageGround, PagePlate.Tint);
+
+    /// <summary>§29: WHAT COLOUR A TOOL SEAT IS - <see cref="PlateFor"/>'s
+    /// formula under <see cref="PagePlate.SeatFloor"/>.
+    ///
+    /// <para>Deliberately a SECOND method rather than an edit to
+    /// <see cref="PlateFor"/>. The user ruled the inner disc perfect, so the one
+    /// guarantee this section owes is that the disc's expression is not on the
+    /// path that moved - and it is not: <c>_disc.Fill</c> is the only reader of
+    /// <see cref="PlateFor"/> and this is the only reader of
+    /// <see cref="PagePlate.Seat(Color)"/>. Folding the floor into
+    /// <see cref="PlateFor"/> would have moved the disc on exactly the page the
+    /// user was looking at when they called it perfect.</para>
+    ///
+    /// <para>The floor bites on the dark base's branch alone, so on every light
+    /// paper this returns precisely what <see cref="PlateFor"/> does and the two
+    /// surfaces remain the single colour §24 made them. See
+    /// <see cref="PagePlate.Seat(Color)"/> for why the light branch must not
+    /// move - it carries the user's own <c>#7EA0B9</c> - and for what the
+    /// near-black grounds become.</para></summary>
+    private Color SeatFor() => PagePlate.Seat(PageGround);
 
     /// <summary>The live page's ground - the paper the user is drawing on.
     ///
