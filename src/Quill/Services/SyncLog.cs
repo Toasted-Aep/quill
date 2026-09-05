@@ -426,7 +426,15 @@ public static class SyncLog
                 var pg = FindPage(lib, op.Id);
                 if (op.J == null)
                 {
-                    if (pg != null) foreach (var s in lib.Notebooks.SelectMany(n => n.Sections)) s.Pages.Remove(pg);
+                    if (pg != null)
+                    {
+                        foreach (var s in lib.Notebooks.SelectMany(n => n.Sections)) s.Pages.Remove(pg);
+                        // 4.2: a peer deleted this page and we just confirmed it
+                        // is gone from OUR tree too - reclaim its cached
+                        // thumbnail so a merged-in delete doesn't leave a PNG
+                        // behind that a local-only delete already wouldn't.
+                        ThumbnailCache.Forget(pg.Id);
+                    }
                     return op.Id;
                 }
                 var meta = JsonSerializer.Deserialize<NotePage>(op.J);

@@ -1039,6 +1039,12 @@ public static class LibraryStore
         lib.Notebooks.RemoveAt(idx);
         PruneRecents(lib);   // its pages are gone from the tree now
         Save(lib);
+        // 4.2: every page under this notebook just left the live tree for
+        // certain (it is still intact inside the trash entry above, for
+        // Restore, but no longer reachable from the gallery) - reclaim their
+        // cached thumbs/ PNGs now rather than leaving them for ever. If the
+        // notebook is later restored, GetAsync just re-renders on next ask.
+        ThumbnailCache.Forget(nb.Sections.SelectMany(s => s.Pages).Select(p => p.Id));
         return true;
     }
 
@@ -1059,6 +1065,10 @@ public static class LibraryStore
         parent.Sections.RemoveAt(idx);
         PruneRecents(lib);
         Save(lib);
+        // 4.2: same reasoning as DeleteNotebook - these pages are confirmed
+        // gone from the live tree right now, not inferred from a page list
+        // that could be stale.
+        ThumbnailCache.Forget(sec.Pages.Select(p => p.Id));
         return true;
     }
 
@@ -1080,6 +1090,10 @@ public static class LibraryStore
         sec.Pages.RemoveAt(idx);
         PruneRecents(lib);
         Save(lib);
+        // 4.2 ("thumbs/ keeps PNGs of deleted pages indefinitely"): this page
+        // is confirmed gone from the live tree at this exact line - reclaim
+        // its cached thumbnail now instead of leaving it in thumbs/ forever.
+        ThumbnailCache.Forget(page.Id);
         return true;
     }
 
