@@ -91,9 +91,11 @@ a sector used to change tool. `PdfExporter` quantised colour channels to 2.55 of
   ready when the machine auto-locked; one short run finishes them.
 - **The 19 perspective presets** — all measured, worst residual 0.0084 under a
   leave-one-out control. Enumeration and measurement done; not yet built in.
-- **`bottom-bar`** — mode bar, mouse tool, pan and rotate. Eleven commits,
-  mid-edit. The open question is whether the mode bar and the mouse tool's menu
-  are one surface or two.
+- **`oilpaint` — three commits, built and verified, and now 370 commits behind
+  `integration`.** Tile substrate, dab engine with impasto, undoable paint and
+  eraser-erases-paint. It is the only work in the repo that exists nowhere else,
+  and it gets more expensive to land every day. **This is the most
+  time-sensitive item on the page.**
 
 ## Next
 
@@ -103,11 +105,16 @@ a sector used to change tool. `PdfExporter` quantised colour channels to 2.55 of
   per-layer visibility, selection scoping, Objects rows — plus the layers panel.
 - **Panel-meets-panel.** The inset model handles a small window but not a panel
   meeting another panel or a dock.
-- **`CloneWithPoints` drops `Opacity` and `Locked`** — erasing part of a
-  translucent stroke makes the fragments opaque; erasing part of a locked stroke
-  unlocks the pieces.
 - **Per-run text colour in export.** Whole-box colour now round-trips; runs
   still flatten. Four emitters and a per-run brush on `CanvasTextLayout`.
+
+*Two entries were removed from this section on 2026-09-05 because they were
+already done and had been carried forward unverified — the exact failure this
+file's own verification note warns about. `CloneWithPoints` drops nothing:
+`3bf5a4a` made a copy carry every field but the Id (§18.10). And `bottom-bar`
+is not "eleven commits, mid-edit" — it holds zero commits that are not already
+in `integration`. Both were inherited from the 2026-08-23 roadmap and restated
+rather than checked.*
 
 ## Later
 

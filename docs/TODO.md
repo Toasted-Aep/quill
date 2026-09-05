@@ -20,8 +20,11 @@ Status key: `TODO` · `IN FLIGHT` · `NEEDS SCREEN` · `DONE` · `RULING NEEDED`
 
 ## Wave 2 — chrome contrast: three faults, one class
 
+**2.0 goes first: it protects the verification of everything behind it.**
+
 | # | item | done means |
 |---|---|---|
+| **2.0** | **A second legacy-import path bypasses the scratch-isolation gate.** Run 16 found its pre-seeded scratch library still pulled in three of the user's real notebooks via a path in `LibraryStore.cs` gated on a `settings.json` flag rather than on `File.Exists`, which `vp9_seed.py` does not cover. **Copy-only — both real files verified byte-identical throughout** — but it means every screen run since has verified against contaminated scratch state. | a seeded scratch folder imports nothing, proven by a run that starts empty and stays empty |
 | 2.1 | **Precision panel has no plate** — `#F2F2F2` on `#FCFCFC`, **1.091:1**, every heading and chip invisible on the default paper | it uses the same panel machinery Settings does (11.24:1 on the same page) |
 | 2.2 | **Text editor ground 2.93:1** (`#606060` / `#141413`) | clears the 3:1 floor on all nine shipped papers, measured by a harness |
 | 2.3 | **Dial seat on Plain White 1.020:1** — it stands on the dial's **drop shadow**, not the page, so every figure §24/§29 computed for that case used the wrong surface | the plate formula knows the shadow exists, or the seat is lifted off it |
