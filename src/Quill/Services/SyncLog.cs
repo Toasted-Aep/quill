@@ -292,7 +292,18 @@ public static class SyncLog
                 w.Flush();
                 outFs.Flush(true);   // to disk, not just to the OS cache
             }
-            if (File.Exists(path)) File.Replace(tmp, path, null);
+            // 4.1: a null backup here means a failure mid-replace (power loss,
+            // a sync client holding the destination at the exact wrong instant)
+            // can leave NEITHER the pre-compaction log nor the compacted one -
+            // this device's whole change history for the library gone. A fixed
+            // backup name costs nothing: File.Replace overwrites it each time
+            // (no accumulation across repeated compactions), and its ".bak"
+            // suffix keeps it outside the "oplog.*.jsonl" glob MergeForeign
+            // scans, so it can never be mistaken for a peer's log. Matches the
+            // backup LibraryStore.PromoteTemp already takes for library.json,
+            // settings.json and trash.json - this was the one File.Replace in
+            // the app that had not caught up to that pattern.
+            if (File.Exists(path)) File.Replace(tmp, path, path + ".bak");
             else File.Move(tmp, path);
             _compactFloor = CompactThresholdBytes;
         }

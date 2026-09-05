@@ -8224,3 +8224,51 @@ what the user sees while typing is what the page will keep. The focus affordance
 did not have to be traded for it: WinUI's accent underline was there all along,
 hidden under the grey slab, and is visible now.
 
+## 34 A null backup on the sync log's own atomic swap — 2026-09-06
+
+**Wave 4, item 4.1.** `File.Replace(tmp, path, null)` lived in exactly one
+place: `SyncLog.CompactIfNeeded`, swapping a recompacted
+`oplog.<device>.jsonl` in over the live one. A null third argument means
+Win32 `ReplaceFile` only guarantees the destination keeps its own name
+through a late failure when a backup name IS supplied — with `null`, a crash
+or a lock at the exact wrong instant between the delete-original and
+rename-in steps can leave `path` gone and `tmp` still sitting there under
+its own name: neither the pre-compaction log nor the compacted one.
+
+**Not library.json.** The oplog is Stage-1 sync's own change history for
+merging OTHER devices' edits — losing this device's copy degrades sync (a
+peer would need a full resync) rather than losing the notebook itself, which
+lives in library.json and is untouched by this path. Still worth fixing
+exactly as written: the item asked for a backup or a written justification,
+and there was no reason to prefer the justification when the fix is this
+cheap.
+
+**The fix.** `File.Replace(tmp, path, path + ".bak")`, mirroring
+`LibraryStore.PromoteTemp`, which already takes a backup this way for
+library.json, settings.json and trash.json. Two things make the fixed name
+safe rather than a slow leak:
+
+| risk named in the brief | why it doesn't apply here |
+|---|---|
+| a backup file that accumulates | `File.Replace` overwrites an existing file at the backup path on every call — confirmed against `LibraryStore.PromoteTemp`, already doing exactly this on every settings/trash/library save in the same codebase without complaint. One `.bak` per device, always the previous generation, never a growing pile. |
+| a rename that fails on a locked file | unchanged: the call was already inside `CompactIfNeeded`'s own try/catch, which already treats any `File.Replace` failure as "compaction skipped this round, retry after the next threshold crossing" and leaves the live log untouched. Win32 `ReplaceFile` can in principle also fail to write the backup half, but that failure is caught the same way. Worst case after the change is identical to worst case before it. |
+
+**Why not touched further.** `MergeForeign` globs `oplog.*.jsonl` to find peer
+logs; `oplog.<device>.jsonl.bak` does not match that pattern (it ends
+`.bak`, not `.jsonl`), so the backup can never be misread as a second
+device's log. No other `File.Replace` call in the four files assigned this
+wave (`InkSurface.cs`, `LibraryStore.cs`, `SyncLog.cs`, `ThumbnailCache.cs`)
+passes a null backup — `LibraryStore.PromoteTemp` already took one before
+this item started.
+
+**NOT VERIFIED ON SCREEN.** This is a compaction path that only runs once an
+oplog crosses 2 MB; nothing about it is visible in the UI. The C# compiler
+itself built clean — 0 warnings, 0 errors — but the copy-to-output step of a
+full `dotnet build` could not complete in this session: `Quill.exe` was
+already running and holding the output binaries locked. Per instructions no
+running instance was started, stopped, or otherwise touched to force that
+through. To verify by hand: point `QUILL_DATA_FOLDER` at a scratch folder,
+grow an oplog past 2 MB (or lower `CompactThresholdBytes` for the test),
+trigger a save, and confirm `oplog.<device>.jsonl.bak` appears next to the
+freshly compacted log and holds the pre-compaction content.
+

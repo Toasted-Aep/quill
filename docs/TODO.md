@@ -41,7 +41,7 @@ Status key: `TODO` · `IN FLIGHT` · `NEEDS SCREEN` · `DONE` · `RULING NEEDED`
 
 | # | item | done means |
 |---|---|---|
-| 4.1 | **`File.Replace(tmp, path, null)`** — no backup parameter in the sync path | a backup is taken, or the call is justified in writing |
+| 4.1 | **`File.Replace(tmp, path, null)`** — **DONE, FIXED**: the only such call was oplog compaction's swap in `SyncLog.cs`; it now passes `path + ".bak"`, matching `LibraryStore.PromoteTemp`'s existing pattern for library.json/settings.json/trash.json. The fixed name is overwritten every compaction (no accumulation) and its `.bak` suffix sits outside the `oplog.*.jsonl` glob `MergeForeign` scans, so it can never be read back as a peer's log. Code-only; not verified on screen. | a backup is taken, or the call is justified in writing |
 | 4.2 | **Thumbnail pruning** — `thumbs/` keeps PNGs of deleted pages for ever | deleting a page reclaims its thumbnail |
 | 4.3 | **`_skipNextRightTap` can stay armed** and swallow an unrelated context menu later | the flag cannot outlive the gesture that set it |
 
