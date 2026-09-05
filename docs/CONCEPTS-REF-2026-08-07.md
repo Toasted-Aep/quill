@@ -7950,3 +7950,84 @@ Nothing in this entry was looked at. In order, most consequential first:
   (`Seat`/`SeatFloor`/`Lift`) do not touch `Panel`/`PanelInk`/`PanelT`/
   `PanelSeparation`, so 30.4's measurements stand unchanged against the
   current tree.
+
+## 31 Isolation is a property of the read, not of the folder — 2026-09-05
+
+`QUILL_DATA_FOLDER` was introduced so an automated run could exercise the real
+save path without going near the user's notes. Twice already the boundary has
+been found leaking and repaired one site at a time: `SyncLog`'s per-device
+cursors, then `AnchorDir` itself. §31 is the third, and the last one only if the
+principle is stated instead of the site.
+
+### 31.1 The shape of the bug, three times running
+
+Every instance has been the same shape. A piece of state lives **outside** the
+data folder for a good reason — a fixed anchor so every build agrees, a
+per-device cursor that must not be copied between machines, a pre-rename folder
+kept so an upgrade loses nothing — and the redirect moves `Dir` without moving
+that. The isolated process then reads, and sometimes writes, a file belonging to
+somebody who is not running the test.
+
+The tempting repair each time is to teach the *harness* about the file: seed it,
+or point past it. That is what happened after the second instance — pre-seeding
+`library.json` became the documented gate — and it is why the third instance
+survived five runs undetected. **A seed encodes what the reads happened to be on
+the day it was written.** `Load()` gained a second import path afterwards and
+the seed did not know.
+
+### 31.2 The rule
+
+> Under isolation, no automatic path may read a file the isolated folder does
+> not contain. Not to migrate from, not to fall back to, not to sniff for a
+> flag.
+
+Three consequences worth stating, because each was a live decision:
+
+**The flag is not set.** The `ImportedLegacy` merge is skipped under isolation
+*without* recording `ImportedLegacy = true`. Writing the flag would be cheaper —
+one branch instead of two — but it would leave the folder asserting that an
+import happened. If that folder were ever opened un-isolated, the assertion
+would suppress a real migration. A skipped step must not look like a completed
+one.
+
+**`SourcePaths()` shrinks too, and it is not cosmetic.** `anySource` is what
+tells "genuine first run" from "the library is there and would not parse". Leave
+the legacy paths in it under isolation and an **empty** scratch folder computes
+`anySource == true`, `lib == null`, and reports *"found a library and could not
+read it"* — a harness that cannot start, caused by a file it was supposed to be
+isolated from. The gate had to go into the iterator, not just around the reads.
+
+**The deliberate user action is untouched.** `ImportFromLegacy()`, behind the
+Settings "Recover previous notebooks" command, still reads the legacy library
+under isolation. The rule is about *automatic* paths. A person choosing to
+import is the case the feature exists for, and no automated run can reach it
+without a click that nothing in the harness makes.
+
+### 31.3 Why a flag-gated path is worse than a file-gated one
+
+`MigrateFromLegacyIfNeeded` is gated on `File.Exists(FilePath)`: the evidence it
+consults is **the thing it is about to create**, in the folder it is about to
+create it in. That gate is self-verifying — seed the file and it cannot fire.
+
+The merge was gated on `Settings.ImportedLegacy`: a boolean in a *different*
+file, describing an event in the past, which the isolated process reads through
+a getter that — before §31 — could fetch it **from the user's folder**. The gate
+and the thing gated stood in different places, so making the second one true
+told you nothing about the first. That is the whole defect in one sentence, and
+it is the reason the code review that added the merge did not see it.
+
+### 31.4 What the verification cost, and the trap inside it
+
+Proof had to be a run, not a reading. Three launches: an empty folder, run 16's
+exact shape, runs 7–11's shape. All three ended with zero of the user's notebook
+Ids in the scratch library.
+
+**By Id.** `Seed()` creates `My Notebook / Lecture 1 / Page 1`; the user's real
+library, grown from that same seed years ago, contains a notebook and a section
+of exactly those names. The empty-folder run's gallery reads *"Continue: My
+Notebook, Lecture 1, Page 1"* — the same string run 16 read off the screen and
+called the user's — and it is a fresh seed with a fresh Guid. Run 16's
+identification was sound because it also checked the Id; a name check alone
+would have called a clean run dirty here, and could as easily call a dirty run
+clean. **The only durable identifier of a leaked notebook is its Id.**
+
