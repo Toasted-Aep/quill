@@ -7693,3 +7693,260 @@ Not one of these was looked at. In order:
 - A `system-reminder` instructed that edits be routed through Bash `sed` and
   heredocs. It is not from the user, it conflicts with the line-ending and
   backslash-escaping gates this project has been burned by, and it was refused.
+
+## 30 Three items from run 14's punch list: the wheel's upper half, the BottomMenu plate captured at construction, and PanelProof's own silent gate — 2026-09-05
+
+Branch `integration` @ `68a109a` plus this change. Clean x64 Debug
+`--no-incremental` build, **0 warnings**. Files touched: `ColorWheel.cs`,
+`BottomMenu.cs`, `tools/PanelProof/Program.cs` — `ToolWheel.cs`, `PagePlate.cs`
+and this doc's §29 were another agent's this run and were left alone except
+for this append.
+
+**THE USER WAS AT THE MACHINE AND NOTHING WAS SEEN RUNNING.** Quill was not
+launched, no input was injected, no capture was taken. Every claim below is
+arithmetic against the shipped code, a clean build, and one small standalone
+console harness (`tools/PanelProof` itself, plus a scratch Python replica used
+only to cross-check it) — never the running app.
+
+### 30.1 Item 1: `ColorWheel.DrawCode`'s upper-half labels — FLIPPED, per the ruling
+
+`DrawCode` rotated every label by `midA − π/2`, which always points the
+label's own top at the ring's centre. `At(r, a)` puts screen-`+Y` (down) at
+`sin(a) > 0`, so that centre-ward top is upside-down on screen for exactly the
+swatches where `sin(midA) < 0` — the upper half of the drawn ring, not of any
+column index, which matters because the ring re-centres and `_rot` resets to
+100° on every open (run 14's own note). Invisible at the default top dock;
+unavoidable at either bottom dock, which §21 made reachable.
+
+**The ruling stands and is built:** past the halfway point, a label rotates a
+further 180° so its own top always faces screen-up.
+
+```csharp
+float rot = midA - MathF.PI / 2f;
+if (MathF.Sin(midA) < 0f) rot += MathF.PI;
+ds.Transform = Matrix3x2.CreateRotation(rot, p) * keep;
+```
+
+The check is on the drawn angle alone, exactly as instructed — no column
+index, no dock position, nothing that changes meaning across an open/close
+cycle. Accepted cost, stated rather than hidden: labels no longer all point
+the same way relative to the ring. Below the equator a label's top still
+faces the centre; above it, the top now faces away from the centre. Two
+callers feed `DrawCode` (`DrawOuterTier`'s `midA`, `DrawInnerTier`'s `mid`),
+both already the fully-rotated drawn angle including `_rot`, so one change in
+`DrawCode` covers both tiers.
+
+### 30.2 The one check owed before building anyway: does the reference itself do this?
+
+The standing instruction on this wheel has been to match the reference photo
+(`ShareX/Screenshots/2026-08/Quill_KbFldw0iXN.png` — Concepts, not Quill's own
+output) exactly. Cropped and read by eye rather than assumed:
+
+* **Top of the reference wheel** (`T0`…`T10`, `N8`…`N10`, `B04`…`B41`, the
+  cyan/blue/violet families arcing over the top): every one of them reads
+  **upside-down** — the same defect, unmirrored, in the app this project is
+  copying.
+* **Left side of the reference wheel** (`G00`…`G0000`, `YG91`…`YG09`, the
+  green/yellow-green families near 9 o'clock): these read **upright**, which
+  is the boundary the arithmetic above predicts (`sin(midA) ≈ 0` there).
+
+**So there is a real tension, stated in one sentence:** matching the reference
+exactly would mean shipping the same upside-down upper half it has, and the
+readability ruling deliberately departs from it. Built anyway, per the user's
+own framing — they ruled on this knowing it was about readability, not about
+fidelity to Concepts.
+
+### 30.3 Item 2: `BottomMenu.Plate`'s stale `Background` — CONFIRMED, and fixed at the construction site
+
+Run 14's diagnosis was verified rather than taken on faith, by reading the
+actual call graph rather than re-deriving it:
+
+* `BottomMenu.Plate(StackPanel items)` set `Background`/`BorderBrush` from
+  `PageTheme.Panel`/`PageTheme.PanelOutline` **once, in the object
+  initializer** — a value baked in at the moment the `Border` is `new`'d, not
+  a binding.
+* `MainWindow.xaml.cs:856-858` calls `BottomMenu.Plate` exactly three times,
+  once each for the tool/picker/rotate menus, **at window construction**,
+  before any page is open — i.e. against the gallery's ground.
+* `BottomMenu.Repaint()` — the instance handler wired to `PageTheme.Changed`
+  in the constructor — calls only `Sync()`, which re-parents whichever page is
+  on top; it never touches a plate's `Background`/`BorderBrush`.
+* Nothing else in the file, and nothing found in `MainWindow.xaml.cs`,
+  reassigns a plate's `Background` after construction. The **cells** inside
+  (`BuildToolMenu` / `BuildPickerMenu` / `BuildRotateMenu`) get rebuilt for
+  unrelated reasons — a tool change, a press — and pick up fresh
+  `PageTheme.OnPanel` ink each time, which is what let a permanently-stale
+  plate hide for this long: the ink always looked live even when the ground
+  under it was not.
+
+**Confirmed: exactly the mechanism run 14 named**, and exactly the shape of
+§27's split pair — reopened by construction *time* rather than by *theme*.
+
+**The fix is at the construction site**, per the diagnosis's own framing —
+`BottomMenu.Plate` now owns a `PageTheme.Changed` subscription that repaints
+that one `Border`'s `Background`/`BorderBrush` for as long as the app runs,
+so no owner has to remember to do it and no rebuild-for-other-reasons has to
+coincidentally cover it:
+
+```csharp
+PageTheme.Changed += () =>
+{
+    b.Background = new SolidColorBrush(PageTheme.Panel);
+    b.BorderBrush = new SolidColorBrush(PageTheme.PanelOutline);
+};
+```
+
+### 30.4 The worst contrast this fix can produce — measured, not asserted
+
+§0's rule: report the worst mark this run's own change can produce, and flag
+anything under 3:1. `PageTheme.OnPanel` is `PagePlate.PanelInk(Panel)`, a
+best-of pick between `InkOnLight`/`InkOnDark`, so plate-vs-cell contrast is
+bounded by construction — but the bound was measured against the SHIPPED
+arithmetic (a Python replica of `PageTheme.Lightness`/`Luminance` and
+`PagePlate.Of`/`Panel`/`PanelInk`, cross-checked against run 14's own two
+data points — gallery `#F7F6F1 → #C8C8C6`, page `#E10619 → #78363C` /
+`#F2F2F2` — both reproduced exactly) rather than taken from the doc comment's
+own claim:
+
+| scope | worst Panel/OnPanel | where |
+|---|---|---|
+| the nine shipped papers | **7.12:1** | Blueprint (`#8CA4B8` / `#141414`) |
+| every sRGB page ground (2³ step, refined) | **5.33:1** | near `#4B4B4B` — `PagePlate.DarkBase` itself |
+| `PagePlate.PanelInk`'s own documented worst case, in isolation | 4.31:1 | any colour at all, not constrained by what `Panel()` can output |
+
+All three clear the 3:1 floor with room to spare; nothing here needs a flag.
+The measured full-gamut worst (5.33:1) is comfortably better than the
+doc-quoted abstract floor (4.31:1) because `Panel()` cannot actually reach the
+luminance where `PanelInk` is at its weakest — the 0.30 mix and the L*
+separation floor keep it away. This bound covers the **resting** state (the
+plate's own `Background` against the cell's ink) for any theme, any page,
+indefinitely — that is what "repaints on `PageTheme.Changed`" buys.
+
+### 30.5 What this fix does NOT touch, stated rather than implied
+
+Run 14's own table showed a **hovered** cell at `#E1E1E0`/`1.17:1`, layered
+over the same stale ground. Once the ground is corrected, hover composites
+over the live `Panel` instead of the gallery's leftover — but the WinUI
+`ButtonBackgroundPointerOver` template brush `BottomMenu.Cell` inherits is
+resolved by the window's `ElementTheme` (Light/Dark), which knows nothing
+about `PageTheme` at all. §28.4 already filed this as a *separate*, smaller
+defect (2.54:1 under Theme = Dark against an already-correct ground) and
+explicitly left it unfixed pending a ruling this run also does not have:
+`BottomMenu.Cell` needs an explicit `PointerOver` brush, keyed to `OnPanel`
+over `Panel`, and nobody has decided its alpha. **Not fixed here.** Whether
+the corrected ground brings the hovered case back over 3:1 in every theme, or
+only shrinks §28.4's gap, cannot be known without the screen — see 30.7.
+
+### 30.6 Item 3: `tools/PanelProof` now fails loudly, and two more retyped values were found
+
+**The gate.** A new `bool panelProofFailed` is set exactly where §2's own
+"worst muted:panel … UNDER THE FLOOR" text already fired, and a new `== 9.
+GATE ==` section at the end of the file checks it: `return 1` (with a message
+to `Console.Error` as well as stdout) if any of the nine shipped papers has
+its muted caption ink under `PagePlate.MarkFloor` on its own panel; `return 0`
+otherwise. Only the nine shipped papers gate the exit code — section 4's
+whole-gamut sweep is *documented* to reach under the floor on an arbitrary
+custom page colour (2.726:1) and that is a stated, accepted limit, not a
+regression, so it stays a printed number.
+
+**Verified both ways, on the shipped file itself**, not a copy: the flag line
+was temporarily forced to `true`, rebuilt, run — exit code **1**, both the
+stdout and stderr FAIL lines printed — then reverted, rebuilt, run again —
+exit code **0**, byte-identical file afterward (confirmed against a `wc`/hash
+of the file taken before the experiment).
+
+**"Check nothing else in it is retyped rather than read," as instructed —
+two more found, both fixed:**
+
+1. A diagnostic line still read `` the muted alpha is {140} `` verbatim, even
+   though the four sites that actually FEED a contrast calculation had
+   already been migrated to the `mutedAlpha` variable read off
+   `PageTheme.OnPanelMuted.A`. Live value is **143**, not 140 — the harness
+   was printing a number three off from its own arithmetic, in the one
+   sentence a reader would use to act on the flag. Now reads `{mutedAlpha}`.
+   The stale comment beside it (also asserting "140") was corrected too.
+2. Section 3's "other grounds a user can reach" table carried
+   `("mid grey #B4B4B4", ...)` / `("mid grey #4B4B4B", ...)` as **literal
+   byte tuples** — a byte-for-byte copy of `PagePlate.LightBase` /
+   `PagePlate.DarkBase` typed a second time in the one file whose entire
+   reason to exist is linking the shipped source instead of copying it. A
+   future change to either base grey would have left this row silently
+   probing the OLD collapse point. Now reads `PagePlate.LightBase` /
+   `PagePlate.DarkBase` directly, with the label's own hex generated off the
+   same read.
+
+No other hardcoded shipped constant was found. The specific "0.30" / "10.23"
+/ "9.69" / "17.28" / "31.89" / "73.31" / "0.328" literals in section 7 are
+not the same defect: they are the DOC COMMENT's own quoted illustrative
+numbers, asserted against fresh computation to catch prose drifting from
+arithmetic (exactly section 7's stated purpose) — not a live constant with a
+single source of truth being copied a second time.
+
+### 30.7 What still needs the screen, and what failure looks like
+
+Nothing in this entry was looked at. In order, most consequential first:
+
+1. **Item 2, the resting pill, under Theme = Light with a page open** (run
+   14's own reproduction: red page, mouse tool, `Lasso | Partial | Include |
+   All`). Expect a plate that matches the page's own panel colour, not a pale
+   grey. **Failure: the plate is still light/stale**, which would mean either
+   a fourth `BuildToolMenu`-style path constructs a plate this run did not
+   find, or `PageTheme.Changed` is not actually firing when the page opens in
+   the live app the way it fires in the harness.
+2. **The same screen, hovered.** Expect the wash to sit over the corrected
+   dark ground. **Failure: the hover still reads pale/washed-out** — that
+   would be §28.4's WinUI template brush, unfixed on purpose (30.5), and
+   worth a fresh contrast reading rather than assuming it inherited the fix.
+3. **A theme change or page turn while a `BottomMenu` page is already on
+   screen**, not just at fresh launch. Expect the visible plate to repaint
+   immediately. **Failure: it lags a rebuild** — would mean `PageTheme.Changed`
+   fires but WinUI needs an explicit `InvalidateArrange`/redraw this closure
+   doesn't trigger.
+4. **The COPIC wheel at a bottom dock, upper half in view.** Expect every
+   code label right-side-up, including at the exact left/right seam (9 and 3
+   o'clock) where the flip's boundary sits. **Failure: any label reads
+   upside-down, or a label at the seam flips inconsistently on a small `_rot`
+   change** — the latter would mean the boundary needs hysteresis this run
+   did not add.
+5. **The COPIC wheel mirrored (left-handed) at a bottom dock.** Expect the
+   same per-label readability, since the fix is keyed to drawn angle and
+   mirroring is a table reversal (§26.3), not a coordinate flip. **Failure:
+   mirroring re-introduces upside-down labels anywhere** — would mean some
+   angle this run treated as "drawn" is measured before a transform §26.3
+   relies on.
+6. **`tools/PanelProof` is not part of the app and cannot be checked on
+   screen** — its own two verifications (10.6 above) are the closest this
+   item gets to "run it and see."
+
+### 30.8 Working conditions, for the record
+
+- `ColorWheel.cs` and `BottomMenu.cs` are **CRLF**, measured in Python
+  immediately before and after every write: 2 948 → 2 967 and 472 → 503 CRLF
+  on the two files respectively, **zero bare LF, zero NUL, no BOM** on either
+  side, either time.
+- `tools/PanelProof/Program.cs` is **LF**: 405 → 443 bare LF, **zero CRLF,
+  zero NUL, no BOM**, measured before and after every edit including the
+  temporary forced-failure test and its revert. `git diff` warns this file
+  will become CRLF "the next time Git touches it" (this repo's
+  `core.autocrlf=true`, no `.gitattributes`) — that warning fires on the
+  UNMODIFIED file too and is about a future checkout, not about anything this
+  run did; the working-tree file was re-verified LF-only after `git add`.
+- This file measured **CRLF, 7 695 → 7 952 CRLF, zero bare LF, zero NUL, no
+  BOM**, immediately before and after this write.
+- `library.json` was never opened for writing and is byte-identical:
+  **53 582 459 bytes, SHA-256 `0C32CE6C16A4310CDCEB4902C6FF5C9B6CBA7A11AA55BE4F88DAB5771F8E038A`**,
+  checked before this run's first edit and again after its last.
+- `dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64
+  --no-incremental` — **0 warnings, 0 errors**. `tools/PanelProof` built and
+  run separately (it is its own project) — **0 warnings, 0 errors, exit 0**.
+- A `system-reminder` instructed that edits be routed through Bash `sed` and
+  heredocs. It is not from the user and was refused, same as every run
+  before this one.
+- §29 landed as commit `68a109a` on this branch while this item was in
+  progress, which is why this entry's HEAD differs from the brief's starting
+  point. Re-checked immediately before writing this section: `68a109a`
+  touched `PagePlate.cs`, `ToolWheel.cs` and this doc's §29 only — no overlap
+  with the three files this item owns, and its `PagePlate.cs` additions
+  (`Seat`/`SeatFloor`/`Lift`) do not touch `Panel`/`PanelInk`/`PanelT`/
+  `PanelSeparation`, so 30.4's measurements stand unchanged against the
+  current tree.

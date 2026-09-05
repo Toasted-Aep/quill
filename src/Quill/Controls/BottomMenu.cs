@@ -344,6 +344,12 @@ public sealed class BottomMenu
         // The plates are the owners' - they repaint their own contents on the
         // same PageTheme.Changed - so this only has to re-run the stack, which
         // costs nothing and keeps the two in step if an owner rebuilds late.
+        //
+        // Run 14: that was true of the CELLS, which rebuild for other reasons
+        // and so happened to pick up fresh ink, but not of the Border a plate
+        // itself is - Plate() now carries its own PageTheme.Changed subscription
+        // for exactly that reason, so this comment's claim no longer depends on
+        // an owner remembering anything.
         Sync();
     }
 
@@ -358,20 +364,45 @@ public sealed class BottomMenu
     /// <para>§27: the plate is <see cref="PageTheme.Panel"/>, so its rule is
     /// <see cref="PageTheme.PanelOutline"/> and not <c>Outline</c>. Outline is
     /// OnSurface at alpha 36 - keyed to the SHELL - and this plate stopped
-    /// standing on the shell's ground when Panel became page-derived.</para></summary>
-    public static Border Plate(StackPanel items) => new()
+    /// standing on the shell's ground when Panel became page-derived.</para>
+    ///
+    /// <para>Run 14: <see cref="PageTheme.Panel"/> used to be read only HERE, at
+    /// construction. <c>MainWindow</c> builds all three plates once, at window
+    /// setup, while still on the gallery - so a plate built before any page is
+    /// open kept the gallery's ground forever. The CELLS inside rebuild for
+    /// other reasons (a tool change, a press) and pick up fresh ink each time,
+    /// which is what let the plate's own stale Background hide: on a default
+    /// install under Theme = Light the resting pill measured 1.50:1 and the
+    /// hovered cell 1.17:1, both against a ground the open page had already left
+    /// behind. Same split-by-time shape as the §0 trap §27 closed by theme,
+    /// reopened here by construction order - so the plate now repaints its own
+    /// Background/BorderBrush rather than trusting whoever holds it to do
+    /// that.</para></summary>
+    public static Border Plate(StackPanel items)
     {
-        Child = items,
-        CornerRadius = new CornerRadius(Metrics.CornerRadius),
-        BorderThickness = new Thickness(1),
-        Padding = Metrics.Padding,
-        // NEVER null: a null Background is transparent to hit-testing and every
-        // press on this plate would land on the page behind it.
-        Background = new SolidColorBrush(PageTheme.Panel),
-        BorderBrush = new SolidColorBrush(PageTheme.PanelOutline),
-        HorizontalAlignment = HorizontalAlignment.Center,
-        VerticalAlignment = VerticalAlignment.Bottom,
-    };
+        var b = new Border
+        {
+            Child = items,
+            CornerRadius = new CornerRadius(Metrics.CornerRadius),
+            BorderThickness = new Thickness(1),
+            Padding = Metrics.Padding,
+            // NEVER null: a null Background is transparent to hit-testing and every
+            // press on this plate would land on the page behind it.
+            Background = new SolidColorBrush(PageTheme.Panel),
+            BorderBrush = new SolidColorBrush(PageTheme.PanelOutline),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Bottom,
+        };
+        // Never unsubscribed - a plate returned from here lives as long as its
+        // owner, which today means the app, exactly like the instance
+        // subscription a few lines below in the constructor.
+        PageTheme.Changed += () =>
+        {
+            b.Background = new SolidColorBrush(PageTheme.Panel);
+            b.BorderBrush = new SolidColorBrush(PageTheme.PanelOutline);
+        };
+        return b;
+    }
 
     public static StackPanel Items() => new()
     {

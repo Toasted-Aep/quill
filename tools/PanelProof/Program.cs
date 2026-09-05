@@ -19,6 +19,16 @@ static Color Over(Color mark, Color ground)
     return Color.FromArgb(255, C(mark.R, ground.R, f), C(mark.G, ground.G, f), C(mark.B, ground.B, f));
 }
 
+// Job 3: THE ACCEPTANCE GATE. Section 2 sets this when a SHIPPED paper's
+// muted caption ink drops under PagePlate.MarkFloor on its own panel, and the
+// process exits non-zero at the bottom of this file. Everything above that
+// line used to only ever print "UNDER THE FLOOR" - readable in a scrollback
+// nobody was tailing, and indistinguishable at a glance from every other line
+// this file prints. A run that changes PanelT, PanelSeparation, a base grey
+// or the muted alpha and pushes any shipped paper under the floor now fails
+// the run, not just the transcript.
+bool panelProofFailed = false;
+
 var papers = new (string Name, PaperKind Kind)[]
 {
     ("Plain White",  PaperKind.PlainWhite),
@@ -44,8 +54,11 @@ var extra = new (string Name, Color Ground)[]
     ("OLED black #000000",     Color.FromArgb(255, 0x00, 0x00, 0x00)),
     ("pinned dark #0F0E10",    Color.FromArgb(255, 0x0F, 0x0E, 0x10)),
     ("pinned light #F7F6F1",   Color.FromArgb(255, 0xF7, 0xF6, 0xF1)),
-    ("mid grey #B4B4B4",       Color.FromArgb(255, 0xB4, 0xB4, 0xB4)),
-    ("mid grey #4B4B4B",       Color.FromArgb(255, 0x4B, 0x4B, 0x4B)),
+    // Read, not retyped: these two used to be a byte-for-byte copy of
+    // PagePlate's own base greys, so a future change to either constant would
+    // have kept probing the OLD collapse point instead of the shipped one.
+    ($"mid grey (LightBase) {Hex(PagePlate.LightBase)}", PagePlate.LightBase),
+    ($"mid grey (DarkBase) {Hex(PagePlate.DarkBase)}",   PagePlate.DarkBase),
 };
 
 Console.WriteLine($"PanelT = {PagePlate.PanelT:F2}   PanelSeparation = {PagePlate.PanelSeparation:F1} L*   MarkFloor = {PagePlate.MarkFloor:F1}:1");
@@ -133,12 +146,18 @@ foreach (var (name, kind) in papers)
 }
 if (worstMuted < PagePlate.MarkFloor)
 {
+    // Job 3: the loud half of the flag. Everything below this line is still
+    // diagnostic text; this is the one line that makes the run itself fail.
+    panelProofFailed = true;
     // What it would take, so the flag is actionable rather than just alarming.
-    // OnPanelMuted is OnPanel at alpha 140 - PageTheme.Apply sets it, and 140 is
-    // inherited from OnSurfaceMuted's own relation to OnSurface rather than
-    // chosen for a panel. This is the smallest alpha that clears the floor on
-    // every shipped paper. NOT applied: it is a visual weight decision about
-    // secondary text and it belongs to the user, not to the harness.
+    // OnPanelMuted is OnPanel at alpha `mutedAlpha` - PageTheme.Apply sets it -
+    // and that figure is read above, not retyped here, for the same reason the
+    // whole file links PageTheme.cs instead of copying it: a hardcoded "140"
+    // sat in this very line after PageTheme.Apply had already moved the alpha
+    // to 143, and went on reporting the old number silently. `need` below is
+    // the smallest alpha that clears the floor on every shipped paper. NOT
+    // applied: it is a visual weight decision about secondary text and it
+    // belongs to the user, not to the harness.
     int need = mutedAlpha;
     for (int alpha = mutedAlpha; alpha <= 255; alpha++)
     {
@@ -152,7 +171,7 @@ if (worstMuted < PagePlate.MarkFloor)
         }
         if (lo2 >= PagePlate.MarkFloor) { need = alpha; break; }
     }
-    Console.WriteLine($"      the muted alpha is {140} (PageTheme.Apply); {need} is the smallest that clears " +
+    Console.WriteLine($"      the muted alpha is {mutedAlpha} (PageTheme.Apply); {need} is the smallest that clears " +
                       $"{PagePlate.MarkFloor:F1}:1 on all nine. NOT APPLIED - see §27's flag.");
 }
 Console.WriteLine();
@@ -403,3 +422,22 @@ Console.WriteLine("== 8. BEFORE / AFTER: the superseded shell ramp vs §27's pag
                           $"{Hex(PageTheme.OnPanel)} at {Ratio(PageTheme.OnPanel, PageTheme.Panel):F2}:1");
     }
 }
+
+// ---- 9. THE GATE, and it is loud -------------------------------------
+//
+// Job 3: a non-zero exit, not a printed line. Section 2's per-paper FLAG loop
+// and its "worst muted:panel" summary already said this in text; text is what
+// a screen run reads and a CI step does not. Only the NINE SHIPPED PAPERS gate
+// the exit code - section 4's whole-gamut sweep is EXPECTED to reach under the
+// floor on an arbitrary custom page colour (§27 measured 2.726:1 there) and
+// that is a stated, accepted limit rather than a regression, so it stays a
+// printed number and nothing here reads it.
+Console.WriteLine("== 9. GATE ==");
+if (panelProofFailed)
+{
+    Console.WriteLine("  FAIL: muted-on-panel is under the 3:1 floor on a shipped paper - see section 2.");
+    Console.Error.WriteLine("PanelProof FAILED: muted-on-panel is under the 3:1 floor on a shipped paper - see section 2.");
+    return 1;
+}
+Console.WriteLine("  PASS: muted-on-panel clears the 3:1 floor on all nine shipped papers.");
+return 0;
