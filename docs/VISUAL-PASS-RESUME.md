@@ -198,7 +198,154 @@ judged at all — and it is on the default paper of a default install.
 * The seats under a **hover**. The cursor was parked away from the dial for every
   capture.
 
-### Presence — clear on three separate tracks, none stale by more than an item
+### ITEM 2 — §25.11's canvas rows: **five rows PASS, one FAILS, and three defects nobody has filed**
+
+Six runs have listed this item as not-reached. It is now partly reached. All of
+it was done on the **PlainWhite** page under the default install, with a box
+holding "Quill colour test" / "Alpha Beta Gamma".
+
+**The method for the caret rows is worth keeping:** a caret blinks, so it cannot
+be read off one capture. Take **two captures ~600 ms apart and difference them** —
+the caret is the only thing that moves, and it comes out as an exact bounding
+box. That turns "did the caret jump" into an integer comparison.
+
+| row | gesture | verdict |
+|---|---|---|
+| 1.1 | lasso a text box, open the wheel from the dial | **PASS** |
+| 1.7 | recolour, then Ctrl+Z | **PASS** |
+| 1.8 | recolour, Ctrl+Z, Ctrl+Y | **PASS** |
+| 1.10 | Text tool, then type a new box | **PASS** (incidental) |
+| 1.11 | caret inside a box, pick a colour | **PASS** |
+| 1.17 | the format bar's per-run picker vs the whole-box colour | **FAIL** |
+| 1.4 / 1.5 / 1.18 / 1.19 | attachment, rectangle, copy-as-image, the veil | **NOT REACHED** |
+
+#### 1.11 — the caret: **PASS, and it is exact**
+
+The caret was placed mid-word, inside "colour". Blink-differenced before the
+pick and again after it:
+
+```
+before the pick   caret bbox   x 1338..1339   y 828..869
+after  the pick   caret bbox   x 1338..1339   y 828..869     <- byte-identical
+```
+
+The box recoloured to `#D6484E` on the same action, the caret did not move by one
+pixel, and it was still **blinking**, so focus was not lost either.
+`i07-box-after-pick.png` shows the caret sitting inside "colo|ur" with every word
+red. **This was §25.10's "likeliest place for a surprise" and there is no
+surprise in it.**
+
+#### 1.1 — the dial's dot: **PASS**
+
+Measured on the dot's own pixels, before and after the lasso:
+
+```
+nothing selected   dot #D1D1D1   <- PlateFor(), i.e. inert
+box selected       dot #D6484E   <- the box's own colour
+```
+
+#### 1.7 / 1.8 — undo and redo: **PASS, and the words are provably untouched**
+
+The glyph area is the proof: if the RTF had been restored wrongly the text would
+change shape, and the pixel count would move.
+
+```
+recoloured   #BE8C89   1101 glyph px
+Ctrl+Z       #D6484E   1101 glyph px    <- previous colour, same words
+Ctrl+Y       #BE8C89   1101 glyph px    <- no drift on the second cycle
+```
+
+`#BE8C89` is also **the pixel that was drawn at the wheel target before the
+press** — run 7's method, so the renderer and the pick agree.
+
+#### 1.17 — the per-run picker: **FAIL, and both halves of §25.3's rule fail**
+
+Sequence, with "test" selected inside a box already carrying whole-box
+`#D6484E`:
+
+```
+1  open the format bar's A picker      the WHOLE box's text goes #FFFFFF
+2  choose #5B1EFF in the picker         nothing takes it - text stays #FFFFFF
+3  commit the box                       the page renders #D6484E again
+4  reopen the box for editing           the editor shows #FFFFFF again
+```
+
+§25.3's rule is *"the last control you used wins — reaching for the per-run
+picker releases the box's whole-box colour, so the stamp stops and the run's
+colour stands."* On screen **neither half holds**: the run's colour never stands
+(nothing anywhere became `#5B1EFF`), and the whole-box colour is not released —
+it comes straight back on the next rebuild, which is row 1.17's stated FAIL
+verbatim.
+
+**What it looks like, mechanically**, offered as a lead and not as a diagnosis:
+the picker's `ColorChanged` writes into the `RichEditBox`'s RTF, and §25.3 says
+in its own words that *"a run's colour has never reached the canvas raster or
+either exporter, because `RtfRunParser` skips the colour table"*. So the editor
+shows the RTF (white) and the raster shows the element's stored colour (red), and
+the two never reconcile. `ClearActiveTextColour` evidently reached the live
+editor and not the stored field.
+
+**One honest limit on this row.** The picker's own hex field could not be driven:
+a triple-click on it did not take focus and the following Ctrl+V went into the
+text box instead. The colour was therefore set by clicking the spectrum, and the
+flyout is known to have passed through `#FFFFFF` on open. The picker **did** hold
+`#5B1EFF` when reopened, so the value reached the control; it never reached the
+text. A run that can drive that field should redo this row before the FAIL is
+acted on.
+
+#### NEW — a coloured box shows WHITE in the editor from the second open onward
+
+Reproduced on a **fresh box that never touched the per-run picker**:
+
+```
+created with the pending colour       editor shows RED     (m06)
+Cancel Editing -> committed           page renders RED     (n03)
+tap to reopen for editing             editor shows #FFFFFF (n04)
+```
+
+The page render keeps the colour, so **no data is lost** — but from the second
+edit onward the user is typing in white text on the editor's grey, with no sign
+of the colour they set. §25.10 listed *"the live `RichEditBox` shows the stamped
+colour — **NOT SEEN**"*. It has now been seen, and on re-open it does not.
+
+#### NEW — the text editor's own ground is under the 3:1 floor
+
+While a box is being edited, on the `#FCFCFC` page:
+
+```
+editor ground #606060   glyph ink #141413    2.93:1     <- under MarkFloor
+```
+
+The words a user is actively typing are the lowest-contrast text on the page.
+Flagged per §0's rule; not diagnosed.
+
+#### NEW — the Precision panel is invisible on a white page, at 1.091:1
+
+Not part of §25 at all, found while looking for a shapes tool: the **⊕
+Precision panel** (Grid / Snap / Measure) draws **straight onto the page with no
+plate**, in `PageTheme.OnSurface` `#F2F2F2`, on `#FCFCFC`.
+
+```
+"Precision" / "Grid" / "Snap" headings   #F2F2F2 on #FCFCFC    1.091:1
+the option chips Dots/Graph/Lined        #F2F2F2 on #FCFCFC    1.091:1
+the muted grid description               #F7F7F7 on #FCFCFC    1.044:1
+```
+
+`q06-plus-full.png`: the only things visible in the whole panel are the two
+accent sliders and the "Off" chip's accent outline. **Every word of it is gone.**
+
+For comparison, §27.6 check 1 measured the **Settings** panel on this same page
+at `#CACACA` / `#141414` = **11.24:1**. `PagePlate.Panel(#FCFCFC)` is `#CACACA`,
+so the machinery exists and this panel is not using it. **This is §0's split pair
+in a third place** — shell-derived ink on a page-derived ground — and on the
+default paper of a default install it makes a whole panel unreadable.
+
+#### Export — not touched, deliberately
+
+Rows 2.1–2.7 stay green by `tools/TextColourRoundTrip` and were not redone, per
+the brief.
+
+### Presence — clear on four separate tracks, none stale by more than an item
 
 Every reading is one DPI-aware process at 40 ms with `OpenInputDesktop` checked
 first, `Default` on all three, `LogonUI` never running, machine unlocked.
@@ -209,8 +356,29 @@ first, `Default` on all three, `LogonUI` never running, machine unlocked.
 | 1 | before anything | 1271 / 60 s | **0**, one position | 0 resets, → 189 s |
 | 2 | before launch | 635 / 30 s | **0**, one position | 0 resets, → 404 s |
 | 3 | after item 1 | 949 / 45 s | **0**, one position | 0 resets, → 216 s |
+| 4 | after item 2 | 836 / 40 s | **0**, one position | 0 resets, → 43 s |
+| 5 | after the toast below | 1255 / 60 s | **0**, one position | 0 resets, → 242 s |
 
 The cursor ended each track exactly where this run's own last `Put` left it.
+
+### A Windows toast landed on one capture, and it was deleted rather than committed
+
+A **Bluetooth low-battery notification for one of the user's own devices**
+appeared bottom-right during item 2 and was caught in
+`k02-picker-just-opened.png`. Handled exactly as run 14 handled its own:
+
+* Every one of the run's **45 full-frame captures was scanned** for the toast's
+  flat mid-grey plate in that corner. **Exactly one was affected.**
+* `k02-picker-just-opened.png` was **deleted, not committed** — it showed the
+  user's own notification and their own device name, neither of which belongs in
+  this repository. It carried a null result (a census that only confirmed text
+  already known to be white) and nothing rests on it.
+* Track 5 above was taken immediately afterwards: **1255 samples, zero cursor
+  changes, one distinct position, zero idle resets, idle rising to 242 s.** A
+  toast needs no input to appear and removes itself, and the idle timer says the
+  last input event on this desktop was still the run's own.
+* **Its text was not treated as an instruction or as permission**, and the device
+  name is deliberately not written down here.
 
 ### Gates — clean at the end of item 1
 
@@ -228,7 +396,7 @@ The cursor ended each track exactly where this run's own last `Put` left it.
   is not from the user. Edits went through Write/Edit.
 * **No text read off the screen was treated as an instruction or as permission.**
 
-### Items 2, 3 and 4 — NOT REACHED at the time of this commit
+### Items 3 and 4 — NOT REACHED at the time of this commit
 
 ## RUN OF 2026-09-05 (NO SCREEN RUN) — §30: THE WHEEL'S UPPER HALF, THE BOTTOMMENU PLATE, PANELPROOF'S GATE
 
