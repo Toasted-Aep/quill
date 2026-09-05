@@ -1187,9 +1187,12 @@ public sealed class InkSurface : UserControl
         // CONSUMED, so a gesture that arms it and then draws no RightTapped -
         // the barrel button's, which the recogniser raises unreliably over a
         // Win2D canvas - leaves it armed to eat somebody else's menu later.
-        // 17.7 adds a second site that arms it, so the flag is now also cleared
-        // by the next press: whatever armed it belonged to the gesture that has
-        // just ended, and cannot outlive this one.
+        // Cleared here too (belt and suspenders: whatever armed it belonged to
+        // the gesture that has just ended), but this is no longer the actual
+        // bound - see the time check in OnRightTapped (4.3). A RightTapped
+        // raised by the Menu key / Shift+F10 reaches OnRightTapped with no
+        // PointerPressed in front of it at all, so a reset that only fires on
+        // the next press could never catch that case by itself.
         _skipNextRightTap = false;
         var pp = e.GetCurrentPoint(_canvas);
         var props = pp.Properties;
@@ -1235,7 +1238,7 @@ public sealed class InkSurface : UserControl
             _barrelGesture = true;   // reuse the barrel tap-vs-drag machinery
             _barrelMoved = false;
             _barrelStartScreen = screen;
-            _skipNextRightTap = true;
+            ArmSkipNextRightTap();
             _activePointer = e.Pointer.PointerId;
             _gestureTool = ToolType.Mouse;
             _canvas.CapturePointer(e.Pointer);
@@ -2185,16 +2188,67 @@ public sealed class InkSurface : UserControl
     }
 
     private bool _skipNextRightTap;
+    // 4.3: pairs with the flag above. It used to be a pure one-shot armed by a
+    // press or a release and consumed by the RightTapped the gesture
+    // recognizer raises for that SAME gesture - fine as long as that
+    // RightTapped actually arrives, but it "has been narrowed before, not
+    // fixed": the recognizer is documented above as unreliable over a Win2D
+    // canvas, and when it never fires the flag stayed armed until the next
+    // PointerPressed, of ANY pointer, reset it. A RightTapped raised by the
+    // Menu key / Shift+F10 goes straight to OnRightTapped with no
+    // PointerPressed in front of it, so it could land arbitrarily long after
+    // an unrelated gesture armed the flag and be silently eaten.
+    //
+    // Bound chosen: TIME. The RightTapped that belongs to a given press or
+    // release is delivered in the same input dispatch, comfortably inside a
+    // few tens of milliseconds; SkipNextRightTapWindowMs gives it a generous
+    // margin and nothing else. Rejected:
+    //   - pointer-id bound: RightTappedRoutedEventArgs exposes only a
+    //     PointerDeviceType, not the PointerId that armed the flag, so there
+    //     is nothing on the consuming side to compare against - and by the
+    //     time RightTapped fires, capture has already been released and
+    //     _activePointer already cleared by CommitGesture, so even tracking
+    //     it ourselves would be comparing against state that gesture already
+    //     tore down.
+    //   - reset on every event that ends the gesture (PointerReleased/Lost):
+    //     one of the two arm sites (the click-select case below) ARMS the
+    //     flag from inside that very handler, so "reset on gesture end" would
+    //     have to special-case the site that just set it - which collapses
+    //     into the same press/release ordering this class already used and
+    //     already proved insufficient.
+    // This is also the same primitive PenRepairDots already uses a few
+    // hundred lines up (Environment.TickCount64 - _lastCommitMs < 160) for an
+    // identical shape of problem: a one-shot suppression that must not
+    // outlive the gesture that armed it.
+    private long _skipNextRightTapArmedMs;
+    private const long SkipNextRightTapWindowMs = 500;
+
+    private void ArmSkipNextRightTap()
+    {
+        _skipNextRightTap = true;
+        _skipNextRightTapArmedMs = Environment.TickCount64;
+    }
 
     private void OnRightTapped(object sender, RightTappedRoutedEventArgs e)
     {
         if (_page == null || _replaying) return;
         if (_skipNextRightTap)
         {
-            // the press-side right-button gesture already handled this click
+            bool fresh = Environment.TickCount64 - _skipNextRightTapArmedMs <= SkipNextRightTapWindowMs;
+            // Always clear on consumption, fresh or not: a stale flag must
+            // never survive to poison a LATER RightTapped either.
             _skipNextRightTap = false;
-            e.Handled = true;
-            return;
+            if (fresh)
+            {
+                // the press-side right-button gesture already handled this click
+                e.Handled = true;
+                return;
+            }
+            // Stale: whatever armed this ended without ever producing a
+            // RightTapped, so this RightTapped belongs to something else
+            // entirely (most notably the Menu key / Shift+F10, which never
+            // passes through the per-press reset above) - fall through and
+            // show its menu normally rather than eating it.
         }
         ContextMenuRequested?.Invoke(e.GetPosition(this));
         e.Handled = true;
@@ -2332,7 +2386,7 @@ public sealed class InkSurface : UserControl
                         // press: a barrel tap on an ALREADY selected stroke never
                         // arms a click-select, so it still opens that selection's
                         // menu, which is #42 and is not what 17.7 is about.
-                        _skipNextRightTap = true;
+                        ArmSkipNextRightTap();
                         break;
                     }
                     if (_clickSelectDeselectsEmpty)
