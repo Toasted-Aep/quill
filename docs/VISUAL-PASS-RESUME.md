@@ -258,6 +258,27 @@ Ctrl+Y       #BE8C89   1101 glyph px    <- no drift on the second cycle
 `#BE8C89` is also **the pixel that was drawn at the wheel target before the
 press** — run 7's method, so the renderer and the pick agree.
 
+**A qualification on that PASS, and it is the reason the brief says to read
+`crash.log`.** The scratch folder had none until item 2, and then it had this —
+timestamps that fall **exactly on the undo** (`p02` captured 13:50:14, the log at
+13:50:26, `p03` at 13:50:28):
+
+```
+13:50:26  render region failed: 2/2 regions, pass 1, repainting;  COMException hresult=0x80004005
+...       (passes 2..8, identical)
+13:50:26  render region failed: 2/2 regions, pass 9,  NOT repainting (over 8); COMException 0x80004005
+13:50:28  render region failed: 2/2 regions, pass 10, NOT repainting (over 8); COMException 0x80004005
+```
+
+That is `InkSurface.OnRegionsInvalidated` — **every region of the frame failing**,
+ten times, with the self-heal giving up after its eighth attempt. `E_FAIL`, not
+device-lost (`DescribeRenderFailure` would have said so). The pixels that landed
+were right, so **row 1.7's outcome stands** — but the file's own comment beside
+that catch says this failure class *"shows BLANK content — the 'invisible ink'
+failure class"*, and this run drove it with two keystrokes. **Undo/redo of a text
+box's colour is a reproducible way into it**, and that is worth a section of its
+own rather than a line in a PASS.
+
 #### 1.17 — the per-run picker: **FAIL, and both halves of §25.3's rule fail**
 
 Sequence, with "test" selected inside a box already carrying whole-box
