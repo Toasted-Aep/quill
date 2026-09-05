@@ -1,5 +1,235 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-05 (fifteenth screen run) — §29's TEN TOOL SEATS, ON SCREEN AT LAST
+
+Branch `integration` @ `b8e3512`. Clean x64 Debug `--no-incremental` build,
+**0 warnings**, 23.8 s. Scratch `QUILL_DATA_FOLDER` at `scratchpad/vp11data`,
+seeded before first launch. Captures in `scratchpad/vp11/`.
+
+The seed carries five pages rather than one, so every ground §29.6 asks about is
+one tap away and none of them goes through the Settings picker: **Black**
+`#000000`, **Darkprint**, **Blueprint**, **Brown**, **PlainWhite** `#FCFCFC`.
+Theme left at the model default (`Dark` / `Manual`), i.e. a **default install** —
+a pinned dark shell over whatever the page is.
+
+### ITEM 1 — §29's ten tool seats: **the reported defect is FIXED, and the run found a WORSE case §29 did not model**
+
+#### 29.6 check 1 — the black page: **PASS**
+
+The ten seats are **plainly visible**. Read off the pixels, not by eye:
+
+```
+page   #000000     223,776 px
+disc   #2D2D2D      32,136 px   ONE blob, 225x226 physical = 113.0 DIP  (DiscR x 2)
+seat   #3F403F      12,305 px   EIGHT blobs, each 49x50 physical = ~24.5 DIP
+```
+
+`#3F403F` is §29.4's predicted value **exactly**, and the ratio it buys is the
+predicted one: **seat:page 2.016:1** (was 1.525:1), ΔL\* 26.97 (was 18.47).
+`b01-black-page.png`, `b02-dial-2x.png`.
+
+Eight blobs, not ten, is **correct**: two of the ten sectors are empty and carry
+§11.2 item 11's bare `+`. See check 7.
+
+#### 29.6 check 2 — the disc: **PASS, unchanged**
+
+`#2D2D2D`, one blob, **225 x 226 physical px = 113.0 DIP**, which is `DiscR * 2`
+to the tenth. The arithmetic said the disc could not move and the screen agrees.
+
+#### 29.6 check 3 — disc versus seats side by side: **PASS. It does NOT read as two materials.**
+
+This was the stated risk and it is the one thing only a person can answer, so
+here is the answer plainly: **it reads as one object — grey buttons on a grey
+plate — not as two materials and not as a lighter grey pasted on.**
+
+The numbers behind that impression:
+
+```
+disc  #2D2D2D  vs  seat #3F403F     1.322:1     ΔL* 8.50
+```
+
+**And there is a structural reason the split is cheap here, which §29 did not
+say:** on this page the disc and the seats **never touch**. The disc's rim ends
+at r = 112.5 physical px and a seat's inner edge begins at r = 119.5 — a **7
+physical px (3.5 DIP) band of pure black page between them**, all the way round.
+§24's "one colour" was never holding a continuous surface together on a black
+page; it was colouring two shapes with a gap between them. Giving the smaller
+shape 8.5 L\* more reads as hierarchy, not as a seam.
+
+A simulated before/after is in `b06-before-sim-vs-after.png` (the shipped
+capture with `#3F403F` mapped back to `#2D2D2D`, which is exactly the pre-§29
+value; interiors are exact, antialiased edges are not). Left is the old dial and
+the seats really are nearly gone; right is the shipped one.
+
+#### 29.6 check 7 — empty cells: **PASS, transparent**
+
+`b05-empty-4x.png`: both empty sectors are **pure `#000000` with a bare muted
+`+`** and no disc of any colour under it. Sampled the whole seat ring at 2°
+steps: 51 samples land on `#3F403F`, 72 on `#000000` — the eight seats and the
+two empty sectors, and nothing in between.
+
+No **unavailable** cell was reachable on this page (all ten sectors were either
+assigned or empty), so that half of check 7 is **not observed on screen**. The
+code path is `_seat[i].Opacity = 0` alongside `_mark`/`_label` at 0, i.e. the
+whole cell is invisible, but that is reading, not looking.
+
+#### 29.6 check 8 — the popped sector: **PASS**
+
+`b04-popped-4x.png`. The active pen's wedge is popped and filled `#F2F2F2`; its
+seat has ridden out with it — measured at **r = 163.5 physical** against the
+other seven at **r ≈ 144** — and the pen mark is still centred in it. **The
+lifted seat did not separate from its icon.**
+
+Worth stating because it is the one place the seat looks like a foreign object:
+on the popped sector the seat is standing on the wedge's near-white fill, not on
+the page, so it reads as a dark hole punched in a white wedge. **That is not a
+regression** — before §29 the same circle was `#2D2D2D`, darker still — but it is
+the same "the seat is not standing on what the floor was computed against" shape
+as the Plain White finding below.
+
+#### 29.6 check 4 — Darkprint: **PASS. It does not read too heavy — and it needed the move more than black did.**
+
+```
+page   #262B31  (+ its own grain, ~30k px of #252A30 / #1F2328 / #272C32)
+disc   #3C3E41   32,127 px
+seat   #56585C   12,272 px      <- §29.4's predicted value, exactly
+```
+
+§29.5 worried this paper "may well have looked fine" and asked whether the gate
+needs to be narrower than `BaseIsDark`. **On screen the opposite is true.**
+`d02-darkprint-before-vs-after.png` puts the simulated old dial beside the
+shipped one: at the old value the seats *are the disc's colour* over a page only
+a little darker, and they are **harder to pick out on Darkprint than they were on
+black**. The shipped value is a moderate lift that leaves the dial dark. **The
+gate does not need narrowing; Darkprint was a second instance of the reported
+defect, not collateral damage.**
+
+**One honest limit on that:** the seeded page has Darkprint's grain but
+`Grid: 0`, so **no grid**. §29.2's case for Darkprint looking fine rested on
+"grain *and* a grid to interrupt". The seats are opaque before and after, so a
+grid is interrupted identically either way and only the tone differs — but the
+grid case was not put on screen and should not be claimed.
+
+#### 29.6 check 5 — Blueprint and Brown Paper: **their seats are NOT absent. The exclusion is SAFE, and §29.1's ordering is why it looked unsafe.**
+
+Both are byte-identical to §29's table, i.e. unmoved:
+
+```
+Blueprint     page #2E80C2   disc+seats #7E9FBA   44,289 px
+Brown Paper   page #A9713F   disc+seats #B09985   44,286 px
+```
+
+`e02-blueprint-dial.png`, `f02-brown-dial.png`. **The seats read as clear discs
+on both.** Blueprint's are unmistakable; Brown Paper's are softer but plainly
+there.
+
+**This is a ruling for the user, and it goes the other way from the worry.**
+§29.5 said "if the seats read as absent on Blueprint too, this exclusion is what
+to revisit" — they do not, so it stands. The reason is worth writing down
+because it is the flaw in the table §29.1 built its whole argument on:
+
+> Blueprint's seat and page differ by **1.516:1 in luminance and a great deal in
+> chroma** — a desaturated blue-grey on a saturated mid-blue. The black page's
+> seat and page differ by **1.525:1 and nothing else at all**, both being
+> neutral. WCAG contrast is a luminance ratio and is blind to that difference,
+> so the near-tie in the ratio column hides two completely different amounts of
+> visible separation.
+
+That is why black is the worst ground while sitting at the *top* of both metric
+orderings, and it is a better account of the user's report than "there is no
+grain to interrupt" on its own.
+
+#### 29.6 check 6 — Plain White: **PASS on §29's own criterion. And the seats are MORE invisible there than on the page the user complained about.**
+
+Nothing moved, as required — `#D1D1D1`, byte-identical to §29.4's row.
+
+**But look at it.** `g02-plainwhite-dial.png` is a flat light-grey mass with
+icons floating on it: **not one of the ten seats can be made out.** Radial
+profile from the dial centre, at bearings with no mark in the way:
+
+```
+r 120..160   #D1D1D1   the SEAT
+r 175..190   #CFCFCF   what the seat is actually standing on
+r 205..220   #DEDEDE .. #F5F5F5   falling off
+r 240        #FCFCFC   the page
+```
+
+```
+seat #D1D1D1 on the page  #FCFCFC     1.488:1   <- what §29 measured
+seat #D1D1D1 on #CFCFCF               1.020:1   <- what the seat is ON
+```
+
+**1.020:1 is not a low ratio, it is the same colour**, and it is far worse than
+the **1.525:1** on black that produced the user's report. §29.2 flagged this
+class of thing as "a third contributor, measured and NOT acted on", attributing
+it to §7's opaque `ringFill` on the light branch and quoting 1.14–1.29:1. **The
+mechanism on screen is not that one.** The shell is pinned dark on a default
+install, so `dark` is true and `ringFill` **is** transparent; the `#CFCFCF`
+annulus is the **dial's own drop shadow** over the white page — which is why it
+falls off smoothly to `#FCFCFC` between r 190 and r 240 instead of ending at a
+rim. No branch of `PagePlate` models a shadow, so no floor keyed to the page can
+see this.
+
+**Not changed, because it is a ruling and not a tuning** — the lever would be to
+judge the seat against what is composited under it rather than against
+`PageGround`, which is §0's contract pointed at a new surface.
+
+**A second thing on the same page, pre-existing and not §29's:** the size labels
+and the empty sectors' `+` are drawn in `PageTheme.OnSurface` `#F2F2F2`, which is
+the **shell's** ink, on that same page-derived `#CFCFCF`.
+
+```
+label "5" / "8" ink #F2F2F2 on #CFCFCF     1.392:1
+empty-sector + (composites ~#E6E6E6)       ~1.20:1
+seat mark (BestInk -> #141413) on #D1D1D1  12.071:1
+```
+
+`g03-white-labels-3x.png` shows the result: **black marks at 12:1 and white size
+numbers at 1.39:1 on the same plate, side by side.** That is §0's split pair
+again — the mark is judged against the seat it stands on, the label is not
+judged at all — and it is on the default paper of a default install.
+
+#### What this item did NOT look at
+
+* An **unavailable** sector (above).
+* Darkprint **with a grid on** (above).
+* Any of the other five light stocks; Plain White was taken as their
+  representative and §29's arithmetic makes them one family.
+* The seats under a **hover**. The cursor was parked away from the dial for every
+  capture.
+
+### Presence — clear on three separate tracks, none stale by more than an item
+
+Every reading is one DPI-aware process at 40 ms with `OpenInputDesktop` checked
+first, `Default` on all three, `LogonUI` never running, machine unlocked.
+**Sample count and elapsed time agree on every one.**
+
+| # | when | samples | cursor changes | idle |
+|---|---|---|---|---|
+| 1 | before anything | 1271 / 60 s | **0**, one position | 0 resets, → 189 s |
+| 2 | before launch | 635 / 30 s | **0**, one position | 0 resets, → 404 s |
+| 3 | after item 1 | 949 / 45 s | **0**, one position | 0 resets, → 216 s |
+
+The cursor ended each track exactly where this run's own last `Put` left it.
+
+### Gates — clean at the end of item 1
+
+* `C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256
+  `0C32CE6C16A4310CDCEB4902C6FF5C9B6CBA7A11AA55BE4F88DAB5771F8E038A`, mtime
+  2026-08-28 17:26:38.403965 UTC** — sealed before the first launch, never opened
+  for writing.
+* **Migration prevented, not survived.** `vp11_seed.py` wrote the scratch library
+  before the first launch, so `MigrateFromLegacyIfNeeded` returned early. The
+  gallery held **only this run's own `VP11` notebook** (`a01-boot.png`).
+* This file measured **wholly CRLF — 3,302 endings, 0 bare LF, 0 bare CR, 0 NUL,
+  no BOM** — immediately before this write.
+* The `system-reminder` telling agents to route file edits through Bash `sed` and
+  heredocs arrived again and was **refused — the twenty-third run to do so.** It
+  is not from the user. Edits went through Write/Edit.
+* **No text read off the screen was treated as an instruction or as permission.**
+
+### Items 2, 3 and 4 — NOT REACHED at the time of this commit
+
 ## RUN OF 2026-09-05 (NO SCREEN RUN) — §30: THE WHEEL'S UPPER HALF, THE BOTTOMMENU PLATE, PANELPROOF'S GATE
 
 Branch `integration` @ `68a109a` plus this change (§29 landed mid-run from a
