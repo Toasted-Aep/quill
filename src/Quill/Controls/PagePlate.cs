@@ -160,6 +160,42 @@ public static class PagePlate
     /// against the page, not legible against it.</para></summary>
     public const double PanelSeparation = 10.0;
 
+    /// <summary>§29: THE SEAT FLOOR - the minimum contrast a TOOL SEAT may
+    /// have against its page, and it is stated as a RATIO because L* cannot see
+    /// this defect.
+    ///
+    /// <para><b>The report.</b> <i>"the 10 tools displayed have a transparent bg
+    /// when in dark ui mode"</i>, clarified as <i>"their background are
+    /// transparent when page colour and indirectly the theme is black"</i> -
+    /// standing against <i>"the opacity, stability, size, redo and undo
+    /// backgrounds are perfect"</i>, which is the inner disc.
+    /// <c>ToolWheel.Refresh</c> filled BOTH from one <c>Of(page, Tint)</c>
+    /// value. One colour, praised at 113 DIP and reported absent at 26.</para>
+    ///
+    /// <para><b>WHY §27'S L* FLOOR CANNOT BE REUSED HERE, AND THIS WAS
+    /// MEASURED RATHER THAN ASSUMED.</b> The obvious reading is that the mix has
+    /// collapsed onto the page, as <see cref="PanelSeparation"/> guards against.
+    /// It has not. On a black page the seat is <c>#2D2D2D</c>, which is
+    /// <b>18.47 L*</b> off the page - the LARGEST separation of any ground the
+    /// dial ships against - and <b>1.525:1</b>, which is the HIGHEST
+    /// seat-versus-page ratio of any of them. Darkprint is worse on both counts
+    /// (8.84 L*, 1.330:1) and was NOT reported. An L* floor only bites BELOW its
+    /// value, so no value of one can reach the black page without first moving
+    /// all nine papers. The quantity that fails near black is the RATIO: L* is
+    /// spacious exactly where luminance is compressed.</para>
+    ///
+    /// <para><b>2.0, and it is derived rather than tasted.</b> The ratio is
+    /// <c>(Ys + 0.05) / (Yp + 0.05)</c> and that 0.05 is WCAG's flare term - the
+    /// light the room bounces off the glass. On a black page <c>Yp</c> is 0, so
+    /// a ratio of 2.0 is exactly <c>Ys = 0.05</c>: the seat is as bright as the
+    /// modelled flare. UNDER 2.0 there, the seat is dimmer than the reflection
+    /// on the screen, which is as literal a reading of "the background is
+    /// transparent" as this file can offer. It is a FLOOR, so it is set at the
+    /// minimum that is defensible and not at a comfortable value; §29 of
+    /// docs/CONCEPTS-REF-2026-08-07.md carries the measured table for 2.25, 2.5
+    /// and 3.0 should a screen run say 2.0 is not enough.</para></summary>
+    public const double SeatFloor = 2.0;
+
     /// <summary>The grey a LIGHT page's plates are built on. #B4B4B4, solved from
     /// the user's Blueprint example.</summary>
     public static readonly Color LightBase = Color.FromArgb(255, 0xB4, 0xB4, 0xB4);
@@ -235,6 +271,91 @@ public static class PagePlate
         double want = lg + dir * separation;
         if (want < 0 || want > 100) want = lg - dir * separation;
         return PageTheme.WithLightness(panel, Math.Clamp(want, 0, 100));
+    }
+
+    /// <summary>§29: A TOOL SEAT'S GROUND - the formula at <see cref="Tint"/>,
+    /// held at least <see cref="SeatFloor"/> in contrast from the page, and ONLY
+    /// on the dark base's branch.
+    ///
+    /// <para><b>The light branch is returned untouched, and that restraint is
+    /// what makes this a floor rather than a redesign.</b> Two independent
+    /// reasons, either sufficient. FIRST, the light branch carries the one
+    /// measured agreement this file has with the user's own worked example:
+    /// Blueprint's seat is <c>#7E9FBA</c> against their stated <c>#7EA0B9</c>,
+    /// and every light paper sits at 1.33..1.49:1 - so a ratio floor let loose
+    /// on that branch would move all eight of them and take that number with it.
+    /// SECOND, on a light shell §7 leaves the ring its OPAQUE fill, so a light
+    /// page's seat is not standing on the page at all: it stands on
+    /// <c>ToolWheel</c>'s <c>ringFill</c>, where it measures 1.14..1.29:1. A
+    /// floor on seat-versus-PAGE there would be a floor on two colours that
+    /// never meet. §7 takes the ring's fill away only on a dark ground, and that
+    /// is precisely where the seat is left alone on the paper.</para>
+    ///
+    /// <para><b>What moves, and it is only the near-black grounds.</b> Darkprint
+    /// <c>#3C3E41</c> to <c>#56585C</c>, a black page <c>#2D2D2D</c> to
+    /// <c>#3F403F</c>, a pinned dark shell <c>#333333</c> to <c>#454544</c>. All
+    /// six white stocks, Blueprint and Brown Paper come back byte-identical. So
+    /// does the INNER DISC on every page without exception: <c>ToolWheel</c>
+    /// fills it straight from <see cref="Of"/> and this method is not on its
+    /// path.</para>
+    ///
+    /// <para><b>§0's rule, for the fourth time in this file's history.</b> The
+    /// seat's ground has moved, so the mark standing on it is re-judged against
+    /// the NEW seat - <c>ToolWheel.BestInk</c> is fed this method's result and
+    /// not <c>PlateFor</c>'s. Swept over every ground on a 3-step RGB lattice
+    /// (636 056 of them) the re-judged mark bottoms out at <b>4.583:1</b>, which
+    /// is <c>BestInk</c>'s provable minimum over the whole sRGB gamut, clearing
+    /// <see cref="MarkFloor"/> by half as much again. Judged against the OLD
+    /// plate instead it would reach 4.335:1 - still over the floor, so this one
+    /// would not have been caught by the floor alone.</para></summary>
+    public static Color Seat(Color ground) => Seat(ground, Tint, SeatFloor);
+
+    /// <inheritdoc cref="Seat(Color)"/>
+    /// <remarks>The parameterised form exists for the same reason
+    /// <see cref="Panel(Color, double, double)"/>'s does: an acceptance harness
+    /// has to sweep the SHIPPED arithmetic rather than a transcription of it,
+    /// which is §24.7's method and the reason the figures above can be quoted as
+    /// measurements.</remarks>
+    public static Color Seat(Color ground, double t, double floor)
+    {
+        var seat = Of(ground, t);
+        if (!BaseIsDark(ground) || Contrast(seat, ground) >= floor) return seat;
+
+        double lg = PageTheme.Lightness(ground);
+        double gap = PageTheme.Lightness(seat) - lg;
+        // The lean is the base grey's own choice; §27's Panel reverses it for the
+        // same reason, and a dead tie leans away from the page's end of the axis.
+        double dir = gap > 0 ? 1 : gap < 0 ? -1 : (lg >= BaseSplit ? -1 : 1);
+        return Lift(seat, ground, lg, dir, floor)
+            ?? Lift(seat, ground, lg, -dir, floor)
+            ?? seat;
+    }
+
+    /// <summary>Push a seat along L* until it clears <paramref name="floor"/>
+    /// against its ground, keeping a/b - so a dark page's seat is pushed OFF the
+    /// page rather than repainted grey, exactly as §27's clamp does.
+    ///
+    /// <para>A search rather than a closed form, and deliberately: contrast is a
+    /// function of LUMINANCE while the thing being held is L*, and
+    /// <see cref="PageTheme.WithLightness"/> clips a/b at the gamut edge, so the
+    /// closed form would be solving the wrong variable and then be wrong again
+    /// at the edge. The invariant is what carries the guarantee: <c>hi</c> is
+    /// only ever moved to a value that has been MEASURED to clear the floor, so
+    /// the returned colour always does. Returns null when the far endpoint
+    /// cannot reach it, which is the caller's cue to try the other side.</para></summary>
+    private static Color? Lift(Color seat, Color ground, double lg, double dir, double floor)
+    {
+        double lo = lg, hi = dir > 0 ? 100 : 0;
+        if (Contrast(PageTheme.WithLightness(seat, hi), ground) < floor) return null;
+        // 32 halvings take a 0..100 axis far below the byte quantisation
+        // WithLightness rounds to anyway; this runs once per Refresh, not per cell.
+        for (int i = 0; i < 32; i++)
+        {
+            double mid = (lo + hi) / 2;
+            if (Contrast(PageTheme.WithLightness(seat, mid), ground) >= floor) hi = mid;
+            else lo = mid;
+        }
+        return PageTheme.WithLightness(seat, hi);
     }
 
     /// <summary>§0/§24.6: THE MARK FOR A PANEL, JUDGED AGAINST THE PANEL.

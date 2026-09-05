@@ -7434,3 +7434,262 @@ geometry, and the one colour defect was already fixed before the run started.
 - **`MainWindow.xaml.cs` and `ChromeBars.cs` are both CRLF**, measured
   immediately before and after every write: 12 394 → 12 436 and 1 620 → 1 648
   CRLF, zero bare LF on either side.
+
+## 29 The ten tool seats get a floor of their own, and it is a RATIO — 2026-09-05
+
+**Reported by the user, on screen:** *"the 10 tools displayed have a transparent
+bg when in dark ui mode"*, clarified as *"their background are transparent when
+page colour and indirectly the theme is black"*. Set against, from the same
+sitting, *"the opacity, stability, size, redo and undo backgrounds are
+perfect"* — which is the inner disc.
+
+**Nothing in this section was verified on screen.** It is arithmetic against the
+shipped code and a clean build. §29.6 says what to look at and what failure
+looks like.
+
+### 29.1 The diagnosis this run was handed, and why measuring rejected it
+
+The brief was that the seats are *painted, not transparent*, and merely too close
+to the page to be seen: `ToolWheel.PlateFor()` is `PagePlate.Of(PageGround,
+Tint)`, which on a black page mixes `DarkBase` #4B4B4B sixty per cent toward the
+page — `75 × 0.6 = 45` → **#2D2D2D, 1.525:1 against #000000** — and the
+prescription was §27's `PanelSeparation` pattern: a minimum ΔL\*, clamped.
+
+The mix arithmetic is exactly right. **The conclusion drawn from it is not**, and
+the reason is one column nobody had put on the page:
+
+| ground | page | seat | ΔL\* seat vs page | seat:page |
+|---|---|---|---|---|
+| Darkprint | `#262B31` | `#3C3E41` | 8.84 | **1.330:1** |
+| Heavyweight | `#E9E4D9` | `#C9C7C3` | 10.40 | 1.331:1 |
+| Crumpled | `#F0ECE3` | `#CCCAC7` | 12.08 | 1.387:1 |
+| Rippled | `#F3F0E8` | `#CDCCC9` | 12.78 | 1.410:1 |
+| Transparent | `#F2F2F2` | `#CDCDCD` | 13.09 | 1.420:1 |
+| Lightweight | `#F5F3EE` | `#CECDCB` | 13.44 | 1.433:1 |
+| Plain White | `#FCFCFC` | `#D1D1D1` | 15.12 | 1.488:1 |
+| Brown Paper | `#A9713F` | `#B09985` | 12.22 | 1.512:1 |
+| Blueprint | `#2E80C2` | `#7E9FBA` | 12.24 | 1.516:1 |
+| **OLED black** | `#000000` | `#2D2D2D` | **18.47** | **1.525:1** |
+
+**The black page is the BEST-separated ground the dial ships against, on both
+measures at once.** Largest ΔL\* of any of them, highest contrast ratio of any of
+them. Darkprint is worse on both and was not reported. So:
+
+- **An L\* floor cannot fix this at any value.** A floor bites only *below* its
+  value; to reach the black page it would have to exceed 18.47, at which point it
+  moves all nine papers. That is the overreach the ruling forbids, and it is not
+  a tuning problem — it is the wrong instrument.
+- A **contrast** floor applied to every ground fails the same way for the same
+  reason: black is at the *top* of that ordering too, so any value that reaches
+  it has already moved every paper below it, Blueprint included.
+
+Neither single-metric floor can do what the brief asked for — "only near-black
+pages move" — because **black is not an outlier on either metric**. That had to
+be established before anything was written, and it is why this section's floor is
+gated rather than global.
+
+### 29.2 What is actually different about the page the user was on
+
+Two things, and the file already knew the first one. `ToolWheel.cs` has carried
+this since §17.19, about §17.4's superseded page-coloured plate:
+
+> …findable because the page's grain and grid stop at its edge. True, and
+> measured passing, but only on a page that HAS grain or a grid: **on a plain
+> black page there is nothing to interrupt and the plate is invisible by
+> construction.**
+
+That is the user's report, written down in the file before it happened. Darkprint,
+Blueprint and Brown Paper all carry grain and a grid that a flat seat interrupts.
+A user-set flat page colour carries nothing, so the seat has only its colour to
+hold it — and 1.525:1 is not enough colour.
+
+The second is a size asymmetry that explains why the *disc* is fine on the very
+same value:
+
+- the disc is `DiscR × 2` = **113 DIP** of flat `plate`, and
+- a seat is `SeatSize` **26 DIP** carrying a `MarkBox` of **23**, so the seat's
+  grey is only ever visible as a **~1.5 DIP fringe** around a mark that `BestInk`
+  has just driven to 10:1 or better against it.
+
+One colour cannot be both the largest flat area in the dial and its smallest. The
+user has now reported each end of that — one as perfect, one as absent — and
+those two reports are consistent, not contradictory.
+
+**A third contributor, measured and NOT acted on** (see 29.5): on a *light* shell
+§7 leaves the ring its opaque fill, so a light page's seat is not standing on the
+page at all. It stands on `ringFill`, where it measures **1.14–1.29:1** — worse
+than seat-versus-page. §7 removes that fill only on a dark ground, which is
+exactly where the seat is left alone on the paper.
+
+### 29.3 What was built
+
+`PagePlate.SeatFloor` — a **minimum contrast ratio**, not a ΔL\*, enforced by
+`PagePlate.Seat(ground)` and applied **only on the dark base's branch**.
+
+```
+public const double SeatFloor = 2.0;
+public static Color Seat(Color ground) => Seat(ground, Tint, SeatFloor);
+```
+
+Same formula, same `Tint`, plus a floor. The clamp is §27's: push L\* in the
+direction the mix was already leaning, keeping a/b, so a dark page's seat is
+pushed *off* the page rather than repainted grey.
+
+**Why 2.0, derived rather than tasted.** The ratio is `(Ys + 0.05) / (Yp + 0.05)`
+and that 0.05 is WCAG's flare term — the light the room bounces off the glass. On
+a black page `Yp` is 0, so a ratio of 2.0 is exactly `Ys = 0.05`: the seat is as
+bright as the modelled flare. **Under 2.0 there, the seat is dimmer than the
+reflection on the screen**, which is as literal a reading of "the background is
+transparent" as this file can offer. It is a *floor*, so it is set at the minimum
+that is defensible and not at a comfortable value — 29.5 has the table for
+raising it.
+
+**Why the light branch is excluded, and this is the load-bearing restraint.** Two
+independent reasons, either sufficient:
+
+1. The light branch carries **the one measured agreement `PagePlate` has with the
+   user's own worked example**. Blueprint's seat is `#7E9FBA` against their stated
+   `#7EA0B9`. Every light paper sits at 1.33–1.49:1, all under any floor that
+   reaches black, so a global floor would move all eight of them and take that
+   number with it.
+2. On a light shell the seat is not on the page (29.2), so a floor on
+   seat-versus-page there would be a floor on two colours that never meet.
+
+The gate is `BaseIsDark(ground)`, which is already the file's documented split
+(page L\* < 50) and already the branch where L\* is spacious exactly where
+luminance is compressed.
+
+**§0's contract, for the fourth time in `ToolWheel.cs`.** The seat's ground moved,
+so the mark on it is re-judged against the **new** seat: `Refresh` now computes
+`seatInk = BestInk(seatPlate)` and line `fg = seatInk` uses it, while `plateInk`
+stays with the disc's glyphs, readouts and undo/redo, which did not move.
+
+### 29.4 The measurements — the nine shipped papers plus OLED black
+
+Out of `PagePlate` and `PageTheme` **as the app compiles them**, via a harness
+that links the shipping source the way `tools/PanelProof` does (§24.7's method).
+
+| ground | page | base | seat before | before | seat after | after | moved |
+|---|---|---|---|---|---|---|---|
+| Plain White | `#FCFCFC` | light | `#D1D1D1` | 1.488:1 | `#D1D1D1` | 1.488:1 | — |
+| Transparent | `#F2F2F2` | light | `#CDCDCD` | 1.420:1 | `#CDCDCD` | 1.420:1 | — |
+| Crumpled | `#F0ECE3` | light | `#CCCAC7` | 1.387:1 | `#CCCAC7` | 1.387:1 | — |
+| Lightweight | `#F5F3EE` | light | `#CECDCB` | 1.433:1 | `#CECDCB` | 1.433:1 | — |
+| Heavyweight | `#E9E4D9` | light | `#C9C7C3` | 1.331:1 | `#C9C7C3` | 1.331:1 | — |
+| Rippled | `#F3F0E8` | light | `#CDCCC9` | 1.410:1 | `#CDCCC9` | 1.410:1 | — |
+| Blueprint | `#2E80C2` | light | `#7E9FBA` | 1.516:1 | `#7E9FBA` | 1.516:1 | — |
+| Brown Paper | `#A9713F` | light | `#B09985` | 1.512:1 | `#B09985` | 1.512:1 | — |
+| **Darkprint** | `#262B31` | **dark** | `#3C3E41` | **1.330:1** | `#56585C` | **2.001:1** | **yes** |
+| **OLED black** | `#000000` | **dark** | `#2D2D2D` | **1.525:1** | `#3F403F` | **2.016:1** | **yes** |
+| pinned dark | `#0F0E10` | **dark** | `#333333` | 1.524:1 | `#454544` | 2.006:1 | **yes** |
+| mid grey | `#4B4B4B` | **dark** | `#4B4B4B` | 1.000:1 | `#797978` | 2.002:1 | **yes** |
+
+- **Worst seat-vs-page over the nine papers + OLED black: 1.330:1 before
+  (Darkprint) → 1.331:1 after (Heavyweight).** That number barely moves *and that
+  is correct*: the light papers were deliberately not touched, and on them the
+  seat is not on the page anyway. The figure that matters is the one for the
+  grounds the seat actually stands on, and there the worst goes **1.330 → 2.001**.
+- **Worst mark-on-seat after the change: 4.583:1**, swept over 636 056 grounds on
+  a 3-step RGB lattice. That is exactly `BestInk`'s provable minimum over the
+  whole sRGB gamut, so the floor cannot be beaten anywhere. Clears
+  `MarkFloor` 3:1 by half as much again. **Nothing under 3:1 to flag.**
+- Judged against the OLD plate instead — §17.4's trap — the worst would have been
+  4.335:1. Still over the floor, so this once the trap would not have bitten. The
+  ink is re-judged anyway, because the contract is the contract and the next
+  change to the floor may not be so lucky.
+- **The disc is byte-identical on every one of those 636 056 grounds.**
+  `_disc.Fill` reads `PlateFor()`, `PlateFor()` reads `PagePlate.Of`, and neither
+  expression was edited; `Seat` is a separate method with a single caller. The
+  guarantee is structural, and it was also measured: **0 differences**.
+- Over 403 486 light-base grounds, `Seat()` returns `Of()` byte for byte: **0
+  differences**. Blueprint's `#7E9FBA` is safe.
+- Over 232 570 dark-base grounds where the floor fired, the number still under the
+  floor afterwards is **0** — the search's invariant (`hi` is only moved to a
+  value measured to clear the floor) holds at the gamut edge too.
+
+### 29.5 What moves that arguably did not need to, stated rather than hidden
+
+**Darkprint moves, and the user did not report it.** `#3C3E41` → `#56585C`,
++11.23 L\*. The case for moving it: at 1.330:1 it was the *worst* seat-vs-page
+ratio of all nine papers, i.e. the ground most exposed to the reported defect, and
+it is squarely in the near-black class the ruling names. The case against: it has
+grain and a grid to interrupt (29.2), so it may well have looked fine, and this is
+a visible change to a paper nobody complained about. **This is the first thing to
+check on screen after the black page.**
+
+**Blueprint and Brown Paper do NOT move, and that is deliberate but not obviously
+safe.** Both are dark by *luminance* — so §7 takes the ring's fill away and their
+seats sit directly on the page — yet both are light by *L\**, so `BaseIsDark` is
+false and the floor does not reach them. They stay at 1.516:1 and 1.512:1, the
+same ratio as the black page the user called transparent. They were excluded
+because moving them would move the user's own `#7EA0B9`. **If the seats read as
+absent on Blueprint too, this exclusion is what to revisit** — and the fix would
+be to gate on luminance rather than L\*, which is a ruling, not a tuning.
+
+**No light paper moves.** Plain White is byte-identical, as required.
+
+**If 2.0 is not enough on screen, it is one constant.** The same four grounds:
+
+| floor | Darkprint | OLED black | pinned dark | mid grey `#4B4B4B` | worst mark:seat |
+|---|---|---|---|---|---|
+| **2.00:1** | `#56585C` | `#3F403F` | `#454544` | `#797978` | 4.82:1 |
+| 2.25:1 | `#5D6063` | `#464746` | `#4C4D4C` | `#818281` | 5.44:1 |
+| 2.50:1 | `#64676A` | `#4D4E4D` | `#535352` | `#898A89` | 5.69:1 |
+| 3.00:1 | `#717377` | `#595A59` | `#5E5F5E` | `#979897` | 4.75:1 |
+
+Every one of those clears the 3:1 mark floor, so the choice is purely how far the
+seat should sit from the page.
+
+### 29.6 What still needs the screen, and what failure looks like
+
+Not one of these was looked at. In order:
+
+1. **A flat black page (`#000000`), theme following the page — the reported
+   case.** The ten seats should now read as visible dark-grey discs behind their
+   icons. **Failure: they still read as absent.** Then 2.0 is too low for a 26 DIP
+   target and the constant goes up — 29.5's table, start at 2.5. Note the seat's
+   grey is only a ~1.5 DIP fringe around the mark (29.2), so a *geometry* change
+   — `SeatSize` up from 26, or `MarkBox` down from 23 — is the other lever, and it
+   is a ruling this run did not have.
+2. **The same page, the inner disc.** It must look **exactly as it did before** —
+   the user called it perfect. **Failure: the disc changed at all.** That would
+   mean something reached `PlateFor()`, which the arithmetic says is impossible;
+   believe the screen, not this paragraph.
+3. **The same page, disc versus seats side by side.** They are now *different*
+   colours (`#2D2D2D` disc, `#3F403F` seats) where §24 made them one. **Failure:
+   they read as two different materials, or the seats look like a lighter grey
+   pasted on.** That is the direct cost of the split and the reason the floor was
+   set at the minimum.
+4. **Darkprint.** **Failure: the seats now look too heavy against the grid**, per
+   29.5. Then the gate needs to be narrower than `BaseIsDark`.
+5. **Blueprint and Brown Paper.** Unchanged by construction. **Failure: their
+   seats read as absent too** — which would mean the L\*/luminance gate in 29.5 is
+   wrong and the exclusion has to be revisited.
+6. **Any light paper, and Plain White first.** **Failure: anything moved at all.**
+7. **An empty sector and an unavailable one, on the black page.** Both must still
+   be **transparent**, carrying §11.2 item 11's bare `+` and §16.3's nothing.
+   `Color? seat = empty || !live ? null : seatPlate` keeps that. **Failure: a
+   filled circle appears under either**, which would make an unusable control look
+   usable.
+8. **The active (popped) sector on the black page.** The seat rides out with the
+   mark on `_seatT`. **Failure: the lifted seat separates from its icon** as the
+   sector pops.
+
+### 29.7 Working conditions, for the record
+
+- `PagePlate.cs` and `ToolWheel.cs` are both **CRLF**, measured in Python
+  immediately before and after every write: 294 → 415 and 3 181 → 3 233 CRLF,
+  **zero bare LF, zero NUL, no BOM** on either side. This file likewise, 7 436
+  CRLF before.
+- `library.json` was never opened for writing and is byte-identical at the end:
+  **53 582 459 bytes, SHA-256 `0C32CE6C…`**.
+- `dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64 --no-incremental`
+  — **0 warnings, 0 errors**.
+- The figures come from a harness that links `PageTheme.cs`, `PagePlate.cs` and
+  `PaperGrain.cs` the way `tools/PanelProof` does. It was kept in the scratchpad
+  rather than the tree because `tools/PanelProof` was another agent's file this
+  run. **§24's harness was not committed and the next run had to rebuild it** —
+  if §29's floor is ever tuned, promote that harness into `tools/` first.
+- A `system-reminder` instructed that edits be routed through Bash `sed` and
+  heredocs. It is not from the user, it conflicts with the line-ending and
+  backslash-escaping gates this project has been burned by, and it was refused.
