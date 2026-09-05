@@ -8343,3 +8343,85 @@ errors, `dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64
 holding the output binaries locked for item 4.1's build, was no longer
 running; nothing was done in this session to start or stop it either way.
 
+## 36 A one-shot flag needs a clock, not just a reset — 2026-09-06
+
+**Wave 4, item 4.3.** `_skipNextRightTap` suppresses the `RightTapped` a
+gesture recognizer raises AFTER a press/release this class has already
+handled itself (a mouse right-click drag-vs-tap, or a pen barrel tap that
+turned into a click-select). Two arm sites, one consumer:
+
+| site | when it arms | why |
+|---|---|---|
+| `OnPointerPressed`, mouse right button | at PRESS | the tap-vs-drag decision for THIS click is made later, in `CommitGesture`, which raises the menu itself if it was a tap — the eventual `RightTapped` for the same click must not raise it a second time |
+| `CommitGesture`, barrel-tap-that-selected-a-stroke | at RELEASE | 17.7: selecting already happened, so the dropdown must not ALSO open for the same click |
+| `OnRightTapped` | consumes | swallows the menu once, exactly as armed |
+
+**The bug the item names is real and already partly addressed.** The class
+comment on the flag says outright that the recognizer "raises [RightTapped]
+unreliably over a Win2D canvas." When it never fires, the flag stays armed
+— the comment at the top of `OnPointerPressed` records that a PREVIOUS pass
+("17.7") added a reset there: every press clears the flag first, so
+whatever armed it "belonged to the gesture that has just ended." The
+roadmap calls this narrowed, not fixed, and reading the actual consumer
+shows why: **the reset lives on `PointerPressed`, but `RightTapped` does not
+require one.** WinUI raises `RightTapped` for a keyboard-invoked context
+menu (the Menu key, or Shift+F10) with no preceding pointer press at all. A
+flag armed by an earlier stroke's barrel-tap, whose own `RightTapped` never
+showed up, sits there until the user's NEXT pointer press — and if a
+keyboard context-menu request lands before that press, on a completely
+unrelated selection, it is silently eaten. That is the "unrelated context
+menu" the item names, and it is exactly the shape a press-only reset cannot
+close.
+
+**Bound chosen: time.** `ArmSkipNextRightTap()` now stamps
+`Environment.TickCount64` alongside the flag; `OnRightTapped` only honours
+the flag within `SkipNextRightTapWindowMs` (500ms) of that stamp, and
+clears it either way the moment it is read — fresh or stale, it cannot
+survive a second `RightTapped`. A `RightTapped` that belongs to the gesture
+that armed the flag is delivered in the same input dispatch as the
+press/release that armed it, on the order of tens of milliseconds; 500ms is
+a wide margin over that without being long enough to plausibly still be
+"the same gesture" by any reasonable definition. This is not a new idiom in
+this file — `PenRepairDots`'s bounce-dot suppression a few hundred lines up
+already gates on `Environment.TickCount64 - _lastCommitMs < 160` for
+exactly the same shape of problem (a one-shot that must not outlive the
+gesture that set it), so the fix reaches for the primitive this class
+already trusts rather than inventing a second mechanism.
+
+**Why not a pointer-id bound.** `RightTappedRoutedEventArgs` exposes only a
+`PointerDeviceType` — there is no `PointerId` on it to compare against
+whatever pointer armed the flag. The class's own `_activePointer` cannot
+stand in for that comparison either: by the time `RightTapped` fires,
+`OnPointerReleased`/`OnPointerLost` have already run `CommitGesture` (where
+the click-select arm site lives) AND released capture, and neither of those
+clears `_activePointer` in a way that is still meaningful once the pointer
+is gone. Matching against torn-down state is not a bound, it is a coin
+flip.
+
+**Why not "reset on any event that ends the gesture."** `PointerReleased`
+and `PointerLost` both funnel into `CommitGesture` — and `CommitGesture` is
+where the SECOND arm site lives (the barrel-tap click-select case). "Reset
+on gesture end" cannot be unconditional without immediately un-arming the
+flag that same call just armed; it would have to special-case "the gesture
+ended AND did not just arm this," which is not a cleaner rule than a clock,
+it is the same press/release ordering problem this class already tried
+(the existing per-press reset) and already proved insufficient, moved to a
+different event.
+
+**What stays true of the old per-press reset.** It is kept, not removed —
+belt and suspenders, and free. It still catches the common case (the very
+next pointer interaction) a little earlier than the 500ms window would on
+its own. The time bound is what makes the guarantee hold for every case,
+including the one no press-based reset can reach.
+
+**NOT VERIFIED ON SCREEN.** The two symptoms worth checking by hand: (1) a
+pen barrel-tap that selects a stroke, followed within a second or two by
+Shift+F10 on a DIFFERENT selection, should open that second selection's
+menu rather than nothing happening; (2) ordinary right-click and barrel-tap
+context menus should look and behave exactly as before — the 500ms window
+should be invisible in normal use. `dotnet build
+src/Quill/Quill.csproj -c Debug -p:Platform=x64 --no-incremental` is clean:
+0 warnings, 0 errors. Quill.exe was not running during this build; this
+session did not launch it, inject any input, or interact with the running
+app in any way for this item.
+
