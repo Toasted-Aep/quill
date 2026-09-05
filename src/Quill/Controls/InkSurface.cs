@@ -261,6 +261,18 @@ public sealed class InkSurface : UserControl
     private Rect? _flashRect;
     private long _flashStartMs;
 
+    /// <summary>§27.1: an in-draw animation asking for the NEXT frame.
+    ///
+    /// <para>A frame-driven animation cannot call <c>_canvas.Invalidate()</c>
+    /// where it is drawn. Under <c>CanvasVirtualControl</c> the draw runs
+    /// inside an OPEN drawing session on the virtual surface, and Invalidate
+    /// mutates the very update-region state that session is holding - the
+    /// same state the next <c>CreateDrawingSession</c> reads. So the sites
+    /// below set this flag instead, and <see cref="OnRegionsInvalidated"/>
+    /// asks for the repaint once, after every session in the pass is
+    /// closed.</para></summary>
+    private bool _animRepaint;
+
     // Internal copy/paste clipboard for canvas objects (shared across pages).
     private static List<PenStroke>? _clipStrokes;
     private static List<ShapeElement>? _clipShapes;
@@ -5161,6 +5173,16 @@ public sealed class InkSurface : UserControl
             }
         }
 
+        // §27.1: every session opened above is closed by here, so the
+        // surface can safely be told it wants another frame. Routed through
+        // the dispatcher for the same reason the self-heal below is: a
+        // repaint requested from INSIDE the handler re-enters it.
+        if (_animRepaint)
+        {
+            _animRepaint = false;
+            try { DispatcherQueue.TryEnqueue(() => _canvas.Invalidate()); } catch { }
+        }
+
         if (failed == 0) { _renderFailStreak = 0; return; }
 
         _renderFailStreak++;
@@ -5548,7 +5570,7 @@ public sealed class InkSurface : UserControl
                 ds.FillRectangle(rr, Color.FromArgb((byte)(70 * (1 - ft)), Accent.R, Accent.G, Accent.B));
                 ds.DrawRectangle(rr, Color.FromArgb((byte)(210 * (1 - ft)), Accent.R, Accent.G, Accent.B),
                                  Math.Max(1.4f, 1.6f / ViewZoom));
-                _canvas.Invalidate();
+                _animRepaint = true;   // NOT Invalidate() - see _animRepaint
             }
         }
     }
@@ -6843,7 +6865,7 @@ public sealed class InkSurface : UserControl
                 float ease = 1f - (1f - t) * (1f - t);           // quad ease-out
                 float sc = 1.06f - 0.06f * ease;
                 ds.Transform = Matrix3x2.CreateScale(sc, sc, ShapeCenter(s)) * ds.Transform;
-                _canvas.Invalidate();                            // keep animating
+                _animRepaint = true;                             // keep animating
             }
         }
         // 11.20 item 16: the shape takes the STYLE of the pen that placed it, not
