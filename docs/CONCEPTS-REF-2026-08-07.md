@@ -8031,3 +8031,102 @@ identification was sound because it also checked the Id; a name check alone
 would have called a clean run dirty here, and could as easily call a dirty run
 clean. **The only durable identifier of a leaked notebook is its Id.**
 
+## 32 A mark on no plate at all — 2026-09-05
+
+§24 gave the chrome page-derived grounds. §27 gave panels page-derived grounds
+and re-keyed the marks standing on them. Both passes were organised the same
+way: **find the plate, derive it from the page, re-key what stands on it.**
+§32 is the case that organising principle cannot see — a surface with no plate.
+
+### 32.1 Why the sweep missed it, which is more interesting than the fix
+
+§27's table has two columns: sites re-keyed, and sites deliberately left with the
+reason. `ChromeUi.Ink/Dim/Hairline` is in the second, and the reason is exact:
+*"their plate is `PageTheme.Surface`, not `Panel` — shell ground, shell ink,
+internally consistent."* Every consumer that reasoning was checked against does
+have a `Surface` plate at `PlateAlpha` 0xEE, and for those the shell-keyed ink is
+right.
+
+`CanvasPane` is a consumer of the same three tokens with **no plate**, by a
+measured reference that says so twice. It appears in neither column. The sweep
+asked *"which plate does this mark stand on?"* and the honest answer here was
+*"none"*, which the question had no place to put.
+
+The lesson generalises past this panel: **an exclusion justified by a property
+is only as good as the enumeration of things that have that property.** §27
+verified that its listed consumers had `Surface` plates. It did not enumerate the
+consumers. One of them had no plate, and got shell ink on paper — 1.091:1, an
+entire panel invisible on the default paper of a default install.
+
+### 32.2 What "bare" costs, and why it is still right
+
+The tempting fix is a plate. It is wrong here for a reason worth stating: the
+bareness is not a style preference, it is a **measurement** —
+docs/CONCEPTS-UI-REFERENCE.md §1.1 sampled behind Layers and Precision and got
+pure canvas with no intervening surface. A colour defect does not license
+overturning a measured reference; it licenses fixing the colour.
+
+What bareness costs is that these marks have no ground of their own, so they
+inherit every property of the paper — including its hue and its darkness — and
+the tokens have to be derived from `PageGround` directly. That is `PagePlate.Ink`
+and not `PagePlate.PanelInk`, and the difference is §7: a panel has been moved
+off the paper by the formula, so the only question left about it is which of two
+inks reads; a bare pane's marks *are* chrome on the paper, which is the case §7's
+"Blueprint, Brown Paper and Darkprint carry WHITE chrome" ruling is about. A
+best-of would flip the first two to black and quietly repeal it.
+
+### 32.3 The scope, and why it is a scope
+
+Sixty factories ink themselves from three static properties. The three ways to
+re-key them:
+
+1. **A parameter on every factory.** Sixty signatures, sixty call sites, and a
+   default value that is wrong for exactly one caller.
+2. **A second ChromeUi.** A copy of a palette is how two surfaces come to
+   disagree about one page — the thing `PageTheme.Contrast` and `PageTheme.Over`
+   both exist to prevent.
+3. **An ambient scope around the build.** These widgets already capture their
+   colours at build time; that is stated at the top of `ChromeUi` and is the
+   reason a theme change rebuilds rather than repaints. So "which ground is this
+   being built over" is a question with an answer exactly during a build, and no
+   answer at all outside one.
+
+Three is the one that matches what the class already is. It is **depth-counted,
+not a bool**: a pane's build calls factories that call factories, and a nested
+scope closing the outer one would hand the rest of the panel the shell's ink
+again. It is opened with `using`, including around the `catch` that builds the
+"this panel could not be built" caption — a failure message inked from the wrong
+ground is the one string in the panel that must never be unreadable.
+
+### 32.4 The floor on the muted ink, and an honest note about whose bug it was
+
+`PanelProof` section 10 failed the run on Blueprint (2.18:1) and Brown Paper
+(2.16:1). A muted ink composites toward its ground, so it always loses ratio
+against the solid ink it is made from; on the six light stocks `OnPage` is 14.5:1
+or better and alpha 140 still leaves 3.8:1, but on those two mid-tone papers the
+solid ink is only 3.76:1 and 3.66:1 to start with and alpha 140 eats it.
+
+**That failure predates the token.** With a pinned dark shell `OnSurface` is
+already `#F2F2F2` on those two papers, so the muted ink there was the same colour
+at the same ratio before §32 existed. §32 neither caused it nor worsened it. It
+is fixed here anyway, because the alternative is knowingly shipping 2.16:1 behind
+a green tick, and because the harness that can now see it is new.
+
+**The alpha moves, not the hue.** §29's method for a seat is to lift L\* until
+the ratio clears; doing that here would walk the ink toward the paper's own
+lightness and abandon §7's ruling that these two papers carry white chrome.
+Raising alpha keeps the ruling's colour exactly and only makes the mark less
+translucent. It terminates because alpha 255 is the solid ink and `PagePlate.Ink`
+clears the floor on all nine papers by construction.
+
+```
+worst mark-on-page, nine shipped papers:   2.164:1  ->  3.006:1
+six light stocks:                          alpha 140 unchanged, byte-identical
+```
+
+The **outline** is not floored, and that is a decision rather than an oversight:
+an alpha-36 hairline is a rule, not a mark carrying meaning, WCAG's 3:1 governs
+the second, and a floored hairline stops being a hairline. §27 leaves
+`PanelOutline` alone on the same reasoning. It is printed at 1.23–1.52:1 so a
+change that erases it is visible.
+

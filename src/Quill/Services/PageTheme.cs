@@ -112,6 +112,44 @@ public static class PageTheme
     /// hands out can never disagree about one panel near the crossover.</para></summary>
     public static bool PanelIsDark { get; private set; }
 
+    /// <summary>2.1: THE MARK FOR A SURFACE WITH NO PLATE AT ALL, judged
+    /// against <see cref="PageGround"/>.
+    ///
+    /// <para>§27 gave every mark on a <see cref="Panel"/> a panel-keyed token and
+    /// left <c>ChromeUi.Ink</c> on <see cref="OnSurface"/> with a reason that was
+    /// true of every consumer it checked: <i>"their plate is PageTheme.Surface,
+    /// not Panel - shell ground, shell ink, internally consistent"</i>. It is not
+    /// true of <see cref="Quill.Controls.CanvasPane"/>. That surface is
+    /// deliberately BARE - no background, no border, no shadow, on a measured
+    /// reference (docs/CONCEPTS-UI-REFERENCE.md §1.1: sampling behind Layers and
+    /// Precision returns pure canvas) - so its marks stand on the PAPER, and a
+    /// shell-keyed ink there is §0's split pair again. On the default install it
+    /// put <c>#F2F2F2</c> on <c>#FCFCFC</c>: <b>1.091:1</b>, the whole Precision
+    /// panel invisible.</para>
+    ///
+    /// <para>This is <see cref="Quill.Controls.PagePlate.Ink"/> - the same rule
+    /// <see cref="OnSurface"/> uses, re-keyed to the page - and NOT a best-of
+    /// like <see cref="OnPanel"/>. A bare pane's marks ARE chrome standing on the
+    /// paper, which is the case §7's white-chrome ruling is about; a best-of
+    /// would flip Blueprint and Brown Paper to black ink and contradict it.
+    /// Measured over the nine shipped papers it runs 3.66:1 to 17.96:1.</para></summary>
+    public static Color OnPage { get; private set; }
+
+    /// <summary>Secondary ink on the bare page - the same 140 alpha
+    /// <see cref="OnSurfaceMuted"/> takes off <see cref="OnSurface"/>.</summary>
+    public static Color OnPageMuted { get; private set; }
+
+    /// <summary>Hairlines and rules on the bare page.</summary>
+    public static Color PageOutline { get; private set; }
+
+    /// <summary>Which side of the line the PAGE is on, for the stock WinUI
+    /// controls a bare pane hosts (the Precision panel's two Sliders), which
+    /// resolve their own brushes from <c>ElementTheme</c> and not from this
+    /// class. Defined as "<see cref="OnPage"/> is the light ink" for the same
+    /// reason <see cref="PanelIsDark"/> is: the element theme and the ink this
+    /// class hands out must not disagree about one page.</summary>
+    public static bool PageIsDark { get; private set; }
+
     /// <summary>Links and primary buttons. The user's accent, untouched by the
     /// page - it is their choice, not the paper's.</summary>
     public static Color Accent { get; set; } = Color.FromArgb(255, 0xD9, 0x77, 0x57);
@@ -278,6 +316,20 @@ public static class PageTheme
         PanelIsDark = OnPanel.R == InkOnDark.R && OnPanel.G == InkOnDark.G && OnPanel.B == InkOnDark.B;
         OnPanelMuted = WithAlpha(OnPanel, 143);
         PanelOutline = WithAlpha(OnPanel, 36);
+        // 2.1: and the SAME THING AGAIN for a surface with no plate at all. The
+        // bare canvas panes have no ground of their own by design, so the ground
+        // their marks stand on is the paper - one more consumer of §0's rule, in
+        // the one shape §27 did not have a token for.
+        OnPage = Quill.Controls.PagePlate.Ink(PageGround);
+        PageIsDark = OnPage.R == InkOnDark.R && OnPage.G == InkOnDark.G && OnPage.B == InkOnDark.B;
+        // 140 wherever 140 is affordable, and only raised where it is not: see
+        // MutedWithFloor. On the six light stocks this returns alpha 140 exactly,
+        // so no shipped caption on white paper changes colour.
+        OnPageMuted = MutedWithFloor(OnPage, PageGround, 140);
+        // The outline is NOT floored. An alpha-36 hairline is a rule, not a mark
+        // carrying meaning, and WCAG's 3:1 is about the second - the same reason
+        // §27 leaves PanelOutline alone. Floored, it would stop being a hairline.
+        PageOutline = WithAlpha(OnPage, 36);
         Probe();
     }
 
@@ -293,7 +345,10 @@ public static class PageTheme
         // §27's fields are APPENDED, never inserted: the scratchpad probes that
         // read this line key off position for the older fields.
         $"pageGround={Hex(PageGround)} panelIsDark={(PanelIsDark ? 1 : 0)} onPanel={Hex(OnPanel)} " +
-        $"panelSep={Math.Abs(Lightness(Panel) - Lightness(PageGround)):F2}";
+        $"panelSep={Math.Abs(Lightness(Panel) - Lightness(PageGround)):F2} " +
+        // 2.1's fields, appended for the same reason §27's were.
+        $"onPage={Hex(OnPage)} onPageMuted={Hex(OnPageMuted)} pageIsDark={(PageIsDark ? 1 : 0)} " +
+        $"onPageMutedRatio={Contrast(Over(OnPageMuted, PageGround), PageGround):F2}";
 
     private static string Hex(Color c) => $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
 
@@ -311,6 +366,60 @@ public static class PageTheme
     }
 
     public static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
+
+    /// <summary>What an ALPHA mark actually resolves to over a given ground.
+    ///
+    /// <para>A muted ink is not a colour, it is an alpha, and its contrast has
+    /// to be measured on what it composites to. tools/PanelProof carried its own
+    /// copy of this arithmetic; a second copy of a formula is how two surfaces
+    /// come to disagree about one page, which is the reason
+    /// <see cref="Contrast"/> lives here too.</para></summary>
+    public static Color Over(Color mark, Color ground)
+    {
+        double f = mark.A / 255.0;
+        static byte C(byte m, byte g, double f) => (byte)Math.Clamp(Math.Round(g + (m - g) * f), 0, 255);
+        return Color.FromArgb(255, C(mark.R, ground.R, f), C(mark.G, ground.G, f), C(mark.B, ground.B, f));
+    }
+
+    /// <summary>2.1: A MUTED INK WITH A FLOOR - the alpha is raised, never the
+    /// colour, until what it composites to clears
+    /// <see cref="Quill.Controls.PagePlate.MarkFloor"/> against its ground.
+    ///
+    /// <para><b>Why it needs one at all, measured rather than assumed.</b> A
+    /// muted ink composites TOWARD its ground, so it always loses ratio against
+    /// the solid ink it is made from. On the six light stocks
+    /// <see cref="OnPage"/> is 14.5:1 or better and alpha 140 still leaves 3.8:1,
+    /// so nothing happens. On Blueprint and Brown Paper the solid ink is only
+    /// 3.76:1 and 3.66:1 to begin with - §7 rules those two carry WHITE chrome
+    /// on a mid-tone paper - and alpha 140 collapses that to <b>2.18:1</b> and
+    /// <b>2.16:1</b>. tools/PanelProof section 10 is what found it.</para>
+    ///
+    /// <para><b>That failure is OLDER than the token.</b> Under a pinned dark
+    /// shell <see cref="OnSurface"/> is already <c>#F2F2F2</c> on those two
+    /// papers, so <see cref="OnSurfaceMuted"/> was the same colour at the same
+    /// ratio before any of this. 2.1 did not cause it and does not worsen it -
+    /// but §0 says a mark under 3:1 is flagged rather than shipped, and the
+    /// harness that can now see it is the reason it stops being shipped.</para>
+    ///
+    /// <para><b>The alpha moves, not the hue.</b> Lifting L* instead - §29's
+    /// method for a seat - would abandon §7's ruling that these two papers carry
+    /// WHITE chrome by walking the ink toward the paper's own lightness. Raising
+    /// alpha keeps the ruling's colour exactly and only makes the mark less
+    /// translucent, which is the smallest change that reaches the floor. It
+    /// terminates because alpha 255 IS the solid ink, and
+    /// <see cref="Quill.Controls.PagePlate.Ink"/> clears the floor on all nine
+    /// shipped papers by construction; if a CUSTOM page ever defeats even that,
+    /// the solid ink is returned and the caller is no worse off than the
+    /// heading beside it.</para></summary>
+    private static Color MutedWithFloor(Color ink, Color ground, byte from)
+    {
+        for (int a = from; a < 255; a++)
+        {
+            var c = WithAlpha(ink, (byte)a);
+            if (Contrast(Over(c, ground), ground) >= Quill.Controls.PagePlate.MarkFloor) return c;
+        }
+        return WithAlpha(ink, 255);
+    }
 
     /// <summary>CIE L*, perceptual lightness on 0..100.
     ///
