@@ -200,6 +200,97 @@ change which erases it shows up in the transcript.
 of the alpha-composite arithmetic — the same shape of defect §30.6 caught here
 before. It now calls `PageTheme.Over`, which is what the app composites with.
 
+### ITEM 2.2 — the text editor's ground: **DONE. And §0 nearly cost this one.**
+
+**The defect, reproduced on screen before it was touched** (`d06-editor-typed.png`):
+a **dark grey slab on white paper**, the same picture §27's report described for
+the Settings panel. Sampled: ground `#606060`, glyphs `#141413`, **2.93:1**.
+
+#### Where `#606060` comes from — arithmetic, not a guess
+
+`InkSurface.BuildTextUi` sets `Background = Transparent` and
+`Foreground = boxInk` on the `RichEditBox`. WinUI's template overrides **both**
+from its visual states, and a VisualState setter outranks a local value for as
+long as the state holds. `TextControlBackgroundFocused` resolves to the **dark**
+theme's `ControlFillColorInputActive`, `#B31E1E1E`, and over the paper:
+
+```
+0x1E * (179/255) + 0xFC * (1 - 179/255) = 96.17  ->  #60   on all three channels
+```
+
+The element theme is dark because `MainWindow.ApplyTheme` sets
+`RootGrid.RequestedTheme` from `PageTheme.IsDark` — the **shell's** darkness —
+and a default install pins the shell to `#0F0E10` under white paper. **§0's split
+pair for the fourth time, arriving through a WinUI resource instead of one of
+ours.**
+
+#### The part that matters: fixing the ground alone would have shipped a worse bug
+
+Before changing anything, the re-open case was measured, because §0 says a mark
+whose ground moves must be re-judged and the mark here is not ours either:
+
+```
+committed on the page   ink #141413 on #FCFCFC   17.968:1    correct
+re-opened for editing   ink #FFFFFF on #606060    6.289:1    <- TextControlForegroundFocused
+```
+
+`TextControlForegroundFocused` overrides `Foreground` the same way, and on a
+re-opened box it wins. **Take the grey away without taking the white away and
+that becomes `#FFFFFF` on `#FCFCFC` — 1.02:1, invisible — far worse than the
+2.93:1 being fixed.** The ground and the mark had to move together, and this is
+the run where §0's contract stopped being a formality and prevented a
+regression.
+
+*(That `#FFFFFF` is also the mechanism behind Wave 3's item 3.2, "a coloured box
+shows white in the editor from its second open onward" — same override, same
+state. It is not claimed fixed here: this run only measured a default-coloured
+box, and 3.2 is specifically about a box carrying its own colour. Wave 3 should
+re-check it; the pin may well have closed it.)*
+
+#### The fix
+
+`PinEditorBrushes` writes the control's own resource dictionary, which is what
+lightweight styling is for:
+
+* **Background — all four states** to the `Transparent` the box already
+  declares. The editor then stands on the **page**.
+* **Foreground — PointerOver and Focused only**, to `boxInk`. The **Normal**
+  state is deliberately left alone: `ApplyTextVeil` writes `Foreground` on every
+  unfocused box on every frame of a veil fade, and pinning Normal would freeze
+  the veil solid.
+
+#### Measured, on screen, on `#FCFCFC` Plain White
+
+| state | before | after |
+|---|---|---|
+| first open, editing | `#141413` on `#606060` — **2.93:1** | on `#FCFCFC` — **17.968:1** (caret `#030303`, 20.10:1) |
+| committed, on the page | 17.968:1 | **17.968:1**, unchanged |
+| **re-opened for editing** | `#FFFFFF` on `#606060` — **6.289:1** | `#141413` on `#FCFCFC` — **17.968:1** |
+
+`e01-editor-fixed.png`, `e02-committed.png`, `e03-reopened.png`. The editing view
+and the committed view are now **the same numbers**, which they were never going
+to be while the editor carried a plate the page knew nothing about. The focus
+affordance survives: WinUI's accent underline is visible in `e01`, where the grey
+slab had been hiding it.
+
+#### The harness — `PanelProof` section 11
+
+```
+worst editor-ink-on-page, nine shipped papers:   4.374:1  (Blueprint)   was 2.93:1
+over a 3-step sRGB lattice, 636,056 grounds:     floor 4.183:1 at #D524B7
+```
+
+The lattice sweep is there because nine samples cannot verify a claim about a
+gamut. `PageTheme.TextInk`'s own remarks assert a whole-gamut floor of 4.183:1 at
+the crossing of the two inks' curves; the sweep **reproduces that figure exactly**,
+so the editor cannot go under 3:1 on *any* page, not merely on the nine.
+
+`#B31E1E1E` appears in this section **once, in a comment**, as the identification
+of a value observed on screen — never as a number the harness computes with. That
+is §30.6's lesson held to: a harness that hardcodes a value it also links is
+checking its own transcription. If WinUI changes that brush the comment goes
+stale and the fix stays right, because the fix removes the dependency on it.
+
 ### Gates — clean
 
 * `C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256
