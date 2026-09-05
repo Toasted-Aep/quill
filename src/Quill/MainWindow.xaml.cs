@@ -388,8 +388,16 @@ public sealed partial class MainWindow : Window
         // fullscreen presenter — 8105f60 chose that and relabelled the toggle to
         // say so; the field is named for what it does as of the StartMaximised
         // rename, so this line and its setting no longer disagree.
-        if (_library.StartMaximised)
-            try { if (AppWindow.Presenter is OverlappedPresenter sop) sop.Maximize(); } catch { }
+        if (_library.StartMaximised) TryStartupMaximise("constructor");
+        // §38: BOTH maximise attempts above run inside this constructor, and
+        // App.OnLaunched shows the window with Activate() only AFTER the
+        // constructor has returned. The show carries its own show-command, so a
+        // maximise asserted before it can be undone BY it - and a maximise that
+        // was undone looks, on screen, exactly like one that never ran. Assert
+        // it once more on the first activation, where it costs nothing if the
+        // attempt above survived.
+        if (_library.StartMaximised || _library.WinMaximized)
+            Activated += OnFirstActivationMaximise;
         UpdateFullscreenIcon();
         // the startup picker needs notebooks, and touch mode needs the saved
         // flag — both happen in FinishStartup (#31, #36)
@@ -458,6 +466,58 @@ public sealed partial class MainWindow : Window
         _library.WinH = h.WinH;
         _library.WinMaximized = h.WinMaximized;
         _library.StartMaximised = h.StartMaximised;
+    }
+
+    /// <summary>§38: the startup maximise, and the only place that says out
+    /// loud when it does not happen.
+    ///
+    /// <para>What this replaced was a bare <c>if (AppWindow.Presenter is
+    /// OverlappedPresenter sop)</c> with an empty <c>catch</c> behind it, so
+    /// BOTH of its failure modes - a presenter of some other kind, and a
+    /// throwing Maximize - were invisible. That is what kept item 5.2
+    /// unexplained: a setting that is true in both stored copies and a call
+    /// that silently no-ops read identically from outside the process.</para>
+    ///
+    /// <para>It still cannot THROW - a window that opens the wrong size is not
+    /// worth failing a launch over - but it can no longer fail in silence.</para>
+    /// </summary>
+    private void TryStartupMaximise(string when)
+    {
+        try
+        {
+            var presenter = AppWindow.Presenter;
+            if (presenter is OverlappedPresenter op) { op.Maximize(); return; }
+            LogStartupMaximiseMiss($"{when}: presenter is {presenter.GetType().Name} " +
+                                   $"(kind {presenter.Kind}), not OverlappedPresenter");
+        }
+        catch (Exception ex)
+        {
+            LogStartupMaximiseMiss($"{when}: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>§38: hooked only when the window is SUPPOSED to open
+    /// maximised, and unhooked on the first fire - this is a startup
+    /// correction, not a policy that fights the user every time the window
+    /// takes focus.</summary>
+    private void OnFirstActivationMaximise(object sender, WindowActivatedEventArgs e)
+    {
+        Activated -= OnFirstActivationMaximise;
+        if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Maximized })
+            return;   // the constructor's attempt held; nothing to correct
+        TryStartupMaximise("first activation");
+        UpdateFullscreenIcon();
+    }
+
+    private void LogStartupMaximiseMiss(string detail)
+    {
+        try
+        {
+            System.IO.File.AppendAllText(System.IO.Path.Combine(LibraryStore.Dir, "crash.log"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] startup maximise did not apply, {detail}" +
+                Environment.NewLine);
+        }
+        catch { }
     }
 
     private async Task BeginLibraryLoadAsync()

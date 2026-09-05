@@ -8552,3 +8552,134 @@ that it is narrow.
 `dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64 --no-incremental`
 is clean: 0 warnings, 0 errors. **Not verified on screen.** This session did
 not launch Quill, inject input, or interact with the user's running instance.
+
+## 38 A maximise asserted before the window is shown — 2026-09-06
+
+**Wave 5, item 5.2.** `StartMaximised` is `true` in both stored copies and the
+app still opens windowed. `8105f60` renamed it from `StartFullscreen`, which
+fixed the NAME; the behaviour stayed unexplained.
+
+Two suspects were on record, neither confirmed. **Both are now answered, and
+they did not get the same answer.**
+
+### 38.1 Suspect two is ruled out by reading: nothing reapplies the bounds
+
+The theory was that saved window bounds get reapplied over the maximise
+afterwards, so the maximise succeeds and is then undone.
+
+`MoveAndResize` appears **exactly once in the whole of `MainWindow.xaml.cs`**,
+at the placement restore, and it runs **before** both `Maximize()` calls, not
+after:
+
+```
+MoveAndResize(WinX, WinY, WinW, WinH);          // saved bounds
+if (WinMaximized)   op.Maximize();              // last session's state
+if (StartMaximised) sop.Maximize();             // the setting
+```
+
+The only other places that touch `WinX/WinY/WinW/WinH` are in the save handler,
+and they **write** those fields from the live window; they never apply them to
+it. `FinishStartup` re-applies the theme, the accent, the panel sizes and the
+key preset from the real library once it lands — it does not re-apply
+placement. **There is no later reapplication to be undone by.** That suspect is
+dead, and it is worth saying so rather than leaving it on the list.
+
+### 38.2 Suspect one was not wrong so much as unfalsifiable
+
+The other theory: the presenter is not an `OverlappedPresenter` at the moment
+of the call, so the guarded `if` no-ops invisibly.
+
+It is probably not what is happening. The **identical** guard runs twenty lines
+earlier, in `ConfigureCustomTitleBar`, and it demonstrably takes — that is the
+call that removes the system caption, and the app draws its own window controls
+because of it. A presenter that satisfies the guard there satisfies it here.
+
+But notice what the old line actually was:
+
+```
+if (_library.StartMaximised)
+    try { if (AppWindow.Presenter is OverlappedPresenter sop) sop.Maximize(); } catch { }
+```
+
+**Two failure modes, both silent.** A presenter of another kind falls through
+the `if`; a throwing `Maximize` falls into an empty `catch`. Neither leaves a
+trace anywhere. That is the real reason this item sat unexplained for as long
+as it did: *a setting that is true in both stored copies and a call that
+silently no-ops are indistinguishable from outside the process.* The suspect
+was not confirmed because it was **not confirmable**, which is a different
+complaint and a fixable one.
+
+`TryStartupMaximise(string when)` now names the presenter's actual type and
+kind in `crash.log` when the guard fails, and the exception type and message
+when the call throws. It still cannot throw — a window that opens the wrong
+size is not worth failing a launch over — but it can no longer fail in silence.
+
+### 38.3 The mechanism this leaves, stated as a hypothesis
+
+What reading the code **does** establish as fact:
+
+```
+MainWindowInstance = new MainWindow();   // App.OnLaunched - constructor,
+                                         //   where BOTH Maximize() calls live
+MainWindowInstance.Activate();           // ...and only HERE is the window shown
+```
+
+Every maximise this app performs at startup is asserted on a window that **has
+never been shown**. `Activate()` then shows it, and a show carries its own
+show-command. A maximised state set before the first show being reset by that
+show is the ordinary Win32 behaviour this arrangement invites.
+
+That is consistent with the one other data point in the file: the SAME
+`op.Maximize()`, reached through `ToggleMaximise` from a double-click on the
+top bar, works — and the only thing different about it is that by then the
+window has been shown.
+
+**This is a hypothesis, not a demonstration.** It is the mechanism the code
+ordering makes available; this session did not watch it happen, and did not
+run the app at all. Item 5.2's "done means" includes *it maximises*, which is
+an on-screen fact, so **this item is PARTIAL, not DONE.**
+
+### 38.4 The fix is written to be right under either answer
+
+The constructor's attempt is **kept**, so that if it does stick there is no
+windowed-then-maximise flash. A second assertion is hooked on the first
+activation and unhooked as it fires:
+
+```
+if (_library.StartMaximised || _library.WinMaximized)
+    Activated += OnFirstActivationMaximise;
+```
+
+`OnFirstActivationMaximise` returns immediately if the presenter already
+reports `OverlappedPresenterState.Maximized` — so when the constructor's
+attempt survived, this costs one state read and does nothing.
+
+Three choices worth recording:
+
+**It is hooked only when the window is supposed to open maximised**, and
+unhooked on the first fire. This is a startup correction, not a policy: a
+window the user has since restored by hand must not be re-maximised the next
+time it takes focus.
+
+**It covers `WinMaximized` as well as `StartMaximised`.** Restoring last
+session's maximised state is asserted from the same constructor, before the
+same `Activate()`, so if the hypothesis holds it is broken in the same way for
+the same reason. Fixing one and leaving its twin would have been arbitrary.
+
+**The re-assertion does not replace the instrumentation.** If the presenter
+really is the wrong kind, the retry fails too — and now says so in
+`crash.log` with the type it actually found. A fix that quietly papers over the
+case it did not diagnose is exactly the "guess that appears to work" this wave
+was told to avoid.
+
+### 38.5 What would settle it
+
+One launch. If the window opens maximised and `crash.log` gains no
+`startup maximise did not apply` line, the ordering hypothesis is confirmed and
+the item closes. If it opens maximised **and** a line appears, the presenter
+suspect was right after all and the line names what it is. If it still opens
+windowed, both suspects are wrong and the log narrows what is left.
+
+`dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64 --no-incremental`
+is clean: 0 warnings, 0 errors. **Not verified on screen.** This session did
+not launch Quill, inject input, or interact with the user's running instance.
