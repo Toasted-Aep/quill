@@ -1,5 +1,67 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-05 (NO SCREEN RUN) — §30: THE WHEEL'S UPPER HALF, THE BOTTOMMENU PLATE, PANELPROOF'S GATE
+
+Branch `integration` @ `68a109a` plus this change (§29 landed mid-run from a
+concurrent agent; no file overlap — see §30's working conditions). Clean x64
+Debug `--no-incremental` build, **0 warnings**. **THE USER WAS AT THE MACHINE
+AND NOTHING WAS SEEN RUNNING** — no launch, no injected input, no capture.
+Full detail is §30 of `CONCEPTS-REF-2026-08-07.md`; this entry is a pointer,
+not a duplicate.
+
+Three items, all from run 14's own punch list:
+
+1. **`ColorWheel.DrawCode`'s upper-half labels** — built the readability flip
+   run 14 asked for a ruling on: past the halfway point of the drawn ring, a
+   label rotates a further 180° so its top faces screen-up. Checked first, as
+   instructed: the Concepts reference **also** runs its own upper half
+   upside-down (confirmed by eye, cropped top vs. left of
+   `Quill_KbFldw0iXN.png`) — so "match the reference" and "keep it readable"
+   really do conflict here, and the build follows the readability ruling.
+2. **`BottomMenu.Plate`'s stale `Background`** — confirmed run 14's exact
+   mechanism (a `Border`'s ground read once at `MainWindow` construction,
+   against the gallery, never repainted) and fixed at the construction site:
+   the plate now carries its own `PageTheme.Changed` subscription. Measured
+   worst case after the fix, against the shipped arithmetic: **7.12:1** over
+   the nine shipped papers, **5.33:1** over the full sRGB gamut of page
+   grounds — both clear of 3:1. **Not touched:** §28.4's WinUI
+   `PointerOver` hover-wash defect, which is a separate mechanism this fix
+   does not reach and nobody has ruled on.
+3. **`tools/PanelProof`** — now exits non-zero when the muted caption ink
+   drops under 3:1 on any of the nine shipped papers, verified both ways by
+   temporarily forcing and reverting the flag on the shipped file itself.
+   Also found and fixed two "retyped rather than read" leftovers while
+   checking for more of the exact defect the tool exists to catch: a
+   diagnostic line still printed a hardcoded "140" for the muted alpha
+   (live value is 143) and a table still carried `PagePlate.LightBase`/
+   `DarkBase` as literal retyped byte tuples instead of reading the
+   constants.
+
+### What the next run should do — the screen checklist, §30.7 in full
+
+1. Item 2's resting pill under Theme = Light with a page open (run 14's own
+   red-page reproduction) — expect it to match the live page's panel colour,
+   not the pale gallery grey.
+2. The same screen, hovered — expect the wash to sit over the corrected dark
+   ground; if it still reads pale, that is §28.4, left unfixed on purpose.
+3. A theme change or page turn while a `BottomMenu` page is already open, not
+   just at fresh launch — expect an immediate repaint.
+4. The COPIC wheel at a bottom dock, upper half in view — every code label
+   should read right-side-up, including right at the 9-and-3-o'clock seam.
+5. The same, mirrored (left-handed) — the fix is keyed to drawn angle, so
+   mirroring should not reopen it.
+
+### Gates — clean at the end of this item
+
+* `library.json`: **53,582,459 bytes, SHA-256 `0C32CE6C…8E038A`** — byte-
+  identical before and after, never opened for writing.
+* `ColorWheel.cs` / `BottomMenu.cs`: CRLF throughout, before and after every
+  write, zero bare LF, zero NUL, no BOM.
+* `tools/PanelProof/Program.cs`: LF throughout, before and after every write
+  including the temporary forced-failure test and its revert.
+* This file and `CONCEPTS-REF-2026-08-07.md`: CRLF throughout, before and
+  after this write.
+
 ## RUN OF 2026-09-04 (fourteenth screen run, part 3) — §28's THREE, AND A NEW DEFECT UNDER THE FOURTH
 
 Same run and build; items 1 and 2 were committed at `78fe492` and `66c0222`

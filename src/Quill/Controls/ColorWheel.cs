@@ -1931,7 +1931,26 @@ public sealed class ColorWheel : UserControl
     {
         var p = At(r, midA);
         var keep = ds.Transform;
-        ds.Transform = Matrix3x2.CreateRotation(midA - MathF.PI / 2f, p) * keep;
+        // Run 14 (part 1): midA - 90 deg always points the label's own top at
+        // the wheel's centre, which only reads right-side up for the lower
+        // half of the ring - At(r, a) puts +Y (screen-down) at sin(a) > 0, so
+        // the centre-ward top is upside-down wherever sin(midA) < 0. That half
+        // is invisible at the default top dock and unavoidable at either
+        // bottom dock (Section 21), so it was never seen until the dock picker
+        // made it reachable. The reference (Concepts) has the same upside-down
+        // upper half - confirmed by eye against
+        // ShareX/Screenshots/2026-08/Quill_KbFldw0iXN.png - so this is a
+        // deliberate departure from the reference, ruled on for readability:
+        // every label past the halfway point is flipped a further 180 deg so
+        // its own top faces screen-up. The check is on the drawn angle alone,
+        // exactly as run 14 noted - the wheel re-centres and _rot resets on
+        // every open, so no column index is stable enough to key this on.
+        // Accepted cost: labels no longer all point the same way relative to
+        // the ring - the ones below the equator still point centre-ward, the
+        // ones above now point away from it.
+        float rot = midA - MathF.PI / 2f;
+        if (MathF.Sin(midA) < 0f) rot += MathF.PI;
+        ds.Transform = Matrix3x2.CreateRotation(rot, p) * keep;
         // The box only positions the (unwrapped) line, but it has to be at
         // least as tall as the line or Win2D clips the descenders.
         double boxH = Math.Max(16.0, _codeFmt.FontSize * 1.7);
