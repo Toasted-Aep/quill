@@ -49,7 +49,7 @@ Status key: `TODO` · `IN FLIGHT` · `NEEDS SCREEN` · `DONE` · `RULING NEEDED`
 
 | # | item | done means |
 |---|---|---|
-| 5.1 | **Renderer failure two keystrokes away** — Ctrl+Z drove `OnRegionsInvalidated` to fail both regions ten passes running, `COMException 0x80004005` | the cause is identified. Logging and retry bounding already shipped; this is the fault itself |
+| 5.1 | **Renderer failure two keystrokes away** — **DONE, FIXED** (§37): the undo/redo flash and the shape settle pulse both called `_canvas.Invalidate()` from INSIDE `DrawRegion`/`DrawShape`, i.e. with the `CanvasVirtualControl` drawing session still open — an animation repainting itself from within its own `BeginDraw`. `_flashRect` is written only by `FlashAction`, called only from `Undo()`/`Redo()`, which is exactly why it reproduces from Ctrl+Z and not from idle rendering. Both now set `_animRepaint`, consumed once per pass after every session is closed, via `DispatcherQueue.TryEnqueue` (§27's own precedent). Device loss ruled out by the shipped log itself — `IsDeviceLost` is already recorded and no line carries `DEVICE-LOST`; use-after-dispose ruled out by the exception type (a disposed Win2D wrapper raises `ObjectDisposedException`, not `COMException`). Code-only; not verified on screen. | the cause is identified. Logging and retry bounding already shipped; this is the fault itself |
 | 5.2 | **Startup does not maximise** — true in both stored copies, still opens windowed | it maximises, and the reason it did not is written down |
 | 5.3 | **SyncLog replay** — non-atomic cursor/device-id writes; a torn cursor can resurrect erased strokes | the write is atomic. High severity, low likelihood, needs care |
 

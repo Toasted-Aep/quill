@@ -8425,3 +8425,130 @@ src/Quill/Quill.csproj -c Debug -p:Platform=x64 --no-incremental` is clean:
 session did not launch it, inject any input, or interact with the running
 app in any way for this item.
 
+
+## 37 An animation that repaints itself cannot live inside the paint — 2026-09-06
+
+**Wave 5, item 5.1.** Run 15 pressed Ctrl+Z and `InkSurface.OnRegionsInvalidated`
+failed **both regions for ten consecutive passes**, `COMException
+hresult=0x80004005`. `scratchpad/vp11data/crash.log` holds the ten lines.
+
+### 37.1 What the log already ruled out before any reading began
+
+The logging shipped in §27 is not just a message dump: `DescribeRenderFailure`
+asks Win2D directly, `dev.IsDeviceLost(ex.HResult)`, and appends `DEVICE-LOST`
+when the answer is yes. **No line in crash.log carries that marker.** The
+HRESULT agrees independently — device loss arrives as `0x887A0005/6/7`
+(`DXGI_ERROR_DEVICE_REMOVED / _HUNG / _RESET`) or `E_SURFACE_CONTENTS_LOST`,
+and `0x80004005` is none of them.
+
+So the leading suspect was **already answered, in the committed evidence, by a
+verdict the previous item had the foresight to record.** That is worth stating
+plainly: the honest value of §27's logging was not that it made the failure
+loud, it was that it made one hypothesis falsifiable without a repro.
+
+The second suspect — a Win2D resource used after disposal — is ruled out by the
+exception TYPE, not by reading the disposal sites. A disposed Win2D wrapper
+raises `ObjectDisposedException` from the managed projection; it does not reach
+`DrawRegion` as a `COMException`. The log says `COMException` on all ten lines.
+
+`0x80004005` is `E_FAIL`, the least specific HRESULT there is, which is also
+why the message is empty. It is what an internal state error surfaces as when
+nothing maps it to something better.
+
+### 37.2 The fault: `Invalidate()` called with the session still open
+
+`OnRegionsInvalidated` draws each region inside an open session:
+
+```
+using var ds = sender.CreateDrawingSession(region);
+... DrawRegion(ds, region);
+```
+
+Under `CanvasVirtualControl` that session is a `BeginDraw` on the virtual
+surface. **Two places in the draw tree called `_canvas.Invalidate()`
+synchronously, while that session was open** — both of them frame-driven
+animations asking for their next frame from the place they are drawn:
+
+| site | animation | reachable when |
+|---|---|---|
+| `DrawRegion`, the `_flashRect` block | undo/redo flash highlight, 500ms | **only after Ctrl+Z / Ctrl+Y** |
+| `DrawShape`, the `_settleShape` block | recognised-shape settle pulse, 200ms | after shape recognition |
+
+`Invalidate()` mutates the surface's update-region state — the same state the
+open session holds and the next `CreateDrawingSession` reads. Calling it
+between `BeginDraw` and `EndDraw` is outside the contract, and an unmapped
+internal failure there is exactly an empty `E_FAIL`.
+
+### 37.3 Why this is the undo path specifically, and why it persists
+
+`_flashRect` is written in exactly one place, `FlashAction`, and `FlashAction`
+is called from exactly two, `Undo()` and `Redo()`. **There is no other way to
+reach the line 5551 `Invalidate()`.** That is the whole of the item's
+"reproduces from a Ctrl+Z, not from idle rendering": the flash block is
+undo-gated by construction.
+
+The shape of the log follows from that:
+
+- The flash block is **not** intersection-tested against the region, so it runs
+  for *every* region in the pass — N illegal `Invalidate()` calls per pass, not
+  one.
+- The flash lasts 500ms and repaints continuously, so it does not poison the
+  surface once, it does so on every frame for half a second. That is why the
+  streak is unbroken rather than a single bad pass followed by recovery.
+- Ten passes inside ~2 seconds, then the §27 limiter standing down at pass 9,
+  matches a 500ms animation driving repaints into a surface that can no longer
+  open a session.
+
+**An honest boundary.** The re-entrancy is a certainty — it is visible in the
+source, and it is undo-gated. That `E_FAIL` is the *specific* symptom Direct2D
+returns for it is inference from the HRESULT's own vagueness plus elimination
+of the alternatives, not something this session watched happen. **Nothing here
+was verified on screen.** What would settle it is one Ctrl+Z on a page with a
+recent action, watching whether crash.log stays empty.
+
+### 37.4 The fix, and why it is the §27 pattern rather than a new one
+
+Both sites now set `_animRepaint = true` instead of calling `Invalidate()`.
+`OnRegionsInvalidated` consumes it **once per pass**, after the region loop —
+by which point every `using var ds` in the pass has been disposed and every
+`EndDraw` has run:
+
+```
+if (_animRepaint)
+{
+    _animRepaint = false;
+    try { DispatcherQueue.TryEnqueue(() => _canvas.Invalidate()); } catch { }
+}
+```
+
+Two decisions worth recording:
+
+**It is consumed before the `failed == 0` early return**, not after. The clean
+pass IS the normal case for an animation — consuming it after that return
+would have left the flash frozen on its first frame in every case where
+nothing was wrong, which is a worse bug than the one being fixed and would
+have looked like a fix that worked.
+
+**It goes through `DispatcherQueue.TryEnqueue`, not a direct call at the tail
+of the handler.** The sessions are closed by then, so a direct call would be
+legal as far as `BeginDraw` is concerned — but a repaint requested from inside
+the handler re-enters the handler. §27's self-heal, eight lines further down
+in the same method, already faced this exact question and answered it this
+way. Following the precedent that is already in the method beats inventing a
+second convention for the same problem.
+
+**The animations still animate.** The flag is set per frame while the flash or
+the pulse is live and cleared on consumption, so the repaint chain is
+preserved; only the moment it is requested moved, from inside the session to
+after it.
+
+### 37.5 What this does not claim
+
+The N-per-pass amplification (no intersection test on `_flashRect`) is left
+alone. It is a wasted-work defect, not a correctness one, and folding it into
+this change would have mixed a behavioural edit into a fix whose whole value is
+that it is narrow.
+
+`dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64 --no-incremental`
+is clean: 0 warnings, 0 errors. **Not verified on screen.** This session did
+not launch Quill, inject input, or interact with the user's running instance.
