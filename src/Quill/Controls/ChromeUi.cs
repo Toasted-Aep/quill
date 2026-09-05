@@ -68,13 +68,54 @@ internal static class ChromeUi
     // rebuilds - exactly as it used to subscribe to ActualThemeChanged.
     // =====================================================================
 
-    public static bool IsDark => PageTheme.IsDark;
+    public static bool IsDark => OnPage ? PageTheme.PageIsDark : PageTheme.IsDark;
 
-    public static Color Ink => PageTheme.OnSurface;
+    // =====================================================================
+    // 2.1: THE ON-PAGE SCOPE.
+    //
+    // Every factory below inks itself from Ink / Dim / Hairline / Wash, and for
+    // the floating bars those are right: a bar's plate is PageTheme.Surface at
+    // PlateAlpha, so its marks stand on a shell-derived ground and take a
+    // shell-derived ink. §27 checked exactly that and left them alone.
+    //
+    // CanvasPane is the consumer that breaks the assumption. It is BARE by a
+    // measured reference - no background, no border, no shadow - so its marks
+    // stand on the PAPER, and the same four tokens are then the wrong four. The
+    // Precision panel measured #F2F2F2 on #FCFCFC, 1.091:1, every word gone.
+    //
+    // A SCOPE rather than a parameter on sixty factories, and rather than a
+    // second copy of ChromeUi: these widgets already capture their colours at
+    // BUILD time (see the note above), so "which ground is this being built
+    // over" is answerable exactly when it is needed and nowhere else. The scope
+    // is opened around a bare pane's build and closed after it; nothing else in
+    // the app sees a different colour than it did before.
+    //
+    // Depth-counted, not a bool: a bare pane's build calls factories that call
+    // factories, and a nested scope that closed the outer one on exit would
+    // hand the rest of the panel the shell's ink again.
+    // =====================================================================
+    private static int _onPageDepth;
 
-    public static Color Dim => PageTheme.OnSurfaceMuted;
+    /// <summary>True while a surface with NO PLATE is being built.</summary>
+    public static bool OnPage => _onPageDepth > 0;
 
-    public static Color Hairline => PageTheme.Outline;
+    /// <summary>Opens the on-page scope for the duration of a build. Always
+    /// use it with <c>using</c>: an exception inside a panel's build is caught
+    /// by <see cref="Quill.Controls.CanvasPane.Rebuild"/>, and a scope leaked
+    /// past it would re-ink the whole app.</summary>
+    public static IDisposable PageInk() => new PageInkScope();
+
+    private sealed class PageInkScope : IDisposable
+    {
+        public PageInkScope() => _onPageDepth++;
+        public void Dispose() { if (_onPageDepth > 0) _onPageDepth--; }
+    }
+
+    public static Color Ink => OnPage ? PageTheme.OnPage : PageTheme.OnSurface;
+
+    public static Color Dim => OnPage ? PageTheme.OnPageMuted : PageTheme.OnSurfaceMuted;
+
+    public static Color Hairline => OnPage ? PageTheme.PageOutline : PageTheme.Outline;
 
     /// <summary>A translucent wash of the ink, for chip and swatch fills that
     /// have to sit on whatever the page happens to be. Alpha, not a mixed

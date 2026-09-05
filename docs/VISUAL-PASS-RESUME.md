@@ -105,6 +105,101 @@ Run C is the sharpest evidence for path 1: identical inputs to runs 7–11, whos
 `DataFolder` still `null`. Nothing was imported and the file no longer claims it
 was.
 
+### ITEM 2.1 — the Precision panel: **DONE. And it was NOT an oversight.**
+
+**The question the brief asked first: was it deliberately excluded?** Yes, twice
+over, and by a measured reference rather than by an omission.
+`CanvasPane`'s own remarks: *"BARE. Every one of these is deliberate and
+measured: no Background, no BorderBrush, no CornerRadius, no shadow."* And
+`ChromeUi.BarePresenter`: *"The measured reference is unambiguous: Concepts'
+Layers, Precision and Objects surfaces are bare text and controls sitting
+directly on the canvas."* Both cite docs/CONCEPTS-UI-REFERENCE.md §1.1, which
+sampled behind those panels and got pure canvas.
+
+**So the panel did not opt out of `PageTheme.Panel`. It has no panel to key
+to.** §27's re-keying pass swept 22 sites and left `ChromeUi.Ink/Dim/Hairline`
+on the shell's tokens with a reason it checked and stated: *"their plate is
+`PageTheme.Surface`, not `Panel` — shell ground, shell ink, internally
+consistent."* That is true of every consumer §27 looked at. It is not true of
+`CanvasPane`, which has no plate at all, and §27's table does not list it in
+either column — neither re-keyed nor deliberately left. **It was not
+considered**, because the sweep was organised around which *plate* a mark stands
+on and this is the one consumer that stands on none.
+
+**So the fix is not to give it a plate** — that would overturn a measured
+reference to fix a colour. The fix is §0's rule applied to the ground it
+actually has: the paper. Four new tokens, derived exactly as §27's four were:
+
+```
+OnPage       = PagePlate.Ink(PageGround)     <- the SAME rule OnSurface uses, re-keyed
+OnPageMuted  = OnPage at alpha 140, floored  <- see below
+PageOutline  = OnPage at alpha 36
+PageIsDark   = "OnPage is the light ink"     <- for the Sliders' ElementTheme
+```
+
+`PagePlate.Ink` and **not** a best-of like `PanelInk`: a bare pane's marks *are*
+chrome standing on the paper, which is the case §7's white-chrome ruling governs;
+a best-of would flip Blueprint and Brown Paper to black ink and contradict it.
+
+`ChromeUi` gets a depth-counted **on-page scope** rather than a parameter on
+sixty factories or a second copy of the class. These widgets already capture
+their colours at build time, so "which ground is this being built over" is
+answerable exactly where it is needed. `CanvasPane.Rebuild` opens it around the
+build — including the `catch`'s failure caption, which is the one string in the
+panel nobody could afford to have unreadable — and `Repaint` opens it again and
+sets `_root.RequestedTheme` from `PageIsDark`, which is what §27 did for a panel
+with `PanelIsDark` and is what the two stock `Slider`s need.
+
+#### On screen, on `#FCFCFC` Plain White, default install (pinned dark shell)
+
+Sampled off the pixels of `d03-precision.png`, not read off the code:
+
+| mark | before (run 14) | after |
+|---|---|---|
+| "Precision" title | 1.091:1 | **17.957:1** (`#141414`) |
+| "Grid" / "Snap" / "Measure" headings | 1.091:1 | **17.957:1** |
+| chip labels (Off / Dots / Graph / …) | 1.091:1 | **17.957:1** |
+| the muted grid description | 1.044:1 | **4.012:1** (`#7D7D7D`) |
+| disabled "Snap to grid" label | — | **4.012:1** |
+
+The theme probe for that frame, straight from the app:
+`ground=#0F0E10 … onSurface=#FFF2F2F2 … pageGround=#FFFCFCFC onPage=#FF141414
+pageIsDark=0`. **Every word of the panel is legible; the sliders came with it.**
+
+#### The harness failed the run, and it was right to
+
+`tools/PanelProof` section 10 measures the three new tokens over the nine
+shipped papers and gates the exit code on them. Its first run **FAILED**:
+
+```
+Blueprint    OnPage #F2F2F2  3.76:1   muted #9ABFDC  2.18:1   <- UNDER THE FLOOR
+Brown Paper  OnPage #F2F2F2  3.66:1   muted #D1B8A1  2.16:1   <- UNDER THE FLOOR
+```
+
+**That failure is older than the token and is not caused by this change.** Under
+a pinned dark shell `OnSurface` is already `#F2F2F2` on those two papers, so the
+muted ink there was the same colour at the same ratio before item 2.1 touched
+anything — the change is neutral on Blueprint and Brown Paper and large on the
+six light stocks. But §0 says a mark under 3:1 is flagged rather than shipped,
+so it is not shipped: `OnPageMuted` now raises its **alpha** — never its hue,
+which would abandon §7's white-chrome ruling — until the composite clears
+`MarkFloor`.
+
+```
+worst mark-on-page over the nine shipped papers:  2.164:1  ->  3.006:1
+the six light stocks:                             alpha 140, byte-identical
+```
+
+It terminates by construction: alpha 255 is the solid ink, and `PagePlate.Ink`
+clears the floor on all nine. The **outline** is deliberately not floored — an
+alpha-36 hairline is a rule, not a mark carrying meaning, and §27 leaves
+`PanelOutline` alone for the same reason. It is printed (1.23–1.52:1) so that a
+change which erases it shows up in the transcript.
+
+**One thing the harness gave back.** `PanelProof` was carrying its **own copy**
+of the alpha-composite arithmetic — the same shape of defect §30.6 caught here
+before. It now calls `PageTheme.Over`, which is what the app composites with.
+
 ### Gates — clean
 
 * `C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256

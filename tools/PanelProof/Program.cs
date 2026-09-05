@@ -12,12 +12,13 @@ static double Ratio(Color a, Color b) => PagePlate.Contrast(a, b);
 
 // Composite an alpha mark onto its ground - a muted ink is not a colour, it is
 // an alpha, and its contrast has to be measured on what it actually resolves to.
-static Color Over(Color mark, Color ground)
-{
-    double f = mark.A / 255.0;
-    static byte C(byte m, byte g, double f) => (byte)Math.Clamp(Math.Round(g + (m - g) * f), 0, 255);
-    return Color.FromArgb(255, C(mark.R, ground.R, f), C(mark.G, ground.G, f), C(mark.B, ground.B, f));
-}
+//
+// THIS USED TO BE THIS FILE'S OWN COPY of the arithmetic. The whole point of
+// this project is that it links the shipping source rather than transcribing
+// it, and a harness carrying its own second implementation of a formula it is
+// checking is the same defect §30.6 caught here in another form. It now calls
+// PageTheme's, which is what the app composites with.
+static Color Over(Color mark, Color ground) => PageTheme.Over(mark, ground);
 
 // Job 3: THE ACCEPTANCE GATE. Section 2 sets this when a SHIPPED paper's
 // muted caption ink drops under PagePlate.MarkFloor on its own panel, and the
@@ -423,6 +424,73 @@ Console.WriteLine("== 8. BEFORE / AFTER: the superseded shell ramp vs §27's pag
     }
 }
 
+// ---- 10. ITEM 2.1: A SURFACE WITH NO PLATE AT ALL ---------------------
+//
+// §27 re-keyed every mark that stands on a PageTheme.Panel and left
+// ChromeUi.Ink on the shell's OnSurface, with a reason that was true of every
+// consumer it checked: those marks stand on a PageTheme.Surface plate.
+//
+// CanvasPane is the consumer that breaks it. It is BARE by a measured
+// reference - no background, no border, no shadow - so its marks stand on the
+// PAPER. On the default install that put #F2F2F2 on #FCFCFC: 1.091:1, the
+// whole Precision panel invisible. PageTheme.OnPage / OnPageMuted / PageOutline
+// are the re-keyed tokens; this section measures them the way section 2
+// measures the panel's.
+//
+// THE MUTED INK IS THE ONE THAT CAN FAIL, and that is why it is gated. OnPage
+// is PagePlate.Ink, a luminance pick whose own floor over the nine papers is
+// 3.66:1 (Brown Paper). OnPageMuted is that ink at alpha 140, which composites
+// TOWARD the page and therefore always loses ratio - so Brown Paper is where a
+// muted caption would go under the floor first, and nothing but a measurement
+// settles whether it does.
+//
+// The OUTLINE is reported and NOT gated, exactly as §27 leaves PanelOutline
+// ungated: an alpha-36 hairline is a rule, not a mark carrying meaning, and
+// WCAG's 3:1 is about the second. It is printed so that a change which makes
+// it disappear altogether is visible in the transcript.
+Console.WriteLine("== 10. item 2.1: the bare pane's ink, on the page itself ==");
+Console.WriteLine("| page | ground | OnPage | ratio | OnPageMuted (composited) | ratio | outline | ratio | pageIsDark |");
+Console.WriteLine("|---|---|---|---|---|---|---|---|---|");
+bool pageInkFailed = false;
+string worstPageInkPaper = "";
+double worstPageInk = 999;
+{
+    // The default install: a pinned dark shell over whatever the paper is. That
+    // is the case item 2.1 was reported on, and the case where the OLD token and
+    // the NEW one disagree most.
+    var shell = Color.FromArgb(255, 0x0F, 0x0E, 0x10);
+    foreach (var (name, kind) in papers)
+    {
+        var pg = GroundOf(kind);
+        PageTheme.SetGrounds(shell, pg);
+        var ink = PageTheme.OnPage;
+        var muted = Over(PageTheme.OnPageMuted, pg);
+        var rule = Over(PageTheme.PageOutline, pg);
+        double ri = Ratio(ink, pg), rm = Ratio(muted, pg), rr = Ratio(rule, pg);
+        if (rm < worstPageInk) { worstPageInk = rm; worstPageInkPaper = name + " (muted)"; }
+        if (ri < worstPageInk) { worstPageInk = ri; worstPageInkPaper = name + " (ink)"; }
+        bool bad = ri < PagePlate.MarkFloor || rm < PagePlate.MarkFloor;
+        if (bad) pageInkFailed = true;
+        Console.WriteLine($"| {name} | `{Hex(pg)}` | `{Hex(ink)}` | {ri:F2}:1 | `{Hex(muted)}` | {rm:F2}:1 | " +
+                          $"`{Hex(rule)}` | {rr:F2}:1 | {(PageTheme.PageIsDark ? 1 : 0)} |{(bad ? "  <- UNDER THE FLOOR" : "")}");
+    }
+}
+Console.WriteLine();
+Console.WriteLine($"  worst mark-on-page over the nine shipped papers: {worstPageInk:F3}:1  ({worstPageInkPaper})");
+{
+    // The report, in one line - the same shape section 8 gives §27's.
+    var shell = Color.FromArgb(255, 0x0F, 0x0E, 0x10);
+    var page = GroundOf(PaperKind.PlainWhite);
+    PageTheme.SetGrounds(shell, page);
+    Console.WriteLine("  THE REPORT - the Precision panel, every word invisible on the default paper");
+    Console.WriteLine($"    default install: shell {Hex(shell)} pinned dark, page {Hex(page)} Plain White");
+    Console.WriteLine($"    BEFORE: heading/chip {Hex(PageTheme.OnSurface)} at {Ratio(PageTheme.OnSurface, page):F3}:1   " +
+                      $"muted {Hex(Over(PageTheme.OnSurfaceMuted, page))} at {Ratio(Over(PageTheme.OnSurfaceMuted, page), page):F3}:1");
+    Console.WriteLine($"    AFTER : heading/chip {Hex(PageTheme.OnPage)} at {Ratio(PageTheme.OnPage, page):F3}:1   " +
+                      $"muted {Hex(Over(PageTheme.OnPageMuted, page))} at {Ratio(Over(PageTheme.OnPageMuted, page), page):F3}:1");
+}
+Console.WriteLine();
+
 // ---- 9. THE GATE, and it is loud -------------------------------------
 //
 // Job 3: a non-zero exit, not a printed line. Section 2's per-paper FLAG loop
@@ -439,5 +507,14 @@ if (panelProofFailed)
     Console.Error.WriteLine("PanelProof FAILED: muted-on-panel is under the 3:1 floor on a shipped paper - see section 2.");
     return 1;
 }
+// Item 2.1 gates the same way and for the same reason. A section that only
+// PRINTS "UNDER THE FLOOR" is a section nobody reads on the run that breaks it.
+if (pageInkFailed)
+{
+    Console.WriteLine("  FAIL: a bare pane's ink is under the 3:1 floor on a shipped paper - see section 10.");
+    Console.Error.WriteLine("PanelProof FAILED: a bare pane's ink is under the 3:1 floor on a shipped paper - see section 10.");
+    return 1;
+}
 Console.WriteLine("  PASS: muted-on-panel clears the 3:1 floor on all nine shipped papers.");
+Console.WriteLine("  PASS: the bare pane's ink and muted ink clear the 3:1 floor on all nine shipped papers.");
 return 0;

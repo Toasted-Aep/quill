@@ -1,4 +1,5 @@
 using Quill.Helpers;
+using Quill.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -148,17 +149,36 @@ public sealed class CanvasPane
     /// chrome, so a theme change rebuilds rather than repaints.</summary>
     public void Rebuild()
     {
-        try { _slot.Child = _build(); }
-        catch { _slot.Child = ChromeUi.Caption("This panel could not be built."); }
+        // 2.1: built inside the on-page scope. This pane is BARE by the measured
+        // reference quoted at the top of this file, so everything the builder
+        // makes is standing on the PAPER and must take the paper's ink. Before
+        // this the Precision panel drew #F2F2F2 on a #FCFCFC page - 1.091:1,
+        // headings, chips and descriptions all invisible on the default paper of
+        // a default install.
+        //
+        // The scope wraps the CATCH's caption too: a failure message inked from
+        // the shell would be the one thing in the panel nobody could read.
+        using (ChromeUi.PageInk())
+        {
+            try { _slot.Child = _build(); }
+            catch { _slot.Child = ChromeUi.Caption("This panel could not be built."); }
+        }
         Repaint();
     }
 
     /// <summary>Re-inks the chrome-free parts after a theme change.</summary>
     public void Repaint()
     {
+        using var _ = ChromeUi.PageInk();
         _title.Foreground = new SolidColorBrush(ChromeUi.Ink);
         var mark = Icons.Stroked(Icons.Close, ChromeUi.Ink, 12, 1.6);
         if (mark != null) { mark.Opacity = 0.55; _close.Content = mark; }
+        // The stock WinUI controls a pane hosts - the Precision panel's two
+        // Sliders - resolve their own brushes from ElementTheme, not from
+        // PageTheme, so the element theme has to be told which ground they are
+        // on as well. Exactly what §27 did for a panel with PanelIsDark; this is
+        // the same move for a pane with no panel.
+        _root.RequestedTheme = PageTheme.PageIsDark ? ElementTheme.Dark : ElementTheme.Light;
     }
 
     /// <summary>Only rebuilds if it is actually on screen — a closed pane costs
