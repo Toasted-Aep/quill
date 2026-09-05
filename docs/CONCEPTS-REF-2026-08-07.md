@@ -8272,3 +8272,74 @@ grow an oplog past 2 MB (or lower `CompactThresholdBytes` for the test),
 trigger a save, and confirm `oplog.<device>.jsonl.bak` appears next to the
 freshly compacted log and holds the pre-compaction content.
 
+## 35 Reclaiming a thumbnail by knowing it's gone, not by guessing it is — 2026-09-06
+
+**Wave 4, item 4.2.** `thumbs/` never removed a page's cached PNGs on
+delete — only `ThumbnailCache.Sweep` existed, and it only clears OLDER
+stamps for a page that still exists (the page changed, so its old-content
+key is dead). A deleted page's key never comes back around, so its file
+just sits there. Confirmed by reading the whole class: nothing in it, or in
+any caller, ever removes a file keyed by a page id that has left the
+library.
+
+**The hazard named in the brief is real and shaped the design.** The
+tempting fix is a reconciliation sweep: list every file in `thumbs/`,
+compute the set of live page ids from the library, delete anything whose id
+isn't in that set. That sweep is only as correct as the snapshot of "live
+page ids" it was handed — taken mid-load, or missing a page a caller forgot
+to enumerate (nested folders, a page held only in an in-flight edit), it
+reaps a thumbnail for a page that is very much still there. The gallery
+either re-renders it (a wasted frame, tolerable) or, if the render path is
+also failing that day, shows nothing where a thumbnail used to be — which is
+strictly worse than the indefinite leak this item set out to fix.
+
+**So the fix never builds that set at all.** `ThumbnailCache.Forget(Guid
+pageId)` takes a single page id and deletes every cached variant for it
+(all sizes, crop states, background overrides — the filename prefix
+`{pageId:N}-` is common to all of them, and a GUID's fixed 32-hex-char `"N"`
+form makes that prefix match unambiguous). It is called from exactly the
+three places in `LibraryStore` that remove a page from the live tree:
+
+| call site | what it forgets |
+|---|---|
+| `DeletePage` | the one page just removed |
+| `DeleteSection` | every page under `sec.Pages`, read from the very object just spliced out |
+| `DeleteNotebook` | every page under `nb.Sections.SelectMany(s => s.Pages)`, same reasoning |
+| `SyncLog.Apply`'s `"pg"` delete case | the one page a PEER just deleted, the moment `MergeForeign` removes it from our tree too |
+
+Every call site already holds a direct reference to the exact object(s) it
+just removed — there is no "list of live pages" to go stale, because nothing
+is being reconciled against a list at all. The confirmation and the forget
+happen on the same object, in the same call, which is what "cannot delete a
+thumbnail whose page it has not positively confirmed is gone" means taken
+literally.
+
+**Soft-delete, not purge, is where this fires.** All three `LibraryStore`
+call sites are the TRASH-BIN delete (`DeleteNotebook/Section/Page`), not
+`Purge`/`PurgeAll`/`AutoPurgeExpired`. Deliberately: "deleting a page
+reclaims its thumbnail" reads as the delete action, not the 30-day-later
+purge, and the page object itself survives inside the `TrashEntry` either
+way — `Restore` reinstates the same `NotePage` reference, and
+`ThumbnailCache.GetAsync` renders straight from a `NotePage` regardless of
+whether it is reachable from `Library.Notebooks`, so a restored page just
+re-renders once on next ask. No second hook was needed at purge time
+because there is nothing left in `thumbs/` for a purge to find by then.
+
+**Why the sync path also needed it.** `SyncLog.MergeForeign` applies a
+peer's page-delete op by removing the page from every section it can find
+it in — that is a page "being deleted" exactly as much as a local
+`DeletePage` call is, just arriving from another device instead of this
+one's own UI. Left alone it would have been a second, quieter version of
+the same leak, so `Apply`'s `"pg"` case now forgets the thumbnail right
+where it confirms the page is gone from `lib`, mirroring `LibraryStore`'s
+three sites exactly.
+
+**NOT VERIFIED ON SCREEN.** Deleting a notebook/section/page and checking
+`thumbs/` for the file(s) actually disappearing, and separately confirming
+a *restored* page's thumbnail reappears (re-rendered, not corrupted or
+blank), both need the running app. The C# build is clean — 0 warnings, 0
+errors, `dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64
+--no-incremental` — confirmed after `Quill.exe`, which had been running and
+holding the output binaries locked for item 4.1's build, was no longer
+running; nothing was done in this session to start or stop it either way.
+

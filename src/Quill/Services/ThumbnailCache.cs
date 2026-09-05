@@ -138,4 +138,45 @@ public static class ThumbnailCache
         }
         catch { }
     }
+
+    /// <summary>4.2: reclaims every cached thumbnail file (every size, crop and
+    /// background-override variant) for one page whose removal from the live
+    /// library the CALLER has just positively confirmed — e.g. it was just
+    /// spliced out of a Section's Pages list, or a sync op just deleted it.
+    ///
+    /// <para>Deliberately NOT a reconciliation sweep that diffs the thumbs/
+    /// folder against "the current set of live page ids": building that set
+    /// requires walking the whole library at exactly the right moment, and a
+    /// stale or partial snapshot (mid-load, a page a caller forgot to include)
+    /// would delete a live page's thumbnail — which then either regenerates
+    /// (wasted work) or, if the render path is also having a bad day, silently
+    /// does not (the exact hazard the roadmap named). Keying off the page id
+    /// the caller already knows is gone removes that failure mode entirely:
+    /// there is nothing to reconcile, so there is nothing to get stale.</para>
+    ///
+    /// <para>Safe to call for a page that turns out to have no cached
+    /// thumbnail yet (never rendered) or none on disk any more — this is
+    /// cache invalidation, not the deletion of record.</para></summary>
+    public static void Forget(Guid pageId)
+    {
+        string prefix = pageId.ToString("N") + "-";
+        lock (Gate)
+        {
+            foreach (var k in Mem.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+                Mem.Remove(k);
+        }
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(Dir, prefix + "*.png"))
+                try { File.Delete(f); } catch { }
+        }
+        catch { }   // Dir may not exist yet — nothing to reclaim either way
+    }
+
+    /// <summary>Convenience for a notebook/section delete, which drags every
+    /// page under it out of the live tree at once.</summary>
+    public static void Forget(IEnumerable<Guid> pageIds)
+    {
+        foreach (var id in pageIds) Forget(id);
+    }
 }
