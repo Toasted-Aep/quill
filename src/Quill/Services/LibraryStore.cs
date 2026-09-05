@@ -117,7 +117,15 @@ public static class LibraryStore
             // sitting right there and merely failed to parse would silently point
             // the app at another folder — exactly the cross-location trap the
             // library load path closes. So only migrate when nothing is here.
-            if (_settings == null && !sawFile)
+            // ...and NOT when QUILL_DATA_FOLDER is redirecting us (#2.0). This
+            // read is the reason five scratch runs looked isolated and were not:
+            // an empty scratch folder has no settings.json, so it adopted the
+            // REAL user's Documents\LectureInk\settings.json - which happens to
+            // carry ImportedLegacy=true, so the merge below was skipped and the
+            // leak stayed hidden. Seed a settings.json (run 16 did, for the
+            // theme) and the adoption stops, the flag reverts to false, and the
+            // merge runs. An isolated instance must read no file of the user's.
+            if (_settings == null && !sawFile && !IsIsolated)
             {
                 try
                 {
@@ -252,6 +260,11 @@ public static class LibraryStore
     {
         yield return FilePath;
         yield return FilePath + ".bak";
+        // An isolated instance has no lineage older than its own folder. Leaving
+        // the legacy paths in here would also make `anySource` true for an EMPTY
+        // scratch folder, so Load would report "found a library and could not
+        // read it" instead of seeding - a harness that cannot start.
+        if (IsIsolated) yield break;
         yield return Path.Combine(OldAnchorDir, "library.json");
         yield return Path.Combine(OldAnchorDir, "library.json.bak");
         yield return LegacyFilePath;
@@ -311,7 +324,9 @@ public static class LibraryStore
             // failed to parse: the user would be shown stale notes, saving would
             // be enabled, and the next autosave would overwrite the real file
             // with them. So only migrate when there is nothing here at all.
-            if (lib == null && !primaryExists)
+            // ...and never under isolation, where "nothing here at all" means an
+            // empty scratch folder, not a user who upgraded (#2.0).
+            if (lib == null && !primaryExists && !IsIsolated)
             {
                 lib = TryRead(Path.Combine(OldAnchorDir, "library.json"), preserveCorrupt: false)
                     ?? TryRead(Path.Combine(OldAnchorDir, "library.json.bak"), preserveCorrupt: false)
@@ -338,7 +353,16 @@ public static class LibraryStore
             // location but not in the current central library (this restores notebooks
             // that an earlier version left behind). Runs in the user's normal session
             // where the old location is fully visible.
-            if (!Settings.ImportedLegacy)
+            //
+            // Gated on IsIsolated as well (#2.0). This is the path run 16 caught:
+            // it is flag-driven, not File.Exists-driven, so pre-seeding the
+            // scratch library.json - the gate that stops MigrateFromLegacyIfNeeded
+            // - does not stop it, and three of the user's real notebooks were
+            // merged into a scratch gallery that was supposed to be empty. The
+            // flag is deliberately NOT set to true here under isolation: nothing
+            // was imported, and recording that it was would be a lie the folder
+            // carries forward.
+            if (!IsIsolated && !Settings.ImportedLegacy)
             {
                 var legacy = TryRead(LegacyFilePath, false) ?? TryRead(LegacyFilePath + ".bak", false);
                 int added = legacy != null ? Merge(lib, legacy) : 0;
@@ -437,6 +461,12 @@ public static class LibraryStore
         try
         {
             if (File.Exists(FilePath)) return;          // already on the new path
+            // An isolated instance (QUILL_DATA_FOLDER) has nothing to migrate
+            // FROM: the legacy folders are the real user's (#2.0). This gate used
+            // to be File.Exists(FilePath) alone, which a harness satisfied by
+            // pre-seeding a library - fine until a SECOND import path turned up
+            // that a seeded library does not gate.
+            if (IsIsolated) return;
 
             // prefer the pre-rename Documents\LectureInk library, then the old
             // hidden AppData location

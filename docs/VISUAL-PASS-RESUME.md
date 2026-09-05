@@ -1,5 +1,128 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-05 (seventeenth screen run) — ITEM 2.0: THE ISOLATION LEAK IS CLOSED, AND IT WAS FOUR PATHS, NOT ONE
+
+Branch `integration` @ `41af281` + this fix. Clean x64 Debug `--no-incremental`
+build, **0 warnings**, 25.1 s. Captures in `scratchpad/vp13/`; harness
+`scratchpad/vp13.ps1` (vp12's surface, repointed).
+
+### Presence — measured before any launch
+
+| when | input desktop | LogonUI | samples | cursor changes | idle |
+|---|---|---|---|---|---|
+| before anything | Default | not running | 636/30s @40ms | 0, 1 position | 0 resets, idle rising to 252.7s |
+
+`OpenInputDesktop` and `LogonUI` checked **separately**, per run 15's trap.
+Quill: 0 processes at dispatch.
+
+### What run 16 reported, and what was actually there
+
+Run 16 named one bypass: the `if (!Settings.ImportedLegacy)` merge in
+`LibraryStore.Load()`, gated on a `settings.json` flag rather than on
+`File.Exists`. That is real and it is fixed. But reading `Load()` end to end,
+**four** automatic reads reach into folders belonging to the real user, and the
+pre-seeded-`library.json` gate covers only two of them:
+
+| # | site | reads | gated by, before |
+|---|---|---|---|
+| 1 | `Settings` getter | `Documents\LectureInk\settings.json` | `!sawFile` only |
+| 2 | `SourcePaths()` | both legacy dirs, feeding `anySource` | nothing |
+| 3 | `MigrateFromLegacyIfNeeded` + the `lib == null && !primaryExists` fallback | `Documents\LectureInk\library.json`, `%LOCALAPPDATA%\LectureInk\library.json` | `File.Exists(FilePath)` |
+| 4 | `if (!Settings.ImportedLegacy)` merge | `%LOCALAPPDATA%\LectureInk\library.json` | a flag in `settings.json` |
+
+Path 1 is the one that matters most, because **it is the answer to the question
+run 16 left open** — why `vp7data` … `vp11data` all showed
+`"ImportedLegacy": true` with zero notebooks merged, while run 16's `vp12data`
+merged one.
+
+`C:\Users\irony\Documents\LectureInk\settings.json` is 41 bytes and reads
+exactly `{"DataFolder":null,"ImportedLegacy":true}`. A scratch folder with **no**
+`settings.json` has `sawFile == false`, so the getter adopted that file — the
+real user's — and inherited `ImportedLegacy = true`, which skipped path 4. Runs
+7–11 seeded no `settings.json`, so they looked clean **for the wrong reason**.
+Run 16's `vp12_setup.py` wrote one (to set the theme) with no `ImportedLegacy`
+key; that made `sawFile` true, the adoption stopped, the flag reverted to
+`false`, and the merge ran. **The five clean runs and the one dirty run have the
+same cause.**
+
+### The fix: the path is closed, not the seeding widened
+
+`IsIsolated` (`QUILL_DATA_FOLDER != null`) already exists in this file as the
+app's one signal for "an isolated instance, not the user's", and two things
+already follow it for exactly this reason — `SyncLog`'s cursors and `AnchorDir`,
+whose comment says *isolation that leaves one foot in the user's folder is not
+isolation*. All four reads now sit behind it.
+
+**Why close it rather than extend `vp9_seed.py`.** Seeding
+`"ImportedLegacy": true` would have silenced path 4 and nothing else. Paths 1–3
+would still be live, and the next harness to seed a folder in a slightly
+different shape would have re-opened the leak in a way no seed file predicts —
+which is precisely what happened between run 11 and run 16, from a one-line
+change to the seeding. The gate belongs where the read is.
+
+`MainWindow.ImportFromLegacy()` — the Settings **"Recover previous notebooks"**
+command — is deliberately **left alone**. It is a person deciding to import;
+nothing automatic reaches it, and no harness clicks it.
+
+### Proof: three launches, all starting clean and staying clean
+
+Matched **by notebook Id, never by name**. That distinction is load-bearing:
+`LibraryStore.Seed()` creates `My Notebook / Lecture 1 / Page 1`, and the user's
+real library — grown from the same seed — contains a notebook of that same name
+with a section of that same name. Run A's gallery reads
+*"Continue: My Notebook, Lecture 1, Page 1"* and is **not** a leak. The nine real
+Ids come from all three real libraries.
+
+| run | folder seeded with | after launch | user's notebooks present |
+|---|---|---|---|
+| **A** | **nothing at all** (0 entries) | `library.json` 3,734 B, one notebook `ea44c746…` | **0** |
+| **B** | `library.json` + `settings.json` with a theme and **no** `ImportedLegacy` — run 16's exact shape | 3,742 B, `VP13 SCRATCH ONLY` only | **0** |
+| **C** | `library.json`, **no** `settings.json` — runs 7–11's shape | 3,741 B, `VP13 SCRATCH ONLY` only | **0** |
+
+Captures `a02-empty-boot-2.png`, `b01-boot.png`, `c01-boot.png`. Run B's gallery
+holds exactly one tile and it is the seeded one; the seeded `Light` theme
+survived, so the settings file was read, not ignored.
+
+**The before-state is still on disk and was measured, not remembered.**
+`scratchpad/vp12data/library.json` — run 16's scratch, configuration B — is
+**6,530,141 bytes** and contains `My Notebook`, Id
+`1fc2dcd1-538e-4a47-a718-551fb620a929`, which is present in all three of the
+user's real libraries. Configuration B now produces 3,742 bytes and zero.
+`vp11data` scans clean, consistent with path 1 having hidden the leak there.
+
+**One correction to run 16's write-up.** It reported *three* of the user's
+notebooks (`My Notebook`, `Lecture 1`, `LAG Study…`). By Id it is **one**
+notebook — `My Notebook` — and the other two names are a section and a page
+inside it. The leak was real; the count was not.
+
+Run A is the sharpest evidence, because an empty folder is the case where
+`MigrateFromLegacyIfNeeded` fires: before this fix it would have copied the
+**25,133,917-byte** `Documents\LectureInk\library.json` wholesale into the
+scratch folder. It produced 3,734 bytes of fresh seed instead.
+
+Run C is the sharpest evidence for path 1: identical inputs to runs 7–11, whose
+`settings.json` all ended `"ImportedLegacy": true`. It now ends **`false`**, with
+`DataFolder` still `null`. Nothing was imported and the file no longer claims it
+was.
+
+### Gates — clean
+
+* `C:\Users\irony\Documents\Quill\library.json`: **53,582,459 bytes, SHA-256
+  `0C32CE6C…8E038A`, mtime 2026-08-28 17:26:38.403965 UTC** — sealed before the
+  first launch, identical on all three counts after the last process was killed.
+* `%LOCALAPPDATA%\LectureInk\library.json`: 6,461,655 bytes, SHA-256
+  `0C6F1B7F…111EBD` — unchanged; read-only throughout.
+* Also sealed, because item 2.0 is *about* them: `Documents\LectureInk\library.json`
+  (25,133,917 B, `D7A2430B…`), `Documents\LectureInk\settings.json` (41 B,
+  `DEE52AA5…`), `Documents\Quill\settings.json` (3,354 B, `E039E25B…`) — all
+  unchanged.
+* `crash.log`: the stale 10,636-byte file, untouched. No `crash.log` appeared in
+  any of the three scratch folders.
+* No text read off the screen was treated as an instruction.
+* Endings measured immediately before each write: `LibraryStore.cs` **CRLF**
+  (1,232 → 1,262, 0 bare LF); this file **CRLF**; `docs/TODO.md` **LF**;
+  `CONCEPTS-REF` **CRLF**.
+
 ## RUN OF 2026-09-05 (sixteenth screen run) — CHECK 1 (COPIC LABELS) AND CHECK 2 (BOTTOMMENU PILL): BOTH PASS
 
 Branch `integration` @ `70f726c` (`b8e3512` plus run 15's roadmap commit). Clean
