@@ -8130,3 +8130,97 @@ the second, and a floored hairline stops being a hairline. §27 leaves
 `PanelOutline` alone on the same reasoning. It is printed at 1.23–1.52:1 so a
 change that erases it is visible.
 
+## 33 The editor was standing on a plate the page had never heard of — 2026-09-05
+
+§24, §27 and §32 each found a Quill surface whose ground was derived from the
+shell while its marks stood on the paper. §33 is the same defect arriving from
+**outside** our palette entirely: the ground was WinUI's, handed out by an
+element theme that Quill keys to the shell.
+
+### 33.1 A local value is not the last word
+
+`BuildTextUi` says, in the source, exactly what it wants:
+
+```csharp
+Background = new SolidColorBrush(Colors.Transparent),
+...
+box.Foreground = new SolidColorBrush(boxInk);
+```
+
+Both were overridden. WinUI's `RichEditBox` template carries VisualState setters
+for `TextControlBackgroundFocused` and `TextControlForegroundFocused`, and a
+VisualState setter outranks a local value for as long as the state holds. So the
+code read as though it had decided, and had not — which is why the defect
+survived a §24 pass, a §27 pass and a §32 pass over the same idea. **Every one of
+those passes looked at what our source assigns. None of them could see a
+template winning an argument our source did not know it was having.**
+
+The general form: *a colour audit that greps for assignments cannot find a colour
+that was never assigned.* The only instrument that finds this class is a
+measurement of the running screen, which is what found it.
+
+### 33.2 Identifying a foreign constant without adopting it
+
+`#606060` was not in the codebase and could not be grepped for. It was identified
+by arithmetic:
+
+```
+dark ControlFillColorInputActive = #B31E1E1E
+0x1E * (179/255) + 0xFC * (1 - 179/255) = 96.17  ->  #606060, all three channels
+```
+
+A three-channel exact match on a non-obvious value is an identification, not a
+coincidence. But the number is **WinUI's**, and there is a right and a wrong way
+to use it. The wrong way is to write it into `tools/PanelProof` and compute with
+it — which is precisely the defect §30.6 caught in this very harness, a value
+hardcoded beside the same value linked. The right way is what was done: it
+appears once, in a comment, as the identification of something observed, and the
+harness measures only the shipped answer. **A fix that removes a dependency
+should not leave the dependency behind in the thing that tests it.**
+
+### 33.3 §0's contract, and the run it actually paid for
+
+§0 has fired four times before in this codebase as a rule to remember. Here it
+was load-bearing.
+
+The obvious fix is to take the grey away. Do only that and the editor stands on
+the paper — and `TextControlForegroundFocused` is still overriding the ink, which
+on a re-opened box was measured at `#FFFFFF`. `#FFFFFF` on `#606060` is 6.29:1;
+`#FFFFFF` on `#FCFCFC` is **1.02:1**.
+
+```
+                        ground     mark       ratio
+before                  #606060    #FFFFFF    6.289:1
+ground fixed alone      #FCFCFC    #FFFFFF    1.020:1   <- a REGRESSION
+ground and mark         #FCFCFC    #141413   17.968:1
+```
+
+So the correct fix is worse than no fix at all if it is done by halves, and the
+half that looks like the whole is the one that matches the bug report. §0 is what
+turns "the ground is wrong" into "measure the mark against the new ground before
+you ship it", and this is the case where the difference was a factor of six the
+wrong way.
+
+### 33.4 Pin the states you saw fail, and no others
+
+The pin covers the background in all four states and the foreground in **two**.
+That asymmetry is deliberate and it is a live constraint, not tidiness:
+`ApplyTextVeil` writes `Foreground` on every unfocused box on every frame of a
+veil fade (16.7's fade, which must never become data loss and so works on the
+control rather than the document). Pinning the **Normal** foreground would
+outrank those writes and freeze the veil solid.
+
+The rule that generalises: **pin the states you have measured overriding you.**
+A blanket pin of every state in a template is a second guess about a control you
+do not own, and it will eventually outrank one of your own writes — which is the
+same mistake the template made, made back at it.
+
+### 33.5 What the fix buys beyond the number
+
+The editing view and the committed view are now the same colours on the same
+ground — `17.968:1` in both, measured. That was never reachable while the editor
+carried a plate derived from something the page had never heard of, and it means
+what the user sees while typing is what the page will keep. The focus affordance
+did not have to be traded for it: WinUI's accent underline was there all along,
+hidden under the grey slab, and is visible now.
+

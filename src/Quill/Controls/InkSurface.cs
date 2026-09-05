@@ -3703,6 +3703,65 @@ public sealed class InkSurface : UserControl
             ? ColorUtil.Parse(hex)
             : PageTheme.TextInk(_page != null ? ColorUtil.Parse(_page.Background) : Colors.White);
 
+    /// <summary>2.2: PINS THE EDITOR'S OWN GROUND AND MARK AGAINST WinUI'S
+    /// VISUAL STATES.
+    ///
+    /// <para><b>The defect, measured on screen.</b> A box being edited on a
+    /// <c>#FCFCFC</c> page drew its words on <c>#606060</c> - a dark grey slab
+    /// on white paper, <b>2.93:1</b>, under <see cref="PagePlate.MarkFloor"/>,
+    /// and the lowest-contrast text anywhere on the page is the text the user is
+    /// currently typing.</para>
+    ///
+    /// <para><b>Where #606060 comes from - arithmetic, not a guess.</b> The box
+    /// below sets <c>Background = Transparent</c> and <c>Foreground = boxInk</c>,
+    /// and WinUI's RichEditBox template overrides BOTH from its visual states:
+    /// a VisualState setter outranks a local value for as long as the state
+    /// holds. <c>TextControlBackgroundFocused</c> resolves to the DARK theme's
+    /// <c>ControlFillColorInputActive</c>, <c>#B31E1E1E</c>, and composited over
+    /// the paper that is
+    /// <code>0x1E * (179/255) + 0xFC * (1 - 179/255) = 96.17 -> #606060</code>
+    /// on all three channels. The theme is dark because
+    /// <c>MainWindow.ApplyTheme</c> sets <c>RootGrid.RequestedTheme</c> from
+    /// <c>PageTheme.IsDark</c> - the SHELL's darkness - and on a default install
+    /// the shell is a pinned dark <c>#0F0E10</c> under white paper. §0's split
+    /// pair once more, arriving through a WinUI resource rather than through one
+    /// of ours.</para>
+    ///
+    /// <para><b>Why the ground and the mark HAD to move together.</b> Fixing the
+    /// ground alone would have shipped a regression, and it was measured before
+    /// it was avoided. <c>TextControlForegroundFocused</c> overrides
+    /// <c>Foreground</c> the same way, and on a RE-OPENED box it wins: screen
+    /// reading <c>#FFFFFF</c> on <c>#606060</c>, 6.29:1. Take the grey away
+    /// without taking the white away and that becomes <c>#FFFFFF</c> on
+    /// <c>#FCFCFC</c> - <b>1.02:1</b>, invisible, far worse than the defect being
+    /// fixed. §0's rule is not a formality here: it is the difference between
+    /// this change and a much worse bug.</para>
+    ///
+    /// <para><b>What is pinned, and what deliberately is not.</b> Background:
+    /// all four states, to the Transparent this box already declares - the
+    /// editor then stands on the PAGE, where <see cref="PageTheme.TextInk"/>
+    /// carries a proven floor of 4.183:1 over the WHOLE sRGB gamut, not merely
+    /// over the nine shipped papers. Foreground: <b>only</b> PointerOver and
+    /// Focused, the two states that were observed overriding it. The NORMAL
+    /// state is left alone on purpose - <c>ApplyTextVeil</c> writes
+    /// <c>Foreground</c> on every unfocused box on every frame of a veil fade,
+    /// and pinning Normal would freeze the veil solid.</para></summary>
+    private static void PinEditorBrushes(RichEditBox box, Color ink)
+    {
+        try
+        {
+            var clear = new SolidColorBrush(Colors.Transparent);
+            box.Resources["TextControlBackground"] = clear;
+            box.Resources["TextControlBackgroundPointerOver"] = clear;
+            box.Resources["TextControlBackgroundFocused"] = clear;
+            box.Resources["TextControlBackgroundDisabled"] = clear;
+            var mark = new SolidColorBrush(ink);
+            box.Resources["TextControlForegroundPointerOver"] = mark;
+            box.Resources["TextControlForegroundFocused"] = mark;
+        }
+        catch { }
+    }
+
     /// <summary>25.2: writes a colour ACROSS A WHOLE LIVE BOX - the default
     /// character format so the next character typed takes it, and every existing
     /// character so what is already there takes it too. Both are needed: the
@@ -8797,6 +8856,10 @@ public sealed class InkSurface : UserControl
         // name that says otherwise is how the next reader gets it wrong.
         var boxInk = TextInkFor(t);
         box.Foreground = new SolidColorBrush(boxInk);
+        // 2.2: and make that Foreground, and the Transparent Background above,
+        // survive WinUI's own visual states. Without this the editor paints
+        // #606060 under #141413 on white paper (2.93:1) and #FFFFFF on re-open.
+        PinEditorBrushes(box, boxInk);
         try
         {
             var dcf = box.Document.GetDefaultCharacterFormat();

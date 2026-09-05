@@ -491,6 +491,73 @@ Console.WriteLine($"  worst mark-on-page over the nine shipped papers: {worstPag
 }
 Console.WriteLine();
 
+// ---- 11. ITEM 2.2: THE TEXT EDITOR'S OWN GROUND -----------------------
+//
+// A box being edited on a #FCFCFC page drew its words on #606060 - 2.93:1,
+// under the floor, the lowest-contrast text on the page being the text the
+// user is currently typing.
+//
+// WHERE THAT GREY CAME FROM, AND WHY THIS SECTION DOES NOT LINK IT.
+// InkSurface sets Background = Transparent and Foreground = boxInk on the
+// RichEditBox; WinUI's template overrides both from its visual states, and a
+// VisualState setter outranks a local value while the state holds.
+// TextControlBackgroundFocused resolves to the DARK theme's
+// ControlFillColorInputActive, #B31E1E1E, and over the paper that composites to
+//     0x1E * (179/255) + 0xFC * (1 - 179/255) = 96.17  ->  #606060
+// on all three channels. The theme is dark because MainWindow.ApplyTheme keys
+// RootGrid.RequestedTheme to PageTheme.IsDark - the SHELL's darkness.
+//
+// #B31E1E1E is WinUI'S constant, not ours. It is written here ONCE, in a
+// comment, as the identification of a value OBSERVED ON SCREEN - never as a
+// number this section computes with. That distinction is the whole of 30.6's
+// lesson: a harness that hardcodes a value it also links is checking its own
+// transcription. If WinUI ever changes that brush the comment goes stale and
+// the fix stays right, because the fix REMOVES the dependency on it.
+//
+// So this section measures only the shipped answer: the editor now stands on
+// the page, and its ink is PageTheme.TextInk of that page - both linked.
+Console.WriteLine("== 11. item 2.2: the text editor stands on the page ==");
+Console.WriteLine("| page | ground | TextInk | ratio | floor |");
+Console.WriteLine("|---|---|---|---|---|");
+bool editorFailed = false;
+double worstEditor = 999;
+string worstEditorPaper = "";
+foreach (var (name, kind) in papers)
+{
+    var pg = GroundOf(kind);
+    var ink = PageTheme.TextInk(pg);
+    double r = Ratio(ink, pg);
+    if (r < worstEditor) { worstEditor = r; worstEditorPaper = name; }
+    bool bad = r < PagePlate.MarkFloor;
+    if (bad) editorFailed = true;
+    Console.WriteLine($"| {name} | `{Hex(pg)}` | `{Hex(ink)}` | {r:F2}:1 | {PagePlate.MarkFloor:F1}:1 |{(bad ? "  <- UNDER THE FLOOR" : "")}");
+}
+foreach (var (name, g) in extra)
+{
+    var ink = PageTheme.TextInk(g);
+    Console.WriteLine($"| {name} | `{Hex(g)}` | `{Hex(ink)}` | {Ratio(ink, g):F2}:1 | (not gated: not shipped stock) |");
+}
+Console.WriteLine();
+Console.WriteLine($"  worst editor-ink-on-page over the nine shipped papers: {worstEditor:F3}:1  ({worstEditorPaper})");
+// TextInk's own remarks claim a floor of 4.183:1 over the WHOLE sRGB gamut, at
+// the crossing of the two inks' curves. Nine papers cannot verify a claim about
+// a gamut, so it is swept: a 3-step lattice is 636,056 grounds, the same lattice
+// 29 used for BestInk, and it is cheap enough to run every time.
+{
+    double floor = 99; Color at = default;
+    for (int r = 0; r < 256; r += 3)
+        for (int g = 0; g < 256; g += 3)
+            for (int b = 0; b < 256; b += 3)
+            {
+                var ground = Color.FromArgb(255, (byte)r, (byte)g, (byte)b);
+                double v = Ratio(PageTheme.TextInk(ground), ground);
+                if (v < floor) { floor = v; at = ground; }
+            }
+    Console.WriteLine($"  and over a 3-step sRGB lattice (636,056 grounds): floor {floor:F3}:1 at {Hex(at)}");
+    Console.WriteLine($"  -> the editor cannot go under the {PagePlate.MarkFloor:F1}:1 floor on ANY page, not merely on the nine.");
+}
+Console.WriteLine();
+
 // ---- 9. THE GATE, and it is loud -------------------------------------
 //
 // Job 3: a non-zero exit, not a printed line. Section 2's per-paper FLAG loop
@@ -515,6 +582,13 @@ if (pageInkFailed)
     Console.Error.WriteLine("PanelProof FAILED: a bare pane's ink is under the 3:1 floor on a shipped paper - see section 10.");
     return 1;
 }
+if (editorFailed)
+{
+    Console.WriteLine("  FAIL: the text editor's ink is under the 3:1 floor on a shipped paper - see section 11.");
+    Console.Error.WriteLine("PanelProof FAILED: the text editor's ink is under the 3:1 floor on a shipped paper - see section 11.");
+    return 1;
+}
 Console.WriteLine("  PASS: muted-on-panel clears the 3:1 floor on all nine shipped papers.");
 Console.WriteLine("  PASS: the bare pane's ink and muted ink clear the 3:1 floor on all nine shipped papers.");
+Console.WriteLine("  PASS: the text editor's ink clears the 3:1 floor on all nine shipped papers, and over the gamut.");
 return 0;
