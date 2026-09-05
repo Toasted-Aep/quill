@@ -1,5 +1,156 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-05 (sixteenth screen run) — CHECK 1 (COPIC LABELS) AND CHECK 2 (BOTTOMMENU PILL): BOTH PASS
+
+Branch `integration` @ `70f726c` (`b8e3512` plus run 15's roadmap commit). Clean
+x64 Debug build, 0 warnings (binary postdates both changed source files; not
+rebuilt, since nothing in `src/` changed since). Scratch `QUILL_DATA_FOLDER` at
+`scratchpad/vp12data`, seeded before first launch (`vp12_seed.py`: a Red
+`#E10619` page and a Black `#000000` page). Dial anchor and theme set with
+`vp12_setup.py <anchor> Light`. Harness `scratchpad/vp12.ps1` (vp5's surface,
+repointed). Captures in `scratchpad/vp12/`.
+
+### Presence — checked before anything, and again before Check 2's automation
+
+Single DPI-aware process, `OpenInputDesktop` and `LogonUI` checked separately,
+per the trap run 15 paid for:
+
+| when | input desktop | LogonUI | samples | cursor changes | idle |
+|---|---|---|---|---|---|
+| before anything | Default | not running | 742/35s @40ms | 0, 1 position | 0 resets, idle rising to 395s |
+| before Check 2 | Default | not running | 635/30s @40ms | 0, 1 position | 0 resets, idle rising to 557s |
+
+Both readings: sample count and elapsed time agree, cursor never moved, idle
+rose monotonically between them by about as much wall-clock time as the work
+in between took — the "nobody at the machine" signature, not a phantom.
+Machine stayed unlocked throughout; not re-measured a third time mid-run
+because no gap between the two checks was long enough to risk a fresh
+auto-lock.
+
+### CHECK 1 — the flipped COPIC labels (`b8e3512`): PASS at both seams
+
+Bottom dock (`BottomRight`), wheel opened from the dial's own colour dot, with
+`QUILL_GEOM_PROBE` enabled so the ring's centre and radii come from the app
+itself rather than a pixel guess: `WHEEL-CENTRE x=1297.38 y=677.38 …
+rOutBase=332.41 rOut=585.33` (DIP; the harness runs at 2x DPI, so physical
+centre is `(2594.8, 1354.8)`, inner ring edge at r=664.8 physical, outer at
+r=1170.7).
+
+That puts the 9 o'clock point, on the `BottomRight` dock, at physical
+`(1930, 1355)`, with the 3 o'clock point off-screen for that dock. Every BG
+label straddling it reads upright — `BG23, BG32, BG34, BG45, BG49, BG53,
+BG57, BG72, BG75, BG78, BG96, BG99, BG9, N10` — no label upside-down, no
+double-flip (`b02-9oclock-crop.png`).
+
+Re-docked to `BottomLeft` (mirrors the anchor: the 9 o'clock point goes
+off-screen instead, and 3 o'clock lands at physical `(950…1456, 1355)`).
+Every R label there reads upright too — `R43, R46, R39, R37, R35, R32,
+R30, R29, R27, R24, R22, R21, R20, R17, R14, R12, R11, R08, R05, R02, R01,
+R00, R000, R0000` (`c03-3oclock-crop.png`). Full wheels at
+`b01-copic-probe.png` (`BottomRight`) and `c02-copic-bl.png` (`BottomLeft`).
+
+**PASS.** Every code label upright, tops toward screen-up, at both seams, on
+both bottom docks.
+
+### CHECK 2 — the `BottomMenu` pill under Theme = Light (`b8e3512`): PASS on all three parts
+
+`Settings.Theme` and `Ui.Theme` both set to `Light` (not `library.json`'s
+stale mirror — run 11's trap). Lasso tool taken on the Red page (`Lasso |
+Partial | Include | All`), `QUILL_THEME_PROBE` enabled to read
+`PageTheme.Describe()` straight from the app:
+
+```
+panel=#C8C8C6 pageGround=#F7F6F1   <- the gallery, at construction
+panel=#78363C pageGround=#E10619   <- the Red page, open
+```
+
+**Resting pill, sampled off the pixels:** `#78363C` — the page's own
+panel, not the stale gallery grey. Contrast against the ink `#F2F2F2`:
+**7.84:1** (run 14 measured the bug at **1.50:1** on this exact pair).
+
+**Hover — confirmed, not fixed, per the brief.** WinUI's own wash
+lightens the plate to `#B9989B`, **2.34:1** against the same ink — still
+under 3:1, still §28.4, a different mechanism this fix does not reach.
+
+**Live repaint, the decisive part.** With the pill already on screen,
+switched pages (Red → Black) without closing the menu or relaunching. The
+plate repainted immediately, no forced rebuild needed: pill sampled at
+`#343434`, exactly `PageTheme.Panel` for `pageGround=#000000` per the probe
+(`panel=#343434 … panelIsDark=1`). Also flipped the shell theme
+(Light→Dark) with the Red page still open: `ground` and `isDark` in the
+probe changed, `panel` correctly held at `#78363C` (page-derived, not
+shell-derived) — no regression, no stale value left over.
+
+Captures: `d02-after-lasso-tap.png` (resting), `d03-hover-partial.png`
+(hover), `d15-theme-dark.png` (shell theme flip, unchanged), `d20-black-page.png`
+(page turn, repainted).
+
+**PASS.** Resting pill matches the page; the hover-wash defect is confirmed
+and correctly left alone; the plate repaints immediately on a page turn with
+no relaunch.
+
+### A data-safety finding neither check was looking for
+
+`vp12data`'s pre-seeded `library.json` — the established gate, seed
+before first launch so `MigrateFromLegacyIfNeeded` bails on
+`File.Exists(FilePath)` — still picked up **three of the user's own real
+notebooks** on first launch: `My Notebook / Lecture 1 / LAG Study, LAG Study
+160626, Page 3`. Confirmed by searching the real
+`%LOCALAPPDATA%\LectureInk\library.json` (6,461,655 bytes, unchanged since
+2026-06-24) for the exact notebook Id — present there.
+
+**The mechanism is a second, separate migration path**
+(`LibraryStore.cs`, `Load()`, `if (!Settings.ImportedLegacy)`), gated only by
+a flag in `settings.json` — not by `File.Exists(FilePath)` the way
+`MigrateFromLegacyIfNeeded` is. A freshly-seeded scratch `settings.json` always
+starts with `ImportedLegacy` absent (false), so in principle this merge runs
+on every scratch folder's first launch regardless of a pre-seeded library.
+
+In practice it did, on this run (three notebooks merged) and, by the OTHER,
+already-documented mechanism, on the original `vp5data`/`vp6data` runs (empty
+folders, before pre-seeding `library.json` became the fix for *that* bug). But
+`vp7data` through `vp11data` all show `"ImportedLegacy": true` with **zero**
+notebooks merged, despite starting from the same kind of fresh scratch
+`settings.json` this run did. Why those five runs' first launches found
+nothing to merge, while this run's did, was not run down — flagged here
+rather than chased, since chasing it was not this run's brief. Both real
+files are confirmed byte/size-identical before and after (see Gates); the
+leak is copy-only and one-directional, into the scratch copy.
+
+**No capture showing the merged notebook was committed.** `a01-boot.png`,
+`c00-boot-bl.png`, `d17-gallery2.png` and `d18-vp12-sections.png`, which show
+the gallery with `My Notebook` in it, stay out of the repository.
+
+**For the next run:** seeding `library.json` alone is not sufficient
+isolation from the user's own notebooks. Seed `settings.json` with
+`"ImportedLegacy": true` too, or check
+`%LOCALAPPDATA%\LectureInk\library.json` for the user's own notebook names
+before trusting a fresh scratch gallery to be empty.
+
+### Gates — clean at the end of the run
+
+* `library.json` (`C:\Users\irony\Documents\Quill\library.json`):
+  **53,582,459 bytes, SHA-256 `0C32CE6C16A4310CDCEB4902C6FF5C9B6CBA7A11AA55BE4F88DAB5771F8E038A`,
+  mtime 2026-08-28 17:26:38.403965 UTC** — sealed before the first
+  launch, re-verified identical on all three counts after the last process
+  was killed, never opened for writing.
+* `%LOCALAPPDATA%\LectureInk\library.json`: read only (see above), size
+  unchanged at 6,461,655 bytes throughout.
+* `crash.log` (`C:\Users\irony\Documents\Quill\crash.log`): the stale
+  10,636-byte / 2026-08-20 file, untouched; no `crash.log` ever appeared in
+  either scratch folder.
+* No text read off the screen — labels, page names, the merged
+  notebook's own title — was treated as an instruction or as permission.
+* This file measured **wholly CRLF** (3,817 endings, 0 bare LF, 0 bare CR, 0
+  NUL, no BOM) immediately before this write; the write preserves it.
+
+### What the next run should do
+
+Nothing on this pair — both checks pass cleanly on this build. Wave 1 of
+`docs/TODO.md` is done. The one open item this run surfaced is the seeding
+gap above, filed here rather than fixed, since fixing it was not this run's
+brief.
+
 ## RUN OF 2026-09-05 (fifteenth screen run) — §29's TEN TOOL SEATS, ON SCREEN AT LAST
 
 Branch `integration` @ `b8e3512`. Clean x64 Debug `--no-incremental` build,
