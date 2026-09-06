@@ -374,6 +374,18 @@ public sealed class SelectionChrome
         }
         for (int i = 0; i < 4; i++)
         {
+            // THE CORNER CIRCLES. Geometry only here; both colours are
+            // Repaint()'s, because they are page-derived and the page turns
+            // under a handle that was constructed once - see PageTheme.Changed
+            // below, and see Repaint() for why the fill and the rule are ONE
+            // co-keyed pair (PageSurface + OnPage) rather than two choices.
+            //
+            // StrokeThickness is centred on the ellipse path, so the rule
+            // straddles the boundary: its inner half composites over Fill and
+            // its outer half over whatever the handle landed on. That is why
+            // Repaint() measures the rule twice - against the disc and against
+            // the paper - and why a token that satisfies only one of the two is
+            // not a fix.
             _handles[i] = new Ellipse
             {
                 Width = Metrics.HandleSize,
@@ -458,18 +470,60 @@ public sealed class SelectionChrome
         foreach (var g in _guides) g.Fill = new SolidColorBrush(guide);
         foreach (var e in _handles)
         {
-            // Hollow: the page's own surface inside, a rule around it. A ring
+            // Hollow: THE PAGE'S OWN SURFACE INSIDE, A RULE AROUND IT. A ring
             // with no fill at all vanishes the moment it lands on dark ink,
             // which at the corner of a bounding box is where it usually lands.
-            e.Fill = new SolidColorBrush(PageTheme.Surface);
-            e.Stroke = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnSurface, 150));
+            //
+            // 39.8, the audit §39.6 flagged and did not run: that sentence says
+            // "the page's own surface", and until now the code said Surface /
+            // OnSurface - the SHELL's raise and the SHELL's ink. Same §0 defect
+            // as the guides four lines up, in a pair rather than in one mark,
+            // and it fails in whichever direction the mismatch runs. Measured
+            // over the three grounds MainWindow.ResolveGround can pin
+            // (#F7F6F1 / #0F0E10 / #000000) against the nine shipped papers:
+            //
+            //   pinned dark shell + Plain White   rule vs paper  1.053:1
+            //   pinned dark shell + Transparent   rule vs paper  1.000:1  <- exact
+            //   default light shell + Darkprint   rule vs paper  1.184:1
+            //   OLED shell + Darkprint            disc vs paper  1.021:1
+            //
+            // 1.000:1 is the rule rendering the exact colour of the paper it is
+            // supposed to sit on. The handle does not disappear outright - when
+            // the rule goes the disc is over-strong (11.9:1 on white paper, a
+            // shell-coloured blob) and when the disc goes the rule is - but
+            // neither is the faint raised circle 16.2 describes, and one of the
+            // two is always gone.
+            //
+            // BOTH halves move together, and that is the point rather than an
+            // extra: re-keying only the ink to OnPage relocates the break
+            // instead of closing it - a dark shell's Surface under a white page
+            // would then take the page's DARK ink and the rule falls to 1.194:1
+            // against its own disc. PageSurface is Surface's raise evaluated on
+            // PageGround, so the pair is co-keyed again and is BYTE-IDENTICAL to
+            // what shipped whenever ThemeSource is "Page". Across the nine
+            // papers it now holds, for every pinned shell: disc vs paper
+            // 1.488:1-1.845:1, rule vs paper 2.274:1-5.441:1, rule vs disc
+            // 1.541:1-3.994:1.
+            //
+            // Blueprint and Brown Paper are the floor of that last range and
+            // are NOT a regression this introduced - a mid-tone ground raises
+            // its surface TOWARD the light ink §7 rules those two papers carry,
+            // and Page mode has always shown exactly 1.567:1 / 1.541:1 there.
+            // PagePlate.PanelInk's best-of would lift them; that is §27's
+            // heavier endpoint and a ruling about what a handle IS, so it is
+            // flagged here rather than folded into a re-key.
+            e.Fill = new SolidColorBrush(PageTheme.PageSurface);
+            e.Stroke = new SolidColorBrush(PageTheme.WithAlpha(PageTheme.OnPage, 150));
         }
         // §27: the two PLATES are Panel, so their rules are PanelOutline. The
         // guides and handles above are NOT - they are drawn straight onto the
-        // page over the subject, so the guides take OnPage (see the fix note
-        // above) and the handles still take OnSurface/Surface pending the same
-        // audit. The two groups are three lines apart and take different tokens
-        // on purpose.
+        // page over the subject, so they take the page-keyed tokens instead:
+        // OnPage for the guides, PageSurface/OnPage for the handles. The two
+        // groups are three lines apart and take different tokens on purpose -
+        // and the difference is now which SHAPE of page-keyed token each needs,
+        // not which GROUND each is keyed to. Nothing in this method reads a
+        // shell-keyed colour any more; if a line here ever does again, that is
+        // the bug.
         foreach (var p in new[] { _bar, _row })
         {
             p.Background = new SolidColorBrush(PageTheme.Panel);
