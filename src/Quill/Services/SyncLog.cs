@@ -90,6 +90,85 @@ public static class SyncLog
 
     private static string CursorPath => Path.Combine(StateDir, "synccursors.json");
 
+    /// <summary>§39: writes one small state file the way library.json is
+    /// written - scratch file, forced to the platter, then swapped in under a
+    /// NAMED backup. This is <c>LibraryStore.WriteTemp</c> + <c>PromoteTemp</c>,
+    /// which item 4.1 already applied to the oplog compaction swap; those two
+    /// are private to <c>LibraryStore</c>, so the pattern is followed rather
+    /// than called.
+    ///
+    /// <para><b>Why these files earn it.</b> <c>File.WriteAllText</c> TRUNCATES
+    /// the destination and then writes into it, so there is a window in which
+    /// the live file is short or empty. For synccursors.json a torn read is
+    /// caught and answered with an EMPTY cursor set, which sets every peer's
+    /// offset back to 0 and replays their whole log - re-applying upserts the
+    /// user later erased. For deviceid.txt it is worse: a device that forgets
+    /// its id stops recognising <c>oplog.[its own id].jsonl</c> as its own and
+    /// replays its ENTIRE history at itself. High severity, low likelihood,
+    /// and the likelihood was the only thing keeping it quiet.</para>
+    ///
+    /// <para>The <c>.tmp</c> and <c>.bak</c> names sit outside the
+    /// <c>oplog.*.jsonl</c> glob <c>MergeForeign</c> scans, so even under
+    /// isolation - where StateDir IS the data folder - neither can ever be
+    /// picked up as a peer's log. Same reasoning as 4.1.</para>
+    ///
+    /// <para>It throws on failure rather than swallowing: every caller is
+    /// already inside a try that treats a failed cursor write as "no cursor
+    /// update this round", which is safe - the cursor stays where it was and
+    /// the same ops are re-examined next pass, where the lamport high-water
+    /// mark skips them.</para></summary>
+    private static void WriteStateAtomic(string path, string text)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var tmp = path + ".tmp";
+        try
+        {
+            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (var sw = new StreamWriter(fs))
+            {
+                sw.Write(text);
+                sw.Flush();       // StreamWriter buffer + encoder -> the FileStream
+                fs.Flush(true);   // to the physical disk, not just the OS cache
+            }
+            if (File.Exists(path)) File.Replace(tmp, path, path + ".bak");
+            else File.Move(tmp, path);
+        }
+        catch
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            throw;
+        }
+    }
+
+    /// <summary>§39: the cursor state, from the live file or from the backup
+    /// the swap above leaves behind; null when neither can be read.
+    ///
+    /// <para>The backup is a slightly OLDER cursor, never a torn one, and an
+    /// older cursor is safe in a way that a missing one is not: every op is an
+    /// idempotent upsert-or-delete keyed by id, and <c>MergeForeign</c> skips
+    /// anything with <c>N &lt;= seen</c>, so a stale offset re-reads a few ops
+    /// and applies none of them twice. A MISSING cursor is offset 0 AND seen 0,
+    /// which applies all of them - that is the resurrection this item
+    /// names.</para>
+    ///
+    /// <para>Null still means "no cursor", which on a genuinely first run is
+    /// correct: a device that has never merged SHOULD read its peers from the
+    /// top. What this recovers is the case where a cursor existed and was
+    /// lost, which is the only case where replay is wrong.</para></summary>
+    private static Cursors? ReadCursors()
+    {
+        foreach (var p in new[] { CursorPath, CursorPath + ".bak" })
+        {
+            try
+            {
+                if (!File.Exists(p)) continue;
+                if (JsonSerializer.Deserialize<Cursors>(File.ReadAllText(p)) is { } c) return c;
+            }
+            catch { }
+        }
+        return null;
+    }
+
     public static string DeviceId
     {
         get
@@ -100,10 +179,17 @@ public static class SyncLog
                 var path = Path.Combine(StateDir, "deviceid.txt");
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 if (File.Exists(path)) _deviceId = File.ReadAllText(path).Trim();
+                // §39: minting a fresh Guid here is what makes a lost id
+                // catastrophic - this device stops recognising its own oplog and
+                // replays its whole history at itself. The backup left by the
+                // atomic write below holds a REAL previous id for this machine,
+                // which reconnects it to that log instead.
+                if (string.IsNullOrEmpty(_deviceId) && File.Exists(path + ".bak"))
+                    _deviceId = File.ReadAllText(path + ".bak").Trim();
                 if (string.IsNullOrEmpty(_deviceId))
                 {
                     _deviceId = Guid.NewGuid().ToString("N")[..12];
-                    File.WriteAllText(path, _deviceId);
+                    WriteStateAtomic(path, _deviceId);
                 }
             }
             catch { _deviceId ??= "local"; }
@@ -175,12 +261,7 @@ public static class SyncLog
         {
             _shadow.Clear();
             foreach (var (key, _, _, _, json) in Entities(lib)) _shadow[key] = Fnv(json);
-            try
-            {
-                if (File.Exists(CursorPath))
-                    _cursors = JsonSerializer.Deserialize<Cursors>(File.ReadAllText(CursorPath)) ?? new Cursors();
-            }
-            catch { _cursors = new Cursors(); }
+            _cursors = ReadCursors() ?? new Cursors();
         }
     }
 
@@ -211,8 +292,7 @@ public static class SyncLog
             try
             {
                 File.AppendAllText(OplogPath, sb.ToString());
-                Directory.CreateDirectory(Path.GetDirectoryName(CursorPath)!);
-                File.WriteAllText(CursorPath, JsonSerializer.Serialize(_cursors, Opts));
+                WriteStateAtomic(CursorPath, JsonSerializer.Serialize(_cursors, Opts));
             }
             catch { }
             CompactIfNeeded();
@@ -375,8 +455,7 @@ public static class SyncLog
             {
                 try
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(CursorPath)!);
-                    File.WriteAllText(CursorPath, JsonSerializer.Serialize(_cursors, Opts));
+                    WriteStateAtomic(CursorPath, JsonSerializer.Serialize(_cursors, Opts));
                 }
                 catch { }
                 // remote state is now local state: refresh the shadow so the next
