@@ -9149,3 +9149,102 @@ adding a per-run `rg`, a per-tspan `fill` and per-run brushes on
 `CanvasTextLayout` would be four emitters reading a value that is destroyed
 before any of them is asked. That is §25.1's own warning — *building two of them
 would have been the defect* — arriving one level down.
+
+## 41 A seat is measured against the shadow it stands on, not the page — 2026-09-06
+
+**Owed since `9a1f294` and written on 2026-09-07.** The agent that built this was
+cut off by a weekly limit after the code and its doc comments were complete but
+before it wrote this section; the orchestrator landed the code with the debt
+recorded in the commit. This section is written from that code and that commit,
+**not from having seen it on screen**, and §29's screen check does not cover it.
+
+### 41.1 What §29 measured, and why it was the wrong surface
+
+§29 gave the dial's ten tool seats a contrast floor because the user reported
+them as *"transparent when page colour and indirectly the theme is black"*. It
+measured seat against **page**, and on that basis the black page came out as the
+best-separated ground the dial ships against — 18.47 ΔL\*, 1.525:1, against
+Darkprint's 8.84 and 1.330:1.
+
+**The seat is not on the page.** `BuildWheel` adds a `_shadow` ellipse **first**,
+under every other part of the dial. So on Plain White the seat sits on `#D1D1D1`
+over `#CFCFCF` — the page seen through the dial's own drop shadow — which is
+**1.020:1**, not the 1.488:1 §29 published for that case.
+
+Every figure §24 and §29 computed for the light branch was therefore taken
+against a surface the seat does not stand on. Those sections now say so rather
+than leaving a stale number above working code.
+
+### 41.2 `SeatBackdrop`, and the one measurement that makes a single figure honest
+
+`PagePlate.SeatBackdrop` composites the page through the shadow's **own alpha**,
+read from `ShadowBrush`'s radial gradient rather than guessed.
+
+A gradient would normally make "the backdrop" meaningless — a seat spanning a
+ramp has no single value. It does not here, and that was measured rather than
+assumed: **the seat band is 59.14..85.14 DIP against a shadow centre offset 2 DIP
+down, so every seat lies wholly inside the gradient's SOLID part.** A seat sees a
+flat backdrop. That is the fact that lets one number describe it.
+
+### 41.3 What did not change, by the user's explicit ruling
+
+- **The disc keeps exactly what it has** — *"the opacity, stability, size, redo
+  and undo backgrounds are perfect."* Byte-identical, confirmed across 636,056
+  grounds.
+- **Empty and unavailable cells stay transparent.** Asked directly, the user
+  chose that; §16.3's rule that an unusable control must not look usable stands.
+- **The page tint stays.** The user was asked whether to drop it and said no.
+- The floor's **value** is unchanged. Only the surface it is measured against
+  moved. Changing both in one run would have left neither measured.
+
+`tools/SeatProof` links the shipping `PageTheme.cs` / `PagePlate.cs` /
+`PaperGrain.cs` so these figures cannot drift from the build.
+
+---
+
+## 42 A cursor that is truncated before it is rewritten — 2026-09-06
+
+**Owed since `d271f6e` and written on 2026-09-07**, under the same circumstances
+as §41: the agent hit a weekly limit with the code complete and the section
+unwritten. Written from the shipped code and the commit message, **not verified
+on screen** — and this one cannot usefully be, because the failure needs a crash
+at a specific instant.
+
+### 42.1 The window, which was `WriteAllText`
+
+Two builds sharing `Documents\Quill` replay their sync logs against each other.
+A **torn cursor** — one that is zero-length or half-written — reads as *"start
+from the beginning"*, and the replay that follows can **resurrect strokes the
+user erased**. High severity, low likelihood.
+
+The tear window was `File.WriteAllText`, which **truncates the target before it
+writes**. A crash, a power loss, or a second process arriving mid-write leaves
+exactly the state the replay misreads. The file was small enough that the window
+was narrow, which is why this had never been observed — not why it was safe.
+
+### 42.2 The fix, and why "narrower" would have been worse than nothing
+
+`WriteStateAtomic` replaces it: write to `.tmp`; `Flush()` the `StreamWriter`'s
+buffer **and its encoder** into the `FileStream`; `Flush(true)` to push it to the
+**physical disk** rather than the OS cache; then `File.Replace` onto the target
+with a `.bak` name. `File.Move` when there is no existing target, since
+`File.Replace` requires one.
+
+This is `LibraryStore.PromoteTemp`'s pattern, which §34 had just applied to the
+oplog compaction swap — a precedent followed rather than a scheme invented.
+
+The `.tmp` and `.bak` names sit **outside** the `oplog.*.jsonl` glob
+`MergeForeign` scans, so neither can ever be read back as a peer's log.
+
+**`SyncLog` is the sole writer of these files** — the harnesses only read them —
+so making the writer atomic **closes** the window rather than narrowing it. That
+distinction is the whole of the item: a half-applied fix would have made the
+failure rarer without making it impossible, and rare data loss is the hardest
+kind ever to diagnose. A defect that bites once a year and cannot be reproduced
+is worse than one that bites weekly.
+
+### 42.3 What is still open
+
+`Flush(true)` asks the drive to persist; a drive that lies about its write cache
+can still lose the tail. That is outside what application code can guarantee and
+is recorded here so nobody re-opens this item believing it was missed.
