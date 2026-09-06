@@ -50,7 +50,14 @@ public static class PageTheme
     public static bool IsDark { get; private set; }
 
     /// <summary>Fill for the dial's inner disc, the pen row, chips and any
-    /// raised element sitting directly on the page. Carries the ground's hue.</summary>
+    /// raised element sitting directly on the page. Carries the ground's hue.
+    ///
+    /// <para><b>Keyed to the SHELL's ground</b>, like <see cref="OnSurface"/> and
+    /// for the same reason - it is the raise a surface takes off the ground the
+    /// rest of the shell is derived from. A raised element whose ground is the
+    /// PAPER rather than the shell wants <see cref="PageSurface"/>; the two are
+    /// the same colour whenever <c>ThemeSource == "Page"</c> and part company on
+    /// the default install, which is the whole of §0's split-pair rule.</para></summary>
     public static Color Surface { get; private set; }
 
     /// <summary>One step further from the ground than <see cref="Surface"/>.
@@ -149,6 +156,38 @@ public static class PageTheme
     /// reason <see cref="PanelIsDark"/> is: the element theme and the ink this
     /// class hands out must not disagree about one page.</summary>
     public static bool PageIsDark { get; private set; }
+
+    /// <summary>§39.8: A RAISED ELEMENT WHOSE GROUND IS THE PAPER -
+    /// <see cref="Surface"/>'s own rule, re-keyed to <see cref="PageGround"/>.
+    ///
+    /// <para>2.1 gave the bare page an INK (<see cref="OnPage"/>) and left it
+    /// without a FILL, because the consumer it was written for - a bare
+    /// <c>CanvasPane</c> - has no fill by design. <c>SelectionChrome</c>'s corner
+    /// circles do: they are hollow discs drawn straight onto the canvas over the
+    /// subject, "the page's own surface inside, a rule around it", and that
+    /// sentence names a page-keyed surface this class did not have. They were
+    /// therefore painted <see cref="Surface"/> + <see cref="OnSurface"/> - a pair
+    /// that is internally consistent with each other and keyed to a ground the
+    /// handles are not standing on.</para>
+    ///
+    /// <para><b>Both halves had to move, and the measurement is why.</b> Re-keying
+    /// only the ink to <see cref="OnPage"/> does not fix the pair, it relocates
+    /// the break: a dark shell's <see cref="Surface"/> under a Plain White page
+    /// then carries the page's own DARK ink, and the rule falls to 1.194:1
+    /// against the disc it is drawn on. A mark and the fill under it have to be
+    /// keyed to the same ground; that is the whole of §0.</para>
+    ///
+    /// <para><b>Deliberately the same formula rather than a new one.</b> It is
+    /// <see cref="Surface"/>'s L* raise at 0.55 chroma, evaluated on the page -
+    /// exactly the relation <see cref="Quill.Controls.PagePlate.Ink"/> has to
+    /// <see cref="OnSurface"/> - so under <c>ThemeSource == "Page"</c> this is
+    /// BYTE-IDENTICAL to <see cref="Surface"/> and nothing that ships in Page
+    /// mode changes colour. Not <see cref="Panel"/>: a panel is §27's HEAVIER
+    /// endpoint with a separation floor, meant for a floating window that
+    /// establishes its own ground, and a 9-DIP corner circle repainted in it
+    /// would change on every paper including the ones that are already
+    /// right.</para></summary>
+    public static Color PageSurface { get; private set; }
 
     /// <summary>Links and primary buttons. The user's accent, untouched by the
     /// page - it is their choice, not the paper's.</summary>
@@ -282,10 +321,8 @@ public static class PageTheme
         IsDark = Luminance(g) < 0.5;
 
         var (L, a, b) = ToLab(g);
-        // A near-white page needs a DARKER raised surface; anything else needs a
-        // lighter one. Without the split, paper would get a white-on-white disc.
         double sl = L > 80 ? L - 15 : L + 18;
-        Surface = FromLab(sl, a * 0.55, b * 0.55);
+        Surface = Raised(g);
         SurfaceAlt = FromLab(L > 80 ? sl - 4 : sl + 4, a * 0.55, b * 0.55);
 
         OnSurface = IsDark ? InkOnDark : InkOnLight;
@@ -322,6 +359,11 @@ public static class PageTheme
         // the one shape §27 did not have a token for.
         OnPage = Quill.Controls.PagePlate.Ink(PageGround);
         PageIsDark = OnPage.R == InkOnDark.R && OnPage.G == InkOnDark.G && OnPage.B == InkOnDark.B;
+        // 39.8: and the FILL that ink stands on where the bare-page element has
+        // one. Same raise as `Surface` a dozen lines up, same source as `OnPage`
+        // a line up - the pair a hollow corner circle needs, and the one shape
+        // 2.1 left out because its own consumer had no fill.
+        PageSurface = Raised(PageGround);
         // 140 wherever 140 is affordable, and only raised where it is not: see
         // MutedWithFloor. On the six light stocks this returns alpha 140 exactly,
         // so no shipped caption on white paper changes colour.
@@ -348,7 +390,12 @@ public static class PageTheme
         $"panelSep={Math.Abs(Lightness(Panel) - Lightness(PageGround)):F2} " +
         // 2.1's fields, appended for the same reason §27's were.
         $"onPage={Hex(OnPage)} onPageMuted={Hex(OnPageMuted)} pageIsDark={(PageIsDark ? 1 : 0)} " +
-        $"onPageMutedRatio={Contrast(Over(OnPageMuted, PageGround), PageGround):F2}";
+        $"onPageMutedRatio={Contrast(Over(OnPageMuted, PageGround), PageGround):F2} " +
+        // 39.8's field, APPENDED for the same reason §27's and 2.1's were. The
+        // ratio beside it is the corner circle's disc against the paper it is
+        // drawn on - the number that collapsed to 1.021:1 on Darkprint before
+        // this token existed, and the reason the token does.
+        $"pageSurface={Hex(PageSurface)} pageSurfaceRatio={Contrast(PageSurface, PageGround):F2}";
 
     private static string Hex(Color c) => $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
 
@@ -363,6 +410,27 @@ public static class PageTheme
         if (ProbePath == null) return;
         try { System.IO.File.AppendAllText(ProbePath, Describe() + Environment.NewLine); }
         catch { }
+    }
+
+    /// <summary>THE RAISE, once - what <see cref="Surface"/> is off the shell's
+    /// ground and what <see cref="PageSurface"/> is off the page's.
+    ///
+    /// <para>Extracted rather than transcribed a second time for the reason this
+    /// file gives every time it extracts one: a second copy of a formula is how
+    /// two surfaces come to disagree about one page. It is also what makes
+    /// "<see cref="PageSurface"/> is byte-identical to <see cref="Surface"/> when
+    /// the two grounds are equal" a property of the code rather than a claim
+    /// about it.</para>
+    ///
+    /// <para><see cref="SurfaceAlt"/> deliberately does NOT go through here: it
+    /// is a second step off the SAME L*, and folding its ±4 into this helper
+    /// would give it a parameter whose only caller passes zero.</para></summary>
+    private static Color Raised(Color ground)
+    {
+        var (L, a, b) = ToLab(ground);
+        // A near-white page needs a DARKER raised surface; anything else needs a
+        // lighter one. Without the split, paper would get a white-on-white disc.
+        return FromLab(L > 80 ? L - 15 : L + 18, a * 0.55, b * 0.55);
     }
 
     public static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);

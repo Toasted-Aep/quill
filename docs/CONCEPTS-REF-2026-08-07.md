@@ -8844,6 +8844,11 @@ this session was not asked to change would have mixed an unrelated repaint
 correction into a narrow feature addition. Flagged rather than fixed here for
 whoever picks it up.
 
+> **Picked up in §39.8**, in a later session and as its own piece of work. The
+> flag was right about the exposure and wrong about its shape in one way worth
+> recording: the handles are a *pair* — a fill and a rule — and the audit could
+> not be the same one-token swap the guides got.
+
 ### 39.7 Build and verification
 
 `dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64 --no-incremental`
@@ -8869,3 +8874,125 @@ brief — type into a box and watch the guides track, check a rotated box,
 check an edge case, check a dark and a light paper, capture it — is not, and
 should be run by the user directly or by a session the user has actually
 confirmed this with.
+
+### 39.8 The corner circles, audited — 2026-09-06
+
+§39.6 flagged the four corner circles and did not fix them: they sit on the
+same uncovered page as the guides, they were still reading
+`PageTheme.Surface` / `PageTheme.OnSurface`, and widening a narrow feature
+addition to cover them would have mixed two changes. This is that audit, run
+as its own piece of work. Same defect, same §0 rule, **different shape** — and
+the difference is the whole content of this section, because the obvious fix
+is wrong.
+
+#### The measurement, on the shipped arithmetic
+
+`tools/HandleProof` links `PageTheme.cs`, `PagePlate.cs` and `PaperGrain.cs`
+the way `tools/PanelProof` and `tools/SeatProof` do, so every figure below
+comes out of the compiler and not out of a transcription. The two things it
+cannot link — `SelectionChrome`'s two brushes, and the three shell grounds
+`MainWindow.ResolveGround` can pin — are asserted against the source text in
+its section 0, and the run fails if either moves.
+
+A hollow disc is judged on **three** surfaces, not one. `StrokeThickness` is
+centred on the ellipse path, so the rule straddles the boundary: its inner
+half composites over the fill, its outer half over whatever the handle landed
+on. Hence *disc vs page*, *rule vs page*, *rule vs disc*.
+
+What shipped, under the three pinnable shells against the nine papers:
+
+| scenario | disc vs page | rule vs page |
+|---|---|---|
+| pinned dark shell, Plain White page | 11.943:1 | **1.053:1** |
+| pinned dark shell, Transparent page | 10.945:1 | **1.000:1** |
+| default light shell, Darkprint page | 8.798:1 | **1.184:1** |
+| OLED shell, Darkprint page | **1.021:1** | 5.441:1 |
+| matched (`ThemeSource = "Page"`) | 1.488–1.845:1 | 2.274–5.441:1 |
+
+`1.000:1` is the rule rendering the exact colour of the paper it is drawn on —
+the same collapse §39.6 measured for the guides, from the same cause, and it
+fires on every one of the six light stocks under a pinned dark shell.
+
+**One honest qualification the guides did not need.** A guide that collapses
+is simply gone. A handle that collapses is not: when the rule goes the disc is
+*over*-strong (11.9:1 — a shell-coloured blob on white paper), and when the
+disc goes the rule is strong instead. So the handle remains locatable in every
+cell of that table. What is lost is what 16.2 actually describes — a faint
+raised circle with a rule around it — and the guarantee the code comment
+claims, "the page's own surface inside, a rule around it." Under a mismatch
+one of the two halves is always absent and the other always wrong for the
+page. That is a real defect and it is stated at its real size.
+
+#### Why the one-token swap is the wrong fix
+
+The obvious change — re-key the ink to `OnPage`, leave the fill — fixes *rule
+vs page* and **breaks *rule vs disc***. A dark shell's `Surface` under a Plain
+White page would carry that page's dark ink: measured, **1.194:1** against the
+disc the rule is drawn on. That is §0's split pair with the grounds swapped,
+not §0's split pair closed. Section 4 of the harness measures it and fails if
+it ever stops failing, so the argument cannot go stale.
+
+A mark and the fill under it have to be keyed to the same ground. **Both
+halves move or neither does.**
+
+#### `PageTheme.PageSurface`, and why it is not `Panel`
+
+No page-keyed *fill* existed. Item 2.1 gave the bare page an ink (`OnPage`,
+`OnPageMuted`, `PageOutline`) and no surface, correctly — its consumer,
+`CanvasPane`, is bare by design and has no fill. The corner circles do, and
+that is the shape 2.1 left out.
+
+`PageSurface` is `Surface`'s own raise evaluated on `PageGround` — exactly the
+relation `PagePlate.Ink` has to `OnSurface`. The raise is now one private
+`Raised()` helper that both fields call, so "identical formula" is a property
+of the code rather than a claim about it. Two consequences:
+
+- Under `ThemeSource = "Page"` the new pair is **byte-identical** to the old
+  one on all nine papers (harness section 3). Nothing that ships in Page mode
+  changes colour; the fix only makes Manual behave the way Page always did.
+- Under Manual the handle no longer depends on the shell **at all** — the
+  harness asserts all three pinned shells produce the same three ratios.
+
+Not `PagePlate.Panel` / `OnPanel`, which was the other candidate and measures
+*better* on one axis (rule vs disc bottoms out at 3.231:1 instead of 1.541:1,
+because `PanelInk` is a best-of). It was rejected: `Panel` is §27's *heavier*
+endpoint with a separation floor, built for a floating window that establishes
+its own ground, and adopting it would repaint a 9-DIP corner circle on **every**
+paper including the six that were already right. That is a ruling about what a
+handle *is*, not a re-key, and §39.6's flag asked for the audit — not for a
+redesign.
+
+After, for every pinned shell:
+
+| paper | disc vs page | rule vs page | rule vs disc | fill / ink |
+|---|---|---|---|---|
+| Plain White | 1.488:1 | 4.556:1 | 3.994:1 | `#D1D1D1` / `#141414` |
+| Transparent | 1.495:1 | 4.489:1 | 3.876:1 | `#C8C8C8` / `#141414` |
+| Crumpled | 1.510:1 | 4.379:1 | 3.765:1 | `#C4C2BD` / `#141414` |
+| Lightweight | 1.493:1 | 4.461:1 | 3.864:1 | `#CAC9C6` / `#141414` |
+| Heavyweight | 1.526:1 | 4.261:1 | 3.661:1 | `#BDBAB5` / `#141414` |
+| Rippled | 1.501:1 | 4.417:1 | 3.844:1 | `#C7C6C2` / `#141414` |
+| Blueprint | 1.823:1 | 2.283:1 | 1.567:1 | `#8FADD3` / `#F2F2F2` |
+| Brown Paper | 1.821:1 | 2.274:1 | 1.541:1 | `#CAA689` / `#F2F2F2` |
+| Darkprint | 1.845:1 | 5.441:1 | 3.591:1 | `#505357` / `#F2F2F2` |
+
+#### What this does not claim
+
+**Blueprint and Brown Paper are weak and this did not fix them.** Their rule
+reads at 1.541–1.567:1 against its own disc, well under the 3:1 mark floor.
+That is not a regression: a mid-tone ground raises its surface +18 L\* *toward*
+the light ink §7 rules those two papers carry, so `Surface` + `OnSurface` has
+produced exactly those two numbers in Page mode since the handles were written.
+The re-key neither causes nor worsens it — it makes Manual match Page, which
+is all it set out to do. `PanelInk`'s best-of would lift both above 3:1; that
+is the `Panel` ruling above, and it is **flagged rather than taken**, the same
+way §34 flagged the ring's tint rather than re-keying a large visible surface
+on its own authority.
+
+**Not verified on screen.** `dotnet build src/Quill/Quill.csproj -c Debug
+-p:Platform=x64 --no-incremental` is clean — 0 warnings, 0 errors — and
+`tools/HandleProof` passes, but both are claims about the compiler and about
+arithmetic, not about what four 9-DIP ellipses look like in a live WinUI
+layout pass over nine papers. The task that requested this change scoped it as
+code-only and analytical, which is what it is; the on-screen pass is not done
+and is not implied by either result above.
