@@ -504,7 +504,7 @@
                     <Button AllowFocusOnInteraction="False" ToolTipService.ToolTip="Text colour">
                         <TextBlock Text="A" Foreground="{StaticResource BrandOrangeBrush}" FontWeight="SemiBold"/>
                         <Button.Flyout>
-                            <Flyout>
+                            <Flyout Opening="TextColorFlyout_Opening">
                                 <ColorPicker x:Name="TextColorPicker" IsAlphaEnabled="False" IsMoreButtonVisible="False"
                                              ColorSpectrumShape="Box" ColorChanged="TextColorPicker_ColorChanged"/>
                             </Flyout>

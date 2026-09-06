@@ -1,5 +1,127 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-06 (nineteenth screen run) - WAVE 3 ROWS 3.1 AND 3.2 ARE NOT THERE, AND A THIRD THING IS
+
+Branch `integration` @ `9e40d80` + this work. Clean x64 Debug `--no-incremental`,
+**0 warnings**. Captures in `scratchpad/w3/`; harness `scratchpad/w3.ps1`
+(vp13's surface plus a `Set-Clipboard` + Ctrl+V route in). Reasoning in
+CONCEPTS-REF **40**.
+
+### Presence - measured before the run and again between items
+
+| when | input desktop | LogonUI | samples | cursor | idle |
+|---|---|---|---|---|---|
+| before anything | Default | not running | 628 / 39.1 s | 1 position | 0 resets, 103.6 -> 142.6 s |
+| between 3.1/3.2 and the rebuild | Default | not running | 628 / 38.9 s | 1 position | 0 resets, 126.9 -> 165.7 s |
+
+`OpenInputDesktop` and `LogonUI` checked separately each time. Quill: 0
+processes at each dispatch.
+
+### The set-up, because the boxes are the experiment
+
+Four seeded/created boxes on one `#FAF9F5` page with the shell theme **Dark**,
+which is the condition 2.2 needs. A - field and RTF both `#C2185B`. B - field
+`#C2185B`, RTF `#141413`, i.e. 25.2's disagreement, which makes B a **live
+detector**: release its field and it drops to `#141413` where anyone can see it.
+C - no field, RTF `#141413`, the control. D - created live with the Text tool
+while `DefaultTextColor` was `#C2185B`, so it takes a colour with **no colour
+control driven at all**, which is precisely the box row 3.2 describes.
+
+Ink read as a histogram of every pixel more than 70 units from the ground, so a
+near-white ink cannot pass as "no text".
+
+### 3.2 - NOT FOUND, four ways
+
+`#C2185B` at rest, on the first open, on the second open, and on both opens
+again after an app restart. Every count identical to the glyph core (2595 px for
+B, 3003 for D), not merely close. C opens `#141413` where run 15 would have seen
+`#FFFFFF` on `#606060`.
+
+**It was real when run 15 saw it. It is item 2.2's defect** - 33/2.2 found
+`TextControlForegroundFocused` resolving to the dark theme's `#FFFFFF` and
+beating the box's `Foreground` **on a re-opened box specifically**, and wrote
+that sentence before Wave 3 existed. `PinEditorBrushes` closed it. Nothing was
+built for this row, and building something would have fixed one fault twice.
+
+### 3.1 - NOT FOUND, claim by claim; one real defect underneath, fixed
+
+- **"opening it whitens the whole box"** - no. B unchanged to the pixel after
+  open + dismiss, and B is the detector that would have shown a released field.
+- **"the chosen colour never appears"** - no. `#9236FF` picked from the spectrum
+  landed on all 3003 glyph-core pixels.
+- **"committing restores the original"** - no, within the session. It survives
+  blur and re-open. It does not survive a **rebuild**, which is a different
+  fault; see below.
+- **"reopening shows white again"** - no for the box; **yes for the picker**.
+- **Both halves of 25.3 hold.** After the pick the file reads `TextColor: null`
+  and `\colortbl ;\red146\green54\blue255;`.
+
+**The likeliest origin of the report, and it is worth naming.** Selected text in
+a Quill box draws as an accent `#D97757` band with the glyphs knocked out in
+`#FFFFFF` - 30,501 accent pixels to 3003 white ones, measured. Select a word,
+open the picker, look at the box, and you are looking at white text. The picker
+itself then opened at WinUI's default `#FFFFFF`. Two white things, neither of
+them the box's ink.
+
+**What was genuinely wrong: the picker never reported its subject.** It had no
+code path that ever set its `Color` - `#FFFFFF` on a first open, and thereafter
+whatever colour it had last been handed, from some other box. Seen: opened over
+a crimson box after an earlier `#9236FF` pick, it read `#9236FF`. That is 16.3's
+rule, which 25.5 already states for the other three colour controls, and this is
+the control 25 left out. Now synced from the same range the setter writes.
+**Verified on screen: it opens at `#C2185B`, R 194 / G 24 / B 91, and the box
+does not move.**
+
+### THE THING NEITHER ROW NAMES - a run colour is destroyed at load, and the loss is saved
+
+D's `#9236FF` was in the file. After **one restart** the box rendered `#141413`
+and the file had been rewritten to `\red20\green20\blue19`. Isolated with box
+**E**: no field at all, RTF colour table `#008000`, `\cf1` on the run - nothing
+can stamp over it, so the only question is whether the stored run colour
+survives. It renders `#141413`.
+
+A probe reading `GetText(FormatRtf)` back inside `BuildTextUi` says where:
+
+```
+after SetText   live : colortbl ;\red0\green128\blue0;\red20\green20\bl...  \cf1
+on Loaded       live : colortbl ;\red20\green20\blue19;                        \cf1
+```
+
+`SetText` restores it. The control's `Loaded` does not have it. `box.Foreground`
+is set on a `RichEditBox` that is not yet in the tree; the template applies,
+WinUI pushes that brush into the document, and every run colour in it is
+flattened. `FlushTexts` then writes the flattened document over the model.
+
+**This amends 16.7's `ApplyTextVeil` remarks**, which assert the opposite - that
+an RTF run colour overrides `Foreground` and will not grey - and rest the veil's
+safety on it. At load, `Foreground` wins. Whether a write to an *already-loaded*
+box behaves the same way was not settled here.
+
+It is also **row 3.3's precondition**, and 3.3 does not know it has one: four
+emitters taught to read a run colour would be reading a value that is destroyed
+before any of them is asked.
+
+### Gates
+
+`Documents\Quill\library.json` 53,582,459 / `0C32CE6C` and
+`%LOCALAPPDATA%\LectureInk\library.json` 6,461,655 / `0C6F1B7F` - byte-identical
+before and after. Scratch folder `scratchpad/vp14data` held only the seeded page
+and stayed that way; **no `crash.log` was written** at any point in the run, so
+nothing was swallowed by `App.xaml.cs`'s pointer handler.
+
+### Machine notes, added to the previous runs'
+
+- `[Q]::KeyMod` **does** reach the editor: Ctrl+V and **Ctrl+A** both work. Only
+  the single-key `[Q]::Key(vk)` path does not. Ctrl+A is what makes a colour
+  change legible at all, since the picker acts on a selection.
+- A `Flyout`'s light dismiss **swallows** the click that closes it, so a tap on
+  bare canvas with the Text tool active dismisses the flyout without creating a
+  box. Two taps are needed if you want both.
+- `Q-Under` (`WindowFromPoint` -> root -> pid) refused nothing this run; the
+  window stayed clear throughout.
+
+---
+
 ## RUN OF 2026-09-06 (eighteenth screen run) - the text position guides, SEEN
 
 Driven by the orchestrator directly rather than by a sub-agent. Two sub-agents
