@@ -21,7 +21,12 @@ public record PdfVectorDot(float X, float Y, float R, string Color);
 // the way to the emitter.
 public record PdfVectorImage(double X, double Y, double W, double H, int PixW, int PixH, byte[] Bgra8,
                              double Angle = 0, double CentreX = 0, double CentreY = 0);
-public record PdfVectorTextRun(string Text, float Size, string Font, bool Bold, bool Italic);
+// 41: Colour is the run's own ink, "#RRGGBB", or null for RTF's "auto"
+// (\cf0, or no \cf at all), which means "take the box's colour". Optional and
+// last, so every 5-argument construction site is unchanged and a run that names
+// no colour comes out exactly as it did before per-run colour existed.
+public record PdfVectorTextRun(string Text, float Size, string Font, bool Bold, bool Italic,
+                               string? Colour = null);
 // One visual line. Text/Size/Font mirror the first run so older single-format
 // consumers keep working; Runs carries the per-run formatting the emitters use.
 //

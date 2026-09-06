@@ -43,6 +43,7 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="Shim.cs" />
     <Compile Include="..\..\src\Quill\Models\NoteModels.cs" Link="NoteModels.cs" />
     <Compile Include="..\..\src\Quill\Models\LayerModels.cs" Link="LayerModels.cs" />
     <Compile Include="..\..\src\Quill\Services\LibraryStore.cs" Link="LibraryStore.cs" />

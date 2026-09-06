@@ -17,6 +17,11 @@ public static class RtfRunParser
         public int FontIdx;
         public bool Bold;
         public bool Italic;
+        /// <summary>CONCEPTS-REF 41: the run's own colour, "#RRGGBB", or null for
+        /// RTF's "auto" (<c>\cf0</c>, or no <c>\cf</c> at all) which means "take
+        /// the box's answer". Null is the whole of the pre-41 behaviour, so a run
+        /// that names no colour still comes out exactly as it did.</summary>
+        public string? Colour;
     }
 
     /// <summary>Paragraphs of runs. An empty inner list is a blank line: it still
@@ -29,6 +34,7 @@ public static class RtfRunParser
         if (string.IsNullOrEmpty(rtf)) return lines;
 
         var fonts = ParseFontTable(rtf);
+        var colours = ParseColorTable(rtf);
         var fmt = new Fmt { Size = defaultSize, FontIdx = -1 };
         var stack = new Stack<Fmt>();
         var sb = new StringBuilder();
@@ -37,7 +43,7 @@ public static class RtfRunParser
         {
             if (sb.Length == 0) return;
             var name = fonts.TryGetValue(fmt.FontIdx, out var n) && n.Length > 0 ? n : defaultFont;
-            cur.Add(new PdfVectorTextRun(sb.ToString(), fmt.Size, name, fmt.Bold, fmt.Italic));
+            cur.Add(new PdfVectorTextRun(sb.ToString(), fmt.Size, name, fmt.Bold, fmt.Italic, fmt.Colour));
             sb.Clear();
         }
 
@@ -124,8 +130,17 @@ public static class RtfRunParser
                     case "f":
                         if (int.TryParse(num, out int fi)) { Flush(); fmt.FontIdx = fi; }
                         break;
+                    case "cf":
+                        // 41: the run's colour. \cf0 is RTF's "auto" and is not in
+                        // the table - it means "whatever the control's default
+                        // is", which for Quill is the box's own answer, so null.
+                        Flush();
+                        fmt.Colour = int.TryParse(num, out int ci) && colours.TryGetValue(ci, out var ch)
+                            ? ch : null;
+                        break;
                     case "plain":
-                        Flush(); fmt.Bold = false; fmt.Italic = false;
+                        // \plain resets CHARACTER formatting, colour included.
+                        Flush(); fmt.Bold = false; fmt.Italic = false; fmt.Colour = null;
                         break;
                     case "u":
                         if (int.TryParse(num, out int uc))
@@ -164,6 +179,44 @@ public static class RtfRunParser
         }
         while (lines.Count > 0 && lines[0].Count == 0) lines.RemoveAt(0);
         while (lines.Count > 0 && lines[^1].Count == 0) lines.RemoveAt(lines.Count - 1);
+    }
+
+    /// <summary>CONCEPTS-REF 41: \cfN index -> "#RRGGBB", from
+    /// <c>{\colortbl ;\red0\green128\blue0;…}</c>.
+    ///
+    /// <para>Entries are semicolon-terminated and <b>index 0 is the blank one
+    /// before the first semicolon</b> — RTF's "auto", which is why it is left out
+    /// of the map rather than given a value. Any entry that is blank or that does
+    /// not carry all three channels is skipped for the same reason: an index that
+    /// is absent means "the box's own answer", which is exactly the behaviour
+    /// every run had before this method existed.</para></summary>
+    private static Dictionary<int, string> ParseColorTable(string rtf)
+    {
+        var map = new Dictionary<int, string>();
+        int at = rtf.IndexOf("{\\colortbl", StringComparison.Ordinal);
+        if (at < 0) return map;
+
+        int depth = 0, end = -1;
+        for (int i = at; i < rtf.Length; i++)
+        {
+            if (rtf[i] == '{') depth++;
+            else if (rtf[i] == '}' && --depth == 0) { end = i; break; }
+        }
+        if (end < 0) return map;
+
+        string body = rtf[(at + "{\\colortbl".Length)..end];
+        var entries = body.Split(';');
+        // The trailing split piece after the last ';' is not an entry.
+        for (int idx = 0; idx < entries.Length - 1; idx++)
+        {
+            var m = Regex.Match(entries[idx], @"\\red(\d+)\\green(\d+)\\blue(\d+)");
+            if (!m.Success) continue;                       // blank entry = auto
+            if (byte.TryParse(m.Groups[1].Value, out byte r) &&
+                byte.TryParse(m.Groups[2].Value, out byte g) &&
+                byte.TryParse(m.Groups[3].Value, out byte b))
+                map[idx] = $"#{r:X2}{g:X2}{b:X2}";
+        }
+        return map;
     }
 
     /// <summary>\fN index -> family name, e.g. {\fonttbl{\f0\fnil\fcharset0 Lora;}}.</summary>
