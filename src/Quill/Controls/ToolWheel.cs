@@ -1079,10 +1079,18 @@ public sealed class ToolWheel
         // are perfect" - which is the disc, three lines below. Both were this
         // one `plate` value. §29 splits them: the DISC keeps Of(page, Tint) byte
         // for byte on every page, and the SEAT takes the same expression under a
-        // contrast floor that bites only on the dark base's branch. On all six
-        // white stocks, on Blueprint and on Brown Paper the two are still the
-        // identical colour, so §24's "one colour for the disc and every cell
-        // alike" survives everywhere it was ever visible.
+        // contrast floor. §29 gated that floor to the dark base's branch and
+        // said "on all six white stocks, on Blueprint and on Brown Paper the two
+        // are still the identical colour". §34 WITHDRAWS THAT. The floor was
+        // being measured against the PAGE, and a seat is not on the page - it is
+        // on PagePlate.SeatBackdrop, the page under this dial's own drop shadow,
+        // wherever §7 has taken the ring's fill away. Against that surface Plain
+        // White measured 1.020:1, worse than the black page that was reported,
+        // and the six white stocks now move. Blueprint (2.097:1) and Brown Paper
+        // (2.085:1) clear the floor on their own and are still byte-identical,
+        // so the user's #7EA0B9 survives the gate being removed rather than
+        // because of it. §24's "one colour for the disc and every cell alike" is
+        // now gone on every page, not just the near-black ones.
         //
         // WHY THEY HAD TO SPLIT, since the colour was never the disc's problem:
         // a seat is SeatSize 26 DIP across carrying a MarkBox of 23, so the
@@ -1097,6 +1105,12 @@ public sealed class ToolWheel
         // L* off the page, the largest separation of any ground the dial ships
         // against, and 1.525:1, the highest ratio of any of them. See
         // PagePlate.SeatFloor - the reason an L* floor cannot fix this.
+        //
+        // §34: AND THE SECOND THING FOUND FALSE IS THE SURFACE ITSELF. Both
+        // figures above are seat-versus-PAGE, and the seat is on the shadow. The
+        // black page is the one ground where the two agree, because 18% black
+        // over #000000 is still #000000 - which is exactly why measuring only
+        // the reported case left the defect standing on all six white stocks.
         var seatPlate = SeatFor();
         // §0's rule, and this is the FOURTH time it applies in this file - the
         // three earlier ones are quoted above. The seat's ground moved, so the
@@ -1108,7 +1122,16 @@ public sealed class ToolWheel
         // on a paper page." §7: on a Blueprint / Brown Paper / Darkprint page the
         // RING goes fully transparent, and only separators, marks and labels
         // remain. The inner disc stays opaque in every case.
-        var ringFill = dark ? Colors.Transparent : Mix(surface, PageTheme.Ground, 0.62);
+        //
+        // §34: THE EXPRESSION IS UNCHANGED AND HAS MOVED. It is a seat's other
+        // possible backdrop - a seat is drawn OVER the sector - so it now lives
+        // beside the shadow in PagePlate, where tools/SeatProof can link the
+        // constant the app paints instead of carrying a second copy of 0.62.
+        // Both operands are still the SHELL's tokens, which is the same
+        // shell-keying items 2.1 and 2.2 removed elsewhere; §34 flags it and
+        // leaves it, because the ring is a large visible surface and re-keying
+        // it is a ruling rather than a tuning.
+        var ringFill = dark ? Colors.Transparent : PagePlate.RingFill(surface, PageTheme.Ground);
 
         // ---- 17.4: what is actually BEHIND a mark ------------------------
         //
@@ -1266,8 +1289,9 @@ public sealed class ToolWheel
             // drawn on, and the seat is now the page-derived grey rather than the
             // pen's colour. Measured, that choice can never do worse than
             // 4.583:1 for any colour in sRGB - see BestInk - and over the nine
-            // shipped papers it runs 7.56:1 (Blueprint) to 13.75:1 (Plain
-            // White). The + on a seatless empty cell keeps onSurface, because
+            // shipped papers it runs 5.48:1 (Heavyweight) to 7.86:1 (Darkprint)
+            // after §34 moved the six white stocks' seats; it was 7.56:1 to
+            // 13.75:1 before. The + on a seatless empty cell keeps onSurface, because
             // there it really is standing on the sector and the page.
             //
             // THE PEN'S COLOUR IN THE PEN ICON is the user's ruling and is NOT
@@ -1653,6 +1677,15 @@ public sealed class ToolWheel
         // 18%). A radial-gradient ellipse rather than a composition DropShadow:
         // the shadow sits over a Win2D swap chain, and a real backdrop-sampling
         // effect there smears by a frame every time the ink moves under it.
+        //
+        // §34: AND ITS INTERIOR IS NOT DECORATION - IT IS A BACKDROP. The
+        // stand-in is SOLID at 18% from the centre out to 96.04 DIP, which is
+        // correct only while the thing above it is opaque. §7 takes the ring's
+        // fill away on a dark shell, and from then on the ten seats (59.14 to
+        // 85.14 DIP, wholly inside that solid part) stand on this wash over the
+        // page rather than on the page. §29 measured all ten against the page
+        // and was measuring a surface they do not touch. PagePlate.ShadowAlpha
+        // and PagePlate.SeatBackdrop are where that is now written down.
         _shadow.Width = _shadow.Height = (RingOut + 14) * 2;
         _shadow.IsHitTestVisible = false;
         Canvas.SetLeft(_shadow, Half - RingOut - 14);
@@ -1931,8 +1964,14 @@ public sealed class ToolWheel
         // and a live brush whose stops moved simply does not repaint.
         var b = new RadialGradientBrush { Center = new Point(0.5, 0.5), RadiusX = 0.5, RadiusY = 0.5 };
         double solid = RingOut / (RingOut + 14);
-        b.GradientStops.Add(new GradientStop { Offset = 0, Color = Color.FromArgb(46, 0, 0, 0) });
-        b.GradientStops.Add(new GradientStop { Offset = solid * 0.98, Color = Color.FromArgb(46, 0, 0, 0) });
+        // §34: the alpha is PagePlate.ShadowAlpha, not a literal, because a
+        // TOOL SEAT STANDS ON THIS. Wherever §7 takes the ring's fill away the
+        // seat's backdrop is this wash over the page, and PagePlate.Seat floors
+        // against it - so the number the dial paints and the number the floor is
+        // measured against have to be one number.
+        var wash = Color.FromArgb(PagePlate.ShadowAlpha, 0, 0, 0);
+        b.GradientStops.Add(new GradientStop { Offset = 0, Color = wash });
+        b.GradientStops.Add(new GradientStop { Offset = solid * 0.98, Color = wash });
         b.GradientStops.Add(new GradientStop { Offset = 1, Color = Color.FromArgb(0, 0, 0, 0) });
         return b;
     }
@@ -3112,12 +3151,15 @@ public sealed class ToolWheel
     /// <see cref="PlateFor"/> would have moved the disc on exactly the page the
     /// user was looking at when they called it perfect.</para>
     ///
-    /// <para>The floor bites on the dark base's branch alone, so on every light
-    /// paper this returns precisely what <see cref="PlateFor"/> does and the two
-    /// surfaces remain the single colour §24 made them. See
-    /// <see cref="PagePlate.Seat(Color)"/> for why the light branch must not
-    /// move - it carries the user's own <c>#7EA0B9</c> - and for what the
-    /// near-black grounds become.</para></summary>
+    /// <para><b>§34: the floor no longer bites on the dark base's branch
+    /// alone</b>, because §29 was measuring it against the page and a seat is
+    /// not on the page. On the six white stocks this now returns a visibly
+    /// darker grey than <see cref="PlateFor"/> - Plain White <c>#D1D1D1</c> to
+    /// <c>#919292</c> - so §24's single colour is gone on every page rather than
+    /// only the near-black ones. Blueprint, Brown Paper and OLED black come back
+    /// byte-identical, on their own measurements rather than on a gate. See
+    /// <see cref="PagePlate.Seat(Color)"/> and
+    /// <see cref="PagePlate.SeatBackdrop"/>.</para></summary>
     private Color SeatFor() => PagePlate.Seat(PageGround);
 
     /// <summary>The live page's ground - the paper the user is drawing on.

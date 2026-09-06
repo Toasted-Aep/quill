@@ -160,9 +160,9 @@ public static class PagePlate
     /// against the page, not legible against it.</para></summary>
     public const double PanelSeparation = 10.0;
 
-    /// <summary>§29: THE SEAT FLOOR - the minimum contrast a TOOL SEAT may
-    /// have against its page, and it is stated as a RATIO because L* cannot see
-    /// this defect.
+    /// <summary>§29/§34: THE SEAT FLOOR - the minimum contrast a TOOL SEAT may
+    /// have against THE SURFACE IT STANDS ON, and it is stated as a RATIO
+    /// because L* cannot see this defect.
     ///
     /// <para><b>The report.</b> <i>"the 10 tools displayed have a transparent bg
     /// when in dark ui mode"</i>, clarified as <i>"their background are
@@ -193,8 +193,72 @@ public static class PagePlate
     /// transparent" as this file can offer. It is a FLOOR, so it is set at the
     /// minimum that is defensible and not at a comfortable value; §29 of
     /// docs/CONCEPTS-REF-2026-08-07.md carries the measured table for 2.25, 2.5
-    /// and 3.0 should a screen run say 2.0 is not enough.</para></summary>
+    /// and 3.0 should a screen run say 2.0 is not enough.</para>
+    ///
+    /// <para><b>§34 CHANGES WHAT THIS IS MEASURED AGAINST, AND NOT THE NUMBER.</b>
+    /// §29 measured the seat against the PAGE. The seat is not on the page.
+    /// Where §7 takes the ring's fill away it stands on
+    /// <see cref="SeatBackdrop"/> - the page seen through the dial's own drop
+    /// shadow - and on Plain White that is <c>#D1D1D1</c> on <c>#CFCFCF</c> =
+    /// <b>1.020:1</b>, worse than the black page that was actually reported. So
+    /// the floor is unchanged at 2.0 and §29's <c>BaseIsDark</c> GATE IS GONE:
+    /// the gate existed to protect the light branch, and the light branch turns
+    /// out to be the branch that fails. What the gate was protecting survives on
+    /// its own measurements instead - see <see cref="Seat(Color)"/>.</para>
+    ///
+    /// <para><b>2.0 was DERIVED at a black backdrop and is TRANSPLANTED at a
+    /// light one</b>, and that is stated rather than hidden. The flare argument
+    /// above needs <c>Yp = 0</c>. Against <c>#CFCFCF</c> it says nothing, and
+    /// the number is carried over because §29 set it and because changing the
+    /// surface and the constant in one run would leave neither measured. §34
+    /// carries the table for 1.5, 1.75, 2.25 and 2.5 on the light stocks.</para></summary>
     public const double SeatFloor = 2.0;
+
+    /// <summary>§34: THE DIAL'S DROP SHADOW, AS AN ALPHA - and a tool seat
+    /// stands on IT, not on the paper.
+    ///
+    /// <para><b>The mechanism, read off <c>ToolWheel</c> rather than
+    /// supposed.</b> <c>BuildWheel</c> adds one <c>_shadow</c> ellipse FIRST,
+    /// under every other part, filled by <c>ShadowBrush</c> with a radial
+    /// gradient that is SOLID black at this alpha from the centre out to
+    /// <c>0.98 x RingOut/(RingOut + 14)</c> of its radius. That is 96.04 DIP,
+    /// against a seat band of 59.14..85.14 DIP and a shadow centre offset 2 DIP
+    /// down - so every seat lies wholly inside the SOLID part and sees a flat
+    /// 46/255 = 18.04% black wash, not a gradient.</para>
+    ///
+    /// <para><b>Why the ellipse is solid inside at all, when a drop shadow is
+    /// only ever seen OUTSIDE the thing that casts it.</b> It is a stand-in for
+    /// a composition blur, which §1.1 rules out because the dial sits over a
+    /// Win2D swap chain. Under an OPAQUE object the interior of that stand-in is
+    /// covered and painting it solid costs nothing. §7 then took the ring's fill
+    /// away on a dark shell, and the interior became visible. Photographed
+    /// rather than argued: <c>scratchpad/vp10/r02-dial.png</c> shows the darker
+    /// disc over the page where the ring has gone, and
+    /// <c>scratchpad/vp12/a02-dial-crop.png</c> shows the same wash through the
+    /// UNAVAILABLE cells on a light shell, where the sector's own opacity is
+    /// 0.</para>
+    ///
+    /// <para>Read by <c>ToolWheel.ShadowBrush</c>, so the app and
+    /// <c>tools/SeatProof</c> paint and measure one number.</para></summary>
+    public const byte ShadowAlpha = 46;
+
+    /// <summary>§34: the RING's own fill - <c>ToolWheel</c>'s OTHER backdrop for
+    /// a seat, and the reason this file has to know that there are two.
+    ///
+    /// <para>§7 leaves the ring an opaque fill on a light shell, and a seat
+    /// drawn over an opaque sector stands on THAT rather than on the shadow.
+    /// It lives here so <c>tools/SeatProof</c> can measure both surfaces off the
+    /// shipping constant instead of a copy of it - the failure §30.6 caught in
+    /// <c>tools/PanelProof</c>, which hardcoded a value it also linked.</para>
+    ///
+    /// <para><b>Both of this mix's operands are SHELL-derived, and that is not
+    /// this file's doing</b> - the expression is <c>ToolWheel</c>'s, moved and
+    /// not changed. It is the same shell-keying items 2.1 and 2.2 removed
+    /// elsewhere, it is why a light shell puts a near-white ring over a
+    /// Darkprint page, and §34 flags it rather than fixing it: the ring is a
+    /// large visible surface and re-keying it is a ruling, not a
+    /// tuning.</para></summary>
+    public const double RingTint = 0.62;
 
     /// <summary>The grey a LIGHT page's plates are built on. #B4B4B4, solved from
     /// the user's Blueprint example.</summary>
@@ -273,41 +337,87 @@ public static class PagePlate
         return PageTheme.WithLightness(panel, Math.Clamp(want, 0, 100));
     }
 
-    /// <summary>§29: A TOOL SEAT'S GROUND - the formula at <see cref="Tint"/>,
-    /// held at least <see cref="SeatFloor"/> in contrast from the page, and ONLY
-    /// on the dark base's branch.
+    /// <summary>§34: WHAT A TOOL SEAT ACTUALLY STANDS ON where §7 has taken the
+    /// ring's fill away - the page seen through the dial's own drop shadow.
     ///
-    /// <para><b>The light branch is returned untouched, and that restraint is
-    /// what makes this a floor rather than a redesign.</b> Two independent
-    /// reasons, either sufficient. FIRST, the light branch carries the one
-    /// measured agreement this file has with the user's own worked example:
-    /// Blueprint's seat is <c>#7E9FBA</c> against their stated <c>#7EA0B9</c>,
-    /// and every light paper sits at 1.33..1.49:1 - so a ratio floor let loose
-    /// on that branch would move all eight of them and take that number with it.
-    /// SECOND, on a light shell §7 leaves the ring its OPAQUE fill, so a light
-    /// page's seat is not standing on the page at all: it stands on
-    /// <c>ToolWheel</c>'s <c>ringFill</c>, where it measures 1.14..1.29:1. A
-    /// floor on seat-versus-PAGE there would be a floor on two colours that
-    /// never meet. §7 takes the ring's fill away only on a dark ground, and that
-    /// is precisely where the seat is left alone on the paper.</para>
+    /// <para>Not a paper, and that is the honest cost of §34: this file's whole
+    /// thesis is that a chrome ground is derived from the PAGE, and a shadow is
+    /// not a page. It is here because the alternative was worse. §29 judged the
+    /// seat against the paper and published ten figures for a surface the seat
+    /// does not touch; the only way to stop doing that is for the formula to
+    /// know what is under the seat.</para>
     ///
-    /// <para><b>What moves, and it is only the near-black grounds.</b> Darkprint
-    /// <c>#3C3E41</c> to <c>#56585C</c>, a black page <c>#2D2D2D</c> to
-    /// <c>#3F403F</c>, a pinned dark shell <c>#333333</c> to <c>#454544</c>. All
-    /// six white stocks, Blueprint and Brown Paper come back byte-identical. So
-    /// does the INNER DISC on every page without exception: <c>ToolWheel</c>
-    /// fills it straight from <see cref="Of"/> and this method is not on its
-    /// path.</para>
+    /// <para><b>It is page-derived and shell-INDEPENDENT, deliberately.</b> The
+    /// ring's fill (<see cref="RingTint"/>) is the seat's other possible
+    /// backdrop and it IS shell-keyed, so flooring against whichever one is live
+    /// would give one paper two seat colours - a light one under a dark shell
+    /// and a dark one under a light shell, flipping on the theme toggle. It is
+    /// not needed: measured, this surface is the WORSE of the two on all nine
+    /// shipped papers and on OLED black, before and after the floor, so
+    /// clearing it clears the ring case as well. That is not universal - over a
+    /// 3-step sweep of the whole gamut a pinned-light ring is the worse surface
+    /// on some saturated custom pages - and §34 states the number rather than
+    /// implying there is none.</para></summary>
+    public static Color SeatBackdrop(Color ground) =>
+        PageTheme.Over(Color.FromArgb(ShadowAlpha, 0, 0, 0), ground);
+
+    /// <summary>§34: THE RING'S FILL, as <c>ToolWheel.Refresh</c> computes it -
+    /// the seat's backdrop wherever §7 has NOT taken the ring away.
     ///
-    /// <para><b>§0's rule, for the fourth time in this file's history.</b> The
-    /// seat's ground has moved, so the mark standing on it is re-judged against
-    /// the NEW seat - <c>ToolWheel.BestInk</c> is fed this method's result and
-    /// not <c>PlateFor</c>'s. Swept over every ground on a 3-step RGB lattice
-    /// (636 056 of them) the re-judged mark bottoms out at <b>4.583:1</b>, which
-    /// is <c>BestInk</c>'s provable minimum over the whole sRGB gamut, clearing
-    /// <see cref="MarkFloor"/> by half as much again. Judged against the OLD
-    /// plate instead it would reach 4.335:1 - still over the floor, so this one
-    /// would not have been caught by the floor alone.</para></summary>
+    /// <para>Moved here unchanged so the harness can link it. Both operands are
+    /// the SHELL's tokens; see <see cref="RingTint"/>.</para></summary>
+    public static Color RingFill(Color surface, Color shellGround) =>
+        Mix(surface, shellGround, RingTint);
+
+    /// <summary>§29/§34: A TOOL SEAT'S GROUND - the formula at
+    /// <see cref="Tint"/>, held at least <see cref="SeatFloor"/> in contrast
+    /// from <see cref="SeatBackdrop"/>.
+    ///
+    /// <para><b>§29 held it away from the PAGE and gated the floor to the dark
+    /// base's branch. Both are corrected here, and the second follows from the
+    /// first.</b> The gate existed to protect the light branch, on two stated
+    /// reasons: that it carries the user's own <c>#7EA0B9</c>, and that a light
+    /// page's seat "is not standing on the page at all". The second reason was
+    /// right and was never followed through - if the seat is not on the page
+    /// then neither is the FLOOR's measurement, and §29 published nine
+    /// seat-versus-page figures anyway. Measured against what the seat is
+    /// really on, the light branch is the branch that fails: <b>1.020:1</b> on
+    /// Plain White against <c>#CFCFCF</c>, where the black page that was
+    /// actually reported measures 1.525:1.</para>
+    ///
+    /// <para><b>The first reason survives WITHOUT the gate, and that is a
+    /// measurement rather than a hope.</b> Blueprint's seat <c>#7E9FBA</c>
+    /// stands on <c>#26699F</c> at <b>2.097:1</b> and Brown Paper's
+    /// <c>#B09985</c> on <c>#8B5D34</c> at <b>2.085:1</b>. Both clear
+    /// <see cref="SeatFloor"/> on their own, so both come back BYTE-IDENTICAL
+    /// with the gate gone and the user's <c>#7EA0B9</c> is untouched. So does
+    /// OLED black's <c>#3F403F</c>.</para>
+    ///
+    /// <para><b>What moves, and it is the six white stocks.</b> Plain White
+    /// <c>#D1D1D1</c> to <c>#919292</c> (-23.37 L*), Transparent to
+    /// <c>#8A8B8B</c>, Crumpled to <c>#888784</c>, Lightweight to
+    /// <c>#8C8B8A</c>, Heavyweight to <c>#84827F</c>, Rippled to
+    /// <c>#8A8A87</c>. They measured 1.020..1.134:1 against their real backdrop
+    /// and they needed to. Darkprint moves LESS than §29 moved it -
+    /// <c>#56585C</c> to <c>#4F5255</c> - because the shadow darkens a dark page
+    /// too and the floor therefore has less work to do. THE COST IS THAT §24's
+    /// "one colour for the disc and every cell alike" is now gone on EVERY page
+    /// rather than only the near-black ones: the disc stays <c>#D1D1D1</c> on
+    /// Plain White while its seats become <c>#919292</c>.</para>
+    ///
+    /// <para><b>The INNER DISC is byte-identical on every ground without
+    /// exception</b>, which is the one guarantee the user's ruling demands.
+    /// <c>ToolWheel</c> fills it straight from <see cref="Of"/> and this method
+    /// is not on its path; measured over a 3-step lattice of all 636 056
+    /// grounds, <b>0 differences</b>.</para>
+    ///
+    /// <para><b>§0's rule, for the fifth time in this file's history.</b> The
+    /// seat's ground moved again, so the mark on it is re-judged against the new
+    /// seat - <c>ToolWheel.BestInk</c> is fed this method's result. Over the
+    /// same 636 056 grounds the re-judged mark bottoms out at <b>4.583:1</b>,
+    /// <c>BestInk</c>'s provable minimum over the whole sRGB gamut; over the
+    /// nine shipped papers plus OLED black the worst is <b>5.48:1</b> (Heavyweight),
+    /// down from 12.44:1 and still clear of <see cref="MarkFloor"/>.</para></summary>
     public static Color Seat(Color ground) => Seat(ground, Tint, SeatFloor);
 
     /// <inheritdoc cref="Seat(Color)"/>
@@ -315,25 +425,36 @@ public static class PagePlate
     /// <see cref="Panel(Color, double, double)"/>'s does: an acceptance harness
     /// has to sweep the SHIPPED arithmetic rather than a transcription of it,
     /// which is §24.7's method and the reason the figures above can be quoted as
-    /// measurements.</remarks>
+    /// measurements. <paramref name="floor"/> = 0 returns the unfloored mix,
+    /// which is how <c>tools/SeatProof</c> gets its "before" column.</remarks>
     public static Color Seat(Color ground, double t, double floor)
     {
         var seat = Of(ground, t);
-        if (!BaseIsDark(ground) || Contrast(seat, ground) >= floor) return seat;
+        // §34: the floor is measured against what the seat STANDS ON, not
+        // against the paper. There is no branch gate: see this method's remarks
+        // for why the light branch's exclusion did not survive being measured,
+        // and for what still comes back byte-identical without it.
+        var back = SeatBackdrop(ground);
+        if (Contrast(seat, back) >= floor) return seat;
 
-        double lg = PageTheme.Lightness(ground);
-        double gap = PageTheme.Lightness(seat) - lg;
+        double lb = PageTheme.Lightness(back);
+        double gap = PageTheme.Lightness(seat) - lb;
         // The lean is the base grey's own choice; §27's Panel reverses it for the
-        // same reason, and a dead tie leans away from the page's end of the axis.
-        double dir = gap > 0 ? 1 : gap < 0 ? -1 : (lg >= BaseSplit ? -1 : 1);
-        return Lift(seat, ground, lg, dir, floor)
-            ?? Lift(seat, ground, lg, -dir, floor)
+        // same reason, and a dead tie leans away from the backdrop's end of the
+        // axis. On a white page the lean is UP by 0.70 L* and the up side cannot
+        // reach the floor at all - pure white on #CFCFCF is 1.558:1 - so the
+        // second Lift is what actually carries that case. It is not a fallback
+        // there; it is the answer.
+        double dir = gap > 0 ? 1 : gap < 0 ? -1 : (lb >= BaseSplit ? -1 : 1);
+        return Lift(seat, back, lb, dir, floor)
+            ?? Lift(seat, back, lb, -dir, floor)
             ?? seat;
     }
 
     /// <summary>Push a seat along L* until it clears <paramref name="floor"/>
-    /// against its ground, keeping a/b - so a dark page's seat is pushed OFF the
-    /// page rather than repainted grey, exactly as §27's clamp does.
+    /// against <paramref name="against"/> - the surface it stands on - keeping
+    /// a/b, so a seat is pushed OFF its backdrop rather than repainted grey,
+    /// exactly as §27's clamp does.
     ///
     /// <para>A search rather than a closed form, and deliberately: contrast is a
     /// function of LUMINANCE while the thing being held is L*, and
@@ -343,16 +464,16 @@ public static class PagePlate
     /// only ever moved to a value that has been MEASURED to clear the floor, so
     /// the returned colour always does. Returns null when the far endpoint
     /// cannot reach it, which is the caller's cue to try the other side.</para></summary>
-    private static Color? Lift(Color seat, Color ground, double lg, double dir, double floor)
+    private static Color? Lift(Color seat, Color against, double lStart, double dir, double floor)
     {
-        double lo = lg, hi = dir > 0 ? 100 : 0;
-        if (Contrast(PageTheme.WithLightness(seat, hi), ground) < floor) return null;
+        double lo = lStart, hi = dir > 0 ? 100 : 0;
+        if (Contrast(PageTheme.WithLightness(seat, hi), against) < floor) return null;
         // 32 halvings take a 0..100 axis far below the byte quantisation
         // WithLightness rounds to anyway; this runs once per Refresh, not per cell.
         for (int i = 0; i < 32; i++)
         {
             double mid = (lo + hi) / 2;
-            if (Contrast(PageTheme.WithLightness(seat, mid), ground) >= floor) hi = mid;
+            if (Contrast(PageTheme.WithLightness(seat, mid), against) >= floor) hi = mid;
             else lo = mid;
         }
         return PageTheme.WithLightness(seat, hi);
