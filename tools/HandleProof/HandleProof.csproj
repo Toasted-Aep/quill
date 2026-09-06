@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- §39.8's acceptance harness (docs/CONCEPTS-REF-2026-08-07.md §39.8).
+
+       IT LINKS THE SHIPPING SOURCE rather than copying it, exactly as
+       tools/PanelProof and tools/SeatProof do. Every figure §39.8 quotes -
+       the raise behind Surface and PageSurface, the ink behind OnSurface and
+       OnPage, the alpha composite, the WCAG ratio, the nine paper grounds -
+       comes out of PageTheme.cs / PagePlate.cs / PaperGrain.cs as the app
+       compiles them, so the tables cannot drift from the build without this
+       project failing.
+
+       THE TWO THINGS IT CANNOT LINK ARE ASSERTED AGAINST THE SOURCE TEXT
+       INSTEAD, in section 0, and the run fails if either has moved:
+       SelectionChrome's two handle brushes with their alpha, and
+       MainWindow.ResolveGround's three pinnable shell grounds.
+       SelectionChrome.cs and MainWindow.xaml.cs are WinUI files and cannot be
+       compiled into a plain console app, so "link it" is not available for
+       them; section 0 is what stops a silent transcription drifting - the
+       failure §30.6 caught tools/PanelProof committing.
+
+       Run it with `dotnet run` against this project file, in Release.        -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>HandleProof</RootNamespace>
+    <AssemblyName>HandleProof</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Quill\Services\PageTheme.cs" Link="PageTheme.cs" />
+    <Compile Include="..\..\src\Quill\Controls\PagePlate.cs" Link="PagePlate.cs" />
+    <Compile Include="..\..\src\Quill\Controls\PaperGrain.cs" Link="PaperGrain.cs" />
+  </ItemGroup>
+
+</Project>
