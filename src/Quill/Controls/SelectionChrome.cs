@@ -29,7 +29,9 @@ namespace Quill.Controls;
 /// and bottom running the whole width. <b>Not a box on the bounds.</b> An
 /// earlier version of 16.2 said it was a box and was wrong; these read as
 /// alignment guides, which is a different statement about the same
-/// rectangle;</item>
+/// rectangle. <b>Amendment (Concepts reference photo, position-while-typing):
+/// the four guides are the one piece of this list EDITING also draws</b> - see
+/// the paragraph below on why that is a narrower carve-out than it looks;</item>
 /// <item>a centred bottom row - Rotate, Scale, Filter, each an icon with its
 /// word beside it.</item>
 /// </list>
@@ -75,15 +77,43 @@ namespace Quill.Controls;
 /// statement - it is the one carrying handles, guides and the flips - so it is
 /// the one that draws. Escape still leaves the box either way.</para>
 ///
-/// <para><b>The editing bar draws NOTHING below the bubble</b> - no guides, no
-/// corner circles, no Rotate / Scale / Filter row. 11.9 asks for quick actions
-/// above the bubble and nothing else, and those three things describe a
-/// selection, which this is not. 17.9 then says the same thing for the whole
-/// presentation - "quick actions stay above the subject, but nothing floats
-/// below it" - and moves that row to the bottom of the screen as a mode bar.
-/// <b>That move is not made here</b>; it is a separate piece of work with its
-/// own owner, and this file deliberately leaves <c>_row</c> where it is rather
-/// than half-moving it. The editing state simply never had a row to move.</para>
+/// <para><b>The editing bar draws NOTHING below the bubble except the four
+/// guides</b> - no corner circles, no Rotate / Scale / Filter row. This is an
+/// AMENDMENT to the original ruling, not its reversal, and the difference is
+/// worth stating precisely because the original reasoning was sound and still
+/// holds for the two things it still excludes:</para>
+///
+/// <list type="bullet">
+/// <item>the corner circles are HANDLES - grips that promise a drag will scale
+/// or move the box from that corner. Editing has no such gesture (a caret does
+/// not scale), so drawing them would offer an action the state cannot perform,
+/// which is worse than offering none;</item>
+/// <item>the Rotate / Scale / Filter row is a MODE SWITCH - it changes what a
+/// drag on the box does next. Editing is already a mode a drag cannot leave by
+/// touching the box (the drag would be a text selection), so the row has
+/// nothing to attach to.</item>
+/// </list>
+///
+/// <para>The guides fail that same test differently: they assert nothing and
+/// offer no gesture. 16.2 already describes them as "alignment guides, not a
+/// selection outline" - a position readout, not a control - and the Concepts
+/// reference photo this amendment is answering shows exactly that reading in
+/// its own editing state: four lines and a quick-action bar, nothing else. A
+/// user typing a caption at the edge of a photo needs to see where that box's
+/// edges fall against the rest of the page as much as - arguably more than - a
+/// user who has merely selected it and is not currently looking at the
+/// keyboard. So the carve-out is one line item, not a re-opening of 11.9's
+/// question: the bar's marks are still the only INTERACTIVE thing this mode
+/// offers, and 11.9's "nothing else" is now read as "no other CONTROL" rather
+/// than "no other pixel" - the reading the reference photo itself supports.</para>
+///
+/// <para>17.9 then says the same thing for the whole presentation - "quick
+/// actions stay above the subject, but nothing floats below it" - and moves
+/// that row to the bottom of the screen as a mode bar. <b>That move is not made
+/// here</b>; it is a separate piece of work with its own owner, and this file
+/// deliberately leaves <c>_row</c> where it is rather than half-moving it. The
+/// editing state simply never had a row to move, and this amendment does not
+/// give it one - the row and the handles stay exactly as absent as they were.</para>
 ///
 /// <para><b>17.12 resizes the quick actions by +80%, and nothing in this file
 /// stands in its way.</b> Every size the editing bar uses comes from
@@ -408,7 +438,23 @@ public sealed class SelectionChrome
 
     public void Repaint()
     {
-        var guide = PageTheme.WithAlpha(PageTheme.OnSurface, Metrics.GuideAlpha);
+        // §0, caught by the Editing-mode carve-out: this used to read OnSurface,
+        // which PageTheme keys to the SHELL's ground (Ground / IsDark), not to
+        // the page these guides are actually drawn over. On the default install
+        // ThemeSource is "Manual" - a pinned shell colour that knows nothing
+        // about the loaded paper - so shell and page routinely disagree, and a
+        // shell-keyed ink drawn on the page is exactly the split pair 2.1 wrote
+        // OnPage/PageOutline to close for the bare-canvas case. Measured: a
+        // pinned dark shell under Plain White paper took this guide from
+        // 1.614:1 to 1.017:1 - the guide's alpha-56 ink landing one unit off the
+        // page colour it sits on, functionally invisible. OnPage is keyed to
+        // PageGround instead, so it cannot invert this way regardless of what
+        // the shell is pinned to; across the nine shipped papers at
+        // GuideAlpha=56 it now holds 1.377:1 (Blueprint) to 1.958:1 (Darkprint).
+        // Still deliberately faint - see GuideAlpha's own remarks, this is a
+        // thin alignment guide, not a mark held to the 3:1 non-text floor - but
+        // faint on purpose is different from accidentally gone.
+        var guide = PageTheme.WithAlpha(PageTheme.OnPage, Metrics.GuideAlpha);
         foreach (var g in _guides) g.Fill = new SolidColorBrush(guide);
         foreach (var e in _handles)
         {
@@ -420,8 +466,10 @@ public sealed class SelectionChrome
         }
         // §27: the two PLATES are Panel, so their rules are PanelOutline. The
         // guides and handles above are NOT - they are drawn straight onto the
-        // page over the subject, and they keep OnSurface/Surface. The two groups
-        // are three lines apart and take different tokens on purpose.
+        // page over the subject, so the guides take OnPage (see the fix note
+        // above) and the handles still take OnSurface/Surface pending the same
+        // audit. The two groups are three lines apart and take different tokens
+        // on purpose.
         foreach (var p in new[] { _bar, _row })
         {
             p.Background = new SolidColorBrush(PageTheme.Panel);
@@ -721,12 +769,17 @@ public sealed class SelectionChrome
         {
             _mode = want;
             _layer.Visibility = want == Mode.None ? Visibility.Collapsed : Visibility.Visible;
-            // Everything except the bar describes a SELECTION. 11.9 asks for
-            // quick actions above the bubble and nothing else, so the guides,
-            // the corner circles and the bottom row stand down while editing
-            // rather than being drawn around a box the user is typing in.
+            // Amendment: the guides now stand for EITHER mode - a position
+            // readout is exactly what the Concepts reference uses them for
+            // while a box is being typed into, not just while it is selected.
+            // The corner circles and the bottom row are unchanged: they are
+            // handles and a mode switch, not a readout, and Editing has no drag
+            // gesture on the box for either of them to attach to (see the class
+            // remarks). So they still stand down while editing rather than
+            // being drawn around a box the user is typing in.
+            var showGuides = want != Mode.None ? Visibility.Visible : Visibility.Collapsed;
             var deco = want == Mode.Selection ? Visibility.Visible : Visibility.Collapsed;
-            foreach (var g in _guides) g.Visibility = deco;
+            foreach (var g in _guides) g.Visibility = showGuides;
             foreach (var e in _handles) e.Visibility = deco;
             _row.Visibility = deco;
             // 17.9: and the row is PUBLISHED or RETRACTED, because it no longer
@@ -803,18 +856,43 @@ public sealed class SelectionChrome
         double bh = _bar.ActualHeight > 0 ? _bar.ActualHeight : Metrics.BarHeight;
         Put(_bar, Clamp(cx - bw / 2, vw - bw), Clamp(y0 - Metrics.Gap - bh, vh - bh));
 
-        // Everything below describes a SELECTION and is collapsed while editing,
-        // so there is nothing to place.
-        if (_mode != Mode.Selection) return;
-
         // THE GUIDES. Full-canvas, projected from the box: verticals at its left
         // and right running the whole viewport height, horizontals at its top and
         // bottom running the whole width. 16.2 is explicit that this is NOT a box
         // on the bounds, so nothing here is clipped to the rectangle.
+        //
+        // Amendment: placed for BOTH modes, not gated on Mode.Selection below -
+        // this is the one element group Editing also shows (see the class
+        // remarks and Sync()). It is placed from the same w/x0/y0/x1/y1 this
+        // method already derived above through WorldToScreen, which is why
+        // Editing's guides track live as the bubble is typed into and resized:
+        // OnEditingMoved and SubjectMoved both call Place(), not just Sync(),
+        // for exactly this reason (see their own remarks).
+        //
+        // AXIS-ALIGNED BY CONSTRUCTION, not by a separate decision made here. A
+        // rotated box's Editing bounds come from EditingTextBoundsWorld, whose
+        // own doc is explicit that "a rotated bubble reports its unrotated
+        // box" - the same approximation SubjectBoundsWorld makes for a rotated
+        // shape - so x0/y0/x1/y1 above are already the unrotated AABB before
+        // this method ever sees them. That keeps a 37.6 deg text box's guides
+        // upright, exactly matching 16.2/17.8's own axis-aligned selection
+        // marquee rather than introducing a second, tilted kind of guide this
+        // file would be the only place that drew. Kept axis-aligned rather than
+        // rotated for the same reason the bar stays horizontal above a tilted
+        // box: a guide's whole job is to compare the subject's edge to the rest
+        // of the page, and an edge is only comparable to a horizontal ruler and
+        // a vertical one if it reads the same way regardless of which way its
+        // own box is turned.
         Line(_guides[0], x0, 0, Metrics.GuideThickness, vh);
         Line(_guides[1], x1, 0, Metrics.GuideThickness, vh);
         Line(_guides[2], 0, y0, vw, Metrics.GuideThickness);
         Line(_guides[3], 0, y1, vw, Metrics.GuideThickness);
+
+        // Everything below still describes a SELECTION only and is collapsed
+        // while editing: corner circles are handles and the row is a mode
+        // switch, neither of which the Editing state has a gesture for (see the
+        // class remarks on why the guides' carve-out does not extend to them).
+        if (_mode != Mode.Selection) return;
 
         // THE CORNER CIRCLES, on the box's own corners.
         double r = Metrics.HandleSize / 2;
