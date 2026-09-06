@@ -8989,6 +8989,18 @@ is the `Panel` ruling above, and it is **flagged rather than taken**, the same
 way §34 flagged the ring's tint rather than re-keying a large visible surface
 on its own authority.
 
+**The rule is under the mark floor on those same two papers, measured against
+the paper rather than the disc.** At alpha 150 it reads 2.283:1 on Blueprint
+and 2.274:1 on Brown Paper, short of `PagePlate.MarkFloor`'s 3:1. Raising the
+alpha clears it - 205 on Blueprint (3.007:1), 209 on Brown Paper (3.006:1) -
+and at those values the circle has stopped being hollow, which is the one
+thing 16.2 asks it to be. So the floor and the shape are in genuine conflict
+here and this section does not pretend otherwise: the number is recorded, the
+alpha is not moved, and the trade is left where it belongs. Note this is a
+DIFFERENT residual from the 1.541:1 above - that one is the rule against its
+own disc, this one is the rule against the paper - and both are properties of
+a mid-tone ground that the re-key inherits rather than creates.
+
 **Not verified on screen.** `dotnet build src/Quill/Quill.csproj -c Debug
 -p:Platform=x64 --no-incremental` is clean — 0 warnings, 0 errors — and
 `tools/HandleProof` passes, but both are claims about the compiler and about

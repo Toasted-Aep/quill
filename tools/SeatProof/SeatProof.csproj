@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- §34's acceptance harness (docs/CONCEPTS-REF-2026-08-07.md §34).
+
+       IT LINKS THE SHIPPING SOURCE rather than copying it, exactly as
+       tools/PanelProof does. Every colour constant §34 quotes - the seat mix,
+       the seat floor, the dial's shadow alpha, the ring's tint, the nine paper
+       grounds - comes out of PagePlate.cs / PageTheme.cs / PaperGrain.cs as the
+       app compiles them.
+
+       THE FOUR THINGS IT CANNOT LINK ARE ASSERTED AGAINST THE SOURCE TEXT
+       INSTEAD, in section 0, and the run fails if any of them has moved:
+       ToolWheel's BestInk and ShadowBrush geometry, ToolWheel's ringFill call,
+       and MainWindow.ResolveGround's three shell grounds. ToolWheel.cs and
+       MainWindow.xaml.cs are WinUI partials and cannot be compiled into a plain
+       console app, so "link it" is not available for them; a silent
+       transcription is what §30.6 caught tools/PanelProof doing, and section 0
+       is the alternative.
+
+       Run it with `dotnet run` against this project file, in Release.
+       Exits non-zero when a shipped ground is under a floor.                -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SeatProof</RootNamespace>
+    <AssemblyName>SeatProof</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Quill\Services\PageTheme.cs" Link="PageTheme.cs" />
+    <Compile Include="..\..\src\Quill\Controls\PagePlate.cs" Link="PagePlate.cs" />
+    <Compile Include="..\..\src\Quill\Controls\PaperGrain.cs" Link="PaperGrain.cs" />
+  </ItemGroup>
+
+</Project>
