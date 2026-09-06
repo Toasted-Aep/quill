@@ -1,5 +1,81 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-06 (eighteenth screen run) - the text position guides, SEEN
+
+Driven by the orchestrator directly rather than by a sub-agent. Two sub-agents
+had declined this check on the same reasoning - that an agent's relay of the
+user's authorisation is not the user's authorisation - and both were right to.
+The user gave the instruction to the orchestrator in chat, so the orchestrator
+ran it.
+
+### 39 Editing-mode position guides - PASS, all four claims
+
+On Plain White at 100%, a text box placed mid-canvas and typed into:
+
+- **The four guides draw in Editing mode.** Verticals at the box's left and
+  right running the full canvas height, horizontals at its top and bottom
+  running the full width. Matches the Concepts reference's arrangement.
+- **No corner circles. No mode row.** Only the guides and the quick-action bar
+  above ("Cancel Editing", ligature, padlock, duplicate, bin). The carve-out is
+  bounded exactly as 39 describes it.
+- **THEY TRACK. This was the main risk and it is clear.** A second, longer paste
+  grew the box from one line to three. The right vertical moved out with the new
+  width and the bottom horizontal moved down with the new height, while the left
+  and top stayed pinned to the unchanged edges. The quick-action bar re-centred
+  above the box with it.
+- **Legible on Plain White.** The guides read clearly as thin low-contrast rules,
+  which is what 16.2 asks for. This is the on-screen half of the OnPage change:
+  the harness measures 1.377-1.958:1 across the nine papers, and on this paper
+  that reads as subtle rather than as broken.
+
+**Not covered by this run:** a rotated box, a box near the canvas edge, and a
+dark paper. The dark case is the same formula and the same harness measurement,
+but it has not been looked at.
+
+### THE ".NET DESKTOP RUNTIME" DIALOG IS NOT SPURIOUS - the note was wrong
+
+Every previous run recorded that dialog as a spurious launch flake to be retried,
+on the grounds that 8.0.30 is installed and is what the app targets. **It is
+installed, and that was never the question.** This run found the real cause:
+
+    Quill.runtimeconfig.json - MISSING
+    Quill.deps.json          - MISSING
+    Quill.dll                - present, 1,995,264 bytes
+
+Without a runtimeconfig the apphost cannot resolve a framework at all, and the
+exact symptom it reports is "You must install .NET Desktop Runtime". The output
+had been left in that state since 16:56, when a concurrent session redirected
+its build to a scratch output to avoid a locked binary - after which the
+incremental state considered those two files current and stopped emitting them.
+
+`--no-incremental` restored both and the app launched first try. **Retrying the
+launch was never going to fix it**; the retries that appeared to work in earlier
+runs were runs whose build had happened to emit the files. Anyone who hits this
+dialog should check for those two files before assuming a flake.
+
+### The z-order guard, which earned itself immediately
+
+An earlier attempt this session had a click land in the Claude window because a
+notification toast took focus - injected input is hit-tested by z-order, not
+activation, and SetForegroundWindow is not enough. This run's `QClick` asserts
+`WindowFromPoint` belongs to Quill's own pid before every click and **refused its
+very first one**, correctly, while the Claude window was still on top. Pinning
+Quill topmost did not by itself clear it.
+
+### Gates
+
+`Documents\Quill\library.json` 53,582,459 bytes / `0C32CE6C` and
+`%LOCALAPPDATA%\LectureInk\library.json` 6,461,655 bytes / `0C6F1B7F` - both
+byte-identical before and after. The scratch library held only `My Notebook /
+Section 1 / Page 1` and the default pen names, which is **item 2.0's isolation
+fix verified on its first real run**; `library.json.bak` and `settings.json.bak`
+were present (4.1's pattern) and `synccursors.json` written (5.3's target).
+
+`[Q]::Key` does not reach the text editor - Escape did not leave editing, as the
+existing note says. Clipboard + Ctrl+V is the only route in.
+
+---
+
 ## RUN OF 2026-09-05 (seventeenth screen run) — ITEM 2.0: THE ISOLATION LEAK IS CLOSED, AND IT WAS FOUR PATHS, NOT ONE
 
 Branch `integration` @ `41af281` + this fix. Clean x64 Debug `--no-incremental`
