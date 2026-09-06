@@ -56,10 +56,16 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="Shim.cs" />
     <!-- The rule under test, and the ColorUtil.IsDark it replaces - the real
          one, so "no existing note changes colour" is a comparison and not a
          claim. -->
     <Compile Include="..\..\src\Quill\Services\PageTheme.cs" Link="PageTheme.cs" />
+    <!-- 2.1/2.2 gave PageTheme a reference into Quill.Controls, which broke
+         this project with CS0234 and left the export checks unrunnable.
+         PanelProof/SeatProof/HandleProof link all three; match them. -->
+    <Compile Include="..\..\src\Quill\Controls\PagePlate.cs" Link="PagePlate.cs" />
+    <Compile Include="..\..\src\Quill\Controls\PaperGrain.cs" Link="PaperGrain.cs" />
     <Compile Include="..\..\src\Quill\Helpers\Util.cs" Link="Util.cs" />
     <!-- The two emitters, and the font resolver PdfExporter calls. -->
     <Compile Include="..\..\src\Quill\Services\PdfExporter.cs" Link="PdfExporter.cs" />

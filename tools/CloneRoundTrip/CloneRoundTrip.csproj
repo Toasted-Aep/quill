@@ -39,6 +39,7 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="Shim.cs" />
     <Compile Include="..\..\src\Quill\Models\NoteModels.cs" Link="NoteModels.cs" />
     <!-- The subject: the set-level rule that duplicate runs. -->
     <Compile Include="..\..\src\Quill\Models\ElementClone.cs" Link="ElementClone.cs" />
