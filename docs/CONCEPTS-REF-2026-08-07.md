@@ -9008,3 +9008,144 @@ arithmetic, not about what four 9-DIP ellipses look like in a live WinUI
 layout pass over nine papers. The task that requested this change scoped it as
 code-only and analytical, which is what it is; the on-screen pass is not done
 and is not implied by either result above.
+
+## 40 Two reported text-colour defects that are not there, and the one that is — 2026-09-06
+
+Wave 3 rows 3.1 and 3.2, taken to the screen (run 19) rather than reasoned
+about. **Neither reproduces.** What the run found instead is a third thing that
+neither row names, that is worse than both, and that explains the one symptom of
+3.1 that was real.
+
+### 40.1 The measurement, so the "not found" can be checked rather than believed
+
+Four boxes on one Plain White page (`#FAF9F5`), shell theme **Dark** — the
+condition §2.2 needs, since `TextControlForegroundFocused` is only `#FFFFFF`
+because `RootGrid.RequestedTheme` follows the shell:
+
+| box | `TextElement.TextColor` | its RTF's `\colortbl` | why it is in the set |
+|---|---|---|---|
+| A | `#C2185B` | `#C2185B` | what a stamped box looks like after a flush |
+| B | `#C2185B` | `#141413` | §25.2's field/RTF **disagreement**, stated |
+| C | *null* | `#141413` | the control: no colour of its own |
+| D | `#C2185B`, created live | — | "a fresh box that never touched the picker" |
+
+D was created by tapping the page with the Text tool while
+`Library.DefaultTextColor` was `#C2185B`, so it takes a colour through
+`PendingTextColor` with **no colour control driven at all** — which is exactly
+the box row 3.2 describes.
+
+Ink read back from the screen as a histogram of every pixel more than 70 units
+from the page ground, so a near-white ink cannot hide as "no text":
+
+| box | at rest | 1st open | 2nd open | after restart, 1st | after restart, 2nd |
+|---|---|---|---|---|---|
+| B | `#C2185B` | `#C2185B` | `#C2185B` | `#C2185B` | `#C2185B` |
+| C | `#141413` | `#141413` | — | — | — |
+| D | `#C2185B` | `#C2185B` | `#C2185B` | — | — |
+
+Every count identical to the glyph-core count (2595 px for B, 3003 for D), not
+merely "close". **Row 3.2 is NOT FOUND**, on a seeded box, on a box whose RTF
+disagrees with its field, on a live-created box, and across an app restart.
+
+### 40.2 Why 3.2 was real when run 15 saw it, and is not now
+
+Row 3.2's symptom — *white in the editor from the second open onward* — is
+**item 2.2's defect, in the words of someone watching it rather than measuring
+it.** §33/§2.2 found `TextControlForegroundFocused` resolving to the dark
+theme's `#FFFFFF` and overriding the box's `Foreground` **on a re-opened box
+specifically**, and wrote that sentence before Wave 3 was scheduled.
+`PinEditorBrushes` closed it. Run 15 predates that fix.
+
+Box C is the control that proves it: an uncoloured box on this page opens
+`#141413` where run 15 would have seen `#FFFFFF` on `#606060`. Nothing in Wave 3
+had to be built for row 3.2, and building something would have meant fixing a
+fault twice.
+
+### 40.3 Row 3.1, claim by claim
+
+| claim | measured |
+|---|---|
+| "opening it turns the whole box white" | **NO.** B unchanged to the pixel after open + dismiss; and B's field/RTF disagreement makes it a live detector — a released field would have dropped B to `#141413` instantly. It did not. |
+| "the colour then chosen never appears anywhere" | **NO.** `#9236FF` picked from the spectrum landed on all 3003 glyph-core pixels. |
+| "committing renders the original colour again" | **NO — within the session.** It survives blur and re-open. It does **not** survive a rebuild; see §40.5, which is the real fault. |
+| "reopening shows white again" | **NO** for the box. **YES for the picker**, and that is a genuine defect — §40.4. |
+| "neither half of §25.3's last-control-wins holds" | **Both halves hold.** After the pick the file reads `TextColor: null` (whole-box colour released) and `\colortbl ;\red146\green54\blue255;` (the run's colour standing). |
+
+**The likeliest origin of the report.** Select text in a Quill box and the
+selection band is the accent `#D97757` with the glyphs knocked out in
+**`#FFFFFF`** — 30,501 accent pixels and 3003 white ones, measured. A run that
+selects a word, opens the picker and looks at the box is looking at white text.
+The picker itself then opened at WinUI's default `#FFFFFF`. Two white things at
+once, neither of them the box's ink.
+
+### 40.4 What was actually wrong with the picker: it never reported its subject
+
+`TextColorPicker` had no code path that ever set its `Color`. It opened at
+WinUI's default `#FFFFFF` on a first open and, on every later open, at the last
+colour **it** had been handed — the colour of some other box entirely. Confirmed
+on screen: opened over a crimson box after an earlier `#9236FF` pick, it read
+`#9236FF`.
+
+That is §16.3's rule, which §25.5 already states for the other three colour
+controls — *a control that sets something has to show what it will set* — and
+this is the one control §25 left out of it. `TextColorFlyout_Opening` now reads
+`Document.Selection.CharacterFormat.ForegroundColor`, **the same object
+`TextColorPicker_ColorChanged` writes**, so the report and the action are not
+two different questions. A transparent answer means RichEdit has no single
+colour for the range, and the picker is then left alone rather than shown a
+colour no word in the selection has.
+
+The sync is guarded by `_syncingTextColour`, cleared **through the dispatcher
+rather than in a `finally`** — a `ColorPicker` may raise `ColorChanged` from its
+own spectrum update rather than from inside the property set, and a sync
+mistaken for a user pick would call `ClearActiveTextColour` and silently release
+a box's whole-box colour because the picker had been *opened*. Verified: the
+picker now opens at `#C2185B` over the crimson box, R 194 / G 24 / B 91, swatch
+and spectrum reticle both on it, and the box does not move.
+
+### 40.5 THE FAULT NEITHER ROW NAMES: `RichEditBox.Foreground` flattens the document at load
+
+Box D's `#9236FF` was in the file — `\colortbl ;\red146\green54\blue255;`,
+read off disk. After one app restart the same box rendered `#141413` **and the
+file had been rewritten to `\red20\green20\blue19`.** The colour was not
+merely unexported. It was destroyed, and the destruction was saved.
+
+Isolated with box **E**: `TextColor` absent, RTF colour table `#008000` green,
+`\cf1` on the run. Nothing can stamp over it — there is no field — so the only
+question is whether the stored run colour survives. It renders `#141413`.
+
+A probe inside `BuildTextUi` reading `GetText(FormatRtf)` back at two moments
+says exactly where it dies:
+
+```
+after SetText   live : colortbl ;\red0\green128\blue0;\red20\green20\bl…   \cf1
+on Loaded       live : colortbl ;\red20\green20\blue19;                       \cf1
+```
+
+`SetText` restores the green correctly and adds the default character format's
+ink as a second table entry. By the time the control raises `Loaded` the green
+entry is **gone**. `box.Foreground` is set on a `RichEditBox` that is not yet in
+the tree; when the template applies, WinUI pushes that brush into the RichEdit
+document and flattens every run colour in it. `FlushTexts` then serialises the
+flattened document over the model, which is how a colour that was on screen a
+minute earlier leaves the file.
+
+**This amends `ApplyTextVeil`'s remarks, which assert the opposite.** §16.7's
+note says *"A run that carries its own colour in the RTF … overrides
+`Foreground` and will not grey"*, and uses that as the reason the veil is safe.
+At load it is the other way round: `Foreground` wins and the run colour is lost.
+Whether a `Foreground` write to an **already-loaded** box behaves the same way
+is a separate question this run did not settle, and the veil's safety rests on
+it.
+
+It also settles what row 3.1's "committing renders the original colour again"
+was: not the picker failing, and not `ClearActiveTextColour` failing — the run's
+colour standing until the next time that box is built, and being flattened then.
+`ClearActiveTextColour` stops the §25 **stamp**; nothing stops `Foreground`.
+
+**And it is the precondition row 3.3 does not know it has.** Teaching
+`RtfRunParser` a colour table, putting a `Color` on `PdfVectorTextRun` and
+adding a per-run `rg`, a per-tspan `fill` and per-run brushes on
+`CanvasTextLayout` would be four emitters reading a value that is destroyed
+before any of them is asked. That is §25.1's own warning — *building two of them
+would have been the defect* — arriving one level down.

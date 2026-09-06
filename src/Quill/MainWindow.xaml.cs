@@ -9028,8 +9028,51 @@ public sealed partial class MainWindow : Window
         if (s != null) s.CharacterFormat.Subscript = FormatEffect.Toggle;
     }
 
+    /// <summary>True only while <see cref="TextColorFlyout_Opening"/> is pushing
+    /// the subject's own colour into the picker, so that sync cannot be mistaken
+    /// for the user choosing a colour. It is cleared through the dispatcher
+    /// rather than in a finally, because a ColorPicker may raise ColorChanged
+    /// from its own spectrum update rather than from inside the property set —
+    /// and releasing a box's whole-box colour because the picker was merely
+    /// OPENED would be exactly the silent data change 25.3 is trying to
+    /// avoid.</summary>
+    private bool _syncingTextColour;
+
+    /// <summary>16.3's rule, applied to the one colour control 25 left out of it:
+    /// <b>a control that sets something has to show what it will set.</b>
+    ///
+    /// <para>25.5 states that rule for the three colour dots and makes each of
+    /// them report <c>Surface.TextColourNow</c>. This picker never reported
+    /// anything. It opened at WinUI's own default — <c>#FFFFFF</c>, a white
+    /// swatch and a white spectrum reticle over a box whose words are crimson —
+    /// and on every later open it showed the last colour <i>it</i> had been
+    /// given, which is the colour of some other box entirely. Wave 3 item 3.1
+    /// was reported as "opening it turns the whole box white"; the box does not
+    /// move (measured, run 19), but a picker that says <c>#FFFFFF</c> about
+    /// crimson words is the thing that has to change either way.</para>
+    ///
+    /// <para>The subject is the SELECTION's own foreground, because that is
+    /// precisely what <see cref="TextColorPicker_ColorChanged"/> writes — asking
+    /// the same object the setter will write keeps the report and the action
+    /// from being two different questions. A transparent answer means RichEdit
+    /// has no single colour for the range (a mixed selection), and the picker is
+    /// then left alone rather than shown a colour no word in it has.</para></summary>
+    private void TextColorFlyout_Opening(object? sender, object e)
+    {
+        var box = Surface.ActiveTextBox;
+        if (box == null) return;
+        Windows.UI.Color subject;
+        try { subject = box.Document.Selection.CharacterFormat.ForegroundColor; }
+        catch { return; }
+        if (subject.A == 0) return;              // mixed / undefined — say nothing
+        _syncingTextColour = true;
+        try { TextColorPicker.Color = subject; } catch { }
+        DispatcherQueue.TryEnqueue(() => _syncingTextColour = false);
+    }
+
     private void TextColorPicker_ColorChanged(ColorPicker sender, ColorChangedEventArgs args)
     {
+        if (_syncingTextColour) return;          // the flyout reporting, not the user choosing
         var s = Surface.ActiveTextBox?.Document.Selection;
         if (s == null) return;
         // 25.3: THE LAST CONTROL YOU USED WINS. This picker colours a RUN inside
