@@ -1,5 +1,56 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-07 (twentieth screen run) — ABORTED AT THE PRESENCE GATE, AFTER PASSING IT
+
+`integration` @ `de8f84c`. Wave 3 row 3.3. **The code landed; the screen check
+did not happen.** Written up in full at CONCEPTS-REF §43.
+
+### The gate passed, then failed, and only `LogonUI` noticed
+
+| check | first, before the work | again, before launching |
+|---|---|---|
+| `LogonUI` process | absent | **PRESENT, pid 25616** |
+| `OpenInputDesktop` | succeeds | **succeeds** — four probes, 1.5 s apart |
+| desktop name | reads normally | reads normally |
+| foreground window | `claude` | `ShellExperienceHost` |
+| cursor over 30 s | static, 0 moves, 0 idle resets | static, 0 moves, 0 idle resets |
+| idle timer | 569.5 s → 602.7 s, climbing | 1888.9 s → 1922.2 s, climbing |
+
+The first reading is a clean unattended-and-unlocked machine: no lock screen, a
+cursor that never moved, and an idle timer climbing monotonically with no
+resets — the opposite of the phantom pattern, which is a static cursor with a
+timer that keeps resetting.
+
+Between the two readings the machine **locked on its own idle timer** at about
+31 minutes. `LogonUI` is the only signal that changed. **`OpenInputDesktop` went
+on succeeding and went on reporting the session unlocked** — the third recorded
+instance, and the whole reason the gate checks `LogonUI` separately rather than
+trusting the desktop name. Nothing was injected; Quill was never launched.
+
+### What is left ready for whoever gets the screen next
+
+`scratchpad/vp20data` is seeded for this exact check — point `QUILL_DATA_FOLDER`
+at it and launch. Four boxes on a `#FCFCFC` page, no strokes, no grid:
+
+| box | stored RTF colour | what to read |
+|---|---|---|
+| **E** at y=120 | `#008000`, `\cf1` — §40.5's isolate | **green** if §43.1's restore holds. `#141413` means WinUI re-flattened what the restore handed it, and §43.5's open question is answered NO |
+| **C** at y=230 | `#141413` — a machine ink | `#141413`. The control: it must not move |
+| **W** at y=340 | `#FFFFFF` — the shape **38 of the library's 106 notes** carry | `#141413`, i.e. **readable**. White here would mean `IsMachineInk` is not protecting the real library |
+| **M** at y=450 | `#C2185B` then `#1B7F3B` in one line | red then green — §43.3's headline case |
+
+Then close the app and read `vp20data/library.json`: if E still carries
+`\red0\green128\blue0`, `FlushTexts` no longer saves the destruction.
+
+**The one thing that check cannot settle on its own**, and §40.5 flagged it
+first: whether a `Foreground` write to an **already-loaded** box flattens too.
+If it does, `ApplyTextVeil` writes `Foreground` on every unfocused box on every
+frame of a fade and would undo the restore. Nothing in run 20 changed the veil,
+so that risk sits exactly where §40.5 left it. To settle it: leave a coloured
+box unselected and start a veil fade, then re-read the box.
+
+---
+
 ## RUN OF 2026-09-06 (nineteenth screen run) - WAVE 3 ROWS 3.1 AND 3.2 ARE NOT THERE, AND A THIRD THING IS
 
 Branch `integration` @ `9e40d80` + this work. Clean x64 Debug `--no-incremental`,

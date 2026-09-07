@@ -9248,3 +9248,158 @@ is worse than one that bites weekly.
 `Flush(true)` asks the drive to persist; a drive that lies about its write cache
 can still lose the tail. That is outside what application code can guarantee and
 is recorded here so nobody re-opens this item believing it was missed.
+
+---
+
+## 43 A colour that reached the file, and the flatten standing between — 2026-09-07
+
+Row 3.3 of the wave-3 sweep: *per-run colour still flattens on export*. Half of
+it was already committed in `590d98e` — `RtfRunParser` reads `\colortbl` and
+`\cfN`, and `PdfVectorTextRun` carries an optional `Colour`. What follows is the
+other half, and the precondition it turned out to have.
+
+### 43.1 The precondition: what §40.5 found, and the restore that answers it
+
+§40.5 measured a stored per-run colour being **destroyed when a box is built**.
+`box.Foreground` is set in `BuildTextUi` on a `RichEditBox` that is not yet in
+the tree; when the template applies, WinUI pushes that brush into the RichEdit
+document and flattens every run colour `SetText` has just restored. `FlushTexts`
+then serialises the flattened document over the model. The colour is not merely
+unexported — it is destroyed, and the destruction is saved.
+
+That is why 3.3 could not start with its emitters. Four emitters reading a value
+that no longer exists by the time any of them is asked would have been four
+emitters reading nothing, and every one of them would have passed its own test
+while the feature did not work.
+
+`BuildTextUi` now captures the document it was **built from** — a local, not
+`t.Rtf`, because `FlushTexts` may run in the window before `Loaded` and would
+then have written the flattened document over the model, leaving the restore
+comparing a flattened copy against itself — and puts it back on `Loaded`, which
+§40.5's own probe shows is after the flatten. `RtfRunParser.RunColoursLost`
+guards it, and refuses in three cases:
+
+- **no chosen colour was lost** — the ordinary note, which must not be touched;
+- **the characters have moved** — so a restore can never overwrite a keystroke
+  that beat `Loaded`;
+- **nothing changed** — so the common path does no work.
+
+### 43.2 The measurement everything else rests on: chosen ink versus machine ink
+
+The obvious implementation — *honour the run colour the parser found* — was
+built, and then measured against the user's own library before being believed.
+It would have been a silent, total regression.
+
+All **106** stored text elements, across 27 pages of
+`Documents\Quill\library.json`, carry an **explicit run colour that nobody
+picked**:
+
+| what the stored note carries | count | where it comes from |
+|---|---|---|
+| `\colortbl ;\red250\green249\blue245;` + `\cf1` | 68 | `BuildTextUi` writes the page's ink into the document's default character format, so RichEdit stores it as a table entry and puts `\cf1` on the runs |
+| `\colortbl ;\red255\green255\blue255;` + `\cf1` | 38 | `#FFFFFF` — item 2.2's `TextControlForegroundFocused` under the dark theme, written into files before `PinEditorBrushes` closed it |
+| more than one table entry | **0** | — |
+| `TextColor` field present | **0** | — |
+
+So RTF's "auto" (`\cf0`, or no `\cf`), which the parser's remarks treat as the
+ordinary case, **occurs in none of them.** Taken at face value, per-run colour
+would have frozen every note in the ink of the page it was typed on. Every page
+holding text in that library has background `#000000`; turn one of those pages
+white and all 106 boxes would export white words on white paper — perfect on
+screen and invisible in the file, which is precisely the failure §25 exists to
+prevent, arriving inverted.
+
+`IsMachineInk` names the three values — `PageTheme.TextInkOnLight` `#141413`,
+`PageTheme.TextInkOnDark` `#FAF9F5`, and `#FFFFFF`. A run wearing one of them
+named a colour but nobody chose it, so it is folded back to null and takes the
+box's answer, exactly as it did before any of this existed. **The flatten §40.5
+describes is therefore left alone on those boxes deliberately: repainting a
+machine-inked box in the CURRENT page's ink is the useful half of that
+mechanism, and it is what lets a note survive its page being recoloured.**
+
+Only values actually observed in stored documents are on that list. Reading a
+colour as machine-set when a person did choose it costs them their colour, so
+the list stays at what was measured. What the three cost is small and stated: a
+run deliberately painted `#FFFFFF` comes out `#FAF9F5` on a dark page — five
+levels on one channel — and `#141413` on a light one, where the white it asked
+for would have been invisible.
+
+### 43.3 The emitters
+
+`ResolveChosenColours` is the single decision, applied **once**, where the model
+meets the export records, so four emitters cannot arrive at four views of it. It
+folds two cases into *take the box's answer*: a run wearing a machine ink, and
+every run of a box carrying a whole-box colour — §25.2's field-wins-over-the-RTF
+rule reaching the exporters, without which a stale run colour would have put a
+different answer in the file from the one stamped on the canvas.
+
+| surface | how per-run colour lands |
+|---|---|
+| PDF | an `rg`/`RG` pair inside the `BT` block, emitted only when a run's colour differs from the one standing. `RG` as well as `rg` because a bold run is drawn `2 Tr` — fill *and* stroke — so a run setting only the fill would come out outlined in the previous run's colour |
+| SVG | a `fill` on the `tspan`, and **only** when the run names a colour; a bare run carries no attribute at all and inherits the `<text>` element's, so the page ink lives in one place rather than two that can drift |
+| Win2D raster | `CanvasTextLayout.SetColor` over the run's own character span |
+| the live editor | nothing. §43.1 put the colour back into the document, so it simply draws — the fourth surface needed no emitter of its own |
+
+The raster is the one that could have gone quietly wrong. `DrawTextElement` lays
+its glyphs out from `RtfToPlainText`, a **different walker** from `Parse` that
+normalises whitespace differently, so colouring by run index would have put
+colour on the wrong characters wherever the two disagree. `MapColourSpans`
+matches the runs *into* the text actually being drawn and returns **null** if any
+run cannot be placed. The failure mode of that path is therefore "no change",
+which is the only failure mode a rendering path should be allowed to have.
+
+### 43.4 What did NOT have to change, and why that is worth recording
+
+The brief expected `PdfVectorText`'s shape might have to change, since it
+carries one `Color` per line and a line holding two colours has nowhere to put
+the second — and asked what that cost.
+
+It cost nothing, because `PdfVectorTextRun.Colour` from `590d98e` **is** that
+place. The line's `Color` became the fallback a run inherits when it names none.
+The record's arity, every construction site, and `ExportRotRoundTrip`'s
+byte-comparison of turned against un-turned SVG are all untouched.
+
+### 43.5 What is measured, and what is NOT
+
+`tools/TextColourRoundTrip` goes from 16 checks to **38**, and links
+`RtfRunParser` for the first time. It measures, against the real code: §40.5's
+two probe lines rebuilt as the fixture for the restore's decision; both library
+shapes required to read as machine ink; the keystroke guard; two colours in one
+line and a bare run beside a coloured one, read back out of the **inflated PDF
+content stream** and the SVG **parsed as XML**; §25.2's field still winning; and
+the default path proved identical **byte for byte** — 168 bytes of content
+stream — between a note in the shape all 106 stored ones share and a box naming
+no colour anywhere. Five negative controls are required to reproduce the pre-43
+defect, so none of the above is decoration.
+
+**What is NOT measured, and must not be reported as if it were: the `SetText`
+inside the `Loaded` handler.** Only the decision in front of it is proved. That
+WinUI keeps what the restore hands it — rather than flattening a second time —
+is a screen question, and §40.5's open question is still open with it: whether a
+`Foreground` write to an **already-loaded** box flattens the same way. If it
+does, `ApplyTextVeil` writes `Foreground` on every unfocused box on every frame
+of a fade and would undo the restore. §40.3 measured a picked colour surviving
+blur and re-open within a session, which is evidence against it but is not the
+same experiment. **Nothing here changed the veil, so that risk is exactly where
+§40.5 left it.**
+
+### 43.6 The screen run stopped at the presence gate — and how
+
+Cleared on the first check: `LogonUI` absent, `OpenInputDesktop` succeeding, the
+cursor static for a full 30 s with the idle timer climbing monotonically
+569.5 s → 602.7 s and zero resets. Unattended and unlocked.
+
+Re-checked immediately before launching anything, it had **failed**: `LogonUI`
+present at pid 25616, foreground moved to `ShellExperienceHost`, idle at
+31.5 minutes — the machine had locked on its own idle timer. **`OpenInputDesktop`
+went on succeeding, and went on reporting the session unlocked, across four
+probes 1.5 s apart.**
+
+That is the third recorded instance of that disagreement, and it is the whole
+reason the gate checks `LogonUI` separately. Nothing was injected and the app
+was never launched. A page seeded for exactly this check is left at
+`scratchpad/vp20data` — four boxes on a `#FCFCFC` page: a chosen green
+(§40.5's box E), a `#141413` machine-ink control, a `#FFFFFF` box in the shape
+38 of the library's notes carry, and one line holding two chosen colours. Point
+`QUILL_DATA_FOLDER` at it and the four readings in §43.5's open question can be
+taken in one launch.
