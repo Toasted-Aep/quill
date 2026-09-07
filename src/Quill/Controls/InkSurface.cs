@@ -347,6 +347,14 @@ public sealed class InkSurface : UserControl
     private EraserStyle _gestureEraserStyle;
     private List<(int Index, PenStroke Stroke)> _eraseRemoved = new();
     private HashSet<PenStroke> _gestureFragments = new();
+    // Pre-erase snapshot of every paint tile this eraser gesture cuts into, keyed
+    // by tile, recorded the first time each tile is touched (OILPAINT-SPEC §6.2).
+    // Non-null only while an eraser gesture with paint on the page is live.
+    private Dictionary<(int Tx, int Ty), (bool Existed, byte[]? ColourZ, byte[]? HeightZ)>? _paintEraseBefore;
+
+    // §6.1: the running paint-undo history is capped at 128 MB, trimmed from the
+    // oldest paint actions; vector undo is never trimmed.
+    private const long PaintUndoCapBytes = 128L * 1024 * 1024;
 
     private List<Vector2>? _lasso;
     private readonly List<PenStroke> _selected = new();
@@ -576,7 +584,7 @@ public sealed class InkSurface : UserControl
                 _canvas.Invalidate();
             }
         };
-        Unloaded += (_, _) => _canvas.RemoveFromVisualTree();
+        Unloaded += (_, _) => { FlushPaint(); _canvas.RemoveFromVisualTree(); };
     }
 
     // =======================================================================
@@ -846,7 +854,18 @@ public sealed class InkSurface : UserControl
         ClearSelection();
         _activeShape = null;
         ViewOffset = new Vector2((float)page.ViewX, (float)page.ViewY);
+        // MERGE (oilpaint): HEAD's clamp, oilpaint's two lines. oilpaint
+        // branched before the zoom range was consolidated and still carried
+        // 0.1f/8f inline; MinZoom/MaxZoom is the one definition that replaced
+        // three copies at two values, and 8f was superseded by 16f. Taking
+        // oilpaint's line would have re-introduced a deliberately fixed defect.
         ViewZoom = Math.Clamp((float)page.ViewZoom, MinZoom, MaxZoom);
+        // oilpaint set _contentMaxDirty here. That field is GONE - it belonged to
+        // the content-normalising pass removed with the view clamp when the canvas
+        // was made infinite again, and nothing recomputes a content maximum now.
+        // Dropped rather than revived: reviving it would restore the mechanism the
+        // infinite-canvas work deliberately deleted.
+        OpenPaintForPage(page);   // flushes the outgoing page's tiles, loads this one's (§4.4)
         // Heal cells eaten by the old empty-box cleanup (#cellfix): every grid
         // slot of every table needs a TextElement, EXCEPT slots covered by a
         // merged cell's span (merges legitimately remove hidden cells).
@@ -1510,6 +1529,9 @@ public sealed class InkSurface : UserControl
                 _lastMoveMs = Environment.TickCount64;
                 _shapeAdjust = false;
                 _adjustShape = null;
+                // Oil paints raster dabs instead of a vector stroke; _wet still
+                // accumulates so the existing invalidation maths keeps working.
+                if (Pen == PenType.Oil && !RulerMode) BeginOilStroke(pos, props.Pressure);
                 _holdTimer.Start();
                 break;
 
@@ -1521,6 +1543,9 @@ public sealed class InkSurface : UserControl
                 _eraseRemoved = new List<(int, PenStroke)>();
                 _eraseRemovedShapes = new List<(int, ShapeElement)>();
                 _gestureFragments = new HashSet<PenStroke>();
+                // The eraser rubs paint away too (§6.2); arm the per-tile snapshot
+                // only when this page actually has resident paint to cut into.
+                _paintEraseBefore = _paint != null ? new() : null;
                 _eraseLast = pos;
                 EraseAt(pos, pos);
                 break;
@@ -2013,6 +2038,9 @@ public sealed class InkSurface : UserControl
                         float minGap = 0.7f / ViewZoom;
                         if (Math.Abs(v.X - last.X) + Math.Abs(v.Y - last.Y) < minGap) continue;
                         _wet.Add(new StrokePoint(v.X, v.Y, ip.Properties.Pressure));
+                        // dabs are walked per intermediate point, so the carry
+                        // spans pointer events exactly as it spans segments
+                        if (OilGestureActive) ExtendOilStroke(v, ip.Properties.Pressure);
                     }
                     // The virtual-control win (#cvc): while inking, repaint ONLY
                     // the pixels around the fresh segment instead of the whole
@@ -2310,6 +2338,13 @@ public sealed class InkSurface : UserControl
                     }
                     break;
                 }
+                // Oil committed its dabs into the tile store; there is no vector
+                // stroke to add and nothing for the ink cache to rebuild.
+                if (OilGestureActive)
+                {
+                    EndOilStroke();
+                    break;
+                }
                 var pts = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : FinalizeStroke(_wet ?? new List<StrokePoint>());
                 if (pts.Count >= 1)
                 {
@@ -2351,23 +2386,37 @@ public sealed class InkSurface : UserControl
             }
             case ToolType.Eraser:
             {
+                // Collect this gesture's vector and paint erase into one list.
+                // A single-type erase still pushes exactly one action (unchanged
+                // from before); only when the pass also cut paint — or spanned
+                // strokes AND shapes — is it bundled into one CompositeAction, so
+                // vector + raster erase undo together in one step (§6.2).
+                var eraseActs = new List<IPageAction>();
                 if (_eraseRemoved.Count > 0)
                 {
                     if (_gestureEraserMode == EraserMode.Object)
-                        PushAction(new RemoveStrokesAction(_eraseRemoved), _page, alreadyDone: true);
+                        eraseActs.Add(new RemoveStrokesAction(_eraseRemoved));
                     else
                     {
                         var added = _gestureFragments.Where(f => _page.Strokes.Contains(f)).ToList();
-                        PushAction(new ReplaceStrokesAction(_eraseRemoved, added), _page, alreadyDone: true);
+                        eraseActs.Add(new ReplaceStrokesAction(_eraseRemoved, added));
                     }
-                    changed = true;
                 }
                 if (_eraseRemovedShapes.Count > 0)
                 {
-                    PushAction(new RemoveShapesAction(_eraseRemovedShapes), _page, alreadyDone: true);
+                    eraseActs.Add(new RemoveShapesAction(_eraseRemovedShapes));
                     _eraseRemovedShapes = new List<(int, ShapeElement)>();
-                    changed = true;
                 }
+                var paintErase = BuildPaintEraseAction();
+                if (paintErase != null) eraseActs.Add(paintErase);
+
+                if (eraseActs.Count == 1)
+                    PushAction(eraseActs[0], _page, alreadyDone: true);
+                else if (eraseActs.Count > 1)
+                    PushAction(new CompositeAction(eraseActs, "Erase"), _page, alreadyDone: true);
+                if (paintErase != null) UndoManager.TrimBottom(PaintUndoCapBytes);
+                if (eraseActs.Count > 0) changed = true;
+                _paintEraseBefore = null;
                 break;
             }
             case ToolType.Mouse:
@@ -3253,6 +3302,46 @@ public sealed class InkSurface : UserControl
                 }
             }
         }
+
+        // Raster paint is not in the spatial index, so the eraser rubs it away by
+        // cutting DestinationOut dabs into the tiles along this step (§6.2). Both
+        // eraser modes erase paint the same way — paint has no "object" to slice.
+        ErasePaint(from, to);
+    }
+
+    /// <summary>Cut the eraser path out of the resident paint tiles, snapshotting
+    /// each tile once for undo (§6.2). No-op when the page has no paint.</summary>
+    private void ErasePaint(Vector2 from, Vector2 to)
+    {
+        if (_paint == null || _paintEraseBefore == null) return;
+        float r = EraserRadius;
+        _paint.EraseSegment(_canvas, from, to, r, tile =>
+        {
+            var key = (tile.Tx, tile.Ty);
+            if (_paintEraseBefore.ContainsKey(key)) return;
+            _paintEraseBefore[key] = (true,
+                PaintTileCodec.CompressRaw(tile.Colour.GetPixelBytes()),
+                PaintTileCodec.CompressRaw(tile.Height.GetPixelBytes()));
+        });
+    }
+
+    /// <summary>Build the paint-erase undo step for the gesture just finished, or
+    /// null if no paint was cut. The after-state is read back here, at pen-up.</summary>
+    private IPageAction? BuildPaintEraseAction()
+    {
+        if (_paint == null || _paintEraseBefore == null || _paintEraseBefore.Count == 0) return null;
+        var caps = new List<PaintTileCapture>(_paintEraseBefore.Count);
+        foreach (var ((tx, ty), before) in _paintEraseBefore)
+        {
+            byte[]? ac = null, ah = null;
+            if (_paint.TryGet(tx, ty, out var t))
+            {
+                ac = PaintTileCodec.CompressRaw(t.Colour.GetPixelBytes());
+                ah = PaintTileCodec.CompressRaw(t.Height.GetPixelBytes());
+            }
+            caps.Add(new PaintTileCapture(tx, ty, before.Existed, before.ColourZ, before.HeightZ, ac, ah));
+        }
+        return new PaintTilesAction(_paint, _canvas, caps, null, "Erase paint");
     }
 
     // ---- eraser styles (§7.c) ---------------------------------------------
@@ -5254,6 +5343,149 @@ public sealed class InkSurface : UserControl
         return MathF.Min((_blurVelocity - BlurVelocityMin) / 900f, 5f);
     }
 
+    // =======================================================================
+    // Raster paint (OILPAINT §1). Sparse world-aligned 512² tiles, composited
+    // between shapes and ink. Paint carries no identity, so it is deliberately
+    // NOT in the spatial index — EnsureGrid never sees it (§6.2).
+    // =======================================================================
+    private PaintTileStore? _paint;
+
+    /// <summary>Number of resident paint tiles and the GPU bytes they hold —
+    /// surfaced for the substrate memory measurement.</summary>
+    public (int Tiles, long Bytes) PaintMemory => _paint == null ? (0, 0L) : (_paint.TileCount, _paint.ResidentBytes);
+
+    private void DrawPaint(CanvasDrawingSession ds, float visMinX, float visMinY, float visMaxX, float visMaxY)
+    {
+        if (_paint == null || _paint.TileCount == 0) return;
+        // ds.Transform is ALREADY world-space here (scale * translate * regionT).
+        // Do not touch it: the tiles draw at their world rects and pan/zoom fall
+        // out of the composed transform for free. Clobbering it is exactly what
+        // made ink invisible at every non-origin tile (#inkfix2).
+        const int ts = PaintTileStore.TileSize;
+        int t0x = PaintTileStore.TileIndex(visMinX), t1x = PaintTileStore.TileIndex(visMaxX);
+        int t0y = PaintTileStore.TileIndex(visMinY), t1y = PaintTileStore.TileIndex(visMaxY);
+        var interp = ViewZoom < 0.9f ? CanvasImageInterpolation.MultiSampleLinear
+                                     : CanvasImageInterpolation.Linear;
+        for (int ty = t0y; ty <= t1y; ty++)
+            for (int tx = t0x; tx <= t1x; tx++)
+            {
+                var world = new Rect(tx * (double)ts, ty * (double)ts, ts, ts);
+                var src = new Rect(0, 0, ts, ts);
+                // settled paint comes through the cached lit tile, so steady
+                // state is one DrawImage per visible tile (§3.3)
+                if (_paint.TryGet(tx, ty, out var tile))
+                    ds.DrawImage(tile.EnsureLit(_canvas), world, src, 1f, interp);
+                // the live gesture's scratch draws straight on top so the wet
+                // stroke appears immediately; it is lit when it commits (§1.3)
+                if (_oil != null && _oil.TryGetScratchColour(tx, ty, out var wet))
+                    ds.DrawImage(wet, world, src, 1f, interp);
+            }
+    }
+
+    // ---- oil brush (OILPAINT §2) ------------------------------------------
+    private OilBrush? _oil;
+
+    private OilBrush EnsureOil(NotePage page)
+    {
+        var store = EnsurePaintStore(page);
+        if (_oil == null || !ReferenceEquals(_oilStore, store))
+        {
+            _oil?.Dispose();
+            _oil = new OilBrush(store);
+            _oilStore = store;
+        }
+        return _oil;
+    }
+    private PaintTileStore? _oilStore;
+
+    /// <summary>True while an oil gesture owns the pen, so the vector wet-stroke
+    /// preview and the committed PenStroke are both suppressed.</summary>
+    private bool OilGestureActive => _oil is { Active: true };
+
+    private void BeginOilStroke(Vector2 pos, float pressure)
+    {
+        if (_page == null) return;
+        var brush = EnsureOil(_page);
+        brush.ResetBrushCache();     // pick up the current pen colour
+        brush.Color = PenColor;
+        brush.Diameter = MathF.Max(1f, PenSize);
+        brush.Begin(pos, pressure);
+    }
+
+    private void ExtendOilStroke(Vector2 pos, float pressure)
+    {
+        if (_oil == null || !_oil.Active) return;
+        _oil.Extend(_canvas, pos, pressure);
+        // §1.3: a gesture that spreads past the scratch budget flushes and
+        // starts a fresh segment rather than holding 3 MiB per touched tile
+        if (_oil.NeedsMidGestureFlush)
+        {
+            var flushed = _oil.CommitScratch(_canvas);
+            if (flushed.HasValue) InvalidateWorldRect(flushed.Value);
+        }
+    }
+
+    private void EndOilStroke()
+    {
+        if (_oil == null || !_oil.Active || _page == null) return;
+        var bounds = _oil.End(_canvas);         // composites the scratch onto the canvas
+        // One undo action for the whole stroke: the tiles it touched, captured
+        // before the commit and read back after, share the SAME undo stack as
+        // vector ink so Ctrl+Z / the dial removes whichever edit was most recent.
+        var caps = _oil.TakeUndoCaptures(_canvas);
+        if (caps != null && caps.Count > 0 && _paint != null)
+        {
+            PushAction(new PaintTilesAction(_paint, _canvas, caps, bounds), _page, alreadyDone: true);
+            UndoManager.TrimBottom(PaintUndoCapBytes);
+        }
+        _page.HasPaint = true;
+        if (bounds.HasValue) InvalidateWorldRect(bounds.Value);
+        else _canvas.Invalidate();
+        ContentChanged?.Invoke();   // persists HasPaint; the spatial index is untouched
+    }
+
+    private void OpenPaintForPage(NotePage page)
+    {
+        try
+        {
+            // the outgoing page's pixels must reach disk before its store dies
+            _paint?.FlushBlocking();
+            _paint?.Dispose();
+            _paint = null;
+            if (!page.HasPaint && !PaintTileStore.HasStoredPaint(page.Id)) return;
+            var store = new PaintTileStore(page.Id);
+            // Each landed tile invalidates only its own world rect, so ink is on
+            // screen immediately and paint fades in tile by tile (§4.4).
+            store.TileLoaded += world => InvalidateWorldRect(world);
+            _paint = store;
+            store.BeginLoad(_canvas);
+        }
+        catch { _paint = null; }
+    }
+
+    /// <summary>Screen-space invalidation of a world rectangle.</summary>
+    private void InvalidateWorldRect(Rect world)
+    {
+        var tl = world.X * ViewZoom + ViewOffset.X;
+        var tp = world.Y * ViewZoom + ViewOffset.Y;
+        InvalidateScreenRect(new Rect(tl - 2, tp - 2,
+                                      world.Width * ViewZoom + 4, world.Height * ViewZoom + 4));
+    }
+
+    /// <summary>App close / explicit save: block briefly so a debounced paint
+    /// write cannot be lost with the process.</summary>
+    public void FlushPaint() => _paint?.FlushBlocking();
+
+    /// <summary>Store for the live page, created on first mark.</summary>
+    private PaintTileStore EnsurePaintStore(NotePage page)
+    {
+        if (_paint != null) return _paint;
+        var store = new PaintTileStore(page.Id);
+        store.TileLoaded += world => InvalidateWorldRect(world);
+        _paint = store;
+        return store;
+    }
+
     // Renders the region into an intermediate target, then composites it through
     // a GaussianBlurEffect. Only runs while blurred, so the steady-state draw
     // path pays nothing.
@@ -5342,6 +5574,11 @@ public sealed class InkSurface : UserControl
             }
         }
 
+        // Raster paint (OILPAINT §1.2) sits ABOVE shapes and images and BELOW
+        // all vector ink: notes are annotations over a painting and must stay
+        // legible, and it leaves the ink cache below completely untouched.
+        DrawPaint(ds, visMinX, visMinY, visMaxX, visMaxY);
+
         // Big pages draw settled ink from the offscreen cache (#43); anything
         // that offsets strokes (replay, selection move, free space) falls back
         // to the classic per-stroke path so offsets stay live.
@@ -5410,7 +5647,9 @@ public sealed class InkSurface : UserControl
             }
         }
 
-        if (_gestureTool == ToolType.Pen)
+        // Oil's wet stroke is the scratch buffer drawn in DrawPaint, not a
+        // vector preview — drawing both would double the mark.
+        if (_gestureTool == ToolType.Pen && !OilGestureActive)
         {
             var temp = new PenStroke
             {
