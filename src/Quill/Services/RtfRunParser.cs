@@ -1,4 +1,5 @@
 using System.Text;
+using Quill.Helpers;
 using System.Text.RegularExpressions;
 
 namespace Quill.Services;
@@ -159,6 +160,138 @@ public static class RtfRunParser
 
         Normalise(lines);
         return lines;
+    }
+
+    /// <summary>The colour every non-empty run names, in document order. Null is
+    /// RTF's "auto".</summary>
+    public static List<string?> RunColours(string? rtf)
+    {
+        var list = new List<string?>();
+        if (string.IsNullOrEmpty(rtf)) return list;
+        foreach (var line in Parse(rtf, 16f, ""))
+            foreach (var run in line)
+                if (run.Text.Length > 0)
+                    list.Add(run.Colour);
+        return list;
+    }
+
+    /// <summary>CONCEPTS-REF 43.2: the inks that reach a stored document from the
+    /// MACHINERY rather than from a person. A run wearing one of these named a
+    /// colour, but nobody chose it.
+    ///
+    /// <para><b>Measured, not assumed.</b> 43.2 read all 106 stored notes in the
+    /// library and every one of them carries an explicit run colour that nobody
+    /// picked - 68 of them <c>#FAF9F5</c> and 38 <c>#FFFFFF</c>. Both arrive on
+    /// their own: <c>BuildTextUi</c> writes the page's ink into the document's
+    /// default character format, so RichEdit stores it as a <c>\colortbl</c>
+    /// entry with <c>\cf1</c> on the runs; and <c>#FFFFFF</c> is the value
+    /// 2.2/33 caught <c>TextControlForegroundFocused</c> resolving to under the
+    /// dark theme, written into files before <c>PinEditorBrushes</c> closed
+    /// it.</para>
+    ///
+    /// <para><b>Why this list and not a longer one.</b> Only values actually
+    /// observed in stored documents are here. Reading a colour as machine-set
+    /// when a person did choose it costs them their colour, so the list stays at
+    /// what was measured. The cost of the three that ARE here is small and
+    /// bounded: a run deliberately painted <c>#FFFFFF</c> comes out
+    /// <c>#FAF9F5</c> on a dark page - five levels on one channel - and
+    /// <c>#141413</c> on a light one, where the white it asked for would have
+    /// been invisible.</para></summary>
+    public static bool IsMachineInk(string? hex) =>
+        hex is { Length: > 0 } &&
+        (Same(hex, ColorUtil.ToHex(PageTheme.TextInkOnLight)) ||
+         Same(hex, ColorUtil.ToHex(PageTheme.TextInkOnDark)) ||
+         Same(hex, "#FFFFFF"));
+
+    private static bool Same(string? a, string? b) =>
+        string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>CONCEPTS-REF 43.2: true when at least one run of this box names a
+    /// colour a person chose - non-null, and not one of
+    /// <see cref="IsMachineInk"/>'s.
+    ///
+    /// <para>A box that fails this behaves in every respect exactly as it did
+    /// before per-run colour existed, which is the whole of the compatibility
+    /// guarantee. 106 of the 106 notes 43.2 sampled fail it.</para></summary>
+    public static bool HasChosenRunColour(string? rtf)
+    {
+        foreach (var c in RunColours(rtf))
+            if (c is { Length: > 0 } && !IsMachineInk(c)) return true;
+        return false;
+    }
+
+    /// <summary>CONCEPTS-REF 43.2: the runs of a parsed box with every colour
+    /// nobody chose set back to null, so a run that named none and a run that
+    /// wore a machine ink are the same thing to an emitter - <i>take the box's
+    /// answer</i>.
+    ///
+    /// <para>Applied ONCE, where the model meets the export records, so the four
+    /// emitters need no opinion about Quill's ink policy and cannot arrive at
+    /// four different ones. <paramref name="boxHasOwnColour"/> is 25.2's
+    /// field-wins-over-the-RTF rule reaching the exporters: a box carrying a
+    /// whole-box colour has already had every run stamped on screen, so honouring
+    /// a stale run colour here would put a different answer in the file from the
+    /// one on the canvas - the exact split 25 closed.</para></summary>
+    public static void ResolveChosenColours(List<List<PdfVectorTextRun>> lines, bool boxHasOwnColour)
+    {
+        for (int li = 0; li < lines.Count; li++)
+            for (int ri = 0; ri < lines[li].Count; ri++)
+            {
+                var run = lines[li][ri];
+                if (run.Colour is null) continue;
+                if (boxHasOwnColour || IsMachineInk(run.Colour))
+                    lines[li][ri] = run with { Colour = null };
+            }
+    }
+
+    /// <summary>Every character of a box paired with the colour its run names,
+    /// with paragraph breaks as one uncoloured '\n' each, so two copies of the
+    /// same words line up index for index.</summary>
+    private static (string Text, List<string?> Colours) ColourPerChar(string? rtf)
+    {
+        var text = new StringBuilder();
+        var cols = new List<string?>();
+        if (string.IsNullOrEmpty(rtf)) return ("", cols);
+
+        var lines = Parse(rtf, 16f, "");
+        for (int li = 0; li < lines.Count; li++)
+        {
+            if (li > 0) { text.Append('\n'); cols.Add(null); }
+            foreach (var run in lines[li])
+                foreach (char ch in run.Text) { text.Append(ch); cols.Add(run.Colour); }
+        }
+        return (text.ToString(), cols);
+    }
+
+    /// <summary>CONCEPTS-REF 43.1: true when <paramref name="live"/> is
+    /// <paramref name="stored"/> with a CHOSEN run colour destroyed - the same
+    /// characters in the same order, and at least one of them no longer carrying
+    /// the colour the stored copy gave it.
+    ///
+    /// <para>43.1 measures what this is for: <c>RichEditBox.Foreground</c> is
+    /// pushed into the RichEdit document when the control's template applies and
+    /// flattens every run colour <c>SetText</c> has just put back. This is the
+    /// question <c>BuildTextUi</c> asks on <c>Loaded</c> before restoring the
+    /// document it was built from.</para>
+    ///
+    /// <para><b>Three refusals, each closing a way a restore could do harm.</b>
+    /// A box with no CHOSEN colour answers false, so no existing note is touched
+    /// and the flatten goes on doing the useful half of its job - repainting a
+    /// machine-inked box in the CURRENT page's ink, which is what lets a note
+    /// survive its page being recoloured. A box whose CHARACTERS have moved
+    /// answers false, so a restore can never overwrite a keystroke that beat
+    /// <c>Loaded</c>. And a document that has lost nothing answers false, so the
+    /// common path does no work at all.</para></summary>
+    public static bool RunColoursLost(string? stored, string? live)
+    {
+        if (!HasChosenRunColour(stored)) return false;
+        var (wantText, want) = ColourPerChar(stored);
+        var (haveText, have) = ColourPerChar(live);
+        if (want.Count != have.Count || wantText != haveText) return false;
+        for (int i = 0; i < want.Count; i++)
+            if (want[i] is { } w && !IsMachineInk(w) && !Same(w, have[i]))
+                return true;
+        return false;
     }
 
     /// <summary>Collapses runs of spaces and trims each line's outer edges — the

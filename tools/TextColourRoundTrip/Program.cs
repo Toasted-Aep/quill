@@ -5,7 +5,7 @@
 // surfaces need a window. The fourth is the file, and the file is exactly the
 // one that had the hole, so this is where the proof goes.
 //
-// Two subjects:
+// Three subjects:
 //
 //   1. PageTheme.TextInk - the rule that decides what colour a box with NO
 //      colour of its own comes out. It used to be four copies of one ternary on
@@ -19,9 +19,19 @@
 //      as XML - not string-matched. The PRE-25 behaviour is built alongside and
 //      is required to FAIL, so this harness is shown able to go red.
 //
+//   3. THE PRECONDITION, 43.1. A stored per-run colour is destroyed when a box
+//      is built - RichEditBox.Foreground is pushed into the document when the
+//      template applies and flattens every run colour SetText has just put
+//      back. Export cannot carry what storage discards, so the DECISION the
+//      restore turns on is measured here, against the exact pair of documents
+//      40.5's own probe printed.
+//
 // What this CANNOT see, stated here rather than left to be assumed: the live
 // RichEditBox, the 16.7 veil and the Win2D raster. Nothing in this file is
-// evidence about any of those three.
+// evidence about any of those three. In particular 43.1's restore is a
+// SetText inside a Loaded handler, and only the DECISION in front of it is
+// measured below - whether WinUI then keeps what it was handed is a screen
+// question and 43.5 says so.
 
 using System.Globalization;
 using System.IO.Compression;
@@ -291,6 +301,92 @@ Check("a page of UNCOLOURED boxes emits the same three fills it did before 25 - 
       $"{pdfBeforeFills.Distinct().Count()} distinct fill(s)");
 
 // ===========================================================================
+// PART 3 - THE PRECONDITION (43.1): WHAT THE RESTORE IS ALLOWED TO ACT ON
+// ===========================================================================
+//
+// 40.5 found that a stored per-run colour does not survive a box being built.
+// A probe inside BuildTextUi reading GetText(FormatRtf) at two moments printed:
+//
+//     after SetText   live : colortbl ;\red0\green128\blue0;\red20\green20\bl...   \cf1
+//     on Loaded       live : colortbl ;\red20\green20\blue19;                      \cf1
+//
+// Those two documents are rebuilt below and are the fixture for the whole of
+// this part. What is measured is the DECISION - RunColoursLost - not the
+// SetText it guards, which needs a window.
+//
+// The fixtures are shapes, not inventions: 43.2 read every one of the 106
+// stored notes in the library and found the SAME shape in all of them - one
+// colour-table entry, \cf1 on the runs, and the entry an ink the machinery
+// wrote rather than one anybody picked. 68 carry #FAF9F5 and 38 carry #FFFFFF.
+
+string CorpusDark  = RtfDoc(@";\red250\green249\blue245;", @"\cf1 lecture notes");
+string CorpusWhite = RtfDoc(@";\red255\green255\blue255;", @"\cf1 lecture notes");
+string ChosenGreen = RtfDoc(@";\red0\green128\blue0;",     @"\cf1 green words");
+string Flattened   = RtfDoc(@";\red20\green20\blue19;",    @"\cf1 green words");
+string CorpusFlat  = RtfDoc(@";\red20\green20\blue19;",    @"\cf1 lecture notes");
+string TwoColours  = RtfDoc(@";\red194\green24\blue91;\red27\green127\blue59;", @"\cf1 red \cf2 green");
+string AutoBeside  = RtfDoc(@";\red194\green24\blue91;",   @"\cf1 red \cf0 plain");
+string TypedInto   = RtfDoc(@";\red20\green20\blue19;",    @"\cf1 green wordsX");
+
+// ---- 3a. THE COMPATIBILITY GATE -------------------------------------------
+// If either shape 43.2 found in the library reads as CHOSEN, then every note in
+// it freezes in the ink of the page it was typed on and a page recoloured later
+// keeps the old words. This is the check that says 43 changes nothing stored.
+Check("43.2 - both run-colour shapes found in ALL 106 stored notes read as "
+      + "MACHINE ink, not as a colour anybody chose, so no existing note changes "
+      + "and every one of them goes on following its page",
+      !RtfRunParser.HasChosenRunColour(CorpusDark) &&
+      !RtfRunParser.HasChosenRunColour(CorpusWhite),
+      $"#FAF9F5 (68 of 106) chosen={RtfRunParser.HasChosenRunColour(CorpusDark)}, "
+      + $"#FFFFFF (38 of 106) chosen={RtfRunParser.HasChosenRunColour(CorpusWhite)}");
+
+Check("...and a colour no machinery of Quill's writes DOES read as chosen - "
+      + "40.5's box E green, two colours in one line, and a coloured run beside "
+      + "an uncoloured one",
+      RtfRunParser.HasChosenRunColour(ChosenGreen) &&
+      RtfRunParser.HasChosenRunColour(TwoColours) &&
+      RtfRunParser.HasChosenRunColour(AutoBeside),
+      $"green={RtfRunParser.HasChosenRunColour(ChosenGreen)}, "
+      + $"two={RtfRunParser.HasChosenRunColour(TwoColours)}, "
+      + $"auto-beside={RtfRunParser.HasChosenRunColour(AutoBeside)}");
+
+// ---- 3b. THE FLATTEN 40.5 PRINTED, AND THE RESTORE THAT ANSWERS IT --------
+Check("43.1 - 40.5's two probe lines, rebuilt: the document as SetText left it "
+      + "against the document Loaded read back. RunColoursLost sees the loss, "
+      + "which is what puts the stored copy back in",
+      RtfRunParser.RunColoursLost(ChosenGreen, Flattened),
+      $"stored runs [{Cols(ChosenGreen)}] -> live runs [{Cols(Flattened)}]");
+
+Check("43.1 - and a document that lost NOTHING asks for no restore, so the "
+      + "common path does no work",
+      !RtfRunParser.RunColoursLost(ChosenGreen, ChosenGreen), "identical documents");
+
+Check("43.1 - a stored note whose only colour came from the machinery is LEFT "
+      + "TO THE FLATTEN. That is deliberate and it is the useful half of 40.5's "
+      + "mechanism: it is what repaints a note when its page is recoloured",
+      !RtfRunParser.RunColoursLost(CorpusDark, CorpusFlat),
+      $"#FAF9F5 -> #141413 on a page turned light: restore={RtfRunParser.RunColoursLost(CorpusDark, CorpusFlat)}");
+
+Check("43.1 - THE KEYSTROKE GUARD. Same colour loss, one character more, and "
+      + "the restore stands down. A restore that fired here would overwrite "
+      + "whatever the user typed between the box being built and Loaded arriving",
+      !RtfRunParser.RunColoursLost(ChosenGreen, TypedInto),
+      $"'green words' -> 'green wordsX': restore={RtfRunParser.RunColoursLost(ChosenGreen, TypedInto)}");
+
+// ---- 3c. THE NEGATIVE CONTROL FOR THIS PART -------------------------------
+// A checker that cannot go red proves nothing. The pre-43 behaviour is "no
+// restore, ever", and what it leaves behind is measured rather than asserted:
+// the green is genuinely GONE from the flattened document, so 3b is comparing
+// two different things and not two spellings of one.
+var flatCols = RtfRunParser.RunColours(Flattened);
+Check("the PRE-43 outcome - no restore - FAILS: the flattened document 40.5 read "
+      + "on Loaded carries no trace of the green at all, so the check above is "
+      + "measuring a real loss and not a formatting difference",
+      flatCols.Count > 0 && flatCols.All(c => !string.Equals(c, "#008000", StringComparison.OrdinalIgnoreCase)) &&
+      RtfRunParser.RunColours(ChosenGreen).Any(c => string.Equals(c, "#008000", StringComparison.OrdinalIgnoreCase)),
+      $"stored [{Cols(ChosenGreen)}] vs flattened [{Cols(Flattened)}]");
+
+// ===========================================================================
 foreach (var line in log) Console.WriteLine(line);
 Console.WriteLine();
 if (failures == 0)
@@ -304,6 +400,17 @@ Console.WriteLine("NOT MEASURED HERE, and not to be reported as if it were: the 
                   + "RichEditBox, the 16.7 veil and the Win2D raster. All three need a "
                   + "window. 25's sweep table marks them UNSEEN.");
 return failures == 0 ? 0 : 1;
+
+// ---------------------------------------------------------------------------
+// A RichEdit-shaped document. Written on one line on purpose: RtfRunParser
+// discards \r and \n, so nothing here depends on how this file is stored.
+static string RtfDoc(string table, string body) =>
+    @"{\rtf1\fbidis\ansi\ansicpg1252\deff0\nouicompat\deflang2057{\fonttbl{\f0\fnil\fcharset0 Lora;}}"
+    + @"{\colortbl " + table + @"}"
+    + @"{\*\generator Riched20 3.1.0008}\viewkind4\uc1 \pard\sl300\slmult1\f0\fs32 " + body + @"\par}";
+
+static string Cols(string rtf) =>
+    string.Join(",", RtfRunParser.RunColours(rtf).Select(c => c ?? "auto"));
 
 // ---------------------------------------------------------------------------
 static Color FromY(double y)

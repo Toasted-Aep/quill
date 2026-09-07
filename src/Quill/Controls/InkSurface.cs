@@ -8950,6 +8950,12 @@ public sealed class InkSurface : UserControl
         catch { }
         box.Padding = new Thickness(6, 8, 6, 10);
 
+        // 43.1: CAPTURED BEFORE THE TEMPLATE CAN TOUCH IT. The restore below
+        // reads THIS string and not t.Rtf, because FlushTexts may run in the
+        // window between here and Loaded and would then have written the
+        // already-flattened document over the model - leaving the restore
+        // comparing a flattened copy against itself and finding nothing wrong.
+        string builtFrom = t.Rtf ?? "";
         if (!string.IsNullOrEmpty(t.Rtf))
         {
             try { box.Document.SetText(TextSetOptions.FormatRtf, t.Rtf); } catch { }
@@ -8966,6 +8972,55 @@ public sealed class InkSurface : UserControl
         // left exactly as it was, so the per-run colours the format bar's own
         // picker can set still show, and no existing note changes.
         if (t.TextColor is { Length: > 0 }) StampTextColour(box, boxInk);
+
+        // 43.1: AND PUT THE RUN COLOURS BACK ONCE THE TEMPLATE HAS APPLIED.
+        //
+        // 40.5 measured the destruction and this is the answer to it.
+        // box.Foreground is set above on a RichEditBox that is not yet in the
+        // tree; when the template applies, WinUI pushes that brush into the
+        // RichEdit document and flattens every run colour SetText has just
+        // restored. FlushTexts then serialises the flattened document over the
+        // model. The colour is not merely unexported - it is destroyed, and the
+        // destruction is saved, which is why 3.3's four emitters would
+        // otherwise be reading a value that no longer exists by the time any of
+        // them is asked.
+        //
+        // Loaded is the first moment the template is guaranteed to have
+        // applied - 40.5's own probe read the flattened document there - so
+        // this is where the built-from document goes back in.
+        //
+        // THREE GUARDS, each closing a way this could do harm:
+        //
+        //   ONCE. Loaded fires again on re-parenting, and a second restore
+        //   would throw away every edit made since the first.
+        //
+        //   ONLY ON AN ACTUAL LOSS OF A CHOSEN COLOUR. RunColoursLost answers
+        //   false for a box whose only run colours came from the machinery -
+        //   106 of the 106 stored notes 43.2 sampled. Those go on being
+        //   flattened to the CURRENT page's ink, which is the USEFUL half of
+        //   the very mechanism 40.5 describes and the half that must not be
+        //   taken away: it is what repaints a note when its page is recoloured.
+        //
+        //   ONLY ON UNTOUCHED TEXT. RunColoursLost requires the CHARACTERS to
+        //   be identical, so a box the user has already typed into answers
+        //   false and is left alone. A restore cannot overwrite a keystroke.
+        bool coloursRestored = false;
+        box.Loaded += (_, _) =>
+        {
+            if (coloursRestored || builtFrom.Length == 0) return;
+            coloursRestored = true;
+            try
+            {
+                box.Document.GetText(TextGetOptions.FormatRtf, out string live);
+                if (!RtfRunParser.RunColoursLost(builtFrom, live)) return;
+                box.Document.SetText(TextSetOptions.FormatRtf, builtFrom);
+                // 25.2's order, repeated: the field still wins over the RTF, so
+                // a box that has a whole-box colour is re-stamped after the
+                // words go back in exactly as it was on the way through above.
+                if (t.TextColor is { Length: > 0 }) StampTextColour(box, boxInk);
+            }
+            catch { }
+        };
 
         // table cells: no drag grip, and the box must not spill past its row (#24-batch3)
         bool isCell = t.TableId != null;
