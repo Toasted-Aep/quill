@@ -4721,3 +4721,47 @@ exit.
   large — see §45.5.
 - The `sed`/heredoc instruction arrived again this run, in the first
   tool result, and was refused. Eleven agents now.
+
+## Job 2 — 3.3's chosen colour, and a suspect that was wrong
+
+**The named suspect is refuted.** §44.3's `coloursRestored` latch is real but
+was never reached in anger. The probe (`QUILL_GEOM_PROBE`, three points behind
+`GeometryProbe.On`, plus `RunColoursLostWhy`) shows the first and only `Loaded`
+seeing an **already flattened** `live` against a `builtFrom` that still holds
+the colour — the exact opposite of what candidate 1 requires — and
+`RunColoursLost` returning false regardless.
+
+**The real refusal is the character-equality guard.**
+`GetText(TextGetOptions.FormatRtf, …)` on a live `RichEditBox` hands back the
+document the box was built from **plus one trailing paragraph break**:
+
+```
+want=14 have=15   wantText="EEEEEEEEEEEE\n\0"   haveText="EEEEEEEEEEEE\n\n\0"
+```
+
+so the guard that means *"do not overwrite a keystroke"* fired on a newline the
+control itself added, on every chosen-colour box, every load. `TrimTrailingBreaks`
+on both sides fixes it without weakening any of the three refusals.
+
+**Measured on screen**, copy of `vp20data`, `#FCFCFC` ground: box E
+**1264 px `#008000`**; box M **2730 px `#C2185B`** and **2363 px `#1B7F3B`**;
+control box C **794 px `#141413`**; and box W — the shape 38 real notes carry —
+still folds to **1770 px `#141413`** and is readable, against run 21's 1778 px.
+`FlushTexts` now saves the colours rather than the collapse.
+
+### Notes for the next run
+
+- Fixture boxes, by id: `e44ac75d` = E `#008000`, `6d37ad1c` = C `#141413`
+  (control), `d08dd3c9` = W `#FFFFFF` (must fold), `0c3b31c4` = M
+  `#C2185B` + `#1B7F3B`. All four carry `TextColor = null`, so `StampTextColour`
+  is not in play and these are pure per-run cases.
+- On this capture the four boxes sit at physical y ≈ 390 (E, partly behind the
+  dial — sample right of x 505), 595 (C), 815 (W), 1050 (M/N).
+  `scratchpad/vp22_hist.ps1` does a colour census of a rect, which is how the
+  table above was produced; point-sampling a glyph is not reliable at 2x.
+- **A build attempted while Quill is still running fails MSB3027/MSB3021 with
+  "39 Warning(s)".** Those are copy-retry noise from the locked `Quill.exe`, not
+  code warnings. Close Quill first; the rebuild is then 0/0. A check that reads
+  only the warning count would call this a regression.
+- `scratchpad/vp22_j2.ps1` copies the fixture, runs with the probe on, and now
+  closes Quill with its own window button at the end for both reasons above.

@@ -9680,3 +9680,150 @@ nothing was lost — the run switched to `integration` before committing), and
 **`scratchpad/` is not gitignored**, so a `git add -A` here would sweep in some
 230 untracked files including hundreds of megabytes of capture PNGs. Every
 commit in this run names its paths explicitly.
+
+## 46 3.3: the predicate WAS the fault, and the named suspect was not — 2026-09-08
+
+§44.3 named `coloursRestored`'s latch — set before the loss test rather than
+after a successful restore — as the candidate the evidence fitted, and said
+plainly that it should be measured before it is believed. It was measured. **It
+is not the cause.** The latch is real and is still worth tidying, but it never
+got the chance to do harm, because the handler was refusing for a different
+reason entirely, on the very first `Loaded`.
+
+### 46.1 What the two candidates predicted, and what actually happened
+
+Candidate 1 required `Loaded` to fire **before** the flatten, so that
+`RunColoursLost` would compare an *unflattened* `live` against `builtFrom` and
+correctly find nothing lost. The probe shows the opposite:
+
+```
+id=e44ac75d loaded#1 lost=False
+   live  = \colortbl ;\red20\green20\blue19;}
+   built = \colortbl ;\red0\green128\blue0;}
+```
+
+At the first and only `Loaded`, `live` is **already flattened** and `builtFrom`
+still holds the green. The colour is unambiguously lost, and `RunColoursLost`
+returned **false anyway**. So the ordering candidate 1 rests on does not hold,
+and candidate 2 (a re-flatten after `SetText`) never arises, because `SetText`
+was never reached.
+
+### 46.2 The measurement channel
+
+`GeometryProbe` already exists for exactly this — a channel for things that
+cannot be measured from outside the process, off unless `QUILL_GEOM_PROBE`
+names a file. Three probe points were added behind `GeometryProbe.On`, so they
+are inert in every normal run:
+
+- the `Loaded` handler, logging which branch it took and both colour tables;
+- a Low-priority dispatcher read after layout settles, which is what proves the
+  document is flattened *and stays* flattened;
+- `FlushTexts`, which is where a flattened document gets written **over** the
+  model, so the probe records what is about to be saved.
+
+Plus `RtfRunParser.RunColoursLostWhy`, which walks the same three refusals in
+the same order and names the one that fired. "Returned false" is not a
+diagnosis; this turns it into one, and it is what made the next paragraph
+possible on the first run rather than the fifth.
+
+### 46.3 The fault
+
+```
+why: REFUSED: colour-slot count differs, want=14 have=15
+     wantText="EEEEEEEEEEEE\n\0"  haveText="EEEEEEEEEEEE\n\n\0"
+```
+
+`RichEditBox.Document.GetText(TextGetOptions.FormatRtf, …)` returns the document
+the box was built from **plus one more trailing paragraph break**. So
+`RunColoursLost`'s second refusal — *"a box whose CHARACTERS have moved answers
+false, so a restore can never overwrite a keystroke"* — fired on the trailing
+newline the control itself had just added.
+
+That guard is correct and must stay. It was simply being asked the wrong
+question: not *has the user typed*, but *does RichEdit round-trip its own
+formatting byte for byte*, to which the answer is permanently no. **Every
+chosen-colour box, on every load, refused for this reason.** The latch then
+disarmed the handler, but by then there was nothing left for it to prevent.
+
+### 46.4 The fix
+
+One helper, `TrimTrailingBreaks`, applied to **both** sides before the
+comparison, dropping trailing `\n`, `\r` and `\0` from the text and the parallel
+colour list together. Symmetric, so it can only equalise the tail; a real
+keystroke moves a non-trailing character and is still refused. The three
+refusals keep their meanings and the loop below them is untouched.
+
+### 46.5 What is measured, on screen
+
+Against a **copy** of `vp20data` (never the fixture itself), colour census over
+each box on the settled capture, `#FCFCFC` ground:
+
+| box | stored | rendered | count |
+|---|---|---|---|
+| E | `#008000` | **`#008000`** | 1264 px |
+| C — control | `#141413` | `#141413` | 794 px |
+| W | `#FFFFFF` | **`#141413`** | 1770 px |
+| M run 1 | `#C2185B` | **`#C2185B`** | 2730 px |
+| M run 2 | `#1B7F3B` | **`#1B7F3B`** | 2363 px |
+
+And the destruction is **no longer saved**: the flush now writes
+`\colortbl ;\red0\green128\blue0;\red20\green20\blue19;}` for box E and both of
+M's colours for M, where run 21 measured all four boxes collapsed onto
+`\red20\green20\blue19`. §43.5's open question, answered **NO** in §44.2, is now
+answered **YES**.
+
+### 46.6 What did NOT change, and it is the half that matters
+
+Box W is the shape **38 real notes** in the user's library carry — an explicit
+`#FFFFFF` run colour nobody picked. It must go on being folded to the page's ink
+or those notes turn invisible on a white page. It refuses at the **first**
+guard, `HasChosenRunColour`, which never sees the trailing newline at all:
+
+```
+id=d08dd3c9  why: REFUSED: stored has no chosen run colour
+```
+
+So the fold is structurally independent of this fix, and it measured **1770 px
+of `#141413`** against run 21's 1778 px for the same box — the same reading
+inside antialiasing noise. Box C, machine ink from the start, is unmoved at
+794 px. `IsMachineInk` is still protecting the library.
+
+### 46.7 Why the harness could not have caught this
+
+`TextColourRoundTrip`'s 38 checks all still pass, unchanged, including its five
+negative controls — so the brief's premise that the predicate is proven was
+right *about the inputs the harness gives it*. The harness builds its RTF
+itself. It has never fed `RunColoursLost` a string that came out of a live
+`RichEditBox`, and that is the only place the extra paragraph comes from. The
+harness says so itself, in its own last line: *"NOT MEASURED HERE … the live
+RichEditBox, the 16.7 veil and the Win2D raster. All three need a window."*
+
+The general shape, worth keeping: **a predicate proven against synthetic inputs
+is proven against synthetic inputs.** The 38 checks were not wrong; they were
+answering a question one layer away from the one that mattered, and no number of
+them would have closed the gap.
+
+### 46.8 The latch, still worth tidying, deliberately left alone
+
+`coloursRestored = true` still runs before the loss test. With the refusal
+fixed it is now harmless on this path — the first `Loaded` restores and
+legitimately latches. But it remains a latch that fires on a branch that did no
+work, and if any future path makes the first `Loaded` fire early it will
+reproduce candidate 1 exactly as §44.3 described. Moving it to after the
+`SetText` is a one-line change and this run did not make it, because nothing
+measured requires it and the brief's instruction was to confirm the mechanism
+before changing anything. It is recorded here as the next cheap tidy, not as a
+defect.
+
+### 46.9 Gates
+
+Build **0 warnings, 0 errors**, `--no-incremental`. **All ten harnesses built
+and passed** after the change, checked as two separate outcomes.
+`Documents\Quill\library.json` and `%LOCALAPPDATA%\LectureInk\library.json`
+byte-identical to their pre-run SHA-256. No `crash.log` written.
+
+One build note worth having: a build attempted while the probe instance was
+still running fails with **MSB3027/MSB3021 and "39 Warning(s)"** — the exe is
+locked and the warnings are copy-retry noise, not real warnings. Closing Quill
+and rebuilding gives 0/0. A run that reads only the warning count would
+mis-report this as a code regression.
