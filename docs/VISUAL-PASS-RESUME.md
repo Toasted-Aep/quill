@@ -1,6 +1,6 @@
 # Visual verification pass — resume state
 
-## RUN OF 2026-09-08 (twenty-first screen run) — ROW 3.3's LAST LINK, SEEN AT LAST
+## RUN OF 2026-09-08 (twenty-first screen run) — ROW 3.3's LAST LINK SEEN; OIL PAINT NOT REACHED
 
 `main` @ `6d64c47`, build **0 warnings**. The launch §43.6 seeded is done.
 Written up in full at CONCEPTS-REF §44.
@@ -68,6 +68,35 @@ settings, oplog, `deviceid.txt` and `backups/` all created inside `vp21run`,
 nothing in the real `Documents\Quill` touched. **No `crash.log` written**; the
 only one on disk is 2026-08-21 and stale. No `.NET Desktop Runtime` dialog, and
 both `Quill.runtimeconfig.json` and `Quill.deps.json` present throughout.
+
+### Job 2 — oil paint: NOT REACHED, stopped at the presence gate
+
+Re-measured between phases, as the brief requires, and it had **failed**. Three
+readings in nine minutes:
+
+| window | cursor | idle resets | what it shows |
+|---|---|---|---|
+| 38.3 s | **3 spots**, 1–3 px apart (`1833,737 → 736 → 734`) | **9** | settling corrections |
+| 60.1 s | static | **3**, clustered in 1.5 s at t≈17–18 s | keystrokes, no pointer movement |
+| 38.3 s | **19 spots**, one continuous track | 2 | **decisive** |
+
+The third reading is the person signature the brief describes, unmistakably:
+`1833,734 → 1884,724 → 2591,780 → 2879,973 → 2879,991 → 2879,997 → 2853,1017 →
+2810,1070 → 2809,1072 → 2805,1085 → 2787,1168 → … → 2789,1280 → 2786,1278 →
+2740,1222 → 2720,1158` — large moves decaying into 1–6 px settling corrections,
+then a return sweep. `LogonUI` was absent throughout and the foreground window
+was `Claude`. **This is a new kind of gate failure from the three §43.6
+records:** those were a LOCKED machine that `OpenInputDesktop` reported as
+unlocked. This is an UNLOCKED machine with somebody actually at it.
+
+**Nothing was injected and Quill was never launched for job 2.** A fixture is
+left ready at `scratchpad/vp21paint`: two clean pages, no strokes and no text,
+so the `OpenPaintForPage` page-switch check has somewhere to go.
+
+**Do the control stroke first.** Source reading (below, and §44.5) found a trap
+that would have made an ordinary pen look broken too, so run 2 of this job
+should not treat a dead first stroke as an engine failure until Touch draw is
+confirmed ON.
 
 ### Machine notes
 

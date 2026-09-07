@@ -9503,3 +9503,51 @@ idle timer reset, with no injection from this run. The 60 s dense track that
 followed showed 950 samples of absolute stillness, which is not what a person at
 the machine produces, so the run went ahead. It is noted because an
 unattributed input event is exactly the kind of thing the gate exists to catch.
+
+### 44.5 Oil paint, read but not run — and the trap sitting in front of it
+
+Job 2 never reached the screen (the gate failed; see the run 21 entry). What
+follows is source reading only, and is flagged as such: **not one line of it is
+evidence that the engine paints.** That question is still exactly as open as the
+brief says it is.
+
+**The zoom drift the brief expected is NOT there.** `MinZoom`/`MaxZoom` are
+defined once, `0.1f`/`16f`, at `InkSurface.cs:608`, and every clamp goes through
+them (`:615`, `:641`, `:862`). The comment at `:859` records the resolution
+explicitly — oilpaint's inline `0.1f`/`8f` was three copies at two values, and
+`8f` was superseded by `16f`. So the place drift was most likely to show was
+found and closed during the merge. **Whether tiles actually follow past 8× is
+still unmeasured** — the constant being right does not make the tile maths
+right, and that remains the highest-value thing to look at next.
+
+**The merge's substantive line is present.** `OpenPaintForPage(page)` is called
+at `InkSurface.cs:868` under the comment "flushes the outgoing page's tiles,
+loads this one's", and `FlushPaint()` is wired to `Unloaded` at `:587`.
+
+**`PenType.Oil` is appended last** (value 14), obeying that enum's own
+serialisation rule, and `OilBrush.SeedOilPreset` adds an "Oil" preset
+(`#C1440E`, size 14) once per library behind an `OilPenSeeded` flag — so a
+library that predates the branch does get the brush, and gets it exactly once.
+
+**The third stale reference: `docs/OILPAINT-SPEC.md` did not survive its own
+merge.** The branch added it in `2c239ed` and `0e564ba` deletes it, 692 lines.
+That is not a code path a harness could reach, which is precisely the shape of
+gap the brief predicted — the architecture document for the feature is simply
+gone from the tree. Nothing in the build notices.
+
+**The trap in front of the first stroke, which is worth more than any of the
+above.** `HandDrawMode` is what lets a mouse mark the page
+(`InkSurface.cs:1386`), and it is set from exactly one place —
+`TouchDrawToggle.IsChecked`, in `TouchDraw_Click`. The toggle is declared in
+`MainWindow.xaml:178` with **no** `IsChecked` and is **hidden from the bar**
+(`ChromeBars.cs:339` moved it to Settings ▸ Interaction ▸ Touch Input). Meanwhile
+`Library.FingerAction` defaults to and persists **`"UseActiveTool"`**
+(`NoteModels.cs:863`), and nothing at startup reads it back into
+`HandDrawMode`.
+
+So on every launch Settings shows **"Use Active Tool" selected** while the mouse
+still **does not draw**. An injected drag inks nowhere, the panel says finger
+drawing is on, and the engine is blameless. That is the exact ambiguity the
+brief warned about, and it is a real inconsistency in its own right, independent
+of oil paint: the persisted preference and the live flag disagree until
+something toggles the switch by hand.
