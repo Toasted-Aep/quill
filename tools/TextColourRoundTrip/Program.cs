@@ -199,6 +199,7 @@ Check("25.4's floor holds: at the crossing the two inks tie at 4.18:1, and nothi
 const string Face = "QuillNoSuchFace";
 const string RedHex = "#C2185B";      // 194, 24, 91  - a channel Num("0.##") could not carry
 const string GreenHex = "#1B7F3B";
+const string GreenHex2 = "#1B7F3B";   // 43.3 reuses it as a RUN colour
 string pageBg = "#FAF9F5";
 string pageInk = ColorUtil.ToHex(PageTheme.TextInk(Hex(pageBg)));
 
@@ -387,6 +388,187 @@ Check("the PRE-43 outcome - no restore - FAILS: the flattened document 40.5 read
       $"stored [{Cols(ChosenGreen)}] vs flattened [{Cols(Flattened)}]");
 
 // ===========================================================================
+// PART 4 - THE EMITTERS (43.3): PER-RUN COLOUR ALL THE WAY INTO THE FILE
+// ===========================================================================
+//
+// The records are built the way BuildVectorPageAsync builds them: Parse, then
+// ResolveChosenColours, then one PdfVectorText per paragraph carrying its runs.
+// The WRAP step in between is Win2D and is not here; it moves text between
+// visual lines with `run with { Text = ... }` and never touches Colour, so no
+// claim below depends on it.
+
+// ---- 4a. TWO COLOURS IN ONE LINE ------------------------------------------
+// The case the brief named first, and the one a record carrying a single colour
+// per line could not express however it was computed.
+string TwoInLine = RtfDoc(@";\red194\green24\blue91;\red27\green127\blue59;", @"\cf1 red \cf2 green");
+var twoPage = OnePage(Box(TwoInLine, false, pageInk));
+var twoPdf = RunFills(Content(PdfExporter.CreateVector(new[] { twoPage })));
+var twoSvg = TspanFills(HtmlSvgExporter.PageToSvg(twoPage));
+
+// The block still OPENS with the line's own colour and each run then switches
+// it, so 25's "one rg per BT" check goes on measuring what it always did. The
+// run colours are therefore what follows the opener.
+var twoRuns = AfterOpener(twoPdf);
+Check("43.3 - TWO COLOURS IN ONE LINE reach the PDF. One BT block, and inside it "
+      + "the colour is switched twice - the case a record carrying a single "
+      + "colour per line had nowhere to put",
+      twoRuns.Count == 2 && Near(twoRuns[0], Hex(RedHex), 1) && Near(twoRuns[1], Hex(GreenHex2), 1),
+      string.Join(" -> ", twoPdf.Select(Show)) + "   (opener, then the runs)");
+
+Check("43.3 - and the block still OPENS with the line's own colour, so 25's "
+      + "one-rg-per-BT check is measuring the same thing it always was and this "
+      + "change cannot have quietly moved it",
+      twoPdf.Count == 3 && Near(twoPdf[0], Hex(pageInk), 1),
+      twoPdf.Count > 0 ? $"BT opens {Show(twoPdf[0])}, page ink {pageInk}" : "no operator");
+
+Check("43.3 - ...and the SVG, as two tspans with two fills inside one <text>",
+      twoSvg.Count == 2 &&
+      twoSvg[0].Equals(RedHex, StringComparison.OrdinalIgnoreCase) &&
+      twoSvg[1].Equals(GreenHex2, StringComparison.OrdinalIgnoreCase),
+      string.Join(" | ", twoSvg));
+
+// ---- 4b. A RUN WITH NO COLOUR BESIDE ONE WITH -----------------------------
+// The thing most likely to regress silently: the uncoloured run must come out
+// in the page's ink, exactly as it does today.
+string AutoBesideChosen = RtfDoc(@";\red194\green24\blue91;", @"\cf1 red \cf0 plain");
+var mixPage = OnePage(Box(AutoBesideChosen, false, pageInk));
+var mixPdf = RunFills(Content(PdfExporter.CreateVector(new[] { mixPage })));
+var mixSvg = TspanFills(HtmlSvgExporter.PageToSvg(mixPage));
+
+Check("43.3 - a run with NO colour beside one with: the coloured run takes its "
+      + "own and the bare one takes the PAGE'S INK, which is what \"auto\" has "
+      + "always meant and the behaviour that must not move",
+      AfterOpener(mixPdf).Count == 2 &&
+      Near(AfterOpener(mixPdf)[0], Hex(RedHex), 1) &&
+      Near(AfterOpener(mixPdf)[1], Hex(pageInk), 1),
+      string.Join(" -> ", mixPdf.Select(Show)) + "   (opener, chosen run, bare run)");
+
+Check("43.3 - and in the SVG the bare run carries NO fill of its own at all, so "
+      + "it inherits the <text> element's - one attribute fewer, not a second "
+      + "copy of the page ink that could later drift from it",
+      mixSvg.Count == 2 && mixSvg[0].Equals(RedHex, StringComparison.OrdinalIgnoreCase) &&
+      mixSvg[1] == "(inherited)",
+      string.Join(" | ", mixSvg));
+
+// ---- 4c. THE PAGE-INK DEFAULT, BYTE FOR BYTE ------------------------------
+// 43.2 read every stored note in the library and found the same shape in all
+// 106: one colour-table entry holding an ink the machinery wrote. Those must
+// emit what they always did. Not "the same colour" - the same BYTES.
+string CorpusNote = RtfDoc(@";\red250\green249\blue245;", @"\cf1 lecture notes");
+string NoColourAtAll = RtfDoc(@";", @"lecture notes");
+var corpusPage = OnePage(Box(CorpusNote, false, pageInk));
+var barePage = OnePage(Box(NoColourAtAll, false, pageInk));
+string corpusStream = Content(PdfExporter.CreateVector(new[] { corpusPage }));
+string bareStream = Content(PdfExporter.CreateVector(new[] { barePage }));
+
+Check("43.2 - THE DEFAULT PATH IS UNTOUCHED. A note in the shape all 106 stored "
+      + "ones share emits a PDF content stream BYTE FOR BYTE identical to a box "
+      + "that names no colour anywhere, so nothing in the library changes",
+      corpusStream.Length > 0 && corpusStream == bareStream,
+      corpusStream == bareStream ? $"{corpusStream.Length} bytes identical"
+                                 : "streams differ");
+
+Check("...and identically in the SVG",
+      HtmlSvgExporter.PageToSvg(corpusPage) == HtmlSvgExporter.PageToSvg(barePage),
+      HtmlSvgExporter.PageToSvg(corpusPage) == HtmlSvgExporter.PageToSvg(barePage)
+          ? "identical" : "differ");
+
+Check("...and the colour they both emit is the PAGE'S ink, not the ink stored in "
+      + "the note - which is the whole reason a machine ink must not read as "
+      + "chosen: it is what lets a note follow its page being recoloured",
+      RunFills(corpusStream).Count > 0 && Near(RunFills(corpusStream)[0], Hex(pageInk), 1),
+      $"stored #FAF9F5, page ink {pageInk}, emitted {Show(RunFills(corpusStream)[0])}");
+
+// ---- 4d. EDIT -> BLUR -> REOPEN -> EXPORT ---------------------------------
+// As far as a console can carry it. The reopen is 40.5's measured flatten and
+// 43.1's decision in front of it; the SetText itself needs a window and 43.5
+// says so rather than letting this row imply otherwise.
+string Stored = RtfDoc(@";\red0\green128\blue0;", @"\cf1 green words");
+string Flat = RtfDoc(@";\red20\green20\blue19;", @"\cf1 green words");
+string AfterReopen = RtfRunParser.RunColoursLost(Stored, Flat) ? Stored : Flat;
+
+var reopenPage = OnePage(Box(AfterReopen, false, pageInk));
+var reopenPdf = RunFills(Content(PdfExporter.CreateVector(new[] { reopenPage })));
+Check("43.1+43.3 - A COLOURED RUN SURVIVES THE ROUND TRIP: stored green, "
+      + "flattened by the template on reopen, restored because RunColoursLost "
+      + "saw the loss, and green again in the exported PDF",
+      AfterOpener(reopenPdf).Count == 1 && Near(AfterOpener(reopenPdf)[0], Hex("#008000"), 1),
+      $"stored [{Cols(Stored)}] -> reopened [{Cols(AfterReopen)}] -> PDF "
+      + string.Join(" -> ", reopenPdf.Select(Show)));
+
+// THE NEGATIVE CONTROL. Without 43.1 the exporter is handed the flattened
+// document, and the green is simply not in it to export.
+var noRestorePage = OnePage(Box(Flat, false, pageInk));
+var noRestorePdf = RunFills(Content(PdfExporter.CreateVector(new[] { noRestorePage })));
+Check("the PRE-43 round trip FAILS the same check: with no restore the exporter "
+      + "is handed the flattened document and the green is not in it to export. "
+      + "That is 40.5's defect reproduced, so the row above is evidence",
+      noRestorePdf.Count > 0 && noRestorePdf.All(c => !Near(c, Hex("#008000"), 8)) &&
+      AfterOpener(noRestorePdf).Count == 0,
+      $"reopened without the restore -> PDF " + string.Join(" -> ", noRestorePdf.Select(Show))
+      + " - no run switches the colour at all, because no run has one");
+
+// ---- 4e. AND THE PRE-43 EMITTERS COLLAPSE TWO COLOURS INTO ONE ------------
+var flatRuns = Box(TwoInLine, false, pageInk);
+for (int i = 0; i < flatRuns.Count; i++)
+    flatRuns[i] = flatRuns[i] with { Runs = flatRuns[i].Runs!.Select(r => r with { Colour = null }).ToList() };
+var flatPdf = RunFills(Content(PdfExporter.CreateVector(new[] { OnePage(flatRuns) })));
+Check("...and the PRE-43 EMITTERS fail 4a: with every run's colour dropped, the "
+      + "two-colour line comes out as ONE colour. The emitters are therefore "
+      + "doing the work, not the parser alone",
+      flatPdf.Count == 1 && !Near(flatPdf[0], Hex(RedHex), 4),
+      string.Join(" -> ", flatPdf.Select(Show)) + " - one operator where 43.3 writes three");
+
+// ---- 4f. 25.2's FIELD STILL WINS OVER THE RTF -----------------------------
+// A box carrying a whole-box colour has had every run stamped on screen. If the
+// exporter honoured a stale run colour the file and the canvas would disagree,
+// which is the split 25 closed and 43 must not reopen.
+var fieldPage = OnePage(Box(TwoInLine, true, RedHex));
+var fieldPdf = RunFills(Content(PdfExporter.CreateVector(new[] { fieldPage })));
+Check("25.2 still holds through 43: a box with a WHOLE-BOX colour ignores every "
+      + "run colour in its RTF and comes out one colour - the field's - so the "
+      + "file cannot disagree with the stamped canvas",
+      fieldPdf.Count > 0 && fieldPdf.All(c => Near(c, Hex(RedHex), 1)),
+      string.Join(" -> ", fieldPdf.Select(Show)));
+
+// ---- 4g. THE RASTER'S SPAN MAP -------------------------------------------
+// DrawTextElement lays its glyphs out from RtfToPlainText, a DIFFERENT walker
+// from Parse that normalises whitespace differently. Colouring by run index
+// would put colour on the wrong characters wherever the two disagree, so the
+// runs are matched INTO the text being drawn. What is measured here is that the
+// match is exact when it succeeds and NULL when it cannot be trusted - null
+// being the answer that makes the raster draw exactly what it drew before.
+var spanLines = RtfRunParser.Parse(TwoInLine, 16f, "QuillNoSuchFace");
+RtfRunParser.ResolveChosenColours(spanLines, false);
+string spanPlain = "red green";
+var spans = RtfRunParser.MapColourSpans(spanPlain, spanLines);
+
+Check("43.3 - the raster's span map lands each chosen run on its OWN characters: "
+      + "'red ' at 0 and 'green' at 4 of \"red green\", not on run indices that "
+      + "would drift the moment the two walkers disagreed about a space",
+      spans is { Count: 2 } &&
+      spans[0] == (0, 4, RedHex) && spans[1] == (4, 5, GreenHex2),
+      spans == null ? "null" : string.Join(" | ", spans.Select(x => $"[{x.Start},{x.Length}) {x.Colour}")));
+
+// The two walkers really can disagree: Parse collapses runs of spaces, so a
+// box typed with a double space reaches the raster with one and the parser
+// with the other. Matching forward absorbs it.
+var wideSpans = RtfRunParser.MapColourSpans("red  green", spanLines);
+Check("...and it absorbs the whitespace the two walkers disagree about - a "
+      + "double space in the drawn text still puts 'green' on the right five "
+      + "characters instead of colouring a space",
+      wideSpans is { Count: 2 } && wideSpans[1] == (5, 5, GreenHex2),
+      wideSpans == null ? "null" : string.Join(" | ", wideSpans.Select(x => $"[{x.Start},{x.Length}) {x.Colour}")));
+
+Check("43.3 - AND IT REFUSES RATHER THAN GUESSES. Text that does not contain a "
+      + "run at all answers null, and DrawTextElement then draws precisely what "
+      + "it drew before per-run colour existed. \"No change\" is the only failure "
+      + "mode a rendering path may have",
+      RtfRunParser.MapColourSpans("something else entirely", spanLines) == null &&
+      RtfRunParser.MapColourSpans("", spanLines) == null,
+      "unmatchable text -> null, empty text -> null");
+
+// ===========================================================================
 foreach (var line in log) Console.WriteLine(line);
 Console.WriteLine();
 if (failures == 0)
@@ -402,10 +584,65 @@ Console.WriteLine("NOT MEASURED HERE, and not to be reported as if it were: the 
 return failures == 0 ? 0 : 1;
 
 // ---------------------------------------------------------------------------
+// The records BuildVectorPageAsync builds, minus the Win2D wrap step.
+static List<PdfVectorText> Box(string rtf, bool hasFieldColour, string boxHex)
+{
+    var lines = RtfRunParser.Parse(rtf, 16f, "QuillNoSuchFace");
+    RtfRunParser.ResolveChosenColours(lines, hasFieldColour);
+    var outp = new List<PdfVectorText>();
+    double baseline = 100;
+    foreach (var line in lines)
+    {
+        baseline += 21.6;
+        if (line.Count == 0) continue;
+        outp.Add(new PdfVectorText(100f, (float)baseline, line.Max(r => r.Size), boxHex,
+                                   string.Concat(line.Select(r => r.Text)), line[0].Font, line));
+    }
+    return outp;
+}
+
+static PdfVectorPage OnePage(List<PdfVectorText> texts) => new(
+    800, 600, 0, 0, "#FAF9F5",
+    new List<PdfVectorPath>(), new List<PdfVectorDot>(), new List<PdfVectorImage>(), texts);
+
+// Every colour operator from the first BT onward, in the order the emitter
+// wrote them. The page's own background fill is emitted BEFORE the first BT,
+// which is what keeps the paper's colour out of this list.
+static List<Color> RunFills(string content)
+{
+    var list = new List<Color>();
+    int bt = content.IndexOf("BT ", StringComparison.Ordinal);
+    if (bt < 0) return list;
+    foreach (Match m in Regex.Matches(content[bt..], @"(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) rg"))
+        list.Add(Color.FromArgb(255, Chan(m.Groups[1].Value), Chan(m.Groups[2].Value), Chan(m.Groups[3].Value)));
+    return list;
+
+    static byte Chan(string s) =>
+        (byte)Math.Clamp(Math.Round(double.Parse(s, CultureInfo.InvariantCulture) * 255), 0, 255);
+}
+
+// The colours a line's RUNS ask for: everything after the operator that opens
+// the BT block, which carries the line's own colour and is emitted whether any
+// run overrides it or not.
+static List<Color> AfterOpener(List<Color> fills) =>
+    fills.Count <= 1 ? new List<Color>() : fills.Skip(1).ToList();
+
+// Each tspan's own fill, or "(inherited)" when it has none and takes the
+// <text> element's. The distinction matters: an inherited fill is one place
+// the page ink lives, a copied one is two places that can drift apart.
+static List<string> TspanFills(string svg)
+{
+    XNamespace ns = "http://www.w3.org/2000/svg";
+    return XDocument.Parse(svg).Descendants(ns + "tspan")
+        .Select(e => (string?)e.Attribute("fill") ?? "(inherited)")
+        .ToList();
+}
+
+// ---------------------------------------------------------------------------
 // A RichEdit-shaped document. Written on one line on purpose: RtfRunParser
 // discards \r and \n, so nothing here depends on how this file is stored.
 static string RtfDoc(string table, string body) =>
-    @"{\rtf1\fbidis\ansi\ansicpg1252\deff0\nouicompat\deflang2057{\fonttbl{\f0\fnil\fcharset0 Lora;}}"
+    @"{\rtf1\fbidis\ansi\ansicpg1252\deff0\nouicompat\deflang2057{\fonttbl{\f0\fnil\fcharset0 QuillNoSuchFace;}}"
     + @"{\colortbl " + table + @"}"
     + @"{\*\generator Riched20 3.1.0008}\viewkind4\uc1 \pard\sl300\slmult1\f0\fs32 " + body + @"\par}";
 
