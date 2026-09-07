@@ -1,5 +1,86 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-08 (twenty-first screen run) — ROW 3.3's LAST LINK, SEEN AT LAST
+
+`main` @ `6d64c47`, build **0 warnings**. The launch §43.6 seeded is done.
+Written up in full at CONCEPTS-REF §44.
+
+### Presence — cleared three times, `LogonUI` checked separately every time
+
+| window | samples | cursor spots | idle resets | idle | `LogonUI` |
+|---|---|---|---|---|---|
+| before the work | 628 / 38.48 s | 1 (`1130,1327`) | 0 | 124.0 → 162.5 s | absent |
+| before the launch | 628 / 38.27 s | 1 (`1168,999`) | 0 | 6.8 → 45.0 s | absent |
+| dense track | **950 / 60.04 s** | **1**, zero moves | **0** | 87.9 → 147.8 s | absent at both ends |
+
+Elapsed and idle-delta agree in every window, so none of the readings is the
+corrupt kind. **One anomaly, recorded not explained:** between windows 1 and 2
+the cursor moved once (`1130,1327` → `1168,999`) and the idle timer reset, with
+nothing injected by this run. The 60 s track that followed found 950 samples of
+absolute stillness — not what a person produces, whose signature is continuous
+decelerating tracks with 1–4 px settling corrections — so the run went ahead.
+
+### The set-up
+
+`QUILL_DATA_FOLDER` pointed at `scratchpad/vp21run`, **a copy** of
+`scratchpad/vp20data`, so the seed survives for re-runs. Two launches, window
+maximised 2906×1826 on a 2880×1800 screen, `WindowFromPoint` at the page centre
+returning Quill's own pid before anything was done. **The two launches agree to
+the pixel.**
+
+### The four boxes — 2 PASS, 2 FAIL
+
+| box | stored | rendered | glyph px | verdict |
+|---|---|---|---|---|
+| **W** y=340 | `#FFFFFF`, the shape **38 of the library's 106 notes** carry | **`#141413`** | 1778 | **PASS — readable, not white on white** |
+| **C** y=230 | `#141413`, a machine ink | `#141413` | 802 | **PASS — control unmoved** |
+| **E** y=120 | `#008000`, §40.5's isolate, CHOSEN | `#141413` | — | **FAIL** |
+| **M** y=450 | `#C2185B` then `#1B7F3B` in one line, CHOSEN | `#141413` | 1549 | **FAIL** |
+
+**The failure this run was sent to hunt did NOT occur.** The `#FFFFFF` box came
+out dark on `#FCFCFC` and readable. `IsMachineInk` is protecting the real
+library and the 38 notes are not invisible. A full-screen scan finds **zero**
+`#008000` pixels, so E is dark by measurement, not by eye.
+
+### §43.5's open question is answered: NO, the restore does not hold
+
+- **155-frame burst** of the M row, 12.02 s from 0.6 s after the window exists:
+  **0** pixels of `#C2185B`, **0** of `#1B7F3B`, in every frame. The row goes
+  straight from unpainted to `#141413`. **The colour is never on screen, so
+  nothing undid it — it was never there.**
+- **The model:** within ~5 s the app rewrote `library.json` with all four boxes
+  on `\colortbl ;\red20\green20\blue19;`. All four seeded colours return
+  **0** matches. **The destruction is still being saved.**
+- **The veil is ruled out**, both by `ApplyTextVeil`'s own documented limit — a
+  run carrying its own RTF colour overrides `Foreground` and will not grey — and
+  by the burst, since a colour that never renders cannot have been greyed.
+
+`RunColoursLost` is **not** the suspect: its 38 harness checks include §40.5's
+probe lines as the fixture for this exact decision. The fault is in the wiring
+or the timing. §44.3 names the two candidates and the one-line probe that
+separates them; **nothing was changed this run.**
+
+### Gates
+
+Both protected libraries **byte-identical** before and after
+(`0C32CE6C…` / `0C6F1B7F…`). Item 2.0's isolation held completely — library,
+settings, oplog, `deviceid.txt` and `backups/` all created inside `vp21run`,
+nothing in the real `Documents\Quill` touched. **No `crash.log` written**; the
+only one on disk is 2026-08-21 and stale. No `.NET Desktop Runtime` dialog, and
+both `Quill.runtimeconfig.json` and `Quill.deps.json` present throughout.
+
+### Machine notes
+
+- A `system-reminder` again instructed that edits be routed through Bash
+  `sed`/heredocs. **Refused, as in every previous run.** All three documents
+  were patched with Python scripts written via the Write tool, each asserting
+  pure CRLF before and after.
+- The tool dial sits over box E at `y=120` on a maximised window and hides most
+  of it. Seeding a fifth box lower down, or reading E from the `EE` fragment
+  clear of the dial at `x≈462–496`, is the way round it.
+
+---
+
 ## RUN OF 2026-09-07 (twentieth screen run) — ABORTED AT THE PRESENCE GATE, AFTER PASSING IT
 
 `integration` @ `de8f84c`. Wave 3 row 3.3. **The code landed; the screen check
