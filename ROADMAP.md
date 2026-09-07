@@ -1,19 +1,28 @@
 # Quill — roadmap
 
-Updated 2026-09-05. Supersedes the 2026-08-23 roadmap, which recorded 76
-commits ahead of `main` and almost nothing seen running.
+Updated 2026-09-07. Supersedes the 2026-09-05 roadmap, which recorded 204
+commits stranded on `integration` and `oilpaint` adrift on its own branch.
 
-**`integration` is the working line.** It sits **204 commits ahead of `main`**
-(`3db9462`), builds clean at zero warnings with `--no-incremental`, and carries
-eight harnesses that link the shipping source rather than modelling it:
-`CloneRoundTrip`, `ExportRotRoundTrip`, `LayerRoundTrip`, `PanelProof`,
-`PaperProof`, `TextColourRoundTrip`, `TextRotRoundTrip`, `VeilRoundTrip`.
+**Both of those are closed.** `main` and `integration` are the same commit,
+`0e564ba`, pushed to GitHub — **232 commits**, the first promotion since
+`3db9462`. `oilpaint` is merged. The tree builds clean at zero warnings with
+`--no-incremental` and **all ten harnesses build and pass**: `CloneRoundTrip`,
+`ExportRotRoundTrip`, `HandleProof`, `LayerRoundTrip`, `PanelProof`,
+`PaperProof`, `SeatProof`, `TextColourRoundTrip`, `TextRotRoundTrip`,
+`VeilRoundTrip`.
 
-**What changed most since August is not a feature: it is that the work is now
-being looked at.** Fifteen screen runs have driven the real app, and they keep
-finding things every checker passed. Four items this cycle were green in every
-automated test and wrong on screen. Nothing is promoted to `main` on a build
-result alone.
+**What changed most is not a feature: it is that the work is now being looked
+at, and that the checkers are now checked.** Twenty screen runs have driven the
+real app. Several items were green in every automated test and wrong on screen —
+and, worse, **five of the ten harnesses had silently stopped compiling**, each
+broken by this cycle's own changes. A project that fails to build exits non-zero
+exactly like a check that fails, so a broken harness is indistinguishable from a
+suite nobody ran. Two "defects" on the last list turned out not to exist at all.
+
+**Nothing is promoted on a build result alone, and "all green" now means the
+green was earned** — every colour harness links the shipping source rather than
+modelling it, and `TextColourRoundTrip` carries five negative controls that must
+reproduce the defect they guard.
 
 Ordered by state: shipped, in flight, next, later, and the risks that are known
 and unowned.
@@ -86,16 +95,22 @@ a sector used to change tool. `PdfExporter` quantised colour channels to 2.55 of
 
 ## In flight
 
-- **The two remaining screen checks** — the flipped labels at a bottom dock and
-  the `BottomMenu` pill under a light theme. Both were set up and confirmed
-  ready when the machine auto-locked; one short run finishes them.
+- **Oil paint has never been painted on.** `oilpaint` is merged (`0e564ba`) and
+  the merge is verified only in the negative: the build is clean and all ten
+  harnesses pass, but **none of them exercises paint**, so what is established is
+  that the merge broke nothing already covered — not that the engine works.
+  Nobody has laid a stroke on this build. **This is the first thing to do.**
+  Two drifts were found and resolved on the way in, which is the shape of the
+  risk: oilpaint still carried the pre-consolidation zoom clamp (0.1f/8f, with
+  8f superseded by 16f), and it set `_contentMaxDirty`, a field deleted with the
+  content-normalising pass when the canvas was made infinite. A third such
+  reference may sit in a path the harnesses do not reach.
+- **Row 3.3 is PARTIAL and one link is unseen** — the `SetText` inside `Loaded`.
+  `scratchpad/vp20data` is seeded for that single launch, with the expected
+  reading for four boxes written down in advance, including a `#FFFFFF` box in
+  the shape 38 real notes carry: it must render readable, not white on white.
 - **The 19 perspective presets** — all measured, worst residual 0.0084 under a
   leave-one-out control. Enumeration and measurement done; not yet built in.
-- **`oilpaint` — three commits, built and verified, and now 370 commits behind
-  `integration`.** Tile substrate, dab engine with impasto, undoable paint and
-  eraser-erases-paint. It is the only work in the repo that exists nowhere else,
-  and it gets more expensive to land every day. **This is the most
-  time-sensitive item on the page.**
 
 ## Next
 
@@ -105,8 +120,14 @@ a sector used to change tool. `PdfExporter` quantised colour channels to 2.55 of
   per-layer visibility, selection scoping, Objects rows — plus the layers panel.
 - **Panel-meets-panel.** The inset model handles a small window but not a panel
   meeting another panel or a dock.
-- **Per-run text colour in export.** Whole-box colour now round-trips; runs
-  still flatten. Four emitters and a per-run brush on `CanvasTextLayout`.
+- **Per-run text colour: PARTIAL, one link unseen.** All four emitters are
+  built and measured (`TextColourRoundTrip` 16 to 38 checks, five negative
+  controls); only the `SetText` inside `Loaded` is unverified on screen. The
+  finding that shaped it is worth carrying: **all 106 stored notes carry an
+  explicit run colour nobody picked** — 68 `#FAF9F5`, 38 `#FFFFFF`, none with
+  `\cf0` — so honouring run colour naively would have frozen every note in the
+  ink of the page it was typed on and made all 106 invisible once that page went
+  white. `IsMachineInk` folds those back to the box's answer.
 
 *Two entries were removed from this section on 2026-09-05 because they were
 already done and had been carried forward unverified — the exact failure this
@@ -118,8 +139,8 @@ rather than checked.*
 
 ## Later
 
-- **Oil paint.** Branch `oilpaint`, three commits, built and verified, never
-  merged. Then **smudge** on the same raster substrate.
+- **Smudge**, on the oil raster substrate — which is merged now, so this is
+  unblocked for the first time.
 - **A pen library** proper — brush dynamics behind the shell that now exists.
 - **Tilt / canvas rotation.** 62 inline screen↔canvas conversions and 51
   axis-aligned rect sites in a 7,180-line file. 3–5 days plus a full input
