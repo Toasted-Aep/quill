@@ -598,6 +598,20 @@ public sealed partial class MainWindow : Window
         Surface.PenRepairBridge = _library.PenRepairBridge;
         Surface.MotionBlur = _library.MotionBlur;
         Surface.ShowCommentsAlways = _library.ShowCommentPins;
+        // §3.3 / K.14: HandDrawMode had exactly one writer - TouchDraw_Click -
+        // and ChromeBars lifts TouchDrawToggle off the top bar, so on a fresh
+        // start nothing ever set it and the mouse could not mark the page.
+        // Settings meanwhile built its Finger Action row from the PERSISTED
+        // FingerAction and drew "Use Active Tool" as selected, so the app
+        // contradicted itself: the intent was written on every change and
+        // applied on no load. Apply it here. The toggle and the surface are set
+        // together so _h.TouchDraw() (the "Touch draw" row) and the Finger
+        // Action strip agree from the first frame. Assigned directly rather
+        // than through TouchDraw_Click because that path also raises a status
+        // toast, which does not belong in a restore.
+        bool handDrawOnLoad = (_library.FingerAction ?? "UseActiveTool") == "UseActiveTool";
+        TouchDrawToggle.IsChecked = handDrawOnLoad;
+        Surface.HandDrawMode = handDrawOnLoad;
         // the font list used to say "Amsterdam"; the installed family is
         // "Amsterdam Handwriting" — migrate saved settings (#9-batch2)
         if (_library.DefaultFont == "Amsterdam") _library.DefaultFont = "Amsterdam Handwriting";
