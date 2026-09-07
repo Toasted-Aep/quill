@@ -5,7 +5,10 @@ namespace Quill.Models;
 public enum PenType
 {
     Standard, Brush, Fountain, Highlighter, Pencil, Marker, Calligraphy,
-    Crayon, Watercolor, Monoline, Rollerball, Gel, Ballpoint, FeltTip
+    Crayon, Watercolor, Monoline, Rollerball, Gel, Ballpoint, FeltTip,
+    // APPENDED, never inserted: PenType serialises as its integer, so adding a
+    // member anywhere but the end silently repaints every saved stroke.
+    Oil
 }
 // APPENDED ONLY, like GridType above. Nothing serialises ToolType as an
 // integer today - a dial sector and a pen-row cell both store "tool:<tag>" by
@@ -558,6 +561,12 @@ public class NotePage
     public long AudioStartTicks { get; set; }
     // Comment pins (#roadmap: staged collaboration — comments ship standalone).
     public List<PageComment> Comments { get; set; } = new();
+    // Raster paint lives in %LOCALAPPDATA%, keyed by page id (OILPAINT §4.1);
+    // this is the only field it adds here. WhenWritingDefault is mandatory, not
+    // decorative: without it every page writes "HasPaint":false into a 53 MB
+    // library.json and changes every page's hash, forcing a sync op per page.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool HasPaint { get; set; }
 
     public override string ToString() => Name;
 }
@@ -618,6 +627,10 @@ public class Library
     public List<Notebook> Notebooks { get; set; } = new();
     public List<string> Folders { get; set; } = new();   // gallery folders (#16)
     public List<PenPreset> Pens { get; set; } = new();
+    // One-time seed of the Oil preset, so EXISTING libraries (whose Pens list is
+    // already non-empty and therefore skips SeedPens) still get the brush once.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool OilPenSeeded { get; set; }
     public string DefaultBackground { get; set; } = "#FAF9F5";
     public GridType DefaultGrid { get; set; } = GridType.None;
     public double DefaultGridSpacing { get; set; } = 32;
