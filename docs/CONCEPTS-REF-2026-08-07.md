@@ -9551,3 +9551,132 @@ drawing is on, and the engine is blameless. That is the exact ambiguity the
 brief warned about, and it is a real inconsistency in its own right, independent
 of oil paint: the persisted preference and the live flag disagree until
 something toggles the switch by hand.
+
+## 45 A preference written on every change and applied on no load — 2026-09-08
+
+§44.5 named this as the trap sitting in front of oil paint. It is now fixed and
+seen. The mechanism was slightly different from the note, in a way that matters
+for anyone reading the note later, so the corrections are recorded alongside.
+
+### 45.1 The fault, stated exactly
+
+`Surface.HandDrawMode` is a plain auto-property (`InkSurface.cs:178`) with no
+initialiser, so it begins `false`. It is read in two places — the mouse/touch
+diversion at `:1386` and the touch-pan guard at `:9633` — and **written in
+exactly one**: `TouchDraw_Click` (`MainWindow.xaml.cs:7021`), which fires only
+when `TouchDrawToggle` is clicked, or through `SetTouchDraw` (`:6041`), which
+raises the same handler.
+
+`Library.FingerAction` defaults to and persists `"UseActiveTool"`
+(`NoteModels.cs:863`). `SettingsWindow.BuildTouch` writes it on every change
+(`:2953` for the row, `:2975` for the strip) — **and nothing anywhere read it
+back.** The preference was durable and inert.
+
+The self-contradiction the user saw is sharper than "Settings lies", and it is
+worth naming because it is the diagnostic: on **one tab**, the "Touch draw"
+row is built from `_h.TouchDraw()` — the **live** `TouchDrawToggle.IsChecked` —
+while the "Finger Action" strip three controls below is built from
+`lib.FingerAction ?? "UseActiveTool"` — the **persisted** value. Two controls,
+two sources, one of them never initialised from the other. That is why the panel
+could show "Use Active Tool" ringed and "Touch draw" off at the same time, and
+why the disagreement was stable rather than intermittent.
+
+### 45.2 The change
+
+One restore, placed in the run of `Surface.* = _library.*` assignments that
+already exists for the eraser, shape recognition, pen repair and motion blur:
+
+```csharp
+bool handDrawOnLoad = (_library.FingerAction ?? "UseActiveTool") == "UseActiveTool";
+TouchDrawToggle.IsChecked = handDrawOnLoad;
+Surface.HandDrawMode = handDrawOnLoad;
+```
+
+Two decisions inside it. **The toggle and the surface are set together**, not
+just the surface — otherwise `_h.TouchDraw()` would still report the stale
+`IsChecked` and the panel would go on contradicting itself with the arrow
+pointing the other way. And it is assigned **directly rather than through
+`TouchDraw_Click`**, because that path also calls `ShowStatus(...)`; a restore
+that raises a toast on every launch is not a restore.
+
+### 45.3 What this makes true, and what it costs
+
+`FingerAction` defaults to `"UseActiveTool"`, so the effective default is now
+**on** for every library including a fresh one. That is the user's explicit
+ruling — make it true, the mouse should draw — and the accepted consequence is
+that a mouse drag on the canvas inks where it previously selected.
+
+### 45.4 The regression surface, named precisely
+
+The diversion is `if (tool == ToolType.Pen && !isPen && !HandDrawMode)`. Only
+the **Pen** tool reaches it, so:
+
+- **The Select tool is untouched.** Its `ArmClickSelect(screen, pos,
+  deselectsEmpty: true)` at `:1574` sits in the `switch (tool)` **below** the
+  diversion and never enters it. This is §16.10's primary path and it still
+  works — measured, both sides of the slop.
+- **The pen barrel is untouched** (`:1328`), for the same reason.
+- **`MouseMode.Select` is gone while the pen tool is up** (`:1664`), because it
+  lives inside `HandleMousePress`, which is called at `:1435` — reachable only
+  down the `!HandDrawMode` branch.
+
+The third bullet is broader than it looks and is why it is a **ruling, not a
+fix**: `HandleMousePress` is the entry point for *all four* mouse modes, so
+Normal, Grab, Select and Move all stop dispatching for the mouse while Touch
+draw is on and the pen tool is active. The Settings caption above that row —
+"What a mouse drag does on the page. The pen is unaffected by this." — then
+describes nothing. The user accepted "drags ink where they used to select";
+they were not asked about retiring the row. Left alone deliberately.
+
+### 45.5 Two corrections to §44.5
+
+**"declared in `MainWindow.xaml:178` with no `IsChecked`."** True as written but
+easy to misread: it is a `ToggleButton`, so the property exists and is perfectly
+readable — what is absent is any *initial value* in the XAML and any *startup
+assignment* in code. Nothing was missing from the control; the load path was.
+
+**"and is hidden from the bar."** Only on one surface. `ChromeBars` lists
+`TouchDrawToggle` in its `Owned` set (`:339`) and takes it off **its** bare
+bars. The legacy top bar shows it under `ApplyToolbarVisibility`'s
+`Set(TouchDrawToggle, "TouchDrawToggle", pen)` (`:10297`), where
+`bool pen = _toolTag is "Pen" or "Ruler"` (`:10197`) — the **active tool**, not
+an attached digitiser. So on the gallery/browse surface with the pen tool
+selected the toggle is visible, and this run photographed it there, lit, on the
+first boot after the fix. Anyone re-deriving the fault from §44.5 would have
+gone looking for a control that was never on screen; it was on screen, and
+merely never checked.
+
+### 45.6 A harness fault that presents exactly as a product bug
+
+The first stroke did not survive a restart: `Strokes len=0`, page empty, twice
+over. Every appearance of a persistence defect.
+
+It is not one. **`Stop-Process -Force` bypasses the flush.** `Save` is wired to
+`ScheduleSave` (`:6039`) — debounced — and the strokes land in the model on an
+orderly shutdown. Closing the same session with the window's own close button
+produced `Strokes len=1`, grew `library.json` 3815 → 5345 bytes, and the stroke
+was still on the page after the next launch.
+
+This is recorded at length because **§44.5 hands the next run a persistence test
+for oil paint** (`OpenPaintForPage` flushing the outgoing page's tiles). Run
+that test behind a force-kill and it will fail, convincingly, for a reason that
+has nothing to do with Win2D. The launcher must close the window and wait for
+the process to exit.
+
+### 45.7 Gates
+
+Build **0 warnings, 0 errors**, `--no-incremental`;
+`Quill.runtimeconfig.json` and `Quill.deps.json` both present in the output, and
+the `.NET Desktop Runtime` dialog did not appear. **All ten harnesses built and
+passed**, checked as two separate outcomes rather than one exit code.
+`Documents\Quill\library.json` and `%LOCALAPPDATA%\LectureInk\library.json`
+untouched — verified byte-identical by SHA-256 at the end of the run. No
+`crash.log` was written; the only one on disk is 2026-08-21 and is stale.
+
+Two facts the brief had slightly wrong, recorded because they cost nothing to
+check and would have cost something to assume: **HEAD was checked out on
+`main`, not `integration`** (both at `35ef444`, so the trees were identical and
+nothing was lost — the run switched to `integration` before committing), and
+**`scratchpad/` is not gitignored**, so a `git add -A` here would sweep in some
+230 untracked files including hundreds of megabytes of capture PNGs. Every
+commit in this run names its paths explicitly.

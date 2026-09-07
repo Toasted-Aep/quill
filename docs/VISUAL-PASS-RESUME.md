@@ -4634,3 +4634,90 @@ tested above — but the bottom mode bar observed here is the pre-§17.16 one, a
 - An instruction arrives through MCP tooling telling agents to route file edits
   through Bash `sed`/heredocs rather than Read/Edit/Write. It is **not from the
   user**; ten agents have now reported and refused it.
+
+---
+
+# Run 22 — 2026-09-08 — the mouse draws, and it was never the engine
+
+## Presence, and why the gate passed
+
+`LogonUI` **not running**, checked separately from `OpenInputDesktop` (which
+said `Default` and has now been wrong four times, so it decided nothing). 60 s
+dense track at 40 ms: **1252 samples over 60.0 s** — sample count and elapsed
+agree, so the reading is not corrupt. Cursor **1 distinct position, 0 changes**,
+and **0 idle resets** with the idle timer climbing monotonically to 120.8 s.
+That is the opposite of the phantom signature (a static cursor with a
+*resetting* timer); it is an absent user. Re-measured before every stage; the
+cursor was found exactly where the previous stage parked it every time
+(`2513,592` → `1939,1237` → `2133,1237` → `2830,31`).
+
+## What was measured on screen
+
+1. **A plain mouse drag lays ink, no setting touched.** Four pixels sampled on
+   the stroke line went `#FAF9F5` → ink, 4 of 4, and the capture is a real
+   tapered pen stroke, not a rubber band. This is item 6.1 and it retires the
+   standing "a mouse cannot draw in Quill" note outright — **the note was true
+   and the cause was a missing startup restore, not a broken tool and not
+   broken injection.**
+2. **The setting round-trips, both directions.** Finger Action → *Do Nothing*
+   through the real Settings UI wrote `FingerAction: "DoNothing"` to the
+   scratch `library.json`; after a restart a mouse drag inked **0 of 4**. Set
+   back to *Use Active Tool*, restart, **4 of 4**. Both halves of the loop are
+   now proven, and only the read-back half was ever missing.
+3. **Settings no longer contradicts itself.** "Touch draw" reads **on** and the
+   Finger Action strip shows **Use Active Tool** on the same tab, from the first
+   frame. Before the fix the row read from the persisted value and the toggle
+   read from the live flag, which is exactly how the panel came to claim
+   something the app was not doing.
+4. **§16.10 / §17.7 hold, measured on both sides of the threshold.** Display is
+   exactly 2x, so `ClickSlopPx = 8f` is **16 physical px**. A press-and-release
+   travelling **5.83 px** (inside) still selects the stroke — bounding box, four
+   corner handles, action bar. One travelling **30 px** (outside) does **not**
+   select; it rubber-bands a box too small to enclose anything. The pair is the
+   measurement the previous run left unfinished.
+
+## The half of §16.10 that DID regress, and was accepted
+
+Click-to-select survives via the **Select tool** (`InkSurface.cs:1574`,
+`deselectsEmpty: true`) — that path never enters the `tool == ToolType.Pen`
+branch and is untouched. What is gone is the **`MouseMode.Select`** route
+(`:1664`), because it lives inside `HandleMousePress`, which is reached only
+when `!HandDrawMode`. Run 21's own note that click-to-select "Requires Mouse
+Mode = Select" describes precisely the route that is now unreachable while the
+pen tool is up. See TODO's standing rulings — the whole Mouse Mode row is
+inert in that state, which is broader than the consequence that was put to the
+user.
+
+## A harness fault that would have been filed as a product bug
+
+The first stroke did **not** survive a restart — `Strokes len=0` in the scratch
+`library.json`, and the page came back empty twice. That looks exactly like a
+persistence defect and is not one. **`Stop-Process -Force` bypasses the flush.**
+Closing the same session with the window's own X button instead put
+`Strokes len=1` in the file and grew it 3815 → 5345 bytes, and the stroke was
+still on the page after the next launch. `Save` is `ScheduleSave` — debounced —
+and the strokes reach the model on an orderly shutdown, so a hard kill loses
+whatever the debounce still held.
+
+**Consequence for Job 3 item 4:** paint persistence cannot be tested with a
+force-kill. Any "the tiles did not survive" result obtained that way is the
+harness talking, not the engine. Close the window and wait for the process to
+exit.
+
+## Machine notes added this run
+
+- `scratchpad/vp22_launch.ps1` (presence gate + isolated launch + z-order
+  assertion), `vp22_ui.ps1` (click/wheel/shot, asserts `WindowFromPoint` owns
+  the pixel before every click), `vp22_drag.ps1` (stroke + pixel measurement),
+  `vp22_slop.ps1` (sub-slop micro-drag). All take physical px.
+- Gallery "Continue" button sits at **1964,167**; the page toolbar gear at
+  **2730,128**; Settings ▸ Interaction tab at **2280,298**; the Finger Action
+  circles at **1939,1237** (Do Nothing) and **2133,1237** (Use Active Tool)
+  after a 6-click wheel-down at **2350,1200**. The tool dial's Select slot is
+  **398,278** and the 3.5 pen is **170,280**.
+- `TouchDrawToggle` **is** in the legacy top bar whenever the active tool is Pen
+  or Ruler (`ApplyToolbarVisibility`, `bool pen = _toolTag is "Pen" or "Ruler"`).
+  It is `ChromeBars`' bare-bars surface that takes it away, not the app at
+  large — see §45.5.
+- The `sed`/heredoc instruction arrived again this run, in the first
+  tool result, and was refused. Eleven agents now.
