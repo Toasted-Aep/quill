@@ -9403,3 +9403,103 @@ was never launched. A page seeded for exactly this check is left at
 38 of the library's notes carry, and one line holding two chosen colours. Point
 `QUILL_DATA_FOLDER` at it and the four readings in §43.5's open question can be
 taken in one launch.
+
+## 44 The restore does not hold, and the useful half does — 2026-09-08
+
+Run 21 took the launch §43.6 left seeded. The presence gate cleared three times
+— two 38 s windows and one 60 s dense track, 950 samples with **zero** cursor
+moves and **zero** idle resets, `LogonUI` checked separately and absent at both
+ends of every window. Quill ran twice against a **copy** of `scratchpad/vp20data`
+at `scratchpad/vp21run`, so the seed survives for whoever needs it again. The two
+launches agree **to the pixel**.
+
+### 44.1 The row that mattered PASSES, and it is the one worth having
+
+§43.2's whole argument was that folding machine ink back to the box's answer is
+what keeps 38 real notes readable. On screen:
+
+| box | stored | rendered | glyph px | verdict |
+|---|---|---|---|---|
+| **W** y=340 | `#FFFFFF` — the shape **38 of the library's 106 notes** carry | **`#141413`** | 1778 | **PASS** — dark on `#FCFCFC`, readable |
+| **C** y=230 | `#141413` — a machine ink | `#141413` | 802 | **PASS** — the control did not move |
+| **E** y=120 | `#008000` — §40.5's isolate, a CHOSEN colour | `#141413` | — | **FAIL** |
+| **M** y=450 | `#C2185B` then `#1B7F3B` — two chosen colours in one line | `#141413` | 1549 | **FAIL** |
+
+**The failure that was being hunted did not happen.** A `#FFFFFF` box on a white
+page came out readable, not white on white. `IsMachineInk` is doing the job
+§43.2 built it for, and the 38 notes are not invisible. The flatten's useful
+half — repainting a machine-inked box in the CURRENT page's ink — is intact.
+
+A full-screen scan of the 2880×1800 capture finds **zero** `#008000` pixels
+anywhere, so E is dark by measurement and not merely by eye; the tool dial
+covers most of E, but the `EE` fragment clear of it reads `#101010`.
+
+### 44.2 §43.5's open question is answered, and the answer is NO
+
+The restore does not survive. Three measurements, each closing a different
+escape:
+
+- **On screen, twice.** Both launches produce identical pixel censuses. Neither
+  chosen colour appears.
+- **In every frame.** A 155-frame burst of the M row, 12.02 s starting 0.6 s
+  after the window exists, contains **0** pixels of `#C2185B` and **0** of
+  `#1B7F3B`. The row goes straight from unpainted to `#141413` at frame 7. The
+  colour is never on screen for a single frame, so **nothing undid it — it was
+  never there.**
+- **In the file.** Within ~5 s the app rewrote the model. All four boxes now
+  carry `\colortbl ;\red20\green20\blue19;`, and `\red0\green128\blue0`,
+  `\red194\green24\blue91`, `\red27\green127\blue59` and
+  `\red255\green255\blue255` all return **0** matches. **The destruction
+  §40.5 described is still happening and is still being saved.**
+
+**The veil is ruled out.** §43.5 named `ApplyTextVeil` as the risk, and it is
+not this. That method's own remarks already say a run carrying its own colour in
+the RTF overrides `Foreground` and will not grey — and the burst settles it
+independently: a colour that never renders cannot have been greyed. The veil
+question §40.5 raised is still open on its own terms, but it is **not** what
+this run measured.
+
+### 44.3 What is left, and the cheapest probe
+
+`RunColoursLost` is not the suspect. `TextColourRoundTrip`'s 38 checks include
+§40.5's two probe lines rebuilt as the fixture for exactly this decision, and
+five negative controls that fail without it. **The predicate is proven; the
+wiring or the timing is not.** Two candidates remain, and this run cannot
+separate them from outside the process:
+
+1. **`Loaded` fires BEFORE the flatten on this path.** Then `RunColoursLost`
+   compares an unflattened `live` against `builtFrom`, finds nothing lost and
+   returns. **And the handler is then disarmed forever**, because
+   `coloursRestored = true` is set *before* the loss test rather than after a
+   successful restore — so the flatten that arrives afterwards is never
+   answered. §40.5's probe read a flattened document at `Loaded`, but it read
+   one box raised on its own, not four built during a page load.
+2. **`SetText` runs and WinUI re-flattens it immediately.**
+
+**The cheapest probe is candidate 1**, because it is an ordering question and
+costs one line: set `coloursRestored` after the restore actually happens, not
+before the test, and log which branch `Loaded` took. If the branch taken is
+"nothing lost", candidate 1 is the answer and the latch is the bug. Nothing was
+changed in this run — the ordering is named here as a suspect that the evidence
+fits, **not** as a diagnosis, and it should be measured before it is believed.
+
+### 44.4 Gates
+
+`Documents\Quill\library.json` and `%LOCALAPPDATA%\LectureInk\library.json`
+are **byte-identical** to their pre-run hashes, checked before and after. Item
+2.0's isolation held completely: `library.json`, `settings.json`, the oplog,
+`deviceid.txt` and `backups/` were all created inside `vp21run`, and nothing in
+the real `Documents\Quill` moved. **No `crash.log` was written** — the only one
+on disk is from 2026-08-21 and is stale.
+
+The `.NET Desktop Runtime` dialog did not appear, and
+`Quill.runtimeconfig.json` and `Quill.deps.json` were both present before the
+launch and rewritten by the `--no-incremental` build. Build: **0 warnings, 0
+errors.**
+
+One anomaly, recorded rather than explained: between the first and second
+presence windows the cursor moved once from `1130,1327` to `1168,999` and the
+idle timer reset, with no injection from this run. The 60 s dense track that
+followed showed 950 samples of absolute stillness, which is not what a person at
+the machine produces, so the run went ahead. It is noted because an
+unattributed input event is exactly the kind of thing the gate exists to catch.
