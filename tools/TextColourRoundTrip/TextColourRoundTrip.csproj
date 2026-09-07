@@ -71,6 +71,9 @@
     <Compile Include="..\..\src\Quill\Services\PdfExporter.cs" Link="PdfExporter.cs" />
     <Compile Include="..\..\src\Quill\Services\HtmlSvgExporter.cs" Link="HtmlSvgExporter.cs" />
     <Compile Include="..\..\src\Quill\Services\FontSubsetter.cs" Link="FontSubsetter.cs" />
+    <!-- 43: the run parser, and the chosen-vs-machine ink rule that decides
+         whether an emitter is allowed to look at a run colour at all. -->
+    <Compile Include="..\..\src\Quill\Services\RtfRunParser.cs" Link="RtfRunParser.cs" />
   </ItemGroup>
 
 </Project>
