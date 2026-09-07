@@ -282,8 +282,9 @@ public class TextElement
     /// mode a second source of truth would otherwise introduce. See 25.2.</para>
     ///
     /// <para>WHOLE BOX, not per run: 25.3 argues why, and the argument is that
-    /// per-run colour is not nearly free here - RtfRunParser skips the colour
-    /// table outright and PdfVectorText carries one colour per line.</para></summary>
+    /// per-run colour is carried by PdfVectorTextRun.Colour since 43; this field
+    /// stays the WHOLE-box answer and 25.2's rule that it wins over the RTF is
+    /// what ResolveChosenColours applies on the way to the emitters.</para></summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TextColor { get; set; }
     public double Rotation { get; set; }

@@ -21,10 +21,15 @@ public record PdfVectorDot(float X, float Y, float R, string Color);
 // the way to the emitter.
 public record PdfVectorImage(double X, double Y, double W, double H, int PixW, int PixH, byte[] Bgra8,
                              double Angle = 0, double CentreX = 0, double CentreY = 0);
-// 41: Colour is the run's own ink, "#RRGGBB", or null for RTF's "auto"
-// (\cf0, or no \cf at all), which means "take the box's colour". Optional and
-// last, so every 5-argument construction site is unchanged and a run that names
-// no colour comes out exactly as it did before per-run colour existed.
+// 43: Colour is the run's own ink, "#RRGGBB", or null for "take the box's"
+// answer". Optional and last, so every 5-argument construction site is unchanged
+// and a run that names no colour comes out exactly as it did before per-run
+// colour existed.
+//
+// 43.2: null here means BOTH of RTF's "auto" (\cf0, or no \cf at all) AND a
+// colour the machinery wrote rather than a person - ResolveChosenColours has
+// already folded the second into the first, so an emitter never has to know the
+// difference and four of them cannot come to four different views of it.
 public record PdfVectorTextRun(string Text, float Size, string Font, bool Bold, bool Italic,
                                string? Colour = null);
 // One visual line. Text/Size/Font mirror the first run so older single-format
@@ -378,7 +383,13 @@ public static class PdfExporter
                               $"{X(anchor.X)} {Y(anchor.Y)} Tm\n");
                 }
 
+                // 43.3: the line's colour opens the block and every run that names
+                // one of its own switches it. A run that names none never emits an
+                // operator at all, so a page of uncoloured boxes produces the same
+                // content stream it did before per-run colour existed - byte for
+                // byte, which is what the round-trip's default-path check measures.
                 bool boldOn = false;
+                string curColour = t.Color;
                 foreach (var r in runs)
                 {
                     if (r.Text.Length == 0) continue;
@@ -398,6 +409,16 @@ public static class PdfExporter
                         boldOn = r.Bold;
                     }
 
+                    string wantColour = r.Colour ?? t.Color;
+                    if (!string.Equals(wantColour, curColour, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // RG as well as rg: a bold run is drawn 2 Tr, fill AND stroke,
+                        // so a run that set only the fill would come out outlined in
+                        // the previous run's colour.
+                        sb.Append(Rgb(wantColour, "rg")).Append(' ')
+                          .Append(Rgb(wantColour, "RG")).Append('\n');
+                        curColour = wantColour;
+                    }
                     sb.Append($"/{fRes} ").Append(Num(r.Size * k)).Append(" Tf (")
                       .Append(EscapePdfText(r.Text)).Append(") Tj\n");
                 }

@@ -244,6 +244,39 @@ public static class RtfRunParser
             }
     }
 
+    /// <summary>CONCEPTS-REF 43.3: each coloured run's character span inside a
+    /// plain-text rendering of the same box, or <b>null</b> if any run cannot be
+    /// placed.
+    ///
+    /// <para><c>DrawTextElement</c> lays its glyphs out from
+    /// <c>RtfToPlainText</c>, which is a different walker from <see cref="Parse"/>
+    /// and normalises whitespace differently. Colouring by run index would drop
+    /// colour on the wrong characters wherever the two disagree. So the runs are
+    /// matched INTO the text actually being drawn, left to right, and a run that
+    /// cannot be found abandons the whole mapping.</para>
+    ///
+    /// <para>Returning null rather than a partial answer is the point: the caller
+    /// then draws exactly what it drew before per-run colour existed. The failure
+    /// mode of this function is "no change", which is the only failure mode a
+    /// rendering path should be allowed to have.</para></summary>
+    public static List<(int Start, int Length, string Colour)>? MapColourSpans(
+        string? plain, List<List<PdfVectorTextRun>> lines)
+    {
+        var spans = new List<(int, int, string)>();
+        if (string.IsNullOrEmpty(plain)) return null;
+        int cursor = 0;
+        foreach (var line in lines)
+            foreach (var run in line)
+            {
+                if (run.Text.Length == 0) continue;
+                int at = plain.IndexOf(run.Text, cursor, StringComparison.Ordinal);
+                if (at < 0) return null;
+                if (run.Colour is { Length: > 0 }) spans.Add((at, run.Text.Length, run.Colour));
+                cursor = at + run.Text.Length;
+            }
+        return spans;
+    }
+
     /// <summary>Every character of a box paired with the colour its run names,
     /// with paragraph breaks as one uncoloured '\n' each, so two copies of the
     /// same words line up index for index.</summary>

@@ -3896,7 +3896,8 @@ public sealed class InkSurface : UserControl
     ///
     /// <para>What the user gives up by reaching for the per-run picker is stated
     /// in 25.3 and is NOT new: per-run colour has never reached the canvas raster
-    /// or either exporter, because RtfRunParser skips the colour table.</para></summary>
+    /// or either exporter. 43 closes that: RtfRunParser reads the colour table
+    /// and 43.2 decides which of the colours in it anybody actually chose.</para></summary>
     public void ClearActiveTextColour()
     {
         if (_page == null || ActiveTextBox == null) return;
@@ -4949,8 +4950,8 @@ public sealed class InkSurface : UserControl
 
         // 25.4: the box's OWN colour when it has one, and the page's ink
         // convention when it does not - one expression, shared with the editor,
-        // the veil and both exporters. Per-run colour still does not survive
-        // RtfToPlainText; 25.3 states that limit rather than pretending it away.
+        // the veil and both exporters. It is still the colour every uncoloured
+        // run is drawn in; 43.3 adds the coloured ones on top of it.
         var ink = TextInkFor(t);
 
         using var format = new CanvasTextFormat
@@ -4980,6 +4981,29 @@ public sealed class InkSurface : UserControl
 
         // +4 inset and +16 below the fixed 16px grip bar match where the RichEditBox
         // renders its text inside the container (same offsets as the PDF exporter).
+        // 43.3: THE RASTER'S PER-RUN COLOUR. The layout is drawn with the box's
+        // ink as its default and each chosen run is painted over that range.
+        // MapColourSpans matches the runs INTO the plain text actually being
+        // laid out rather than trusting the two walkers to agree about
+        // whitespace, and answers null if any run cannot be placed - in which
+        // case nothing below runs and the box is drawn exactly as it was.
+        //
+        // The veil is applied to each run's colour by the same Veil() the
+        // default goes through, so a coloured run fades with its box instead of
+        // standing out of a faded one.
+        try
+        {
+            var runLines = RtfRunParser.Parse(t.Rtf, size, font);
+            RtfRunParser.ResolveChosenColours(runLines, t.TextColor is { Length: > 0 });
+            var spans = RtfRunParser.MapColourSpans(plain, runLines);
+            if (spans != null)
+                foreach (var (start, len, hex) in spans)
+                    layout.SetColor(start, len, Veil(ColorUtil.Parse(hex), IsSubject(t)));
+        }
+        catch { /* an unplaceable run must not sink the capture */ }
+
+        // +4 inset and +16 below the fixed 16px grip bar match where the
+        // RichEditBox renders its text inside the container.
         // 16.7's third intercept, for the Win2D text path (table cells, capture).
         ds.DrawTextLayout(layout, (float)t.X + 4, (float)t.Y + 16, Veil(ink, IsSubject(t)));
 
@@ -8393,6 +8417,12 @@ public sealed class InkSurface : UserControl
             // canvas without the canvas being wrong too.
             string boxHex = ColorUtil.ToHex(TextInkFor(t));
             var logical = RtfRunParser.Parse(t.Rtf, 16f, "Lora");
+            // 43.2: ONE place decides what an emitter is allowed to look at.
+            // A run wearing an ink the machinery wrote is folded back to null
+            // here, and so is every run of a box that carries a whole-box colour
+            // - 25.2's field-wins-over-the-RTF rule, reaching the exporters. Do
+            // this once, at the boundary, and the emitters stay dumb.
+            RtfRunParser.ResolveChosenColours(logical, t.TextColor is { Length: > 0 });
             // wrap at the box width less the 4px inset DrawTextElement lays out with
             var visual = WrapRunLines(logical, Math.Max(60, t.Width) - 8);
             float prevSize = 16f;

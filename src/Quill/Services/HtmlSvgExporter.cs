@@ -112,6 +112,11 @@ public static class HtmlSvgExporter
                   .Append(", sans-serif\"");
                 if (run.Bold) sb.Append(" font-weight=\"bold\"");
                 if (run.Italic) sb.Append(" font-style=\"italic\"");
+                // 43.3: only a run that names a colour of its own gets a fill. The
+                // rest inherit the <text> element's, which is the box's answer, so
+                // an uncoloured page's SVG is unchanged attribute for attribute.
+                if (run.Colour is { Length: > 0 })
+                    sb.Append(" fill=\"").Append(Esc(run.Colour)).Append('"');
                 sb.Append('>').Append(Esc(run.Text)).Append("</tspan>");
             }
             sb.Append("</text>");
