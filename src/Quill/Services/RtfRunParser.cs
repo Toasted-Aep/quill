@@ -18,7 +18,7 @@ public static class RtfRunParser
         public int FontIdx;
         public bool Bold;
         public bool Italic;
-        /// <summary>CONCEPTS-REF 41: the run's own colour, "#RRGGBB", or null for
+        /// <summary>CONCEPTS-REF 43: the run's own colour, "#RRGGBB", or null for
         /// RTF's "auto" (<c>\cf0</c>, or no <c>\cf</c> at all) which means "take
         /// the box's answer". Null is the whole of the pre-41 behaviour, so a run
         /// that names no colour still comes out exactly as it did.</summary>
@@ -132,7 +132,7 @@ public static class RtfRunParser
                         if (int.TryParse(num, out int fi)) { Flush(); fmt.FontIdx = fi; }
                         break;
                     case "cf":
-                        // 41: the run's colour. \cf0 is RTF's "auto" and is not in
+                        // 43: the run's colour. \cf0 is RTF's "auto" and is not in
                         // the table - it means "whatever the control's default
                         // is", which for Quill is the box's own answer, so null.
                         Flush();
@@ -347,7 +347,7 @@ public static class RtfRunParser
         while (lines.Count > 0 && lines[^1].Count == 0) lines.RemoveAt(lines.Count - 1);
     }
 
-    /// <summary>CONCEPTS-REF 41: \cfN index -> "#RRGGBB", from
+    /// <summary>CONCEPTS-REF 43: \cfN index -> "#RRGGBB", from
     /// <c>{\colortbl ;\red0\green128\blue0;…}</c>.
     ///
     /// <para>Entries are semicolon-terminated and <b>index 0 is the blank one
