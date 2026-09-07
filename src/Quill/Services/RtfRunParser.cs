@@ -315,16 +315,62 @@ public static class RtfRunParser
     /// answers false, so a restore can never overwrite a keystroke that beat
     /// <c>Loaded</c>. And a document that has lost nothing answers false, so the
     /// common path does no work at all.</para></summary>
+    /// <summary>CONCEPTS-REF 46.3: RichEdit's own trailing paragraph.
+    /// <c>GetText(FormatRtf)</c> on a live box returns the document the box was
+    /// built from plus ONE more paragraph break, so a straight character
+    /// comparison against the stored copy disagreed every time and
+    /// <see cref="RunColoursLost"/>'s "the characters have moved" refusal fired
+    /// on every chosen-colour box, on every load. Trimming the tail off BOTH
+    /// sides makes that guard answer the question it was written to ask — has
+    /// the user typed — rather than the question the control's own formatting
+    /// accidentally asked. A real keystroke still moves a non-trailing
+    /// character and is still refused.</summary>
+    private static void TrimTrailingBreaks(ref string text, List<string?> cols)
+    {
+        int n = text.Length;
+        while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == '\r' || text[n - 1] == '\0')) n--;
+        if (n == text.Length) return;
+        text = text[..n];
+        if (cols.Count > n) cols.RemoveRange(n, cols.Count - n);
+    }
+
     public static bool RunColoursLost(string? stored, string? live)
     {
         if (!HasChosenRunColour(stored)) return false;
         var (wantText, want) = ColourPerChar(stored);
         var (haveText, have) = ColourPerChar(live);
+        TrimTrailingBreaks(ref wantText, want);
+        TrimTrailingBreaks(ref haveText, have);
         if (want.Count != have.Count || wantText != haveText) return false;
         for (int i = 0; i < want.Count; i++)
             if (want[i] is { } w && !IsMachineInk(w) && !Same(w, have[i]))
                 return true;
         return false;
+    }
+
+    /// <summary>§46.2 PROBE ONLY: which of <see cref="RunColoursLost"/>'s
+    /// refusals a given pair took. Same order, same tests, no side effects — it
+    /// exists because "returned false" is not a diagnosis, and every call site
+    /// is behind <c>GeometryProbe.On</c>.</summary>
+    public static string RunColoursLostWhy(string? stored, string? live)
+    {
+        static string Q(string s) => "\"" +
+            s.Replace("\r", "\\r").Replace("\n", "\\n").Replace("\0", "\\0") + "\"";
+
+        if (!HasChosenRunColour(stored)) return "REFUSED: stored has no chosen run colour";
+        var (wantText, want) = ColourPerChar(stored);
+        var (haveText, have) = ColourPerChar(live);
+        TrimTrailingBreaks(ref wantText, want);
+        TrimTrailingBreaks(ref haveText, have);
+        if (want.Count != have.Count)
+            return $"REFUSED: colour-slot count differs, want={want.Count} have={have.Count} " +
+                   $"wantText={Q(wantText)} haveText={Q(haveText)}";
+        if (wantText != haveText)
+            return $"REFUSED: characters differ, wantText={Q(wantText)} haveText={Q(haveText)}";
+        for (int i = 0; i < want.Count; i++)
+            if (want[i] is { } w && !IsMachineInk(w) && !Same(w, have[i]))
+                return $"LOST at index {i}: {w} -> {have[i] ?? "(null)"}";
+        return "REFUSED: every chosen colour is still present";
     }
 
     /// <summary>Collapses runs of spaces and trims each line's outer edges — the

@@ -964,6 +964,19 @@ public sealed class InkSurface : UserControl
 
     public void Refresh() => _canvas.Invalidate();
 
+    /// <summary>§46.2 probe only: the colour table out of an RTF string. Every
+    /// call site is behind <see cref="GeometryProbe.On"/>, so this does not run
+    /// unless <c>QUILL_GEOM_PROBE</c> names a file.</summary>
+    private static string ProbeCtbl(string? rtf)
+    {
+        if (string.IsNullOrEmpty(rtf)) return "(empty)";
+        int i = rtf.IndexOf("\\colortbl", System.StringComparison.Ordinal);
+        if (i < 0) return "(no colortbl)";
+        int end = rtf.IndexOf('}', i);
+        if (end < 0) end = System.Math.Min(rtf.Length - 1, i + 90);
+        return rtf.Substring(i, System.Math.Min(end - i + 1, 120));
+    }
+
     public void FlushTexts()
     {
         if (_page == null) return;
@@ -972,6 +985,10 @@ public sealed class InkSurface : UserControl
             var model = _page.Texts.FirstOrDefault(t => t.Id == id);
             if (model == null) continue;
             ui.Box.Document.GetText(TextGetOptions.FormatRtf, out string rtf);
+            // §46.2: this is where a flattened document is written OVER the
+            // model, so the probe records what is about to be saved.
+            if (GeometryProbe.On)
+                GeometryProbe.Write("[3.3]", $"flush id={id} -> {ProbeCtbl(rtf)}");
             model.Rtf = rtf;
         }
     }
@@ -9274,22 +9291,59 @@ public sealed class InkSurface : UserControl
         //   be identical, so a box the user has already typed into answers
         //   false and is left alone. A restore cannot overwrite a keystroke.
         bool coloursRestored = false;
+        int probeLoadedCount = 0;
         box.Loaded += (_, _) =>
         {
-            if (coloursRestored || builtFrom.Length == 0) return;
+            probeLoadedCount++;
+            if (coloursRestored || builtFrom.Length == 0)
+            {
+                if (GeometryProbe.On)
+                    GeometryProbe.Write("[3.3]", $"id={t.Id} loaded#{probeLoadedCount} SKIPPED latched={coloursRestored} builtFromLen={builtFrom.Length}");
+                return;
+            }
             coloursRestored = true;
             try
             {
                 box.Document.GetText(TextGetOptions.FormatRtf, out string live);
-                if (!RtfRunParser.RunColoursLost(builtFrom, live)) return;
+                bool lost = RtfRunParser.RunColoursLost(builtFrom, live);
+                // §46.2: the ONE reading that separates §44.3's two candidates.
+                // lost=false here means the document is NOT yet flattened at
+                // Loaded, so the flatten arrives afterwards - and the latch
+                // above has already disarmed this handler for good.
+                if (GeometryProbe.On)
+                    GeometryProbe.Write("[3.3]", $"id={t.Id} loaded#{probeLoadedCount} lost={lost} live={ProbeCtbl(live)} built={ProbeCtbl(builtFrom)}"
+                        + $"{System.Environment.NewLine}      why: {RtfRunParser.RunColoursLostWhy(builtFrom, live)}");
+                if (!lost) return;
                 box.Document.SetText(TextSetOptions.FormatRtf, builtFrom);
                 // 25.2's order, repeated: the field still wins over the RTF, so
                 // a box that has a whole-box colour is re-stamped after the
                 // words go back in exactly as it was on the way through above.
                 if (t.TextColor is { Length: > 0 }) StampTextColour(box, boxInk);
+                if (GeometryProbe.On)
+                    GeometryProbe.Write("[3.3]", $"id={t.Id} RESTORED");
             }
-            catch { }
+            catch (System.Exception ex)
+            {
+                if (GeometryProbe.On)
+                    GeometryProbe.Write("[3.3]", $"id={t.Id} THREW {ex.GetType().Name}: {ex.Message}");
+            }
         };
+        // §46.2 probe only: read the document back once layout has settled. If
+        // this shows a flattened colour table on a box whose Loaded reported
+        // lost=false, the ordering is established rather than inferred.
+        if (GeometryProbe.On)
+        {
+            box.Loaded += (_, _) => box.DispatcherQueue?.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                {
+                    try
+                    {
+                        box.Document.GetText(TextGetOptions.FormatRtf, out string later);
+                        GeometryProbe.Write("[3.3]", $"id={t.Id} afterLayout={ProbeCtbl(later)}");
+                    }
+                    catch { }
+                });
+        }
 
         // table cells: no drag grip, and the box must not spill past its row (#24-batch3)
         bool isCell = t.TableId != null;
