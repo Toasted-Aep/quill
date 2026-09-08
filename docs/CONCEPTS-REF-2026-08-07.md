@@ -9827,3 +9827,119 @@ still running fails with **MSB3027/MSB3021 and "39 Warning(s)"** — the exe is
 locked and the warnings are copy-retry noise, not real warnings. Closing Quill
 and rebuilding gives 0/0. A run that reads only the warning count would
 mis-report this as a code regression.
+
+## 47 Oil paint reached the screen and never reached the disk — 2026-09-08
+
+Nobody had confirmed a paint stroke on the merged `oilpaint` build, and the
+standing lead was that tiles were not being persisted at all: **no `.qtile`
+anywhere under `scratchpad/`, across five paint scratch folders, including one
+from a run that reported painting.** The lead was sound reasoning from a bad
+search. Paint persists, and always did — but a stroke never scheduled its own
+write, so between explicit flushes it was only ever in GPU memory.
+
+### 47.1 The lead was a search in the wrong place
+
+`PaintTileStore` does not write into the library folder, on purpose:
+
+```
+%LOCALAPPDATA%\Quill\paint\{sha256(LibraryStore.Dir)[..16]}\{pageId:N}\
+```
+
+`PaintStore.cs:155-158` says why — pixels must not go in `library.json` (53 MB,
+re-serialised on the UI thread every 1.5 s) and must not go in
+`LibraryStore.Dir`, which is routinely OneDrive, "where a mutable debounced tile
+writer produces *conflicted copy* files the app never reads". The hash keys the
+cache to which library the machine points at.
+
+So `QUILL_DATA_FOLDER` moves the library and does **not** move the paint. Five
+scratch folders containing no `.qtile` is the designed outcome, not evidence.
+Tiles from earlier runs were sitting in `%LOCALAPPDATA%` the whole time, one of
+them written the same morning the lead was recorded.
+
+The general form: a search that can only ever return "absent" is not a
+measurement. Before an absence is treated as a finding, the writer has to be
+read for where it actually writes.
+
+### 47.2 The fault — a Dirty flag, and nothing to act on it
+
+Two things have to happen for a tile to reach disk. `tile.Dirty = true` marks
+*what* to write; `PaintTileStore.MarkDirty()` starts the §4.3 debounce (2 s) and
+the 30 s heartbeat, which is *when* it gets written. `MarkDirty` is private and
+`ScheduleSave()` is its public door.
+
+`PaintWorld`/`ForEachTile` — the documented choke point — does both. But
+`OilBrush.CommitScratch`, which is the only path an oil stroke's pixels take,
+does not go through it. It calls `_store.GetOrCreate` directly, composites
+colour and height, and ends on `tile.InvalidateLit()`, which sets `Dirty` and
+nothing else. Nobody started the timer.
+
+The result is a store that is permanently, correctly dirty and never scheduled.
+`BeginFlush` would have written the tiles the moment it ran; it simply never
+ran. And because it never ran, it never failed, so there was no entry in
+`paint.crashlog` either — the one place a reader would look for a write
+problem stayed empty, which is what made this look like "tiles are not being
+persisted at all" rather than "tiles are never being asked for".
+
+`PaintTilesAction.Apply` — the undo/redo path — already ends with
+`_store.ScheduleSave()`, with the comment *"so restored pixels reach disk on the
+same schedule as a fresh stroke"*. The fresh stroke was the one that did not.
+The fix is that call, in `CommitScratch`, after the commit loop.
+
+### 47.3 What was measured
+
+Before, one stroke on a scratch library:
+
+```
+23:04  stroke laid, visible, page.HasPaint persisted to library.json
+23:07  no .qtile, no paint dir, no crashlog          (2 s debounce, 30 s heartbeat)
+23:09  window closed -> 0_0.qtile 9921 B, 1_0.qtile 16028 B, meta.json   in ~1 s
+```
+
+Five minutes of nothing, then two tiles the instant `Closed` called
+`FlushPaint`. That split is the whole diagnosis: the codec, the atomic write,
+the meta protocol and the tile engine were all fine, and only the scheduling
+was missing.
+
+After the fix, app still running:
+
+```
+23:12:06  stroke laid
+23:12:10  0_1.qtile 11012 B, 1_1.qtile 25428 B, meta.json updated
+```
+
+Everything else was then established first-hand rather than carried forward as
+inference: a mouse drag paints (the seeded Oil preset is the active pen, which
+is why the earlier "control stroke with an ordinary pen" was already paint — 0
+vector strokes and `HasPaint=true`); one `Ctrl+Z` removes a whole stroke with
+no residue; the eraser cuts a clean gap and takes the impasto with the pigment,
+leaving no ghost ridge; paint survives a full restart and reloads; impasto is
+**lit**, not flat, with a highlight on one edge and a shadow on the other; and
+paint tiles hold at both zoom stops — 1600% and 10% — with no seams and no
+dropped tiles, which is the first measurement of paint past 8x.
+
+### 47.4 The load-path failure that was left alone
+
+`paint.crashlog` does carry a real, reproducible entry, from the load side:
+
+```
+tile 0,0 upload failed: The parameter is incorrect.
+The control does not currently have a CanvasDevice associated with it.
+```
+
+`BeginLoad` marshals each inflated tile back to the UI thread and calls
+`GetOrCreate` on the `CanvasVirtualControl`, which can still have no device that
+early. The `catch` only logs; there is no retry. In this run it was harmless —
+a later load succeeded and the paint appeared on screen — and it could not be
+made to lose a page's paint on demand.
+
+That puts it on the far side of the line this pass was given: fix a wiring
+fault, report anything inside the engine. Moving the upload into
+`CreateResources`/`Draw` is loader design, not a call that was forgotten, and it
+cannot be proved fixed in one night. Recorded, not touched.
+
+### 47.5 Nothing in the suite guards any of this
+
+None of the ten harnesses links `OilBrush.cs`, `PaintStore.cs` or
+`InkSurface.cs`. All ten were green with paint entirely unsaved, and they stay
+green either way. The defect was a whole-session data-loss bug that a full
+green suite said nothing about.
