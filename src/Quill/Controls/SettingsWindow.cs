@@ -2874,9 +2874,24 @@ public sealed class SettingsWindow
         // step — SetMouseMode is MainWindow's, the same call the flyout made.
         if (_h.MouseMode != null && _h.SetMouseMode != null)
         {
+            // §16.3 — a control that does nothing must not look live. Touch draw
+            // (HandDrawMode) is the shipped default since c16056c, and
+            // InkSurface's ONLY call to HandleMousePress sits inside
+            // "tool == Pen && !isPen && !HandDrawMode". So while Touch draw is
+            // on, the mouse marks the page like the pen and NONE of these four
+            // modes is dispatched - not Grab, not Select, not Move, not Normal.
+            // Shown and disabled with the reason, which is the same treatment
+            // the Finger Action row gives the actions Quill cannot dispatch.
+            bool modesLive = !_h.TouchDraw();
+
             box.Children.Add(Spacer(16));
             box.Children.Add(SubHead("Mouse Mode"));
-            box.Children.Add(Caption("What a mouse drag does on the page. The pen is unaffected by this."));
+            // The reason goes in the CAPTION, not only in a tooltip: greying a
+            // row tells the reader it is off, never why, and a tooltip needs a
+            // hover a touch reader has no way to make.
+            box.Children.Add(Caption(modesLive
+                ? "What a mouse drag does on the page. The pen is unaffected by this."
+                : "Touch draw is on, so a mouse drag marks the page like the pen and these modes do not run. Turn Touch draw off under Touch Input to use them."));
 
             string mm = _h.MouseMode() ?? "Auto";
             var modes = Strip();
@@ -2886,6 +2901,7 @@ public sealed class SettingsWindow
                 bool on = string.Equals(mm, mode.Tag, StringComparison.Ordinal);
                 var cell = Circle(UnitD, mode.Label, on, () =>
                 {
+                    if (!modesLive) return;
                     // No Touch here: SetMouseMode is MainWindow's, and it calls
                     // TouchMouseMode for EVERY caller - this panel, the dial's
                     // mouse-mode cell, and the tool-change path. Repeating it
@@ -2893,8 +2909,11 @@ public sealed class SettingsWindow
                     _h.SetMouseMode!(mode.Tag);
                     _h.Save();
                 }, inner: Icons.Mark(mode.Glyph, on ? Ink : Muted, 34,
-                                     stroked: mode.Stroked, thickness: 1.7));
-                ToolTipService.SetToolTip(cell, mode.Tip);
+                                     stroked: mode.Stroked, thickness: 1.7),
+                   enabled: modesLive);
+                ToolTipService.SetToolTip(cell, modesLive
+                    ? mode.Tip
+                    : $"“{mode.Label}” is switched off because Touch draw is on and a mouse drag marks the page instead. Turn Touch draw off under Touch Input.");
                 modes.Children.Add(cell);
             }
             box.Children.Add(HRow(modes, "keyboard"));
@@ -2952,9 +2971,17 @@ public sealed class SettingsWindow
             _h.SetTouchDraw(v);
             lib.FingerAction = v ? "UseActiveTool" : "DoNothing";
             _h.Save();
-            Touch("Touch Input");
+            // "Keyboard & Mouse" as well: this toggle is what makes the Mouse
+            // Mode row live or dead, and that row is a SEPARATE section on this
+            // tab. Rebuilding only this one left it stale until the panel was
+            // reopened - greyed after the switch went off, live after it went on.
+            Touch("Touch Input", "Keyboard & Mouse");
         }, tip: "On: a finger or the mouse marks the page, exactly like the pen. Off: a finger pans and zooms and only the pen draws."));
-        box.Children.Add(Caption("Off is the pen-first default — your palm and your fingers move the page, and only the pen leaves ink."));
+        // §3.3 — this said "Off is the pen-first default". It never was:
+        // Library.FingerAction ships as "UseActiveTool" (NoteModels.cs) and
+        // MainWindow applies it on load, so the switch is ON out of the box and
+        // a mouse drag inks. The caption now describes what actually ships.
+        box.Children.Add(Caption("On is the default — a finger or a mouse drag marks the page with the active tool. Turn it off for pen-first: your palm and your fingers move the page, and only the pen leaves ink."));
 
         box.Children.Add(Spacer(14));
         box.Children.Add(SubHead("Finger Action"));
@@ -2975,7 +3002,9 @@ public sealed class SettingsWindow
                 lib.FingerAction = f.Tag;
                 _h.SetTouchDraw(f.Tag == "UseActiveTool");
                 _h.Save();
-                Touch("Touch Input");
+                // Second writer of TouchDraw, so it owes the Mouse Mode row the
+                // same rebuild the toggle above does.
+                Touch("Touch Input", "Keyboard & Mouse");
             }, inner: mark, enabled: f.Live);
             ToolTipService.SetToolTip(cell, f.Live
                 ? (f.Tag == "DoNothing"
