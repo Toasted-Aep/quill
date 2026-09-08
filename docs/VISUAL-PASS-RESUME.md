@@ -1,5 +1,73 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-08 (twenty-second) - the mouse draws; oil paint is STILL not established
+
+Two parts. The sub-agent run was cut off by a session limit **mid-job-3, on item
+6**, and its jobs 1 and 2 were committed but **its oil-paint findings were never
+written down** - they are lost with the transcript. The orchestrator then drove
+the machine directly to establish what it could first-hand.
+
+### Job 1, the input toggle - PASS, verified first-hand
+
+`c16056c` made `FingerAction` honoured at startup, on the user's ruling that the
+mouse SHOULD draw. Confirmed on screen by the orchestrator: a fresh scratch
+folder, a plain mouse drag across the canvas, **no setting touched**, laid a
+smooth orange stroke following the pointer exactly.
+
+**This matters beyond the fix.** The standing note "a mouse cannot draw in Quill
+unless Touch draw is on" has taxed every screen run in this file, and it was
+never a property of the app's design - it was a settings bug. `HandDrawMode`
+read only `TouchDrawToggle.IsChecked`, a hidden toggle with no `IsChecked`, while
+`FingerAction` persisted the real intent and was never read back. Settings said
+"Use Active Tool" while the mouse did not draw.
+
+### Zoom - the merge drift is not there, as far as this reaches
+
+`380%` reached by Ctrl+wheel; the stroke scales smoothly with no tearing or
+misregistration. Together with run 21's source reading - `MinZoom`/`MaxZoom`
+defined once at 0.1/16 with every clamp routed through them - the zoom
+consolidation survived the oilpaint merge. **This was ink, not paint**, so it
+does NOT answer whether paint TILES follow past 8x. That is still open.
+
+### Oil paint - NOT ESTABLISHED, and the previous run's evidence is gone
+
+The sub-agent reported reaching item 6 with item 5 passing ("impasto is lit, not
+flat", captures `ll-single-zoom.png` / `ll-buildup-zoom.png` and the `kk*` dab
+series survive in `scratchpad/vp22/`). **Its detailed findings for items 1-4 were
+never committed and are lost.** They are NOT restated here as passes: reaching
+item 6 under a stop-at-first-failure instruction implies 1-5 held, but an
+inference is not an observation and this file does not record inferences as
+measurements.
+
+**One thing found by reading that is worth more than the re-run:** there is **no
+`.qtile` file anywhere under `scratchpad/`, across four paint scratch folders and
+this run's own.** `PaintTileStore` writes `{Tx}_{Ty}.qtile` per tile via
+`PaintTileCodec.WriteAtomic`, and is wired - `EnsurePaintStore`,
+`OpenPaintForPage`, `FlushPaint` on `Unloaded` and on window `Closed`. So either
+no paint stroke was ever actually laid, or tiles are not being persisted.
+**Item 4 (persistence) should be treated as UNVERIFIED, not as passed.**
+
+Note also the roadmap's ".artq v2" is stale terminology; the shipped extension
+is `.qtile`.
+
+### Gates
+
+Both protected libraries byte-identical (53,582,459 / `0C32CE6C`; 6,461,655 /
+`0C6F1B7F`). Isolation held - the scratch folder took a `deviceid.txt`, an
+oplog, sync cursors and its own backup, nothing from outside. No `crash.log`
+written. No .NET Desktop Runtime dialog; `runtimeconfig.json` confirmed present
+before launch.
+
+### For the next run
+
+Item 6 as written still needs **paint**, not ink, and the route to the paint
+tool is through the app menu then the Brushes library (`scratchpad/vp22/z05-z07`
+show it). Establish items 1-4 first-hand rather than trusting this file's
+inference, and **check for a `.qtile` immediately after the first stroke** - if
+none appears, that is the finding, and it is a bigger one than zoom.
+
+---
+
 ## RUN OF 2026-09-08 (twenty-first screen run) — ROW 3.3's LAST LINK SEEN; OIL PAINT NOT REACHED
 
 `main` @ `6d64c47`, build **0 warnings**. The launch §43.6 seeded is done.
