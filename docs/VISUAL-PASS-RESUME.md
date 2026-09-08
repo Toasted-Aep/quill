@@ -1,5 +1,160 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-08 (twenty-third) - the two rulings shipped, and oil paint established at last
+
+Three jobs, all three closed. Two commits: `fa90608` (jobs 1+2, Settings) and
+`ba823b5` (job 3, oil paint). Build 0 warnings, all ten harnesses build and pass
+before and after. Both protected `library.json` files byte-identical at the end.
+
+**The headline: the standing oil-paint lead was a search in the wrong place, and
+underneath it there was a real, worse defect that the search could never have
+found.** Paint has been persisting since the merge. What it has *not* been doing
+is scheduling its own write - every stroke was unsaved until something flushed
+by hand.
+
+### Presence
+
+Gate run three times - at the start, between jobs 1+2 and job 3, and again
+before resuming desktop driving after the oil-paint fix. Every reading coherent
+(300 samples, 32.9 s elapsed against 30 s expected), cursor **static at a single
+spot**, **zero** idle resets, idle growing monotonically with the wall clock
+(e.g. 117.1 s -> 149.8 s over 32.86 s), `LogonUI` not running each time.
+`OpenInputDesktop` returned `D` - truncated, and advisory only, per its four
+prior disagreements with reality. Every click asserted `WindowFromPoint` belonged
+to Quill's own pid before firing; nothing was ever clicked on a pixel Quill did
+not own.
+
+### Job 1 - the Mouse Mode row (§16.3) - DONE, verified on screen
+
+Premise re-measured rather than trusted: `HandleMousePress` has **exactly one**
+call site, `InkSurface.cs:1452`, inside `tool == ToolType.Pen && !isPen &&
+!HandDrawMode`. With Touch draw on - the shipped default - not one of Normal,
+Grab, Select or Move dispatches.
+
+Shipped the ruling: the row is shown and disabled, copying the Finger Action
+row's pattern (`Circle(enabled:false)`, an early `return` in the tap, a tooltip
+that gives the reason). **The reason also goes in the caption**, because greying
+tells a reader a control is off and never why, and a tooltip needs a hover a
+touch reader cannot make.
+
+On screen, Touch draw ON: caption reads *"Touch draw is on, so a mouse drag marks
+the page like the pen and these modes do not run. Turn Touch draw off under Touch
+Input to use them."*, all four circles greyed. Turned OFF: the row is live again
+and the original caption is back, **immediately, without reopening the panel**.
+That last part needed a fix of its own - "Keyboard & Mouse" and "Touch Input" are
+separate sections on one tab, and both writers of TouchDraw were rebuilding only
+their own.
+
+Greying measured, not eyeballed - darkest pixel per circle, disabled vs live:
+
+```
+Normal  137.0 vs  20.0   lifted +117.0     (selected: Ink at 0.4 opacity)
+Grab    171.0 vs  99.0   lifted  +72.0
+Select  180.1 vs 121.0   lifted  +59.0
+Move    171.0 vs  99.0   lifted  +72.0
+```
+
+### Job 2 - the Touch draw caption - DONE, verified on screen
+
+`Library.FingerAction` ships `"UseActiveTool"` (`NoteModels.cs:863`) and
+`MainWindow.xaml.cs:612` applies it on load, so the shipped default is **on** and
+the old caption's "Off is the pen-first default" was simply false. Corroborated
+on a fresh scratch library before touching anything: the top-bar hand glyph is
+lit at first boot. Caption rewritten to describe what ships, in the register of
+the captions around it.
+
+### Job 3 - oil paint - ESTABLISHED FIRST-HAND, one defect found and fixed
+
+Run 22's items 1-4 were treated as unrecorded and re-established from scratch.
+
+**The lead, refuted.** `PaintTileStore.LibraryRoot` is
+`%LOCALAPPDATA%\Quill\paint\{sha256(LibraryStore.Dir)[..16]}\{pageId:N}\` - never
+the library folder, deliberately and documented at `PaintStore.cs:155-158`,
+because `LibraryStore.Dir` is routinely OneDrive. `QUILL_DATA_FOLDER` moves the
+library and does **not** move the paint. "No `.qtile` under `scratchpad/` across
+five scratch folders" was the designed outcome. Tiles were in `%LOCALAPPDATA%`
+the whole time, including one written the same morning the lead was recorded.
+
+**The real defect, and it is wiring.** `OilBrush.CommitScratch` is the only path
+an oil stroke's pixels take. It bypasses `PaintWorld`/`ForEachTile` - the choke
+point that calls `MarkDirty` - and ends on `tile.InvalidateLit()`, which sets the
+tile's `Dirty` flag and nothing else. Only `MarkDirty` starts the §4.3 debounce
+(2 s) and the 30 s heartbeat. So the store was permanently, correctly dirty and
+**never scheduled**. `BeginFlush` never ran, so it never failed, so
+`paint.crashlog` stayed empty - which is precisely why this looked like "tiles
+are not persisted at all".
+
+Measured before the fix:
+
+```
+23:04  stroke laid; visible; page.HasPaint persisted
+23:07  no .qtile, no paint dir, no crashlog       (2 s debounce, 30 s heartbeat)
+23:09  window closed -> 0_0.qtile 9921 B, 1_0.qtile 16028 B, meta.json, in ~1 s
+```
+
+Five minutes of nothing, then both tiles the instant `Closed` called
+`FlushPaint`. Fixed with the `_store.ScheduleSave()` that
+`PaintTilesAction.Apply` already makes for undo/redo. After, app still running:
+stroke at `23:12:06`, `0_1.qtile` + `1_1.qtile` + updated `meta.json` at
+`23:12:10` - **4.4 s**.
+
+Impact before the fix: paint survived a clean close or a page switch, and a
+crash or a kill lost every stroke since the last one.
+
+**The seven items, all on screen:**
+
+| # | item | result |
+|---|---|---|
+| 1 | can you paint | **PASS** - a mouse drag paints; the seeded Oil preset is the active pen, so the "control stroke with an ordinary pen" was already paint (0 vector strokes, `HasPaint=true`) |
+| 2 | `.qtile` after the first stroke | **FAILED** - none for five minutes. Diagnosed, fixed, re-verified live |
+| 3 | undo | **PASS** - one `Ctrl+Z` removes the whole stroke, no residue; the other stroke untouched |
+| 4 | eraser erases paint | **PASS** - clean gap cut through the paint, impasto going with the pigment, no ghost ridge |
+| 5 | persistence | **PASS** across a full app restart - tiles reload and redraw identically. *Page-switch-and-back was not separately exercised* |
+| 6 | impasto | **LIT**, not flat - highlight on one edge, shadow on the other. Run 22's claim confirmed by observation |
+| 7 | zoom | **PASS** at **1600%** and **10%** - no seams, no dropped tiles. First measurement of paint past 8x |
+
+### Found, NOT fixed, deliberately
+
+**Paint tiles can fail to upload on load.** `PaintTileStore.BeginLoad` marshals
+each inflated tile to the UI thread and calls `GetOrCreate` on the
+`CanvasVirtualControl`, which can still have no device that early:
+
+```
+tile 0,0 upload failed: The parameter is incorrect.
+The control does not currently have a CanvasDevice associated with it.
+```
+
+The `catch` only logs; there is no retry. Reproduced twice (once this run, once
+in a crashlog from 01:58 the same day). **Harmless in this run** - a later load
+succeeded and the paint appeared - and it could not be made to lose a page's
+paint on demand. Moving the upload into `CreateResources`/`Draw` is loader
+design, not a forgotten call, so it stays untouched and written up (§47.4).
+
+**"Restore defaults" puts Touch draw and Finger Action back out of step.**
+`SettingsWindow.cs:2531` writes `FingerAction = "UseActiveTool"` and
+`SettingsWindow.cs:2538` then calls `SetTouchDraw(false)` - the exact
+contradiction 6.1 spent a run reconciling. Which way it should be resolved is a
+product ruling, not a repair, so it is queued as newly owed rather than guessed
+at. Found by reading; not verified on screen.
+
+### Machine notes added this run
+
+- **Paint lives outside the data folder.** `QUILL_DATA_FOLDER` isolates the
+  library and does nothing to `%LOCALAPPDATA%\Quill\paint\<hash>\`. A scratch run
+  therefore inherits the paint of any earlier run that used the same folder path,
+  and deleting the scratch folder does **not** clear it. The hash is
+  `sha256(dir.ToLowerInvariant())[..16]`, so it is computable from outside:
+  `scratchpad\vp23data` -> `ac0929d4eb061075`.
+- **A green suite says nothing about paint.** None of the ten harnesses links
+  `OilBrush.cs`, `PaintStore.cs` or `InkSurface.cs`. All ten were green with
+  every paint stroke unsaved.
+- **The `.NET Desktop Runtime` dialog did not appear**, and
+  `Quill.runtimeconfig.json` (325 B) and `Quill.deps.json` (16348 B) were both
+  present in the build output, checked before the first launch.
+- **The Measurement menu is how you reach the zoom stops** - tap the `100%`
+  readout in the page's top bar; presets are 10% / 100% / 250% / 1600%. It
+  renders very faint over a light page but is fully clickable in that state.
+
 ## RUN OF 2026-09-08 (twenty-second) - the mouse draws; oil paint is STILL not established
 
 Two parts. The sub-agent run was cut off by a session limit **mid-job-3, on item
