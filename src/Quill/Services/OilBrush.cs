@@ -360,6 +360,17 @@ public sealed class OilBrush : IDisposable
             }
             catch { /* one bad tile must not take the stroke down */ }
         }
+        // InvalidateLit sets the tile's Dirty flag, but ONLY MarkDirty starts the
+        // §4.3 debounce and heartbeat, and this commit does not go through
+        // PaintWorld/ForEachTile - the choke point that would have called it. So
+        // without this nudge an oil stroke was never scheduled for writing: the
+        // pixels sat in GPU memory, visible and unsaved, until something called
+        // FlushBlocking by hand (a page switch, or the window closing). Measured
+        // before the fix: a stroke left NO .qtile for five minutes against a 2 s
+        // debounce and a 30 s heartbeat, then wrote both tiles the instant the
+        // window closed. PaintTilesAction.Apply already makes this same call for
+        // undo/redo, for the same reason.
+        _store.ScheduleSave();
         DisposeScratch();
         var b = BoundsRect();
         ResetBounds();
