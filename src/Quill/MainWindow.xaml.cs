@@ -389,13 +389,22 @@ public sealed partial class MainWindow : Window
         // say so; the field is named for what it does as of the StartMaximised
         // rename, so this line and its setting no longer disagree.
         if (_library.StartMaximised) TryStartupMaximise("constructor");
-        // §38: BOTH maximise attempts above run inside this constructor, and
-        // App.OnLaunched shows the window with Activate() only AFTER the
-        // constructor has returned. The show carries its own show-command, so a
-        // maximise asserted before it can be undone BY it - and a maximise that
-        // was undone looks, on screen, exactly like one that never ran. Assert
-        // it once more on the first activation, where it costs nothing if the
-        // attempt above survived.
+        // §48: this constructor call is the one that does the work. §38 proposed
+        // an ordering mechanism - App.OnLaunched runs the whole constructor and
+        // calls Activate() only afterwards, so every startup maximise is asserted
+        // on a window that has never been shown, and the show that follows carries
+        // its own show-command that could reset it. MEASURED, and it does not:
+        // with the re-assert below suppressed, and again with the literal
+        // pre-8202615 one-liner, the window still came up maximised. Activate()
+        // does not undo a maximise asserted before it. Nor does the launcher's
+        // show-command: bare CreateProcess, an explicit SW_SHOWNORMAL, a .lnk
+        // carrying windowstyle=1 and one carrying windowstyle=3 all maximised.
+        //
+        // The re-assert stays anyway. It is a one-shot correction that unhooks
+        // itself and costs nothing when the constructor attempt held (which, on
+        // this machine, is always) - cheap insurance against a launch path this
+        // machine cannot produce. What it is NOT is the fix for 5.2, and the
+        // comment said it was.
         if (_library.StartMaximised || _library.WinMaximized)
             Activated += OnFirstActivationMaximise;
         UpdateFullscreenIcon();
