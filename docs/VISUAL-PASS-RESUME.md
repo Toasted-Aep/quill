@@ -4988,3 +4988,77 @@ still folds to **1770 px `#141413`** and is readable, against run 21's 1778 px.
   only the warning count would call this a regression.
 - `scratchpad/vp22_j2.ps1` copies the fixture, runs with the probe on, and now
   closes Quill with its own window button at the end for both reasons above.
+
+---
+
+## Run 24, job 1 — item 5.2 settled on screen: it maximises, and the fix was never the fix
+
+Presence gate at dispatch: `LogonUI` absent, 512 samples, **0 cursor moves**,
+elapsed 16.25 s against 512 samples (coherent), idle climbing 100.6 s -> 116.7 s
+— a 16.1 s delta against 16.25 s elapsed, so the idle timer is **not** resetting.
+Real absence, not a phantom.
+
+**Result: Quill opens maximised, and it opened maximised before the fix that was
+written to make it open maximised.** Full reasoning in CONCEPTS-REF §48.
+
+### What was run
+
+Ten launches, every one against a scratch `QUILL_DATA_FOLDER`. Runs c/d/j copied
+the user's **real** `Documents\Quill\settings.json` into the scratch folder, which
+matters: the constructor reads `Settings.Ui`, a **third** stored copy of
+`StartMaximised` separate from the library field and the settings mirror. All
+three say `true`. Run i copied the real 53,582,459-byte `library.json` so
+`FinishStartup` landed late, and watched for 40 s.
+
+Work area 2880x1800. A maximised window here measures `-13,-13 2906x1826` — the
+border overhang is normal, not a near-miss.
+
+| run | condition | result |
+|---|---|---|
+| a | seeded, stored bounds 900x700 @200,150, `WinMaximized=false` | `zoomed=True` |
+| b | first-activation re-assert **suppressed** | `zoomed=True` |
+| c | user's real `settings.json` | `zoomed=True`, restore rect `196,196 2160x1313` |
+| d | user's real settings, **literal pre-`8202615` one-liner** | `zoomed=True` |
+| e–h | bare `CreateProcess`; `SW_SHOWNORMAL`; `.lnk` `windowstyle=1`; `.lnk` `windowstyle=3` | all `zoomed=True` |
+| i | real 53 MB library, 40 s watch | maximised at 1000 ms, held |
+| j | shipped form, final | `zoomed=True` |
+
+### The finding
+
+**Run d is the load-bearing one.** `8202615` replaced a one-liner with a logged
+call plus a first-activation re-assert, and marked 5.2 PARTIAL on the honest
+grounds that nobody had launched the app. Rebuild that one-liner and it maximises
+under the user's exact settings. So the ordering mechanism §38 proposed — the
+constructor's maximise being undone by the `Activate()` that follows it — is
+**false**, and the commit written to fix 5.2 fixed nothing, because nothing in
+this tree was broken.
+
+The suspect I added was the best one and it is also wrong: Windows makes the first
+`ShowWindow` in a process use `STARTUPINFO.wShowWindow` when the launcher supplied
+one, and the user's `Quill.lnk` carries `windowstyle=1` (`SW_SHOWNORMAL`). Runs
+e–h tested it four ways. It maximises regardless.
+
+### Notes for the next run
+
+- **`Settings.Ui` is a third copy of `StartMaximised`**, and it is the one the
+  constructor actually reads (`ApplyStartupHints`, line 191, long before line
+  391). "True in both stored copies" checked the library field and the settings
+  mirror; the hint block is a separate write, synced only by `SyncUiHints`, which
+  `PersistSettings` reaches **only when a mirrored value actually changed** (there
+  is an early `return` above it). It happens to be true here, so this was not the
+  cause — but it is the copy to check first next time.
+- The **"39 Warning(s)" locked-build artifact already recorded in this file is
+  real and I hit it**: building while Quill still runs gives MSB3027/MSB3021 and
+  39 warnings; killing Quill and rebuilding gives 0/0. Confirmed twice.
+- `scratchpad/w4_launch.ps1` takes `-Data`/`-Out`/`-Tag`/`-NoSeed` and reports
+  `GetWindowRect` + `IsZoomed` + `GetWindowPlacement` (the **restore** rect, which
+  is what proves `MoveAndResize` ran). `scratchpad/w4_showcmd.ps1` does the four
+  launcher variants; `scratchpad/w4_biglib.ps1` does the 53 MB run.
+- Two stale binaries are still on disk — `bin\Debug\...\win-x64\Quill.exe`
+  (2026-07-07) and `bin\x64\Release\...` (2026-07-12). `Quill.lnk` points at
+  neither (it targets the current x64 Debug build), but its **working directory is
+  a path that no longer exists** (`Downloads\New folder (2)\...`).
+- `scratchpad/w4_harness.ps1` builds **and** runs all ten harnesses and reports
+  BUILD and RUN in separate columns, so a build failure cannot read as a passing
+  suite. All ten: build ok, run PASS. `LayerRoundTrip` = 83 checks.
+  `TextColourRoundTrip` builds with **120 warnings** (the app itself is 0).

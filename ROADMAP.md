@@ -174,9 +174,14 @@ rather than checked.*
   other; a torn cursor can resurrect erased strokes. The harnesses that pulled
   the trigger now honour `LibraryStore.IsIsolated`; the non-atomic write stands.
 - **`File.Replace(tmp, path, null)`** with no backup parameter in the sync path.
-- **Startup does not maximise.** True in both stored copies, still opens
-  windowed. Suspects: the presenter not being an `OverlappedPresenter` at the
-  call, so a guarded `if` no-ops invisibly; or saved bounds reapplied over it.
+- ~~**Startup does not maximise.**~~ **Closed, not reproducible (§48).** Measured
+  on screen ten ways, including with the user's own `settings.json` and their real
+  53 MB library: it maximises. All four suspects are innocent — the presenter
+  guard (logging never fired), saved bounds (the restore rect *is* the stored
+  `196,196 2160x1313`, maximised on top of it), §38's ordering mechanism
+  (**falsified**: the literal pre-`8202615` one-liner maximises too, so that fix
+  was never load-bearing), and the launcher's show-command (a `.lnk` with
+  `windowstyle=1` maximises anyway). No harness covers window placement.
 - **`_skipNextRightTap` is a one-shot that can stay armed** and swallow an
   unrelated context menu later. Narrowed, not fixed.
 - **PDF import rasterises** — imported text is not selectable; 2000-page cap.

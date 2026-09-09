@@ -9943,3 +9943,122 @@ None of the ten harnesses links `OilBrush.cs`, `PaintStore.cs` or
 `InkSurface.cs`. All ten were green with paint entirely unsaved, and they stay
 green either way. The defect was a whole-session data-loss bug that a full
 green suite said nothing about.
+
+---
+
+## 48. Item 5.2, settled on screen: four suspects, all innocent, and a fix that was never the fix
+
+§38 closed 5.2 as PARTIAL and said exactly what was missing: *"it maximises" is an
+on-screen fact and this session did not run the app. One launch settles it.*
+This section is that launch, and three more after it. The headline is not the one
+§38 expected.
+
+**Quill opens maximised. It also opened maximised before the fix that was written
+to make it open maximised.**
+
+### 48.1 What was measured
+
+Every run used a scratch `QUILL_DATA_FOLDER`, so nothing here went near the
+user's library. Runs c, d and j copied the user's **real**
+`Documents\Quill\settings.json` into that scratch folder, so the `Ui` hints the
+constructor actually reads were the user's own, not a seed of mine. Work area
+2880x1800; a maximised window measures `-13,-13 2906x1826` at this DPI, which is
+the normal border overhang.
+
+| run | condition | result |
+|---|---|---|
+| a | seeded `StartMaximised=true`, `WinMaximized=false`, stored bounds 900x700 @200,150 | `zoomed=True` `SW_MAXIMIZE` |
+| b | same, with the first-activation re-assert suppressed | `zoomed=True` `SW_MAXIMIZE` |
+| c | the user's real `settings.json` | `zoomed=True`, `normal=196,196,2160x1313` |
+| d | the user's real `settings.json`, running the **literal pre-`8202615` one-liner** | `zoomed=True`, `normal=196,196,2160x1313` |
+| e | bare `CreateProcess` | `zoomed=True` |
+| f | explicit `SW_SHOWNORMAL` | `zoomed=True` |
+| g | through a `.lnk` carrying `windowstyle=1`, like the user's `Quill.lnk` | `zoomed=True` |
+| h | through a `.lnk` carrying `windowstyle=3` | `zoomed=True` |
+| i | the user's real **53,582,459-byte** `library.json` copied in, watched for 40 s | maximised at 1000 ms, held for the full 40 s |
+| j | shipped form, final confirmation | `zoomed=True`, `normal=196,196,2160x1313` |
+
+No run wrote a `crash.log` line. `TryStartupMaximise`'s logging — the one part of
+`8202615` that was unambiguously worth having — never fired, because neither of
+its failure modes ever occurred.
+
+### 48.2 The four suspects, and why each is innocent
+
+**Suspect one — the presenter is not an `OverlappedPresenter`, or `Maximize()`
+throws.** Innocent, and now falsifiable rather than merely unlikely. §38 replaced
+a guarded `if` behind an empty `catch` with a logged path precisely so this could
+leave a trace. Ten launches, no trace.
+
+**Suspect two — saved bounds reapplied over the maximise.** Innocent. §38 ruled
+this out by reading; run c measures it. `MoveAndResize` demonstrably ran — the
+window's *restore* rectangle is the user's stored `196,196 2160x1313`, which is
+where that call put it — and the window is maximised on top of it. Both facts in
+one reading.
+
+**Suspect three — §38's own: the maximise is asserted before the window is ever
+shown, and `Activate()`'s show-command resets it.** **Innocent, and this is the
+finding.** Run b suppressed the first-activation re-assert and the window still
+came up maximised. Run d went further and rebuilt the *literal* pre-`8202615`
+one-liner, and it maximised too. `Activate()` does not undo a maximise asserted
+before it. The ordering fact §38 established is real — `App.OnLaunched` does run
+the whole constructor before `Activate()` — but the consequence it inferred from
+that fact does not follow.
+
+**Suspect four — mine, and it was a good one.** Windows makes the *first*
+`ShowWindow` call in a process use `STARTUPINFO.wShowWindow` when the launcher
+supplied one, ignoring the command the process itself asked for; a `.lnk` always
+supplies one, and the user's `Quill.lnk` carries `windowstyle=1`
+(`SW_SHOWNORMAL`). That is a real documented behaviour and it would have explained
+the whole report. Runs e–h tested it four ways and it is **innocent**: bare
+`CreateProcess`, an explicit `SW_SHOWNORMAL`, a `.lnk` with `windowstyle=1` and a
+`.lnk` with `windowstyle=3` all maximised. Recorded because it is the most
+plausible mechanism anyone has proposed for this item, and it is wrong, so the
+next person does not spend the evening on it.
+
+### 48.3 So what WAS the reason it did not maximise?
+
+The honest answer: **on this machine, with this build, and with the user's own
+settings, there is no "did not" left to explain.** The row's "done means" has two
+halves and they resolve differently.
+
+*It maximises* — measured, ten ways, including with the user's real 53 MB library
+and the app fully loaded on screen.
+
+*The reason it did not is written down* — the reason is that **`8202615` was not
+load-bearing and the defect is not reproducible in the current tree.** Run d is
+the load-bearing measurement: the code as it stood *before* the fix maximises
+under the user's exact settings. Whatever the original report saw, it was not this
+code path, and it has not survived to the current tree. The candidates that
+remain are all outside what this machine can now reproduce: a build predating
+`8105f60`, when the field was `StartFullscreen` and a settings.json written under
+the old name could orphan the value (`RenamedSettings` exists for exactly that),
+or a stale binary. Two such binaries are still on disk —
+`bin\Debug\...\win-x64\Quill.exe` from 2026-07-07 and
+`bin\x64\Release\...\Quill.exe` from 2026-07-12 — though `Quill.lnk` does not
+point at either.
+
+### 48.4 What changed in the code, and what deliberately did not
+
+The re-assert **stays**. It is a one-shot correction that unhooks itself and costs
+nothing when the constructor attempt held, which on this machine is always; it is
+cheap insurance against a launch path this machine cannot produce. What changed is
+its **comment**, which asserted the ordering mechanism as the fix. It is not the
+fix, nothing was, and a comment that explains a working system by a mechanism that
+has been measured false is worse than no comment — the next person debugging a
+window-state problem would start from a ruled-out premise stated as fact.
+
+This is the third time in two weeks that a named suspect on this project turned
+out to be innocent, and the second time a shipped "fix" was found not to be doing
+the work its comment claimed. The pattern worth extracting: **a fix written
+without running the app cannot distinguish "I repaired it" from "it was never
+broken here".** §38 was scrupulous about saying so and marked itself PARTIAL for
+exactly that reason. That discipline is what made this session cheap — the
+question was already framed, and all that was left was to run it.
+
+### 48.5 Not covered by any harness
+
+None of the ten harnesses links `MainWindow.xaml.cs`; window placement has no
+headless coverage at all, and cannot easily have any — `AppWindow`, presenters and
+`ShowWindow` need a real window. All ten stayed green throughout, and would have
+stayed green if the maximise had been broken. The evidence for 5.2 is the
+measurement table in 48.1 and nothing else.
