@@ -1137,6 +1137,209 @@ public class RemoveLayerAction : IPageAction
     }
 }
 
+/// <summary>CONCEPTS-REF 18.9 seam 5 / 49.8: MAKE A SECOND LAYER.
+///
+/// <para>Until this existed nothing in the app called
+/// <see cref="PageLayers.Add"/>, so the panel 49.5 built showed exactly one row
+/// on every real page and hiding it hid the page. This is the other half.</para>
+///
+/// <para><b>The Layer object is built ONCE and re-inserted, never rebuilt.</b>
+/// A redo that made a fresh layer would hand out a fresh key, and any element
+/// that had been stamped with the old one would be orphaned by the very
+/// operation that was supposed to bring its layer back. Same reasoning, and the
+/// same shape, as <see cref="RemoveLayerAction"/>'s "the very objects, not
+/// copies".</para>
+///
+/// <para><b>Undo puts an untouched page back to costing nothing.</b> Adding a
+/// layer is the first thing that ever makes a page carry a <c>Layers</c> array
+/// (18.4), so undoing the first add has to take the array away again - otherwise
+/// "add a layer, change your mind" would leave a permanent record of a decision
+/// the user reversed. Guarded on the list being a PRISTINE base layer, so an undo
+/// can never discard a name, a hide or an opacity somebody else set.</para></summary>
+public class AddLayerAction : IPageAction
+{
+    private readonly string _name;
+    private readonly int? _above;
+
+    private Layer? _layer;          // built once; redo re-inserts THIS object
+    private int _index = -1;
+    private int _activeBefore;
+    private bool _wasImplicit;
+    private bool _applied;
+
+    public AddLayerAction(string name = "", int? aboveKey = null)
+    {
+        _name = name ?? "";
+        _above = aboveKey;
+    }
+
+    public string Description => "Add layer";
+    // A new layer is empty by construction, so no text box can have moved.
+    public bool TouchesText => false;
+
+    /// <summary>The key the new layer was given. Only meaningful after
+    /// <see cref="Do"/>; the caller needs it to make the new layer active and to
+    /// say its name in the status line.</summary>
+    public int Key => _layer?.Key ?? PageLayers.BaseKey;
+
+    public void Do(NotePage page)
+    {
+        _activeBefore = page.ActiveLayer;
+        if (_layer == null)
+        {
+            _wasImplicit = PageLayers.IsImplicit(page);
+            _layer = PageLayers.Add(page, _name, _above);
+            _index = page.Layers!.IndexOf(_layer);
+        }
+        else
+        {
+            var ls = PageLayers.Materialise(page);
+            if (ls.All(l => l.Key != _layer.Key))
+                ls.Insert(Math.Clamp(_index, 0, ls.Count), _layer);
+        }
+        // New ink lands on what you just made - the only reading of "add a
+        // layer" that does not require a second gesture to be useful.
+        page.ActiveLayer = _layer.Key;
+        _applied = true;
+    }
+
+    public void Undo(NotePage page)
+    {
+        if (!_applied || _layer == null) return;
+        var ls = page.Layers;
+        if (ls != null)
+        {
+            int i = ls.FindIndex(l => l.Key == _layer.Key);
+            if (i >= 0) ls.RemoveAt(i);
+            if (_wasImplicit && IsPristineBase(ls)) page.Layers = null;
+        }
+        page.ActiveLayer = _activeBefore;
+    }
+
+    /// <summary>A single base layer carrying not one thing anybody chose - which
+    /// is precisely what <see cref="PageLayers.Materialise"/> synthesises, and so
+    /// the only list it is safe to throw away again.</summary>
+    internal static bool IsPristineBase(List<Layer>? ls)
+        => ls is { Count: 1 } && ls[0].Key == PageLayers.BaseKey &&
+           ls[0].Name.Length == 0 && !ls[0].Hidden && !ls[0].Locked &&
+           Math.Abs(ls[0].Opacity - 1f) < 1e-6f;
+}
+
+/// <summary>CONCEPTS-REF 18 / 49.8: give a layer a name, or take one away.
+///
+/// <para><b>Clearing the box writes "", never the derived label.</b>
+/// <see cref="PageLayers.DisplayName"/> answers "Layer 3" for a layer whose
+/// <c>Name</c> is empty, and 18 is explicit that persisting that answer "would
+/// make a derived label look like a decision" - so a user who clears the field
+/// gets the empty string back on disk and the derived label back on screen, and
+/// the two stay different things. Whitespace is the same case as empty:
+/// a name of three spaces is not a name.</para>
+///
+/// <para>Renaming the base layer of a page that has never carried a
+/// <c>Layers</c> array materialises one, and undoing back to "" takes it away
+/// again for <see cref="AddLayerAction"/>'s reason.</para></summary>
+public class RenameLayerAction : IPageAction
+{
+    private readonly int _key;
+    private readonly string _to;
+    private string _before = "";
+    private bool _wasImplicit;
+    private bool _applied;
+
+    public RenameLayerAction(int layerKey, string? to)
+    {
+        _key = layerKey;
+        _to = Normalise(to);
+    }
+
+    /// <summary>Null, empty and all-whitespace are ONE case, and it is the case
+    /// that restores the derived name.</summary>
+    public static string Normalise(string? s) => string.IsNullOrWhiteSpace(s) ? "" : s.Trim();
+
+    public string Description => _to.Length == 0 ? "Clear layer name" : "Rename layer";
+    public bool TouchesText => false;
+
+    public void Do(NotePage page)
+    {
+        _wasImplicit = PageLayers.IsImplicit(page);
+        var ls = PageLayers.Materialise(page);
+        var l = ls.FirstOrDefault(x => x.Key == _key);
+        if (l == null)
+        {
+            _applied = false;
+            if (_wasImplicit && AddLayerAction.IsPristineBase(ls)) page.Layers = null;
+            return;
+        }
+        _before = l.Name;
+        l.Name = _to;
+        _applied = true;
+        // Setting a name to the empty string it already had must not leave a
+        // Layers array behind on a page that had none.
+        if (_wasImplicit && AddLayerAction.IsPristineBase(ls)) page.Layers = null;
+    }
+
+    public void Undo(NotePage page)
+    {
+        if (!_applied) return;
+        var ls = page.Layers;
+        var l = ls?.FirstOrDefault(x => x.Key == _key);
+        if (l != null) l.Name = _before;
+        if (_wasImplicit && AddLayerAction.IsPristineBase(ls)) page.Layers = null;
+    }
+}
+
+/// <summary>CONCEPTS-REF 18.2 / 49.8: MOVE A LAYER IN THE STACK.
+///
+/// <para><b>A list move, and nothing else.</b> There is deliberately no
+/// <c>Order</c> integer beside <c>Key</c> - the list IS the order - so
+/// reordering must not touch a single element. Anything that changed an
+/// element's <c>LayerKey</c> here would be repointing content at a different
+/// layer to express a change of position, which is the exact hazard 18.3 says
+/// the key exists to prevent. <c>tools/LayerRoundTrip</c> asserts the whole
+/// element census is unmoved across a reorder, with a negative control that
+/// shows the assertion can fail.</para>
+///
+/// <para><c>_applied</c> is set only when the index ACTUALLY moved.
+/// <see cref="PageLayers.Move"/> clamps, so "move the top layer up" succeeds and
+/// changes nothing; recording that as a done deed would put a no-op on the undo
+/// stack and cost the user a press of Ctrl+Z to undo nothing.</para></summary>
+public class MoveLayerAction : IPageAction
+{
+    private readonly int _key;
+    private readonly int _to;
+    private int _from = -1;
+    private bool _applied;
+
+    public MoveLayerAction(int layerKey, int newIndex)
+    {
+        _key = layerKey;
+        _to = newIndex;
+    }
+
+    public string Description => "Reorder layers";
+    // Layer order decides which INK is on top. The live text layer is a XAML
+    // overlay above the whole canvas and its order does not follow a layer's
+    // (49.8 says so in as many words), so nothing here can move a text box.
+    public bool TouchesText => false;
+
+    public void Do(NotePage page)
+    {
+        _applied = false;
+        var ls = page.Layers;
+        if (ls == null) return;
+        _from = ls.FindIndex(l => l.Key == _key);
+        if (_from < 0) return;
+        if (!PageLayers.Move(page, _key, _to)) return;
+        _applied = ls.FindIndex(l => l.Key == _key) != _from;
+    }
+
+    public void Undo(NotePage page)
+    {
+        if (!_applied) return;
+        PageLayers.Move(page, _key, _from);
+    }
+}
+
 /// <summary>CONCEPTS-REF 16.2's PAPERCLIP: swap the file behind an attachment
 /// and keep it exactly where it is.
 ///

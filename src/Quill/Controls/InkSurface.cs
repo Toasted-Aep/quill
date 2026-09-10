@@ -886,7 +886,8 @@ public sealed class InkSurface : UserControl
                         page.Texts.Add(new TextElement
                         {
                             TableId = tb.Id, TableRow = r, TableCol = c,
-                            X = tb.X + 4, Y = tb.Y + 2, Width = Math.Max(28, cw[c] - 8)
+                            X = tb.X + 4, Y = tb.Y + 2, Width = Math.Max(28, cw[c] - 8),
+                            LayerKey = tb.LayerKey,   // 18.10: with its table
                         });
                         added = true;
                     }
@@ -2350,6 +2351,7 @@ public sealed class InkSurface : UserControl
                         : sh.W > 8 && sh.H > 8;
                     if (big)
                     {
+                        sh.LayerKey = ActiveLayerKey;   // 18.9 seam 5
                         PushAction(new AddShapeAction(sh), _page);
                         changed = true;
                     }
@@ -2390,7 +2392,9 @@ public sealed class InkSurface : UserControl
                             Sens = PenSensitivity,
                             Opacity = PenOpacity >= 0.999f ? (float?)null : PenOpacity,
                             Points = pts,
-                            PressureCurve = EffectivePressureCurve()
+                            PressureCurve = EffectivePressureCurve(),
+                            // 18.9 seam 5: new ink lands on the ACTIVE layer.
+                            LayerKey = ActiveLayerKey,
                         };
                         PushAction(new AddStrokeAction(stroke), _page);
                         changed = true;
@@ -3565,6 +3569,104 @@ public sealed class InkSurface : UserControl
                 if (_textUi.TryGetValue(t.Id, out var ui))
                     ui.Container.Opacity = LayerMultiplier(t.LayerKey);
         _canvas.Invalidate();
+    }
+
+    /// <summary>CONCEPTS-REF 18.9 seam 5: THE LAYER NEW INK LANDS ON.
+    ///
+    /// <para>Resolved through <see cref="PageLayers.Active"/>, so an
+    /// <c>ActiveLayer</c> naming a layer somebody deleted comes back as the base
+    /// layer rather than stamping new ink with a key that names nothing.</para></summary>
+    public int ActiveLayerKey => _page == null ? PageLayers.BaseKey : PageLayers.Active(_page).Key;
+
+    /// <summary>Chooses the layer new ink lands on.
+    ///
+    /// <para><b>Not undoable, on purpose.</b> This is a tool mode, like the pen
+    /// in your hand or 18.1's All/Active scope — <c>SyncLog</c> already refuses
+    /// to replicate <c>ActiveLayer</c> for the same reason, calling it "per-user
+    /// UI state". Putting a mode switch on the undo stack would bury the drawing
+    /// operations the user actually wants back.</para></summary>
+    public void SetActiveLayer(int layerKey)
+    {
+        if (_page == null) return;
+        PageLayers.SetActive(_page, layerKey);
+    }
+
+    /// <summary>49.8: runs one of the four structural layer edits — add, rename,
+    /// reorder, delete — through the page's own undo stack.
+    ///
+    /// <para>It exists because <c>PushAction</c> is private and must stay that
+    /// way: an action pushed from outside would not invalidate the spatial index,
+    /// and <see cref="RemoveLayerAction"/> takes elements off the page. Every
+    /// caller therefore gets the whole tail — flush, push, drop a selection that
+    /// may now point at removed content, and the ink/text/thumbnail refresh
+    /// <see cref="LayersChanged"/> owns — rather than being trusted to remember
+    /// four of the five.</para>
+    ///
+    /// <para><b>FlushTexts runs BEFORE the action, not after.</b> A live
+    /// <c>RichEditBox</c> holds characters the model has not seen; if a layer
+    /// deletion took its <c>TextElement</c> off the page first, the next flush
+    /// would look the id up, miss, and silently drop the edit. Flushing first
+    /// means the box that is about to be deleted is deleted with its words in
+    /// it — which is what undo then brings back.</para></summary>
+    public void ApplyLayerAction(IPageAction action)
+    {
+        if (_page == null) return;
+        FlushTexts();
+        PushAction(action, _page);
+        // A deleted layer can take the selected element with it, and a selection
+        // box drawn around something no longer on the page is the shape of bug
+        // Undo/Redo already guard against in exactly this way.
+        ClearSelection();
+        _activeShape = null;
+        LayersChanged();
+        ContentChanged?.Invoke();
+    }
+
+    // =======================================================================
+    // §18.5 / 49.8 — THE DRAW PATH'S LAYER ORDER.
+    //
+    // "Within a layer, the existing type order is preserved exactly. Across
+    // layers, layer order wins." Until 49.8 the renderer honoured a layer's
+    // Hidden and Opacity and NOT its position, so reordering the stack changed
+    // the model and nothing on the glass.
+    //
+    // PageLayers.InOrder is the declared seam for that order and it ALLOCATES -
+    // three fresh Lists per layer on every call. That is right for the panel and
+    // for PSD export, which ask once; it is wrong for a loop that runs at 60 Hz
+    // on a page with thousands of strokes. So the draw path reaches the same
+    // order by making ONE PASS PER LAYER over the list it already holds and
+    // skipping what is not in that pass: same sequence out, nothing allocated.
+    //
+    // A page with one layer runs exactly one pass, and the per-element test
+    // short-circuits on the pass count before it looks at anything. Every page
+    // that exists today has one layer, so this cannot move a pixel on any of
+    // them.
+    // =======================================================================
+
+    /// <summary>How many passes the draw loops make. 1 unless the page really
+    /// carries more than one layer.</summary>
+    private int LayerPassCount => _page?.Layers is { Count: > 1 } ls ? ls.Count : 1;
+
+    /// <summary>Which pass an element paints in, bottom layer = 0.
+    ///
+    /// <para>Resolves exactly the way <see cref="PageLayers.InOrder"/> does —
+    /// first layer with a matching key wins, an unknown key falls to the base
+    /// layer's pass, and a page with no base layer falls to the bottom-most one.
+    /// Written to match rather than to be obvious, because a draw order and an
+    /// export order that disagreed about where an orphan lands would be 49.1's
+    /// hazard in the one place it is hardest to see.</para></summary>
+    private int LayerPass(int layerKey)
+    {
+        var ls = _page?.Layers;
+        if (ls is not { Count: > 1 }) return 0;
+        int fallback = 0;
+        bool haveFallback = false;
+        for (int i = 0; i < ls.Count; i++)
+        {
+            if (ls[i].Key == layerKey) return i;
+            if (!haveFallback && ls[i].Key == PageLayers.BaseKey) { fallback = i; haveFallback = true; }
+        }
+        return fallback;
     }
 
     private void SelectWithLasso(List<Vector2> poly)
@@ -5240,7 +5342,8 @@ public sealed class InkSurface : UserControl
         var s = new ShapeElement
         {
             Kind = ShapeKind.Image, ImagePath = path,
-            X = topLeftWorld.X, Y = topLeftWorld.Y, W = w, H = h, Size = 0
+            X = topLeftWorld.X, Y = topLeftWorld.Y, W = w, H = h, Size = 0,
+            LayerKey = ActiveLayerKey,   // 18.9 seam 5
         };
         PushAction(new AddShapeAction(s), _page);
         _activeShape = s;
@@ -5626,22 +5729,28 @@ public sealed class InkSurface : UserControl
         var vBR = ToWorld(new Vector2((float)region.Right, (float)region.Bottom));
         float visMinX = vTL.X, visMinY = vTL.Y, visMaxX = vBR.X, visMaxY = vBR.Y;
 
-        foreach (var sh in _page.Shapes)
+        // §18.5 / 49.8: ACROSS LAYERS, LAYER ORDER WINS - see LayerPassCount.
+        int shapePasses = LayerPassCount;
+        for (int pass = 0; pass < shapePasses; pass++)
         {
-            var sb = ShapeBounds(sh);
-            if (sb.Right < visMinX - 8 || sb.Left > visMaxX + 8 ||
-                sb.Bottom < visMinY - 8 || sb.Top > visMaxY + 8) continue;
-            bool veilShape = !IsSubject(sh);
-            if (_movingSel && _selShapeSet.Contains(sh))
+            foreach (var sh in _page.Shapes)
             {
-                var prev = ds.Transform;
-                ds.Transform = Matrix3x2.CreateTranslation(_moveDx, _moveDy) * prev;
-                DrawShape(ds, sh, veilShape);
-                ds.Transform = prev;
-            }
-            else
-            {
-                DrawShape(ds, sh, veilShape);
+                if (shapePasses > 1 && LayerPass(sh.LayerKey) != pass) continue;
+                var sb = ShapeBounds(sh);
+                if (sb.Right < visMinX - 8 || sb.Left > visMaxX + 8 ||
+                    sb.Bottom < visMinY - 8 || sb.Top > visMaxY + 8) continue;
+                bool veilShape = !IsSubject(sh);
+                if (_movingSel && _selShapeSet.Contains(sh))
+                {
+                    var prev = ds.Transform;
+                    ds.Transform = Matrix3x2.CreateTranslation(_moveDx, _moveDy) * prev;
+                    DrawShape(ds, sh, veilShape);
+                    ds.Transform = prev;
+                }
+                else
+                {
+                    DrawShape(ds, sh, veilShape);
+                }
             }
         }
 
@@ -5682,39 +5791,49 @@ public sealed class InkSurface : UserControl
             }
 
             int idx = 0;
-            foreach (var s in _page.Strokes)
+            // §18.5 / 49.8. REPLAY forces a single pass: `idx` below is a
+            // position in _page.Strokes and the replay cursor counts in that
+            // order, so a per-layer walk would replay the page in the wrong
+            // sequence. A replay is an animation of how the page was DRAWN,
+            // which is list order, not how it is stacked.
+            int strokePasses = _replaying ? 1 : LayerPassCount;
+            for (int pass = 0; pass < strokePasses; pass++)
             {
-                var off = Vector2.Zero;
-                if (_movingSel && _selectedSet.Contains(s)) off = new Vector2(_moveDx, _moveDy);
-                else if (_spacing && s.Points.Count > 0 && s.MinY >= _spaceY) off = new Vector2(0, (float)_spaceDelta);
+                foreach (var s in _page.Strokes)
+                {
+                    if (strokePasses > 1 && LayerPass(s.LayerKey) != pass) continue;
+                    var off = Vector2.Zero;
+                    if (_movingSel && _selectedSet.Contains(s)) off = new Vector2(_moveDx, _moveDy);
+                    else if (_spacing && s.Points.Count > 0 && s.MinY >= _spaceY) off = new Vector2(0, (float)_spaceDelta);
 
-                if (AudioPlayheadPosition != null && RecordingStartTicks != null)
-                {
-                    long strokeOffsetTicks = s.CreatedTicks - RecordingStartTicks.Value;
-                    if (strokeOffsetTicks > AudioPlayheadPosition.Value.Ticks) continue;
-                }
-
-                if (_replaying)
-                {
-                    if (idx > _replayStroke) break;
-                    int? limit = idx == _replayStroke ? _replayPoint : null;
-                    DrawStroke(ds, sender, s, off, limit);
-                }
-                else
-                {
-                    s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
-                    float pad = s.Size * 2.5f + 6f;
-                    if (bx1 + off.X >= visMinX - pad && bx0 + off.X <= visMaxX + pad &&
-                        by1 + off.Y >= visMinY - pad && by0 + off.Y <= visMaxY + pad)
+                    if (AudioPlayheadPosition != null && RecordingStartTicks != null)
                     {
-                        if (s == activeStroke)
-                        {
-                            DrawStrokeGlow(ds, sender, s, off);
-                        }
-                        DrawStroke(ds, sender, s, off, null, veil: !IsSubject(s));
+                        long strokeOffsetTicks = s.CreatedTicks - RecordingStartTicks.Value;
+                        if (strokeOffsetTicks > AudioPlayheadPosition.Value.Ticks) continue;
                     }
+
+                    if (_replaying)
+                    {
+                        if (idx > _replayStroke) break;
+                        int? limit = idx == _replayStroke ? _replayPoint : null;
+                        DrawStroke(ds, sender, s, off, limit);
+                    }
+                    else
+                    {
+                        s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
+                        float pad = s.Size * 2.5f + 6f;
+                        if (bx1 + off.X >= visMinX - pad && bx0 + off.X <= visMaxX + pad &&
+                            by1 + off.Y >= visMinY - pad && by0 + off.Y <= visMaxY + pad)
+                        {
+                            if (s == activeStroke)
+                            {
+                                DrawStrokeGlow(ds, sender, s, off);
+                            }
+                            DrawStroke(ds, sender, s, off, null, veil: !IsSubject(s));
+                        }
+                    }
+                    idx++;
                 }
-                idx++;
             }
         }
 
@@ -7617,7 +7736,8 @@ public sealed class InkSurface : UserControl
             Y = atCaret ? c.Y : c.Y - h / 2,
             W = w,
             H = h,
-            Size = 0
+            Size = 0,
+            LayerKey = ActiveLayerKey,   // 18.9 seam 5
         };
         PushAction(new AddShapeAction(s), _page);
         _activeShape = s;
@@ -7800,6 +7920,7 @@ public sealed class InkSurface : UserControl
             Size = Math.Max(2f, PenSize * 0.9f),
             Pen = Pen,
             Opacity = PenOpacity,
+            LayerKey = ActiveLayerKey,   // 18.9 seam 5
         };
         if (kind is ShapeKind.Line or ShapeKind.Arrow)
         {
@@ -7872,6 +7993,7 @@ public sealed class InkSurface : UserControl
         {
             X = worldPos.X - 4, Y = worldPos.Y - 10, AutoWidth = true,
             TextColor = PendingTextColor,
+            LayerKey = ActiveLayerKey,   // 18.9 seam 5
         };
         PushAction(new AddTextAction(t), _page);
         BuildTextUi(t); // add ONLY the new box so existing boxes keep their formatting
@@ -8148,7 +8270,8 @@ public sealed class InkSurface : UserControl
     {
         if (_page == null) return;
         FlushTexts();
-        var t = new TextElement { X = x, Y = y, Width = Math.Max(60, width), Rtf = rtf };
+        var t = new TextElement { X = x, Y = y, Width = Math.Max(60, width), Rtf = rtf,
+                                 LayerKey = ActiveLayerKey };   // 18.9 seam 5
         PushAction(new AddTextAction(t), _page);
         BuildTextUi(t);
         ContentChanged?.Invoke();
@@ -8171,7 +8294,8 @@ public sealed class InkSurface : UserControl
             W = cols * cellW, H = rows * cellH,
             Color = "#8A8884", Size = 1.6f, TRows = rows, TCols = cols,
             TColW = Enumerable.Repeat(cellW, cols).ToList(),
-            TRowH = Enumerable.Repeat(cellH, rows).ToList()
+            TRowH = Enumerable.Repeat(cellH, rows).ToList(),
+            LayerKey = ActiveLayerKey,   // 18.9 seam 5
         };
         var texts = new List<TextElement>();
         for (int r = 0; r < rows; r++)
@@ -8179,7 +8303,12 @@ public sealed class InkSurface : UserControl
                 texts.Add(new TextElement
                 {
                     X = x0 + c * cellW + 6, Y = y0 + r * cellH + 2, Width = cellW - 28,
-                    TableId = table.Id, TableRow = r, TableCol = c
+                    TableId = table.Id, TableRow = r, TableCol = c,
+                    // 18.10: a table and its cells must share a layer. The
+                    // TABLE's key, not the active one - the two are the same
+                    // here and would part company the moment a table is moved
+                    // between layers.
+                    LayerKey = table.LayerKey,
                 });
 
         PushAction(new AddMixedAction(new List<PenStroke>(), new List<ShapeElement> { table }, texts), _page);
@@ -8445,6 +8574,7 @@ public sealed class InkSurface : UserControl
                     TableId = table.Id,
                     TableRow = cell.TableRow + r,
                     TableCol = cell.TableCol + c,
+                    LayerKey = table.LayerKey,   // 18.10: cells share the table's layer
                     Rtf = @"{\rtf1\ansi\deff0{\fonttbl{\f0\fnil Lora;}}\viewkind4\uc1\pars }"
                 });
             }
@@ -8538,7 +8668,9 @@ public sealed class InkSurface : UserControl
         var shifted = _page.Texts.Where(t => t.TableId == table.Id && t.TableCol >= at).ToList();
         var newCells = new List<TextElement>();
         for (int r = 0; r < rows; r++)
-            newCells.Add(new TextElement { TableId = table.Id, TableRow = r, TableCol = at, Width = Math.Max(48, newW - 16) });
+            newCells.Add(new TextElement { TableId = table.Id, TableRow = r, TableCol = at,
+                                          Width = Math.Max(48, newW - 16),
+                                          LayerKey = table.LayerKey });   // 18.10
 
         var newColW = colW.ToList();
         newColW.Insert(at, newW);
@@ -8569,7 +8701,9 @@ public sealed class InkSurface : UserControl
         var shifted = _page.Texts.Where(t => t.TableId == table.Id && t.TableRow >= at).ToList();
         var newCells = new List<TextElement>();
         for (int c = 0; c < cols; c++)
-            newCells.Add(new TextElement { TableId = table.Id, TableRow = at, TableCol = c, Width = Math.Max(48, colW[c] - 16) });
+            newCells.Add(new TextElement { TableId = table.Id, TableRow = at, TableCol = c,
+                                          Width = Math.Max(48, colW[c] - 16),
+                                          LayerKey = table.LayerKey });   // 18.10
 
         var newRowH = rowH.ToList();
         newRowH.Insert(at, newH);
@@ -9989,41 +10123,53 @@ public sealed class InkSurface : UserControl
                 ds.Transform = Matrix3x2.CreateTranslation((float)-srcX, (float)-srcY) *
                                Matrix3x2.CreateScale(scale);
 
-                foreach (var sh in page.Shapes)
-                {
-                    float lm = ThumbLayerMul(page, sh.LayerKey);
-                    if (lm <= 0f) continue;
-                    var color = ThumbFade(forceInk ?? ColorUtil.Parse(sh.Color), lm);
-                    ds.DrawRectangle(new Rect(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H)), color, Math.Max(1f, sh.Size));
-                }
-
-                foreach (var s in page.Strokes)
-                {
-                    float lm = ThumbLayerMul(page, s.LayerKey);
-                    if (lm <= 0f) continue;
-                    var color = ThumbFade(forceInk ?? ColorUtil.Parse(s.Color), lm);
-                    for (int i = 1; i < s.Points.Count; i++)
-                    {
-                        ds.DrawLine(new Vector2(s.Points[i - 1].X, s.Points[i - 1].Y), new Vector2(s.Points[i].X, s.Points[i].Y), color, s.Size);
-                    }
-                }
-
                 // Text carries no colour of its own here — the RTF run colours are
                 // dropped by StripRtf — so contrast against the page background.
                 double lum = (0.299 * bg.R + 0.587 * bg.G + 0.114 * bg.B) / 255.0;
                 var textCol = forceInk ?? (lum > 0.5
                     ? Color.FromArgb(255, 0x1B, 0x1A, 0x18)
                     : Color.FromArgb(255, 0xF4, 0xF2, 0xEC));
-                foreach (var t in page.Texts)
+
+                // §49.8: BOTTOM LAYER FIRST, and within a layer the page's own
+                // type order. 49.6 taught this path the layer MULTIPLIER and left
+                // it walking the three lists flat, so a REORDERED page and its
+                // gallery card disagreed about what was on top - 49.1's hazard,
+                // one cache further out, exactly where 49.6 found the last one.
+                //
+                // Unlike the live draw loop this renders ONCE, so it can afford
+                // PageLayers.InOrder: the same seam the panel reads and PSD
+                // export will iterate. A page with one layer yields ONE bucket
+                // holding these three lists in this order, so every cached PNG
+                // stays bit-identical and nothing is invalidated.
+                foreach (var bucket in PageLayers.InOrder(page))
                 {
-                    float lm = ThumbLayerMul(page, t.LayerKey);
+                    float lm = PageLayers.EffectiveOpacity(bucket.Layer);
                     if (lm <= 0f) continue;
-                    string txt = StripRtf(t.Rtf);
-                    if (string.IsNullOrEmpty(txt)) continue;
-                    using var layout = new CanvasTextLayout(device, txt,
-                        new CanvasTextFormat { FontSize = 16f },
-                        (float)Math.Max(24, t.Width), 4000);
-                    ds.DrawTextLayout(layout, (float)t.X, (float)t.Y, ThumbFade(textCol, lm));
+
+                    foreach (var sh in bucket.Shapes)
+                    {
+                        var color = ThumbFade(forceInk ?? ColorUtil.Parse(sh.Color), lm);
+                        ds.DrawRectangle(new Rect(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H)), color, Math.Max(1f, sh.Size));
+                    }
+
+                    foreach (var s in bucket.Strokes)
+                    {
+                        var color = ThumbFade(forceInk ?? ColorUtil.Parse(s.Color), lm);
+                        for (int i = 1; i < s.Points.Count; i++)
+                        {
+                            ds.DrawLine(new Vector2(s.Points[i - 1].X, s.Points[i - 1].Y), new Vector2(s.Points[i].X, s.Points[i].Y), color, s.Size);
+                        }
+                    }
+
+                    foreach (var t in bucket.Texts)
+                    {
+                        string txt = StripRtf(t.Rtf);
+                        if (string.IsNullOrEmpty(txt)) continue;
+                        using var layout = new CanvasTextLayout(device, txt,
+                            new CanvasTextFormat { FontSize = 16f },
+                            (float)Math.Max(24, t.Width), 4000);
+                        ds.DrawTextLayout(layout, (float)t.X, (float)t.Y, ThumbFade(textCol, lm));
+                    }
                 }
             }
 
@@ -10165,8 +10311,16 @@ public sealed class InkSurface : UserControl
                     cds.Clear(Colors.Transparent);
                     cds.Transform = Matrix3x2.CreateTranslation((float)-world.X, (float)-world.Y) *
                                     Matrix3x2.CreateScale(scale);
+                    // §18.5 / 49.8: the cache holds RENDERED pixels, so the
+                    // order it bakes them in is the order they are seen in. It
+                    // has to make the same per-layer walk the live loop makes,
+                    // or a page would reorder itself the moment it crossed
+                    // InkCacheThreshold.
+                    int cachePasses = LayerPassCount;
+                    for (int pass = 0; pass < cachePasses; pass++)
                     foreach (var s in _page!.Strokes)
                     {
+                        if (cachePasses > 1 && LayerPass(s.LayerKey) != pass) continue;
                         s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
                         float pad = s.Size * 2.5f + 6f;
                         if (bx1 < world.Left - pad || bx0 > world.Right + pad ||
