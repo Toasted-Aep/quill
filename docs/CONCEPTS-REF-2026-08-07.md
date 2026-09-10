@@ -10072,7 +10072,15 @@ section — see §49.4 for what that leaves broken.
 
 Written by the orchestrator from the code an interrupted run left in the tree
 (the machine went down mid-job), verified by build and by all ten harnesses
-including `LayerRoundTrip`'s 83, and **not verified on screen.**
+including `LayerRoundTrip`'s 83.
+
+**It said "not verified on screen" and that is no longer true.** 49.5 built the
+panel the model was missing, 49.6 found a second draw path that had never heard
+of layers, and 49.7 records the screen run: hiding, selection, opacity and the
+round trip 49.3 flagged as the check nobody had run, all measured on the glass.
+49.4's "WHAT THIS LEAVES BROKEN" is kept below exactly as it was written, because
+it was true when written and the record of what a half-shipped feature looked
+like is worth more than a tidy file.
 
 ### 49.1 One answer, and only one place asks for it
 
@@ -10126,3 +10134,276 @@ this file records as a defect when a comment outlives the code it describes.
 Until the panel lands, the honest position is that this section is **half a
 feature**: the renderer is ready, the user cannot reach it, and the UI actively
 says the opposite.
+
+**49.4 above is now HISTORY, not status.** The panel landed in 49.5, the three
+false statements are gone, and the two dead switches are live rows. It is left
+standing because a section that quietly edits away what it got wrong teaches
+nothing.
+
+### 49.5 The panel — and it is deliberately three controls wide
+
+`ChromeBars.BuildLayersPanel` now carries **one row per layer, top first**: the
+layer's name, a visibility switch, and an opacity slider. Rows come from
+`PageLayers.InOrder`, the same bucketing the renderer paints and PSD export will
+iterate, so a row cannot report content the draw path puts somewhere else.
+`InOrder` yields **bottom** first because that is paint order; the panel walks it
+backwards, the direction `PageLayers.Rows` already walks and for the same reason.
+
+Two model promises were kept rather than rediscovered, and both are inversions
+of what the obvious code would do:
+
+- **`DisplayName` is shown and never written back.** It derives "Layer N" from
+  position for a layer with no name the user chose, and 18 says why nothing may
+  persist that: inventing one and storing it *"would make a derived label look
+  like a decision"*. Nothing in `ChromeBars.cs` assigns to `Layer.Name`.
+- **The switch says "visible" and the field is `Hidden`.** `Hidden` is the field
+  precisely so that false — today's behaviour — is the zero value and costs
+  nothing to write. A person switches visibility, not hiddenness, so the
+  inversion lives in one expression in the row and never on disk.
+
+**Both promises were then checked on disk, not asserted.** After a session that
+hid layer 2, showed it again, faded it and hid it once more, `library.json`
+carries `"Name": ""` on both layers and `Hidden` **absent** on the layer that was
+hidden and shown again — the zero value restored, not `Hidden: false` written.
+
+**Writes go through `LayerToEdit`, which is not `PageLayers.Of`.** `All`
+synthesises a **fresh** implicit base layer on every call for a page that has
+never carried a `Layers` array — the model says so, and says why: a shared
+mutable stand-in would let a caller believe it had hidden something. So a write
+has to reach a materialised list. `LayerToEdit` calls `Materialise` first, and is
+called on a **write and never on a read** — opening the panel on a page that
+predates layers still costs that page exactly the bytes it cost before.
+
+Every write ends in `InkSurface.LayersChanged`, with `visibilityChanged:false` on
+the slider path: nothing appears or disappears when only the multiplier moves,
+and a full `RebuildTextLayer` at slider tick rate would tear down every
+`RichEditBox` on the page and take the caret with it.
+
+#### What is NOT here, said plainly
+
+**No add, no rename, no reorder, no delete, and no way to choose the active
+layer.** Delete destroys drawing by the user's own ruling (18.12 item 3) and is
+only safe through `RemoveLayerAction` on the undo stack; the other three are the
+same piece of work. `PageLayers.Remove` is untouched.
+
+**The consequence is the honest headline of this section.** Nothing anywhere in
+the app calls `PageLayers.Add`, and nothing sets `NotePage.ActiveLayer` from a
+control. So on any page a real user has, **this panel shows exactly one row, and
+hiding it hides the page.** The model is now reachable; a *second layer* still is
+not. The panel says so in its own caption rather than leaving the user to work it
+out from a list of one — and the two-layer page this section was verified on had
+to be **seeded by hand**, because the app cannot make one.
+
+#### The copy that had outlived its code
+
+`ChromeBars.cs:1354` told the user *"Quill has no layer model yet. Every stroke,
+shape and text box on a page lives in one single stack, so there is nothing here
+to show, reorder, hide or lock"*, under two switches disabled on the tip *"Not
+available: there is no layer model to switch."* All three statements were false
+from 18 onward. The caption is replaced by a description of what the panel does,
+and the two dead switches by live rows.
+
+**The same lie was one file over, and was not in the brief.** `ExportWindow.cs`
+disabled PSD on the tooltip *"Quill has neither a layer model nor a PSD writer"*,
+and repeated it in the class comment. PSD **stays disabled** — there is still no
+PSD writer, and that is the true half of the sentence. Only the reason changed.
+
+#### Contrast: computed, then measured on the glass
+
+Every mark this panel makes comes from `ChromeUi`'s `Ink` / `Dim` / `Hairline`,
+built inside `CanvasPane.Rebuild`'s `ChromeUi.PageInk()` scope, so `PanelProof`
+section 10 already measures them against the shipped arithmetic:
+
+| | default paper `#FCFCFC` | worst of the nine papers |
+|---|---|---|
+| heading / row label (`OnPage`) | 17.96:1 | 3.66:1 (Brown Paper) |
+| caption (`OnPageMuted`, composited) | 4.01:1 | **3.006:1** (Brown Paper) |
+
+**Worst mark-on-panel this panel produces: 3.006:1.** Nothing under 3:1.
+
+Sampled off an actual screenshot of the open panel on the default paper, glyph
+cores against the ground they stand on: row label **17.96:1** (`#141414`), "On
+this page" heading **17.96:1**, the panel caption **5.43:1**, the per-row
+"4 objects" caption **4.56:1**, and the stock `Slider`'s own "Opacity" header
+**16.79:1** (`#1B1B1B`) — that last one resolves from `ElementTheme` rather than
+`PageTheme`, and it is legible only because `CanvasPane.Repaint` pushes
+`RequestedTheme` onto the pane root, which 2.1 put there for the Precision
+panel's two sliders.
+
+**A standing instruction was wrong here, and the correction is worth more than
+the compliance would have been.** The brief said to use `PageTheme.Panel` /
+`OnPanel` *"as Settings does"*. That is right for a surface with a plate and
+wrong for this one: the Layers surface is a `CanvasPane`, **bare by a measured
+reference**, so its marks stand on the paper — the whole of 2.1. Measured, the
+counterfactual is not a disaster: `OnPanel` on a bare pane bottoms out at
+**4.37:1** (Blueprint), legible but the wrong sign — dark ink on a ground
+`PageTheme` has already classified as wanting light ink. **And the 1.091:1
+collapse 2.1 records was `OnSurface`, the SHELL token — not `OnPanel`.** The note
+that names `OnPanel` as the thing Precision bypassed names the wrong token.
+
+### 49.6 A second draw path that never heard of layers, and a cache key that could not tell
+
+Found while looking for a way to prove a hidden layer's ink disappears **without
+a screen**, and user-facing the moment 49.5 exists: hide a layer, watch its ink
+leave the page, open the gallery, and the card still shows it.
+
+Two faults, and either alone would have kept the other invisible.
+
+1. **`InkSurface.RenderPageThumbnail` walked `page.Strokes` / `page.Shapes` /
+   `page.Texts` directly** — no `LayerKey`, no `EffectiveOpacity`, no
+   `PageLayers` at all. It is the one draw loop in that file that is **static**
+   and has no surface to ask, which is exactly how it went on drawing everything
+   while every other loop learned about layers. This is 49.1's hazard — *two
+   places computing what should be one fact* — realised in the same file as the
+   sentence that warns about it.
+
+2. **`ThumbnailCache.Stamp` did not mix the layer list.** Its own comment calls it
+   *"a cheap stamp over everything that changes the picture"*, and hiding a layer
+   changes the picture without touching a stroke. The stamp stayed identical, so
+   the key stayed identical, and the **stale PNG** was served. That is 49's
+   ink-cache hazard one cache further out — and `LayersChanged`, written for
+   precisely that hazard, does not reach this one.
+
+Both are fixed together, because fixing either alone changes nothing a user would
+see. The render asks `PageLayers.EffectiveOpacity` through `ThumbLayerMul` — the
+same question `LayerMultiplier` asks — skips at 0 and fades the mark's alpha
+below 1; `TryContentBounds` skips hidden layers too, so a crop-to-content cover
+cannot frame the empty space a hidden layer left; and the stamp mixes `Key`,
+`Hidden` and `Opacity`.
+
+**Migration discipline in both halves.** The stamp is mixed only when the page
+actually carries a `Layers` array, and `ThumbLayerMul` answers 1 for every key on
+a page that has none — so every thumbnail that exists stays bit-identical and
+this change invalidates no cached PNG.
+
+**Verified on the rendered artifacts, which is better than a screenshot of them.**
+With layer 2 at opacity 0.4 the page card renders its two strokes and its
+rectangle in **pink** and layer 1's two bars in solid black. With layer 2 hidden,
+the cover card renders **only layer 1's two bars** and the cache file's key moved
+from `d0c0aa89b32c63c7` to `5e33bfdc28b9729c` — a new stamp, 2,698 bytes down to
+1,670. Without the `Stamp` half that key would not have moved and the old PNG
+would have been handed straight back.
+
+**No harness covers this.** None of the ten links `InkSurface.cs` and none
+renders a thumbnail.
+
+### 49.7 The screen pass — what held, and the three things that were not what they looked like
+
+`main` @ `a4d3f2d`. Clean `--no-incremental` x64 Debug, **0 warnings**, four
+times. **All ten harnesses build AND pass**, three times; `LayerRoundTrip` still
+reports **83 checks** — the model was not touched.
+
+Driven against a scratch `QUILL_DATA_FOLDER` holding one seeded two-layer page:
+layer 0 with two black bars at own opacity **0.62** and **absent**, layer 1 with
+two crimson bars at **0.37** and **0.85**, a rectangle at **0.44** and a text box.
+None of the five opacities is 1, which is the only way the round trip can fail
+loudly.
+
+| leg | probe | before | after |
+|---|---|---|---|
+| **panel opens** | — | — | two rows, top first, "Layer 2" (4 objects) over "Layer 1" (2 objects) |
+| **hide layer 2** | crimson bar | `#D25284` | **`#FCFCFC`** — bare paper |
+| | layer 1 bars | `#202020` / `#141413` | **unchanged** |
+| **click on the hidden ink** | selection | — | **nothing caught**, no chrome |
+| **control: same click on a visible bar** | selection | — | **selection action bar raised** |
+| **show layer 2 again** | crimson bar | `#FCFCFC` | **`#D25284`** — the identical value |
+| **opacity to 40** | crimson bar | `#D25284` | **`#E6A5BF`** |
+| | layer 1 bars | `#202020` / `#141413` | **unchanged** |
+| | on disk | `Opacity: 1` | **`Opacity: 0.4`** |
+
+**49.3's round trip, the check nobody had run: PASS.** Through hide → save →
+show → save → fade → save → hide → save, every element's own opacity came back
+untouched — `0.62`, **absent and still absent**, `0.37`, `0.85`, `0.44` — and
+`Name` was never written on either layer.
+
+The selection leg carries its own control on purpose. A click that catches
+nothing proves nothing on its own; the identical click on a visible bar raised
+the action bar, so the path was live and the refusal was the layer's.
+
+#### Three things that were not what they looked like
+
+**1. The one element that DID change was not the multiplier, and the suspect was
+mine.** The round trip's diff flagged exactly one field: the text box's stored
+RTF, 294 → 306 characters. The obvious culprit is
+`LayersChanged(visibilityChanged: true)` → `RebuildTextLayer`, which tears down
+and rebuilds every `RichEditBox`. **The control says no.** Reset to the seeded
+264-character form and launched with **no layer touched at all**, it came back
+**294**; launched a second time, still touching nothing, **300**. The ladder over
+this run is 264 → 294 → 306 → 312, and two of those steps happened with layers
+untouched. So:
+
+- **49.3 is clean** — the layer multiplier never reached an element.
+- **A separate, older defect is now on the record: a text box's stored RTF grows
+  by about six characters on every open-and-close, forever.** The box
+  round-trips through `RichEditBox` and comes back with one more trailing empty
+  paragraph each time, and `FlushTexts` saves it. This is 46's trailing-break
+  phenomenon, except 46 only had to *compare* around it; here it is being
+  written. On a 53 MB library with 106 notes that is not free. The first load
+  also rewrote `\fs36` to `\fs24`, but that box was seeded by hand at a size the
+  app never assigns, so that half is not established as a defect.
+
+**2. Three toggle clicks silently never happened, and the explanation I reached
+for first was wrong.** After the gallery, repeated clicks on the Layers button
+and the visibility toggle stopped doing anything. The tooltip theory was
+plausible and visible in a screenshot — Quill's own tooltip is a separate HWND
+with Quill's pid, so the z-order gate cannot tell it from the control beneath.
+**It was not the tooltip.** It was `| Select-Object -First 1` on the driver's
+output: PowerShell short-circuits the pipeline after the first object, and the
+driver writes its `click :` line **before** it calls `SendInput` — so the process
+was killed between the log line and the click. The log said the click happened
+and it never did. **A driver that reports an action before performing it can lie
+about every action it takes**; the log line now has to come after, and the tooltip
+note stands only as an untested hypothesis.
+
+**3. The "phantom" rule in the presence gate is wrong as written.** The standing
+note says *a static cursor with a resetting idle timer is a phantom*. This run
+produced that exact signature — 300 samples, **one** cursor position, **zero**
+moves, the idle timer resetting to 31 ms twice in 33 s — and one minute later the
+same probe returned **19 cursor moves and 14 idle resets**. It was not a phantom.
+It was **a person who had just unlocked the machine and was sitting still**:
+keyboard input with the mouse untouched produces the phantom signature exactly.
+The verdict happens to be the same either way (*do not drive*), which is the only
+reason the note has never cost anything — but it licenses "static cursor,
+therefore phantom, therefore proceed", and that conclusion would have driven the
+mouse out from under somebody.
+
+#### What the machine did, and the distinction that let half the work proceed
+
+Cleared at dispatch: `LogonUI` absent, 300 coherent samples, zero moves, idle
+climbing 226.6 → 259.4 s. Re-measured before launching anything, the gate had
+**failed**: the machine had locked on its own idle timer at about twelve minutes
+— the same abort run 20 took, and the **fifth** time `OpenInputDesktop` went on
+reporting the session fine while `LogonUI` was the only signal that noticed.
+
+**A distinction was drawn rather than assumed.** The gate exists to stop input
+being injected while a person may be at the machine. A locked screen means nobody
+is at the keyboard, so `w5_launch.ps1` grew an `-AllowLocked` mode that **launches
+and closes only, injects nothing and takes no screenshot** — the foreground window
+measured `Windows Default Lock Screen`, so a capture would have been the lock
+screen and not Quill. That is how the save half of the round trip was measured
+during the lock. Every `SendInput` path stayed gated. The lock then cleared, a
+person was present for four consecutive probes, and the screen pass ran only
+after a fifth probe came back **CLEAR** — zero moves, zero resets, idle climbing
+54.5 → 87.3 s.
+
+#### Left standing
+
+- **The visibility toggle cannot be operated by an assistive client.**
+  `ChromeUi.Toggle` returns a bare `Grid` with a `Tapped` handler, so it exposes
+  no `Toggle` or `Invoke` pattern; UIA can read "Layer 2" and cannot switch it.
+  Inherited from the V3 widget vocabulary and shared by every toggle row in the
+  app — Precision's, Comments', Settings' — so it is a vocabulary change, not a
+  panel one.
+- **Export is unaudited.** Whether the vector PDF and SVG emitters honour a
+  hidden layer was not established either way. They do not go through
+  `LayerMultiplier`, and 49.6 is a reason to suspect rather than to assume.
+- **`scratchpad/w5data` is left seeded and working** — point `QUILL_DATA_FOLDER`
+  at it. `w5_launch.ps1` seeds `settings.json` deliberately every launch (fixed
+  bounds, because placement is captured on `Closed` and a scratch folder
+  otherwise inherits the last run's), and refuses to start unless `Quill.exe`,
+  `Quill.dll`, `Quill.runtimeconfig.json` and `Quill.deps.json` are all present —
+  that dialog is a missing build output, not a missing runtime.
+- Both protected libraries verified **byte-identical** at the end:
+  `Documents\Quill\library.json` 53,582,459 / `0C32CE6C…` and
+  `%LOCALAPPDATA%\LectureInk\library.json` 6,461,655 / `0C6F1B7F…`, mtimes
+  untouched. No paint tile was written under `%LOCALAPPDATA%\Quill\paint`.

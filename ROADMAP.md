@@ -12,8 +12,8 @@ commits stranded on `integration` and `oilpaint` adrift on its own branch.
 `VeilRoundTrip`.
 
 **What changed most is not a feature: it is that the work is now being looked
-at, and that the checkers are now checked.** Twenty screen runs have driven the
-real app. Several items were green in every automated test and wrong on screen —
+at, and that the checkers are now checked.** Twenty-four screen runs have driven
+the real app. Several items were green in every automated test and wrong on screen —
 and, worse, **five of the ten harnesses had silently stopped compiling**, each
 broken by this cycle's own changes. A project that fails to build exits non-zero
 exactly like a check that fails, so a broken harness is indistinguishable from a
@@ -116,8 +116,17 @@ a sector used to change tool. `PdfExporter` quantised colour channels to 2.55 of
 
 - **The Precision panel has no plate at all** (see risks) — the machinery exists
   and this one panel is not using it.
-- **The four features layers was blocking**, each now one call: PSD export,
-  per-layer visibility, selection scoping, Objects rows — plus the layers panel.
+- **Layers: the panel landed and the round trip finally ran** (run 24, §49.5–49.7).
+  Per-layer visibility and opacity are reachable, hiding takes ink off the page
+  and out of reach of the selection tools, and §49.3's promise — that the
+  multiplier is applied at draw time and never written back — is **measured on
+  disk**, not asserted. Two thumbnail faults were found on the way and fixed: the
+  gallery render had never heard of layers, and the cache key in front of it
+  could not have told the difference if it had. **What is still blocked:** PSD
+  export (no writer), and **add / rename / reorder / delete**, without which
+  nothing in the app can make a second layer — so on a real page the panel has
+  one row. That is the next piece of layer work, and it is the one that makes the
+  panel worth opening.
 - **Panel-meets-panel.** The inset model handles a small window but not a panel
   meeting another panel or a dock.
 - **Per-run text colour: PARTIAL, one link unseen.** All four emitters are
