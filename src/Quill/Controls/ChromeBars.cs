@@ -1365,8 +1365,11 @@ public sealed class ChromeBars
     {
         var ops = _h.PageOps();
         var page = ops.Page();
+        // No Heading("Layers") here: CanvasPane already draws the pane's title,
+        // which doubles as its drag handle, so a heading with the same word
+        // stacks "Layers" on "Layers". Seen on screen, invisible in the code -
+        // the stub this replaced had the same duplication.
         var panel = new StackPanel { Spacing = 4, Width = 320 };
-        panel.Children.Add(ChromeUi.Heading("Layers"));
 
         if (page == null)
         {
