@@ -1,5 +1,150 @@
 # Visual verification pass — resume state
 
+## RUN OF 2026-09-10 (twenty-fourth) - the layers panel, and 49.3's round trip finally run
+
+`main` @ `a4d3f2d`, three commits on top of `3012b56`. Build **0 warnings** four
+times, all ten harnesses build and pass three times, `LayerRoundTrip` still 83
+checks. Both protected `library.json` files byte-identical at the end.
+
+**The headline: §49 was half a feature - a renderer honouring a model nothing
+could reach - and the half that was missing was not only the panel. A second
+draw path, the gallery thumbnail, had never heard of layers at all, and the
+cache key in front of it could not have told the difference if it had.**
+
+### Presence - CLEAR, then LOCKED, then a person, then CLEAR
+
+| when | LogonUI | samples | cursor | idle resets | verdict |
+|---|---|---|---|---|---|
+| dispatch | absent | 300 / 32.9 s | 1 spot, 0 moves | 0 | CLEAR |
+| before launching | **RUNNING** | - | - | - | machine auto-locked at ~12 min |
+| after the lock cleared | absent | 300 / 32.9 s | 1 spot, **0 moves** | **2**, cursor static | NOT CLEAR |
+| +1 min | absent | 300 / 33.0 s | **19 moves** | 14 | NOT CLEAR - a person |
+| +2, +3 min | absent | 300 | 0 then 12 moves | 3, 3 | NOT CLEAR |
+| +4 min | absent | 300 / 32.9 s | 1 spot, 0 moves | 0, idle 54.5 -> 87.3 s | **CLEAR** |
+| before the last launch | absent | 300 | 1 spot, 0 moves | 0 | **CLEAR** |
+
+Two things came out of that sequence and both are corrections to standing notes.
+
+**`OpenInputDesktop` was wrong for the fifth time.** It reported the session fine
+throughout the lock; `LogonUI` was the only signal that noticed. The gate checks
+it separately and that is why.
+
+**The "phantom" rule is wrong as written.** The note says *a static cursor with a
+resetting idle timer is a phantom*. The reading right after the unlock was
+exactly that - one cursor position, zero moves, the timer resetting to 31 ms
+twice in 33 s - and sixty seconds later the same probe returned **19 cursor moves
+and 14 idle resets**. It was a **person who had just unlocked the machine and was
+sitting still**: keyboard input with the mouse untouched reproduces the phantom
+signature precisely. The verdict is the same either way, which is why it has
+never cost anything, but the note licenses "static cursor, therefore phantom,
+therefore proceed".
+
+**A distinction was drawn rather than assumed.** The gate exists to stop input
+being injected while a person may be at the machine. A locked screen means nobody
+is at the keyboard, so `w5_launch.ps1` grew `-AllowLocked`: launch and close
+only, nothing injected, no screenshot (the foreground window measured `Windows
+Default Lock Screen`, so a capture would have been the lock screen). That is how
+the save half of the round trip was measured during the lock. Every `SendInput`
+path stayed gated, and the screen pass waited for a genuine CLEAR.
+
+### The set-up, because the page is the experiment
+
+Nothing in Quill creates a second layer - add, rename, reorder and delete are all
+still unbuilt - so the two-layer page had to be **seeded by hand**
+(`scratchpad/w5_seed.py`, left in place at `scratchpad/w5data`). Every element
+carries a distinctive own opacity and **none of them is 1**, which is the only
+shape in which the round trip can fail loudly:
+
+| layer | content | own opacity |
+|---|---|---|
+| key 1, top, "Layer 2" | crimson bar y=520 | 0.37 |
+| | crimson bar y=600 | 0.85 |
+| | rect y=660 | 0.44 |
+| | text box y=770 | - |
+| key 0, base, "Layer 1" | black bar y=300 | 0.62 |
+| | black bar y=380 | **absent** |
+
+### What was measured
+
+| leg | probe | before | after |
+|---|---|---|---|
+| panel opens | - | - | two rows, **top first**, "Layer 2" (4 objects) over "Layer 1" (2 objects) |
+| **hide layer 2** | crimson bar | `#D25284` | **`#FCFCFC`** - bare paper |
+| | layer 1 bars | `#202020` / `#141413` | **unchanged** |
+| **click on the hidden ink** | selection | - | **nothing caught** |
+| **control: same click on a visible bar** | selection | - | **action bar raised** |
+| **show it again** | crimson bar | `#FCFCFC` | **`#D25284`** - identical value |
+| **opacity to 40** | crimson bar | `#D25284` | **`#E6A5BF`** |
+| | layer 1 bars | unchanged | **unchanged** |
+| | on disk | `Opacity: 1` | **`Opacity: 0.4`** |
+| **gallery, layer faded** | page card | - | layer 2 renders **pink**, layer 1 solid black |
+| **gallery, layer hidden** | cover card | key `d0c0aa89…`, 2698 B | key **`5e33bfdc…`**, 1670 B, layer 1 only |
+
+**49.3's round trip - the check nobody had run - PASSES.** After hide, save,
+show, save, fade, save, hide, save, every element's own opacity is untouched:
+`0.62`, **absent and still absent**, `0.37`, `0.85`, `0.44`. `Name` was never
+written on either layer, and `Hidden` came back **absent** rather than `false` on
+the layer that was hidden and shown again - the zero value restored, not
+inverted.
+
+Contrast sampled off the open panel on the default `#FCFCFC` paper: row label
+**17.96:1**, "On this page" heading **17.96:1**, panel caption **5.43:1**, per-row
+caption **4.56:1**, the stock Slider's own header **16.79:1**. Computed worst over
+all nine shipped papers, from `PanelProof` section 10: **3.006:1** (Brown Paper,
+muted). Nothing under 3:1.
+
+### Three things that were not what they looked like
+
+**1. The one element that changed was not the multiplier, and the suspect was
+mine.** The round trip flagged exactly one field: the text box's RTF, 294 -> 306
+characters. The obvious culprit is `RebuildTextLayer`, which the visibility
+toggle calls. **Controlled and cleared:** reset to the seeded 264-character form
+and launched with **no layer touched**, it came back 294; launched again, still
+touching nothing, 300. Two of the ladder's steps happened with layers untouched,
+so 49.3 is clean - and a **separate, older defect** is now on the record: **a text
+box's stored RTF grows by about six characters on every open-and-close**, forever.
+The box round-trips through `RichEditBox`, comes back with one more trailing empty
+paragraph, and `FlushTexts` saves it. §46 only had to compare around that
+newline; here it is being written, and on a 53 MB library with 106 notes it is
+not free.
+
+**2. Three clicks silently never happened, and my first explanation was wrong.**
+Repeated clicks stopped doing anything. The tooltip theory was plausible and even
+visible in a screenshot - Quill's own tooltip is a separate HWND sharing Quill's
+pid, so the z-order gate cannot tell it from the control beneath. **It was not
+the tooltip.** It was `| Select-Object -First 1` on the driver's output:
+PowerShell short-circuits the pipeline after the first object, and the driver
+wrote its `click :` line **before** calling `SendInput`, so the process was killed
+between the log line and the click. **The log said the click happened and it never
+did.** A driver that reports an action before performing it can lie about every
+action it takes. The tooltip note survives only as an untested hypothesis.
+
+**3. A duplicated heading that no checker could see.** The panel opened with
+"Layers" stacked on "Layers" - `CanvasPane` already draws the pane title, which
+doubles as its drag handle. UIA confirms two Text elements named `Layers`. The
+stub this replaced had the same duplication, so it had been there all along; it
+survived every build, every harness and a reading of the method, and one look at
+the panel caught it (`a4d3f2d`).
+
+### Left for the next run
+
+- **Export is unaudited for layers.** Whether the vector PDF and SVG emitters
+  honour a hidden layer was not established either way. They do not go through
+  `LayerMultiplier`, and §49.6 is a reason to suspect rather than assume.
+- **The toggle is not operable by an assistive client.** `ChromeUi.Toggle`
+  returns a bare `Grid` with a `Tapped` handler and exposes no `Toggle` or
+  `Invoke` pattern; UIA reads "Layer 2" and cannot switch it. Shared by every
+  toggle row in the app, so it is a vocabulary change, not a panel one.
+- **The RTF growth above.** Cheap to reproduce: launch, close, read the length.
+- `scratchpad/w5data` is seeded and working; `w5_launch.ps1` re-seeds
+  `settings.json` deliberately every launch (placement is captured on `Closed`,
+  so a scratch folder otherwise inherits the last run's bounds) and refuses to
+  start unless `Quill.exe`, `Quill.dll`, `Quill.runtimeconfig.json` and
+  `Quill.deps.json` are all present - that dialog is a missing build output, not
+  a missing runtime.
+
+---
+
 ## RUN OF 2026-09-08 (twenty-third) - the two rulings shipped, and oil paint established at last
 
 Three jobs, all three closed. Two commits: `fa90608` (jobs 1+2, Settings) and
