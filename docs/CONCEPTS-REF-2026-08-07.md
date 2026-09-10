@@ -10062,3 +10062,67 @@ headless coverage at all, and cannot easily have any — `AppWindow`, presenters
 `ShowWindow` need a real window. All ten stayed green throughout, and would have
 stayed green if the maximise had been broken. The evidence for 5.2 is the
 measurement table in 48.1 and nothing else.
+
+## 49 Per-layer visibility: one answer, asked once — 2026-09-10
+
+§18 landed the layer **model** and 83 checks, and said the panel was deliberately
+not built with it. This is the first half of building on it: **the render path
+now honours `Hidden` and the per-layer opacity.** The panel is NOT part of this
+section — see §49.4 for what that leaves broken.
+
+Written by the orchestrator from the code an interrupted run left in the tree
+(the machine went down mid-job), verified by build and by all ten harnesses
+including `LayerRoundTrip`'s 83, and **not verified on screen.**
+
+### 49.1 One answer, and only one place asks for it
+
+`InkSurface.LayerMultiplier(layerKey)` is the render-time answer, and it defers
+entirely to `PageLayers.EffectiveOpacity`. **0 means hidden — draw nothing at
+all**, so hiding is not a separate branch in the draw path; it is the zero of the
+same number the opacity multiplier already produces.
+
+That collapse is the point. A hidden layer and a zero-opacity layer are the same
+thing to a renderer, and giving them two code paths is how they eventually
+disagree about one layer.
+
+### 49.2 Selection goes through the same fact
+
+Hiding a layer must also stop it being **hit-tested**, or the user can grab
+something they cannot see, move it, and never know. That goes through
+`PageLayers.CanSelect` into `CanCatch` — deliberately **not** a second,
+separately-written idea of "is this layer showing".
+
+This codebase has produced that defect repeatedly in another form: §0's contract
+fires when a mark's colour is resolved from one surface and drawn on another.
+The shape is identical — two places computing what should be one fact — and it
+has cost six sections to date.
+
+### 49.3 Nothing is written back
+
+The layer's opacity is a **multiplier applied at draw time**, never persisted
+into an element. §18.8 states this and says explicitly that it is the same
+promise §16.7 makes about the selection veil, kept the same way — so the veil's
+mechanism is the one followed here rather than a second one invented.
+
+The consequence to preserve: hiding a layer, saving, and unhiding must return
+every element's own opacity **unchanged**. That is a round-trip check nobody has
+run on screen yet.
+
+### 49.4 WHAT THIS LEAVES BROKEN, and it is user-facing
+
+**There is still no layers panel**, so nothing in the UI can set `Hidden` or the
+opacity. The model is honoured by the renderer and unreachable by the user.
+
+Worse, `ChromeBars.cs:1354` still tells the user:
+
+> *"Quill has no layer model yet. Every stroke, shape and text box on a page
+> lives in one single stack…"*
+
+with two controls disabled on the tip *"Not available: there is no layer model to
+switch."* **All three statements are now false.** That copy predates §18 and was
+correct when written; it is not correct now, and it is exactly the class of thing
+this file records as a defect when a comment outlives the code it describes.
+
+Until the panel lands, the honest position is that this section is **half a
+feature**: the renderer is ready, the user cannot reach it, and the UI actively
+says the opposite.

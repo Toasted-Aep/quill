@@ -3513,6 +3513,60 @@ public sealed class InkSurface : UserControl
         return PageLayers.CanSelect(_page, layerKey, SelectScope);
     }
 
+    /// <summary>§49 / 18.8: THE RENDER-TIME LAYER ANSWER, and the only place the
+    /// draw path asks for it. 0 means "hidden - draw nothing at all".
+    ///
+    /// <para>Goes through <see cref="PageLayers.EffectiveOpacity"/> and nowhere
+    /// else, for 18.1's reason: the selection path already asks
+    /// <see cref="PageLayers.CanSelect"/> through <see cref="CanCatch"/>, and a
+    /// second, separately-written idea of "is this layer showing" is how the two
+    /// eventually disagree about the same layer.</para>
+    ///
+    /// <para><b>A read. It cannot write.</b> The multiplier is handed to a LOCAL
+    /// in <see cref="DrawStroke"/>/<see cref="DrawShape"/> at the exact point the
+    /// element's own opacity is resolved for drawing, which is the shape 16.7
+    /// item 1 already uses for the veil: a local in, a local out, no reference to
+    /// the element to write back through. 18.8's "applied at DRAW TIME and never
+    /// written back" is kept the same way, by the same means.</para></summary>
+    private float LayerMultiplier(int layerKey)
+        => _page == null ? 1f : PageLayers.EffectiveOpacity(_page, layerKey);
+
+    /// <summary>§49: call after ANY change to a layer's Hidden or Opacity.
+    ///
+    /// <para><b>The ink cache is the whole reason this exists.</b> #43's cache
+    /// holds RENDERED PIXELS of every settled stroke, and it is only rebuilt
+    /// when something marks it dirty. Hiding a layer changes what should be in
+    /// those pixels without touching a single stroke, so on any page at or over
+    /// <c>InkCacheThreshold</c> the layer would go on showing from the cache and
+    /// the feature would look broken on exactly the big pages it matters on -
+    /// while working perfectly on every small page anyone tested it with. This
+    /// is the same hazard 16.7 met and answered by standing the cache down for
+    /// the duration of a fade; a fade is per-frame, a layer toggle is discrete,
+    /// so a dirty flag is the right form of the same answer.</para>
+    ///
+    /// <para>The text layer is rebuilt for the reason
+    /// <see cref="RebuildTextLayer"/> gives: a hidden layer's boxes must stop
+    /// existing, not merely stop being painted.</para>
+    ///
+    /// <para><paramref name="visibilityChanged"/> false is the OPACITY-SLIDER
+    /// path, and it exists to avoid two real costs. A full
+    /// <see cref="RebuildTextLayer"/> tears down and rebuilds every
+    /// <c>RichEditBox</c> on the page - expensive on a text-heavy page at slider
+    /// tick rate - and it CLEARS <see cref="ActiveTextBox"/>, so dragging the
+    /// slider while a box had the caret would take the caret away on the first
+    /// tick. Nothing appears or disappears when only the multiplier moves, so
+    /// the existing containers just take the new value.</para></summary>
+    public void LayersChanged(bool visibilityChanged = true)
+    {
+        _inkCacheDirty = true;
+        if (visibilityChanged) RebuildTextLayer();
+        else if (_page != null)
+            foreach (var t in _page.Texts)
+                if (_textUi.TryGetValue(t.Id, out var ui))
+                    ui.Container.Opacity = LayerMultiplier(t.LayerKey);
+        _canvas.Invalidate();
+    }
+
     private void SelectWithLasso(List<Vector2> poly)
     {
         if (_page == null) return;
@@ -5683,7 +5737,11 @@ public sealed class InkSurface : UserControl
             // is selected stays in the pen's own colour under the tip, and joins
             // the faded page only once it is committed and the selection that
             // caused the fade is still standing.
-            DrawStroke(ds, sender, temp, Vector2.Zero, null, veil: false);
+            // §49: layerMul 1 for the same reason veil is false. `temp` is the
+            // gesture, not the page - it carries no LayerKey, so a lookup would
+            // judge it against the BASE layer and hide the ink under the nib the
+            // moment the base layer happened to be hidden.
+            DrawStroke(ds, sender, temp, Vector2.Zero, null, veil: false, layerMul: 1f);
         }
 
         var accent = Accent;   // follows the app accent (#6-batch3)
@@ -6266,12 +6324,25 @@ public sealed class InkSurface : UserControl
     /// <param name="veil">16.7's page fade. False for the WET stroke - ink under
     /// the nib is not yet part of the page and must never grey mid-gesture - and
     /// for anything that is itself the selection subject.</param>
+    /// <param name="layerMul">§49. Null asks <see cref="LayerMultiplier"/> for
+    /// this stroke's layer, which is what every page-render path wants. Pass 1
+    /// for a stroke that is NOT page content and must draw regardless: the wet
+    /// stroke under the nib, which belongs to the gesture rather than to the
+    /// page yet.</param>
     private void DrawStroke(CanvasDrawingSession ds, ICanvasResourceCreator rc, PenStroke s, Vector2 offset,
-                            int? pointLimit, bool veil = true)
+                            int? pointLimit, bool veil = true, float? layerMul = null)
     {
         var pts = s.Points;
         int n = Math.Min(pointLimit ?? pts.Count, pts.Count);
         if (n == 0) return;
+
+        // §49: a hidden layer draws NOTHING, and that has to be a return rather
+        // than a multiply-by-zero. The `op` clamp below has a 0.02 floor - it is
+        // there so a fully transparent pen still leaves a findable hairline
+        // instead of invisible geometry - and a hidden layer pushed through it
+        // would come out as a 2% ghost of the drawing rather than as nothing.
+        float lm = layerMul ?? LayerMultiplier(s.LayerKey);
+        if (lm <= 0f) return;
 
         // 16.7, THE ONE INTERCEPT. This is the only place a stroke's stored
         // colour string becomes a draw colour; every alpha and grain variant
@@ -6281,7 +6352,9 @@ public sealed class InkSurface : UserControl
         // Every alpha this method lays down is scaled by the stroke's own
         // opacity. Clamped off zero so a fully transparent pen still leaves a
         // hairline the user can find and erase rather than invisible geometry.
-        float op = Math.Clamp(s.Opacity ?? 1f, 0.02f, 1f);
+        // §49: the LAYER's multiplier composes here, on the same local, so the
+        // whole of 18.8 is one multiplication and cannot reach `s.Opacity`.
+        float op = Math.Clamp((s.Opacity ?? 1f) * lm, 0.02f, 1f);
         byte Al(int a) => (byte)Math.Clamp(a * op, 1, 255);
         color.A = Al(color.A);
 
@@ -6406,9 +6479,14 @@ public sealed class InkSurface : UserControl
     /// <summary>Draws <paramref name="s"/> through the REAL stroke renderer onto
     /// any session. The dial's preview circle goes through here, so what the user
     /// sees while scrubbing is produced by the same code that lays ink on the
-    /// page — never a UI ellipse standing in for it.</summary>
+    /// page — never a UI ellipse standing in for it.
+    ///
+    /// <para>§49: <c>layerMul: 1</c>. Every caller hands this a SYNTHETIC stroke
+    /// built to show a pen setting, not an element off the page, so it carries
+    /// LayerKey 0 by construction - and looking that up would blank the dial's
+    /// preview whenever the base layer happened to be hidden.</para></summary>
     public void RenderStrokeTo(CanvasDrawingSession ds, ICanvasResourceCreator rc,
-        PenStroke s, Vector2 offset = default) => DrawStroke(ds, rc, s, offset, null);
+        PenStroke s, Vector2 offset = default) => DrawStroke(ds, rc, s, offset, null, layerMul: 1f);
 
     /// <summary>The widest this stroke will actually be drawn, in DIP.
     ///
@@ -7128,8 +7206,18 @@ public sealed class InkSurface : UserControl
 
     /// <param name="veil">16.7 again — false for the subject and for the grain
     /// passes, which re-enter carrying the already-veiled colour.</param>
-    private void DrawShape(CanvasDrawingSession ds, ShapeElement s, bool veil = true)
+    /// <param name="layerMul">§49, and it has the same clone hazard `veil` has.
+    /// Null looks the shape's layer up. The GRAIN PASSES below re-enter this
+    /// method as clones that carry the multiplier ALREADY BAKED INTO their own
+    /// Opacity, so they pass 1 — looking it up again would square the multiplier
+    /// on every grainy pen, and a clone's LayerKey would be the base layer's in
+    /// any case.</param>
+    private void DrawShape(CanvasDrawingSession ds, ShapeElement s, bool veil = true, float? layerMul = null)
     {
+        // §49: hidden means nothing is drawn, not a 2% ghost - see DrawStroke.
+        float lm = layerMul ?? LayerMultiplier(s.LayerKey);
+        if (lm <= 0f) return;
+
         Matrix3x2 prevT = ds.Transform;
         bool rot = Math.Abs(s.Rotation) > 0.01;
         if (rot)
@@ -7169,7 +7257,10 @@ public sealed class InkSurface : UserControl
         List<ShapeElement>? overGrain = null;
         if (inked)
         {
-            float op = Math.Clamp(s.Opacity <= 0f ? 1f : s.Opacity, 0.02f, 1f);
+            // §49: the layer's multiplier composes on this local, exactly as it
+            // does in DrawStroke, and is therefore already inside every grain
+            // pass's Opacity below.
+            float op = Math.Clamp((s.Opacity <= 0f ? 1f : s.Opacity) * lm, 0.02f, 1f);
             color.A = (byte)Math.Clamp(PenStyle.Alpha(s.Pen) * op, 1, 255);
             w = PenStyle.Width(s.Pen, Math.Max(1f, s.Size));
             foreach (var g in PenStyle.Grain(s.Pen))
@@ -7189,9 +7280,20 @@ public sealed class InkSurface : UserControl
                 };
                 // `veil` has to ride along: the pass is a CLONE and so is not in
                 // the selection sets, so it would fade under an exempt subject.
-                if (PenStyle.GrainUnderneath(s.Pen)) DrawShape(ds, pass, veil);
+                // §49: layerMul does NOT ride along - `op` above already carries
+                // it into pass.Opacity, so looking it up again would square it.
+                if (PenStyle.GrainUnderneath(s.Pen)) DrawShape(ds, pass, veil, layerMul: 1f);
                 else (overGrain ??= new List<ShapeElement>()).Add(pass);
             }
+        }
+        else if (lm < 1f)
+        {
+            // §49: Image and Table are exempt from the pen treatment above, so
+            // the multiplier has nowhere to compose into for them. A table's
+            // rules are a mark like any other and take it on their alpha; the
+            // image cases below take it as a draw opacity, because a photograph
+            // has no stored colour to scale.
+            color.A = (byte)Math.Clamp(color.A * lm, 0, 255);
         }
         switch (s.Kind)
         {
@@ -7240,16 +7342,20 @@ public sealed class InkSurface : UserControl
                                 M51 = 1, M52 = 1, M53 = 1, M54 = 0
                             }
                         };
-                        ds.DrawImage(inv, r, new Rect(0, 0, bmp.Size.Width, bmp.Size.Height));
+                        // §49: the layer multiplier as a DRAW opacity. The
+                        // bitmap is not touched - this is the same promise the
+                        // veil's composite below makes, one frame only.
+                        ds.DrawImage(inv, r, new Rect(0, 0, bmp.Size.Width, bmp.Size.Height), lm);
                     }
                     else
                     {
-                        ds.DrawImage(bmp, r);
+                        ds.DrawImage(bmp, r, new Rect(0, 0, bmp.Size.Width, bmp.Size.Height), lm);
                     }
                 }
                 else
                 {
-                    ds.DrawRectangle(r, Color.FromArgb(130, 128, 128, 128), 1.5f, _dashStyle);
+                    ds.DrawRectangle(r, Color.FromArgb((byte)Math.Clamp(130 * lm, 0, 255), 128, 128, 128),
+                                     1.5f, _dashStyle);
                     if (s.ImagePath != null) RequestBitmap(s.ImagePath);
                 }
                 // 16.7 for an attachment that is NOT the subject. A photograph
@@ -7357,7 +7463,7 @@ public sealed class InkSurface : UserControl
         // stroke renderer lays it. Inside the rotate/settle transform, so a
         // rotated shape's grain rotates with it.
         if (overGrain != null)
-            foreach (var pass in overGrain) DrawShape(ds, pass, veil);
+            foreach (var pass in overGrain) DrawShape(ds, pass, veil, layerMul: 1f);   // §49: already baked in
         if (rot || settling) ds.Transform = prevT;   // settle pulse also bends the transform
     }
 
@@ -9063,7 +9169,22 @@ public sealed class InkSurface : UserControl
         LastTextBox = null;
         if (_page == null) return;
         foreach (var t in _page.Texts)
+        {
+            // §49: a text box is a XAML overlay, not a Win2D mark, so the layer
+            // answer lands here instead of in a draw call. A hidden layer's box
+            // is NOT BUILT AT ALL rather than built and collapsed - a
+            // RichEditBox that exists is focusable, hit-testable and Tab-
+            // reachable, so a collapsed one would still be a way to type into
+            // a layer the user cannot see.
+            float lm = LayerMultiplier(t.LayerKey);
+            if (lm <= 0f) continue;
             BuildTextUi(t);
+            // The multiplier rides on the CONTAINER's render opacity, which is a
+            // property of this frame's visual and not of the element. 18.8's
+            // "never written back" is kept because there is nothing here that
+            // could write: t is only read.
+            if (lm < 1f && _textUi.TryGetValue(t.Id, out var ui)) ui.Container.Opacity = lm;
+        }
     }
 
     private static readonly System.Text.RegularExpressions.Regex UrlRx = new(
