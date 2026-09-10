@@ -9991,13 +9991,17 @@ public sealed class InkSurface : UserControl
 
                 foreach (var sh in page.Shapes)
                 {
-                    var color = forceInk ?? ColorUtil.Parse(sh.Color);
+                    float lm = ThumbLayerMul(page, sh.LayerKey);
+                    if (lm <= 0f) continue;
+                    var color = ThumbFade(forceInk ?? ColorUtil.Parse(sh.Color), lm);
                     ds.DrawRectangle(new Rect(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H)), color, Math.Max(1f, sh.Size));
                 }
 
                 foreach (var s in page.Strokes)
                 {
-                    var color = forceInk ?? ColorUtil.Parse(s.Color);
+                    float lm = ThumbLayerMul(page, s.LayerKey);
+                    if (lm <= 0f) continue;
+                    var color = ThumbFade(forceInk ?? ColorUtil.Parse(s.Color), lm);
                     for (int i = 1; i < s.Points.Count; i++)
                     {
                         ds.DrawLine(new Vector2(s.Points[i - 1].X, s.Points[i - 1].Y), new Vector2(s.Points[i].X, s.Points[i].Y), color, s.Size);
@@ -10012,12 +10016,14 @@ public sealed class InkSurface : UserControl
                     : Color.FromArgb(255, 0xF4, 0xF2, 0xEC));
                 foreach (var t in page.Texts)
                 {
+                    float lm = ThumbLayerMul(page, t.LayerKey);
+                    if (lm <= 0f) continue;
                     string txt = StripRtf(t.Rtf);
                     if (string.IsNullOrEmpty(txt)) continue;
                     using var layout = new CanvasTextLayout(device, txt,
                         new CanvasTextFormat { FontSize = 16f },
                         (float)Math.Max(24, t.Width), 4000);
-                    ds.DrawTextLayout(layout, (float)t.X, (float)t.Y, textCol);
+                    ds.DrawTextLayout(layout, (float)t.X, (float)t.Y, ThumbFade(textCol, lm));
                 }
             }
 
@@ -10039,9 +10045,37 @@ public sealed class InkSurface : UserControl
         }
     }
 
+    /// <summary>§49.6: the thumbnail's layer answer, and it is the SAME
+    /// question <see cref="LayerMultiplier"/> asks - <see cref="PageLayers.EffectiveOpacity"/>
+    /// - because §49.1's whole point is that a hidden layer and a zero-opacity
+    /// layer are one fact with one answer.
+    ///
+    /// <para>Static, because the thumbnail render is: it has a page and no
+    /// surface. That is exactly why this path missed layers in the first place -
+    /// it is the one draw loop in this file that cannot reach the instance
+    /// method, and so it quietly went on drawing everything.</para>
+    ///
+    /// <para>A page with no Layers array answers 1 for every key, so every
+    /// thumbnail ever rendered stays bit-identical and no cached PNG is
+    /// invalidated by this existing.</para></summary>
+    private static float ThumbLayerMul(NotePage page, int layerKey)
+        => PageLayers.EffectiveOpacity(page, layerKey);
+
+    /// <summary>Applies a layer multiplier to a thumbnail mark's ALPHA. The
+    /// thumbnail has always drawn flat colour and dropped each element's own
+    /// opacity; this does not change that, it only lets a faded LAYER read as
+    /// faded on the card. At a multiplier of 1 the colour is returned
+    /// untouched, so nothing that has no layers changes by a single byte.</summary>
+    private static Color ThumbFade(Color c, float mul)
+        => mul >= 1f ? c : Color.FromArgb((byte)Math.Round(c.A * Math.Clamp(mul, 0f, 1f)), c.R, c.G, c.B);
+
     // Union of everything drawn on the page, padded and then grown to the
     // target's aspect ratio so the fit is exact without cropping. Growing in
     // height anchors the top: notes read downward, so the top is what matters.
+    //
+    // §49.6: hidden layers are left OUT of the union. A cover thumbnail that
+    // cropped to content would otherwise frame the empty space where a hidden
+    // layer's ink used to be, which is the same defect one step removed.
     private static bool TryContentBounds(NotePage page, int targetWidth, int targetHeight,
                                          out double x, out double y, out double w, out double h)
     {
@@ -10058,15 +10092,20 @@ public sealed class InkSurface : UserControl
         foreach (var s in page.Strokes)
         {
             if (s.Points.Count == 0) continue;
+            if (ThumbLayerMul(page, s.LayerKey) <= 0f) continue;
             s.GetBounds(out float a, out float b, out float c, out float d);
             float pad = s.Size * 0.5f;
             Add(a - pad, b - pad, c + pad, d + pad);
         }
         foreach (var sh in page.Shapes)
+        {
+            if (ThumbLayerMul(page, sh.LayerKey) <= 0f) continue;
             Add(Math.Min(sh.X, sh.X + sh.W), Math.Min(sh.Y, sh.Y + sh.H),
                 Math.Max(sh.X, sh.X + sh.W), Math.Max(sh.Y, sh.Y + sh.H));
+        }
         foreach (var t in page.Texts)
         {
+            if (ThumbLayerMul(page, t.LayerKey) <= 0f) continue;
             if (string.IsNullOrEmpty(StripRtf(t.Rtf))) continue;
             Add(t.X, t.Y, t.X + Math.Max(24, t.Width), t.Y + 48);
         }

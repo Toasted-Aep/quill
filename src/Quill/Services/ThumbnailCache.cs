@@ -32,11 +32,30 @@ public static class ThumbnailCache
         return h;
     }
 
-    /// <summary>Cheap stamp over everything that changes the picture.</summary>
+    /// <summary>Cheap stamp over everything that changes the picture.
+    ///
+    /// <para><b>§49.6: the layer list is part of "the picture".</b> Hiding a
+    /// layer changes what the page looks like without touching one stroke, so a
+    /// stamp that did not mix the layers left the key identical, and the gallery
+    /// served the STALE PNG of a page whose ink had gone. That is §49's ink-cache
+    /// hazard one cache further out, and <c>InkSurface.LayersChanged</c> does not
+    /// reach this one - the key has to carry the fact instead.</para>
+    ///
+    /// <para>Mixed ONLY when the page actually carries a layer list. A page that
+    /// has never been near a layers UI keeps the stamp it has always had, so this
+    /// invalidates nothing that exists - the same migration promise the model
+    /// itself is built on.</para></summary>
     public static string Stamp(NotePage page)
     {
         ulong h = 14695981039346656037UL;
         h = MixStr(h, page.Background);
+        if (page.Layers is { Count: > 0 } layers)
+            foreach (var l in layers)
+            {
+                h = MixNum(h, l.Key);
+                h = MixNum(h, l.Hidden ? 1 : 0);
+                h = MixNum(h, (long)Math.Round(l.Opacity * 1000f));
+            }
         h = MixNum(h, page.Strokes.Count);
         h = MixNum(h, page.Shapes.Count);
         h = MixNum(h, page.Texts.Count);
