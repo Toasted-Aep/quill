@@ -33,9 +33,11 @@ namespace Quill.Controls;
 ///
 /// <para><b>Nothing here fakes a file.</b> Quill can write JPG, PNG, SVG, the
 /// native .quill bundle, a flattened PDF and a vector PDF, and those are wired
-/// through to the real exporters. It has no DXF writer and no layer model, so
+/// through to the real exporters. It has no DXF writer and no PSD writer, so
 /// DXF and PSD are SHOWN — the reference has them — but disabled, with a
-/// tooltip that says why. The same rule governs the region chips and the two
+/// tooltip that says why. PSD's reason CHANGED at §49.5 and the tooltip changed
+/// with it: the layer model landed at 18 and the panel that reaches it at 49.5,
+/// so what is missing is now the writer alone. The same rule governs the region chips and the two
 /// option toggles: a combination the pipeline cannot honour is disabled and
 /// explains itself rather than silently producing the wrong file.</para>
 /// </summary>
@@ -83,7 +85,7 @@ public sealed class ExportWindow
             "Quill has no DXF writer yet. It is shown here so the row matches the design, but exporting it would produce a file that is not really DXF."),
         new(Fmt.Psd, "PSD", "Lossless", Kind.None, ".psd", "Photoshop document",
             "A layered Photoshop document.",
-            "Quill has neither a layer model nor a PSD writer yet, so there is nothing honest to put in the layers of a PSD."),
+            "Quill has no PSD writer yet. The layers themselves are real — the page carries them and the Layers panel sets them — but nothing here can write the file."),
         new(Fmt.Quill, ".quill", "Native", Kind.Native, ".quill", "Quill page",
             "Quill's own format: every stroke, image and text box exactly as stored, and re-importable with no loss."),
         new(Fmt.PdfFlat, "PDF", "Flattened", Kind.Raster, ".pdf", "PDF document",

@@ -1344,29 +1344,57 @@ public sealed class ChromeBars
     }
 
     // =====================================================================
-    // LAYERS — no model exists, and this panel says so
+    // LAYERS — the model's own visibility and opacity, reachable at last
+    // (§49.5).
+    //
+    // §18 landed the model and §49 taught the renderer to honour it, and until
+    // this method existed the result was HALF A FEATURE: the draw path read
+    // Hidden and Opacity off every layer and nothing in the app could set
+    // either. Worse, the copy that used to stand here told the user there was
+    // no layer model at all, which stopped being true at §18.
+    //
+    // SCOPE, and it is deliberately narrow: NAME, VISIBILITY, OPACITY. No
+    // reorder, no rename, no add, no delete. Deleting a layer destroys drawing
+    // by the user's own ruling (18.12 item 3) and is only safe through
+    // RemoveLayerAction on the undo stack; add, rename and reorder are the other
+    // half of that same piece of work. A control that is not here cannot lie
+    // about what it does (16.3), which is the whole reason the two dead toggles
+    // that used to sit here were a defect worth a section.
     // =====================================================================
     private FrameworkElement BuildLayersPanel()
     {
+        var ops = _h.PageOps();
+        var page = ops.Page();
         var panel = new StackPanel { Spacing = 4, Width = 320 };
         panel.Children.Add(ChromeUi.Heading("Layers"));
-        panel.Children.Add(ChromeUi.Caption(
-            "Quill has no layer model yet. Every stroke, shape and text box on a page lives in one single stack, " +
-            "so there is nothing here to show, reorder, hide or lock."));
-        panel.Children.Add(ChromeUi.Rule());
-        panel.Children.Add(ChromeUi.Caption(
-            "The button is here because the bar's shape is fixed by the design, and because layers are the " +
-            "dependency several other features are waiting on: PSD export, per-layer visibility, the selection " +
-            "tool's layer scope and the Objects panel's per-object rows all need it first."));
 
-        // A disabled preview of the row this panel WILL carry, so the shape of
-        // the feature is legible without pretending it works.
-        var preview = new StackPanel { Spacing = 0, Opacity = 0.45, Margin = new Thickness(0, 6, 0, 0) };
-        preview.Children.Add(ChromeUi.ToggleRow("Layer 1", true, _ => { }, enabled: false,
-            tip: "Not available: there is no layer model to switch."));
-        preview.Children.Add(ChromeUi.ToggleRow("Background", true, _ => { }, enabled: false,
-            tip: "Not available: there is no layer model to switch."));
-        panel.Children.Add(preview);
+        if (page == null)
+        {
+            panel.Children.Add(ChromeUi.Caption("No page is open."));
+            return panel;
+        }
+
+        // ONE source for what is on which layer: the SAME buckets the renderer
+        // paints and PSD export will iterate (18.5). A row built from a second
+        // count of its own is how a panel eventually reports content the draw
+        // path puts somewhere else.
+        var buckets = PageLayers.InOrder(page).ToList();
+
+        panel.Children.Add(ChromeUi.Caption(
+            "Hiding a layer takes its ink off the page and out of reach of the selection tools. Opacity " +
+            "multiplies what is drawn — it is never written into the marks themselves, so hiding a layer, " +
+            "saving, and showing it again gives every mark back exactly as it was."));
+
+        // TOP LAYER FIRST. InOrder yields BOTTOM first because that is paint
+        // order; a layers list reads the other way up, which is the same
+        // direction PageLayers.Rows already walks and for the same reason.
+        for (int i = buckets.Count - 1; i >= 0; i--)
+            panel.Children.Add(BuildLayerRow(page, buckets[i]));
+
+        if (buckets.Count == 1)
+            panel.Children.Add(ChromeUi.Caption(
+                "This page has one layer, so hiding it hides the page. Making a second one is not built yet — " +
+                "add, rename and reorder land together."));
 
         // The page inventory used to be the Objects panel's job. Objects is now
         // the object LIBRARY (V3 L) - a place to get things from, not a report of
@@ -1375,6 +1403,111 @@ public sealed class ChromeBars
         panel.Children.Add(ChromeUi.Rule());
         panel.Children.Add(BuildInventory());
         return panel;
+    }
+
+    /// <summary>One layer's row: its name, whether it is visible, and its
+    /// opacity — the three things §49.4 said the user could not reach.
+    ///
+    /// <para><b>The name is SHOWN and never written back.</b>
+    /// <see cref="PageLayers.DisplayName"/> derives "Layer N" from position for a
+    /// layer with no name the user chose, and 18 is explicit about why nothing
+    /// may persist that: inventing one and storing it "would make a derived label
+    /// look like a decision". So this row reads it and stops. Nothing in this
+    /// file assigns to <see cref="Layer.Name"/>.</para>
+    ///
+    /// <para><b>The switch says "visible" and the field is <c>Hidden</c>.</b>
+    /// Hidden is the field precisely so that false — today's behaviour — is the
+    /// zero value and costs nothing to write. A person is switching visibility,
+    /// not hiddenness, so the inversion happens HERE, in one expression, and
+    /// never on disk.</para>
+    ///
+    /// <para>Nothing in this row rebuilds the panel. The toggle repaints its own
+    /// pill and the slider carries its own thumb, so a rebuild would only be a
+    /// chance to tear down the element the user is still touching.</para></summary>
+    private FrameworkElement BuildLayerRow(NotePage page, LayerContent content)
+    {
+        var ops = _h.PageOps();
+        var layer = content.Layer;
+        int key = layer.Key;
+        string name = PageLayers.DisplayName(page, layer);
+        int n = content.Count;
+        string what = n == 1 ? "1 object" : $"{n} objects";
+
+        var row = new StackPanel { Spacing = 0, Margin = new Thickness(0, 6, 0, 0) };
+
+        row.Children.Add(ChromeUi.ToggleRow(name, !layer.Hidden, on =>
+        {
+            var l = LayerToEdit(page, key);
+            if (l == null) return;
+            l.Hidden = !on;
+            // §49: the ink cache holds RENDERED PIXELS of settled strokes, and a
+            // layer toggle changes what should be in them without touching a
+            // single stroke. Skip this and the feature works on every small page
+            // and fails on exactly the big ones it matters on.
+            _h.Surface().LayersChanged();
+            ops.Save();
+            ops.Status(on
+                ? name + " is showing again."
+                : name + " is hidden — its ink is off the page and cannot be selected.");
+        }, tip: name + " — " + what + ". Hiding takes this layer's ink off the page and out of reach of the " +
+                "selection tools; nothing on it is changed."));
+
+        var caption = ChromeUi.Caption(layer.Locked ? what + " · locked" : what);
+        caption.Margin = new Thickness(0, 0, 0, 2);
+        row.Children.Add(caption);
+
+        // A stock Slider, exactly as the Precision panel's two are. CanvasPane
+        // pushes RequestedTheme onto the pane root for these, because a stock
+        // control resolves its own brushes from ElementTheme and not from
+        // PageTheme - so putting one here costs nothing extra to theme.
+        var opacity = new Slider
+        {
+            Minimum = 0,
+            Maximum = 100,
+            StepFrequency = 1,
+            Header = "Opacity",
+            Value = Math.Round(Math.Clamp(layer.Opacity, 0f, 1f) * 100.0),
+            Margin = new Thickness(0, 0, 0, 2),
+        };
+        ToolTipService.SetToolTip(opacity,
+            "A multiplier over each mark's own opacity, applied as the page is drawn. 0 is the same thing as " +
+            "hidden. Nothing here is written into a stroke.");
+        // Subscribed AFTER Value is set, so BUILDING a row can never write.
+        opacity.ValueChanged += (_, e) =>
+        {
+            var l = LayerToEdit(page, key);
+            if (l == null) return;
+            l.Opacity = (float)(e.NewValue / 100.0);
+            // false: nothing appears or disappears when only the multiplier
+            // moves, and a full text-layer rebuild at slider tick rate would
+            // take the caret out of a box the user was typing in.
+            _h.Surface().LayersChanged(visibilityChanged: false);
+            ops.Save();
+        };
+        row.Children.Add(opacity);
+        return row;
+    }
+
+    /// <summary>Resolves a layer for WRITING, and it is deliberately NOT
+    /// <see cref="PageLayers.Of"/>.
+    ///
+    /// <para><see cref="PageLayers.All"/> synthesises a FRESH implicit base layer
+    /// on every call for a page that has never carried a Layers array. The model
+    /// says so in as many words, and says why: a shared mutable stand-in would
+    /// let a caller believe it had hidden something. So a write has to reach a
+    /// materialised list, and <see cref="PageLayers.Materialise"/> is the only
+    /// thing that ever makes a page start carrying one.</para>
+    ///
+    /// <para>Called on a WRITE and never on a read. Opening this panel on a page
+    /// that predates layers still costs that page exactly the bytes it cost
+    /// before — which is the migration-is-a-no-op promise the whole model is
+    /// built on, and it would be a poor trade to spend it on a panel someone
+    /// merely looked at.</para></summary>
+    private static Layer? LayerToEdit(NotePage page, int key)
+    {
+        var ls = PageLayers.Materialise(page);
+        for (int i = 0; i < ls.Count; i++) if (ls[i].Key == key) return ls[i];
+        return null;
     }
 
     /// <summary>What is actually on this page, counted live.</summary>
