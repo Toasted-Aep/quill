@@ -32,14 +32,20 @@ namespace Quill.Controls;
 /// #3282aa primary action.</para>
 ///
 /// <para><b>Nothing here fakes a file.</b> Quill can write JPG, PNG, SVG, the
-/// native .quill bundle, a flattened PDF and a vector PDF, and those are wired
-/// through to the real exporters. It has no DXF writer and no PSD writer, so
-/// DXF and PSD are SHOWN — the reference has them — but disabled, with a
-/// tooltip that says why. PSD's reason CHANGED at §49.5 and the tooltip changed
-/// with it: the layer model landed at 18 and the panel that reaches it at 49.5,
-/// so what is missing is now the writer alone. The same rule governs the region chips and the two
-/// option toggles: a combination the pipeline cannot honour is disabled and
-/// explains itself rather than silently producing the wrong file.</para>
+/// native .quill bundle, a flattened PDF, a vector PDF and — since §50 — a
+/// LAYERED PSD, and those are wired through to the real exporters. DXF is the
+/// only format left without a writer, so it alone is SHOWN — the reference has
+/// it — but disabled, with a tooltip that says why.</para>
+///
+/// <para><b>PSD's disabled tooltip has now been retired twice and the history is
+/// the point.</b> It first read "Quill has neither a layer model nor a PSD
+/// writer"; §18 landed the model and §49.5 made half that sentence false, so
+/// §49.5 corrected the REASON and left the chip switched off, because the
+/// writer half was still true. §50 wrote the writer, so the chip is on. The
+/// same rule governs the region chips and the two option toggles: a combination
+/// the pipeline cannot honour is disabled and explains itself rather than
+/// silently producing the wrong file — and for PSD that now includes saying, in
+/// the Details note, what the format does NOT carry out of Quill.</para>
 /// </summary>
 public sealed class ExportWindow
 {

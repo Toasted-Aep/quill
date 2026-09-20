@@ -8880,7 +8880,6 @@ public sealed class InkSurface : UserControl
         var dots = new List<PdfVectorDot>();
         var images = new List<PdfVectorImage>();
         var texts = new List<PdfVectorText>();
-        var bgCol = ColorUtil.Parse(_page.Background);
 
         // ---- images, decoded to pixels for embedding ----
         foreach (var sh in _page.Shapes)
@@ -8951,37 +8950,10 @@ public sealed class InkSurface : UserControl
         }
 
         // ---- grid, pre-blended against the background ----
-        if (_page.Grid != GridType.None)
-        {
-            float spacing = (float)Math.Max(8, _page.GridSpacing);
-            while (w / spacing * (h / spacing) > 25000) spacing *= 2;
-            var over = ColorUtil.IsDark(bgCol) ? Color.FromArgb(70, 255, 255, 255) : Color.FromArgb(46, 0, 0, 0);
-            var blended = Color.FromArgb(255,
-                (byte)((over.R * over.A + bgCol.R * (255 - over.A)) / 255),
-                (byte)((over.G * over.A + bgCol.G * (255 - over.A)) / 255),
-                (byte)((over.B * over.A + bgCol.B * (255 - over.A)) / 255));
-            string gHex = ColorUtil.ToHex(blended);
-            double sx = Math.Floor(minX / spacing) * spacing;
-            double sy = Math.Floor(minY / spacing) * spacing;
-            switch (_page.Grid)
-            {
-                case GridType.Dotted:
-                    for (double y = sy; y < minY + h; y += spacing)
-                        for (double x = sx; x < minX + w; x += spacing)
-                            dots.Add(new PdfVectorDot((float)x, (float)y, 1.4f, gHex));
-                    break;
-                case GridType.Square:
-                    for (double x = sx; x < minX + w; x += spacing)
-                        paths.Add(LinePath(x, minY, x, minY + h, gHex, 1f));
-                    for (double y = sy; y < minY + h; y += spacing)
-                        paths.Add(LinePath(minX, y, minX + w, y, gHex, 1f));
-                    break;
-                case GridType.Lines:
-                    for (double y = sy; y < minY + h; y += spacing)
-                        paths.Add(LinePath(minX, y, minX + w, y, gHex, 1f));
-                    break;
-            }
-        }
+        // §50: ONE grid emitter, shared with the PSD path's paper bucket. It was
+        // inlined here; PSD needed the same marks in a different bucket, and
+        // copying twenty lines is how two exports end up with two grids.
+        GridMarks(paths, dots, minX, minY, w, h);
 
         // ---- shapes ----
         foreach (var sh in _page.Shapes)
@@ -8999,6 +8971,236 @@ public sealed class InkSurface : UserControl
         }
 
         return new PdfVectorPage(w, h, minX, minY, _page.Background, paths, dots, images, texts);
+    }
+
+    /// <summary>§50 — the same page, as a STACK rather than a flat bag.
+    ///
+    /// <para>This is a sibling of <see cref="BuildVectorPageAsync"/> and not a
+    /// wrapper round it, and the reason is structural: a
+    /// <see cref="PdfVectorPage"/> has four lists keyed by primitive TYPE, so
+    /// the moment a stroke becomes a <see cref="PdfVectorPath"/> there is
+    /// nothing on it that remembers which layer it came from. One flat page IS
+    /// the flattened thing a PSD must not be. The PRIMITIVE records are shared
+    /// verbatim; only the grouping differs.</para>
+    ///
+    /// <para><b>Order comes from <see cref="PageLayers.InOrder"/> and is not
+    /// re-derived.</b> That is the seam the renderer paints, the panel lists and
+    /// the thumbnail walks, and a PSD stores its layer records bottom-first too,
+    /// so the two orders need no reversal between them.</para>
+    ///
+    /// <para><b>Nothing here writes to the model.</b> The derived
+    /// <see cref="PageLayers.DisplayName"/> goes into the file because a PSD
+    /// layer has to be called something; <c>Layer.Name</c> is only read. Hidden
+    /// and Opacity are read and handed on as facts, never multiplied into a
+    /// pixel - <see cref="PsdExporter"/> puts them in the layer's flags and
+    /// opacity byte, which is 18.8 kept the way 16.7 keeps the veil.</para>
+    ///
+    /// <para><b>A hidden layer still exports, with its content.</b> 18.12 item 2
+    /// is the ruling: the PSD keeps what is on a hidden layer and hides it,
+    /// which PDF and SVG cannot do and so is the one thing this format is
+    /// uniquely able to honour.</para></summary>
+    public async Task<PsdVectorPage?> BuildPsdPageAsync(double marginPx)
+    {
+        if (_page == null) return null;
+        FlushTexts();
+
+        // The SAME framing arithmetic BuildVectorPageAsync uses. Deliberately
+        // duplicated rather than factored out for this one change: the vector
+        // page's geometry is load-bearing for two shipped exporters and three
+        // harnesses, and a shared helper introduced here would put all of them
+        // on a seam nothing has measured.
+        var content = ContentBoundsWorld() ?? new Rect(0, 0, 800, 600);
+        foreach (var t in _page.Texts)
+        {
+            var est = new Rect(t.X, t.Y, Math.Max(60, t.Width), 60);
+            content = content.IsEmpty ? est : RectUnion(content, est);
+        }
+        double minX = content.X - marginPx, minY = content.Y - marginPx;
+        double w = Math.Max(64, content.Width + marginPx * 2);
+        double h = Math.Max(64, content.Height + marginPx * 2);
+
+        var layers = new List<PsdLayerArt>();
+
+        // ---- the PAPER bucket, and it is NOT one of the page's layers ------
+        // 18.6: the background, the paper and the grid do not belong to a layer
+        // and deliberately have their own visibility controls. Putting them in
+        // the layer list would give the user two switches for one fact, so they
+        // get a bucket of their own with a name nobody will mistake for a
+        // Quill layer. It is at the bottom because it is what everything else
+        // is drawn on.
+        var paper = PsdLayerArt.Empty("Paper") with { Ground = _page.Background };
+        GridMarks(paper.Paths, paper.Dots, minX, minY, w, h);
+        layers.Add(paper);
+
+        // ---- one PSD layer per Quill layer, bottom first -------------------
+        foreach (var bucket in PageLayers.InOrder(_page))
+        {
+            var art = PsdLayerArt.Empty(
+                PageLayers.DisplayName(_page, bucket.Layer),
+                bucket.Layer.Hidden,
+                bucket.Layer.Opacity);
+
+            foreach (var sh in bucket.Shapes)
+            {
+                if (sh.Kind == ShapeKind.Image && sh.ImagePath != null)
+                {
+                    try
+                    {
+                        CanvasBitmap? bmp = _bitmaps.TryGetValue(sh.ImagePath, out var cached) ? cached : null;
+                        bmp ??= await CanvasBitmap.LoadAsync(_canvas, sh.ImagePath);
+                        var ic = ShapeCenter(sh);
+                        art.Images.Add(new PdfVectorImage(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H),
+                            (int)bmp.SizeInPixels.Width, (int)bmp.SizeInPixels.Height, bmp.GetPixelBytes(),
+                            sh.Rotation, ic.X, ic.Y));
+                    }
+                    catch { /* unreadable image: skip, the rest of the layer still exports */ }
+                    continue;
+                }
+                FlattenShape(sh, art.Paths);
+            }
+
+            foreach (var s in bucket.Strokes)
+            {
+                if (s.Points.Count == 0) continue;
+                var pts = new List<(float X, float Y)>(s.Points.Count);
+                foreach (var p in s.Points) pts.Add((p.X, p.Y));
+                if (pts.Count == 1) pts.Add((pts[0].X + 0.2f, pts[0].Y + 0.2f));
+                bool hl = s.Pen == PenType.Highlighter;
+                art.Paths.Add(new PdfVectorPath(pts, s.Color, s.Size * (hl ? 1.6f : 1f), false,
+                                                (s.Opacity ?? 1f) * (hl ? 0.35f : 1f)));
+            }
+
+            foreach (var t in bucket.Texts)
+            {
+                var im = RenderTextBitmap(t);
+                if (im != null) art.TextImages.Add(im);
+            }
+
+            layers.Add(art);
+        }
+
+        return new PsdVectorPage(w, h, minX, minY, _page.Background, layers);
+    }
+
+    /// <summary>The grid, pre-blended against the page background exactly as
+    /// <see cref="BuildVectorPageAsync"/> blends it. Lifted out so the PSD's
+    /// paper bucket and the vector page cannot end up with two different
+    /// grids.</summary>
+    private void GridMarks(List<PdfVectorPath> paths, List<PdfVectorDot> dots,
+                           double minX, double minY, double w, double h)
+    {
+        if (_page == null || _page.Grid == GridType.None) return;
+        var bgCol = ColorUtil.Parse(_page.Background);
+        float spacing = (float)Math.Max(8, _page.GridSpacing);
+        while (w / spacing * (h / spacing) > 25000) spacing *= 2;
+        var over = ColorUtil.IsDark(bgCol) ? Color.FromArgb(70, 255, 255, 255) : Color.FromArgb(46, 0, 0, 0);
+        var blended = Color.FromArgb(255,
+            (byte)((over.R * over.A + bgCol.R * (255 - over.A)) / 255),
+            (byte)((over.G * over.A + bgCol.G * (255 - over.A)) / 255),
+            (byte)((over.B * over.A + bgCol.B * (255 - over.A)) / 255));
+        string gHex = ColorUtil.ToHex(blended);
+        double sx = Math.Floor(minX / spacing) * spacing;
+        double sy = Math.Floor(minY / spacing) * spacing;
+        switch (_page.Grid)
+        {
+            case GridType.Dotted:
+                for (double y = sy; y < minY + h; y += spacing)
+                    for (double x = sx; x < minX + w; x += spacing)
+                        dots.Add(new PdfVectorDot((float)x, (float)y, 1.4f, gHex));
+                break;
+            case GridType.Square:
+                for (double x = sx; x < minX + w; x += spacing)
+                    paths.Add(LinePath(x, minY, x, minY + h, gHex, 1f));
+                for (double y = sy; y < minY + h; y += spacing)
+                    paths.Add(LinePath(minX, y, minX + w, y, gHex, 1f));
+                break;
+            case GridType.Lines:
+                for (double y = sy; y < minY + h; y += spacing)
+                    paths.Add(LinePath(minX, y, minX + w, y, gHex, 1f));
+                break;
+        }
+    }
+
+    /// <summary>A text box, RASTERISED, because PSD has nowhere else to put it.
+    ///
+    /// <para>PSD's type layer is an Engine Data descriptor and this build writes
+    /// none, so a box reaches the file as pixels and is no longer editable as
+    /// text in Photoshop. That is the single largest thing PSD export loses and
+    /// it is written down here rather than discovered.</para>
+    ///
+    /// <para>The layout is the one the PDF emitter uses — the same
+    /// <see cref="WrapRunLines"/> wrap, the same baseline ladder, the same
+    /// per-run colour after <c>ResolveChosenColours</c> — so the PSD and the
+    /// PDF cannot disagree about where a line broke.</para>
+    ///
+    /// <para><b>No layer multiplier is applied.</b> A box on a 40% layer is
+    /// drawn here at full strength; the 40% is the PSD layer's opacity byte.</para></summary>
+    private PdfVectorImage? RenderTextBitmap(TextElement t)
+    {
+        try
+        {
+            string boxHex = ColorUtil.ToHex(TextInkFor(t));
+            var logical = RtfRunParser.Parse(t.Rtf, 16f, "Lora");
+            RtfRunParser.ResolveChosenColours(logical, t.TextColor is { Length: > 0 });
+            double boxW = Math.Max(60, t.Width);
+            var visual = WrapRunLines(logical, boxW - 8);
+
+            var placed = new List<(double Baseline, List<PdfVectorTextRun> Line)>();
+            float prevSize = 16f;
+            double baseline = 16;
+            for (int li = 0; li < visual.Count; li++)
+            {
+                var line = visual[li];
+                float size = line.Count > 0 ? line.Max(r => r.Size) : prevSize;
+                prevSize = size;
+                baseline += li == 0 ? size : size * 1.35;
+                if (line.Count == 0) continue;
+                placed.Add((baseline, line));
+            }
+            if (placed.Count == 0) return null;
+
+            double boxH = Math.Max(8, baseline + prevSize * 0.6);
+            using var rt = new CanvasRenderTarget(_canvas, (float)boxW, (float)boxH, 96);
+            using (var ds = rt.CreateDrawingSession())
+            {
+                ds.Clear(Colors.Transparent);
+                foreach (var (bl, line) in placed)
+                {
+                    double x = 4;
+                    foreach (var run in line)
+                    {
+                        if (run.Text.Length == 0) continue;
+                        using var fmt = new CanvasTextFormat
+                        {
+                            FontFamily = string.IsNullOrEmpty(run.Font) ? "Lora" : run.Font,
+                            FontSize = run.Size,
+                            FontWeight = run.Bold ? Microsoft.UI.Text.FontWeights.Bold : Microsoft.UI.Text.FontWeights.Normal,
+                            FontStyle = run.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
+                        };
+                        using var tl = new CanvasTextLayout(_canvas, run.Text, fmt, float.MaxValue, float.MaxValue);
+                        // DrawTextLayout places the layout's TOP; the ladder
+                        // above is in BASELINES, which is what the PDF text
+                        // matrix takes. The line's own ascent is the difference,
+                        // and asking the layout for it beats assuming a ratio.
+                        float ascent = tl.LineMetrics.Length > 0 ? tl.LineMetrics[0].Baseline : run.Size * 0.8f;
+                        ds.DrawTextLayout(tl, (float)x, (float)(bl - ascent),
+                                          ColorUtil.Parse(run.Colour ?? boxHex));
+                        x += tl.LayoutBounds.Width;
+                    }
+                }
+            }
+
+            var tc = TextCentreWorld(t);
+            return new PdfVectorImage(t.X, t.Y, boxW, boxH,
+                                      (int)rt.SizeInPixels.Width, (int)rt.SizeInPixels.Height,
+                                      rt.GetPixelBytes(), t.Rotation, tc.X, tc.Y);
+        }
+        catch
+        {
+            // A box Win2D will not lay out must not sink the export; the rest
+            // of the layer still reaches the file.
+            return null;
+        }
     }
 
     /// <summary>Greedy word wrap that respects run boundaries: each token measures
