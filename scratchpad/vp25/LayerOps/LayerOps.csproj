@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Run 25 / 49.8 - a SCRATCH harness, deliberately NOT in tools/.
+       The ten harnesses stay ten; this one exists to answer the questions run
+       25 was sent to answer and nothing else.
+
+       16a557a added AddLayerAction, RenameLayerAction and MoveLayerAction and
+       added ZERO harness coverage: LayerRoundTrip still reports 83 checks and
+       only ever constructs RemoveLayerAction. Its section 12 reorders with
+       PageLayers.Move directly, so the ACTION has never been run by anything.
+
+       Same pattern as tools/LayerRoundTrip: the REAL sources, <Compile
+       Include>d out of src/Quill so this cannot drift into testing a copy. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Quill.Tools</RootNamespace>
+    <AssemblyName>LayerOps</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Shim.cs" />
+    <Compile Include="..\..\..\src\Quill\Models\NoteModels.cs" Link="NoteModels.cs" />
+    <Compile Include="..\..\..\src\Quill\Models\LayerModels.cs" Link="LayerModels.cs" />
+    <Compile Include="..\..\..\src\Quill\Services\LibraryStore.cs" Link="LibraryStore.cs" />
+    <Compile Include="..\..\..\src\Quill\Services\SyncLog.cs" Link="SyncLog.cs" />
+    <Compile Include="..\..\..\src\Quill\Services\UndoRedo.cs" Link="UndoRedo.cs" />
+  </ItemGroup>
+
+</Project>
