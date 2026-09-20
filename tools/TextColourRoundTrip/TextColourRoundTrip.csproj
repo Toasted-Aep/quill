@@ -74,6 +74,12 @@
     <!-- 43: the run parser, and the chosen-vs-machine ink rule that decides
          whether an emitter is allowed to look at a run colour at all. -->
     <Compile Include="..\..\src\Quill\Services\RtfRunParser.cs" Link="RtfRunParser.cs" />
+    <!-- 50 / TODO 8.7: the rule that decides whether a live document may be
+         written over the stored one. THE SHIPPING FILE, linked - part 5 drives
+         the same function InkSurface.FlushTexts calls, so a harness that passes
+         here cannot be passing against a re-typed copy of the decision. It has
+         no WinUI reference for exactly this reason. -->
+    <Compile Include="..\..\src\Quill\Services\TextFlushPolicy.cs" Link="TextFlushPolicy.cs" />
   </ItemGroup>
 
 </Project>

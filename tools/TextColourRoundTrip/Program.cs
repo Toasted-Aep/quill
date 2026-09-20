@@ -569,6 +569,186 @@ Check("43.3 - AND IT REFUSES RATHER THAN GUESSES. Text that does not contain a "
       "unmatchable text -> null, empty text -> null");
 
 // ===========================================================================
+// PART 5 - 50 / TODO 8.7: THE STORED RTF IS A FIXED POINT ACROSS OPEN AND CLOSE
+// ===========================================================================
+//
+// 49.7 found, by accident and against a control, that a text box's stored RTF
+// grows about six characters every time the note is opened and closed - 264 ->
+// 294 -> 306 -> 312 on one box, two of those steps with nothing in the app
+// touched at all. Six characters is "\par\r\n": Windows' RTF writer is not
+// idempotent, SetText then GetText hands back the document plus ONE empty
+// paragraph, and FlushTexts stored that back unconditionally.
+//
+// WHAT IS LINKED AND WHAT IS MODELLED, because the distinction is the whole
+// value of this part:
+//
+//   LINKED - TextFlushPolicy, the shipping file, the actual decision
+//            InkSurface.FlushTexts makes. Every Check below calls it.
+//   MODELLED - Windows' RTF writer. A RichEditBox needs a window and none of
+//            the ten harnesses can make one. RichEditRoundTrip below appends
+//            one "\par\r\n" in the exact position the REAL LIBRARY shows it,
+//            and 5a measures that the model adds six characters and not some
+//            other number.
+//
+// The fixture's shape is a measurement, not an invention. All 106 stored
+// documents in the 53 MB library end in a run of empty paragraphs followed by
+// RichEdit's own "\r\n\pard...\par\r\n}\r\n\0"; 23 of them carry 47 trailing
+// empties, 21 carry 7, 13 carry 43, 9 carry 39. Boxes that share a page carry
+// IDENTICAL counts, which is the signature of a per-session increment rather
+// than of anyone pressing Return. 17,346 of 83,195 stored RTF characters -
+// 20.8% - are empty paragraphs past the first.
+
+const int Opens = 200;
+string seed = StoredDoc("lecture notes", 6);
+
+// ---- 5a. THE MODEL IS CALIBRATED, NOT ASSUMED -----------------------------
+string once = RichEditRoundTrip(seed);
+Check("8.7 - the modelled RichEdit round trip adds exactly SIX characters, and "
+      + "they are \\par\\r\\n - the unit 49.7's ladder is made of (264->294->306"
+      + "->312 are all multiples of six) and the unit all 106 stored documents "
+      + "are padded with",
+      once.Length - seed.Length == 6 &&
+      Added(seed, once) == "\\par\r\n",
+      $"{seed.Length} -> {once.Length} chars, added {Escape(Added(seed, once))}");
+
+// ---- 5b. THE NEGATIVE CONTROL: THE DEFECT, REPRODUCED ---------------------
+// The pre-50 FlushTexts, verbatim: serialise the control's document and store
+// it, every time, whatever happened. A checker that cannot go red proves
+// nothing, so the growth is reproduced here before it is refused below.
+string unguarded = seed;
+for (int i = 0; i < Opens; i++) unguarded = RichEditRoundTrip(unguarded);
+Check("THE DEFECT, REPRODUCED: the PRE-50 rule - write the document back on "
+      + "every flush, unconditionally - FAILS the fixed-point property. "
+      + $"{Opens} opens and closes with nothing edited grow the stored document "
+      + $"by {Opens} paragraphs and {Opens * 6} characters, without bound",
+      unguarded.Length == seed.Length + Opens * 6 && unguarded != seed,
+      $"{seed.Length} -> {unguarded.Length} chars over {Opens} opens "
+      + $"(+{unguarded.Length - seed.Length}), identical to the seed: {unguarded == seed}");
+
+// ---- 5c. THE FIX: A BOX NOBODY REACHED IS A FIXED POINT -------------------
+string stored = seed;
+int writes = 0;
+for (int i = 0; i < Opens; i++)
+{
+    // one open: the control is handed the stored document and hands back its
+    // own serialisation of it. Nothing focuses the box, nothing edits it.
+    string live = RichEditRoundTrip(stored);
+    if (TextFlushPolicy.NeedsTheDocument(stored, reached: false, touched: false) &&
+        TextFlushPolicy.ShouldWriteBack(stored, false, false, null, live))
+    { stored = live; writes++; }
+}
+Check($"50 - THE FIXED POINT: {Opens} opens and closes of a box nobody touches "
+      + "leave the stored document BYTE FOR BYTE identical. Not shorter, not "
+      + "normalised - unwritten. This is 8.7's \"done means\" column, verbatim",
+      stored == seed && writes == 0,
+      $"{writes} write(s) in {Opens} opens, {seed.Length} -> {stored.Length} chars, "
+      + $"byte-identical: {stored == seed}");
+
+// ---- 5d. AND A CLICK THAT CHANGED NOTHING IS STILL NOT A WRITE ------------
+// The box IS reached - the user tapped into it, the format bar came up, they
+// tapped away. Nothing about the document moved, so nothing is stored.
+string clicked = seed;
+int clickWrites = 0;
+for (int i = 0; i < Opens; i++)
+{
+    string live = RichEditRoundTrip(clicked);
+    string baseline = live;                       // captured in GotFocus
+    if (TextFlushPolicy.ShouldWriteBack(clicked, true, false, baseline, live))
+    { clicked = live; clickWrites++; }
+}
+Check($"50 - ...and so do {Opens} sessions in which the box IS focused and "
+      + "nothing is typed. The baseline is captured at the moment of reach and "
+      + "compared in full, so a click is not an edit",
+      clicked == seed && clickWrites == 0,
+      $"{clickWrites} write(s) in {Opens} focused sessions, byte-identical: {clicked == seed}");
+
+// ---- 5e. 49.7's LADDER, BOTH RUNGS, BEFORE AND AFTER ----------------------
+// A plain open/close is one SetText->GetText cycle. A session that also toggles
+// a layer runs RebuildTextLayer, which is a SECOND cycle - which is why 49.7's
+// ladder steps +12 across the layer session (294->306) and +6 across the two
+// that touched nothing (306->312).
+string plain = RichEditRoundTrip(seed);
+string withRebuild = RichEditRoundTrip(RichEditRoundTrip(seed));
+Check("49.7's ladder explained and reproduced: a plain open/close is ONE "
+      + "SetText->GetText cycle (+6, the 306->312 step) and a session that also "
+      + "rebuilds the text layer is TWO (+12, the 294->306 step). Under 50 both "
+      + "store nothing at all",
+      plain.Length - seed.Length == 6 && withRebuild.Length - seed.Length == 12 &&
+      !TextFlushPolicy.ShouldWriteBack(seed, false, false, null, plain) &&
+      !TextFlushPolicy.ShouldWriteBack(seed, false, false, null, withRebuild),
+      $"one cycle +{plain.Length - seed.Length}, two cycles +{withRebuild.Length - seed.Length}, "
+      + "written back: neither");
+
+// ---- 5f. AN EXISTING NOTE, IN THE SHAPE 23 OF THE 106 ACTUALLY HAVE -------
+// The fix has to work on notes that have ALREADY grown, not only on new ones.
+string grown = StoredDoc("lecture notes", 46);   // 47 trailing empties, the modal shape
+string grownOut = grown;
+for (int i = 0; i < Opens; i++)
+{
+    string live = RichEditRoundTrip(grownOut);
+    if (TextFlushPolicy.ShouldWriteBack(grownOut, false, false, null, live)) grownOut = live;
+}
+Check("50 - AND IT HOLDS FOR NOTES THAT HAVE ALREADY GROWN. A document carrying "
+      + "47 trailing empty paragraphs - the shape 23 of the 106 stored notes "
+      + "are in today - stops growing on its very next open. What it has already "
+      + "accumulated STAYS: nothing here prunes, and the length below is the "
+      + "proof of that as much as of the fix",
+      grownOut == grown && grown.Length > seed.Length,
+      $"{grown.Length} chars in, {grownOut.Length} chars out after {Opens} opens, "
+      + "unchanged and not shortened");
+
+// ---- 5g. WHAT MUST STILL BE WRITTEN --------------------------------------
+// The failure mode that would matter is the opposite one: refusing to store an
+// edit. Four shapes, and every one of them has to come out true.
+string live5 = RichEditRoundTrip(seed);
+string typed = live5.Replace("lecture notes", "lecture notes!");
+string bolded = live5.Replace(@"\cf1\f0\fs24 ", @"\cf1\b\f0\fs24 ");   // same characters
+Check("50 - A KEYSTROKE IS STORED. Same box, same session, one character more, "
+      + "and the document goes to the model",
+      TextFlushPolicy.ShouldWriteBack(seed, true, false, live5, typed),
+      $"baseline {live5.Length} chars, live {typed.Length} chars -> written");
+
+Check("50 - AND SO IS A FORMATTING-ONLY CHANGE, which is the case that rules "
+      + "out the cheaper fix. Bolding a word moves no character at all, so a "
+      + "guard that compared the TEXT would have thrown the bold away; the "
+      + "comparison is on the bytes and catches it",
+      TextFlushPolicy.ShouldWriteBack(seed, true, false, live5, bolded) &&
+      Plain(bolded) == Plain(live5),
+      $"characters identical ({Escape(Plain(live5))}), bytes differ -> written");
+
+Check("50 - A BRAND-NEW BOX IS ALWAYS STORED, latch or no latch. Nothing is in "
+      + "the model yet, so the emptiness of the stored copy is checked FIRST and "
+      + "no other clause can shadow it - this is the safety net, and it is the "
+      + "one that would cost a user their first sentence",
+      TextFlushPolicy.ShouldWriteBack("", false, false, null, live5) &&
+      TextFlushPolicy.ShouldWriteBack(null, false, false, null, live5) &&
+      TextFlushPolicy.NeedsTheDocument("", false, false),
+      "empty stored -> written; null stored -> written");
+
+Check("50 - A BOX QUILL EDITED WITHOUT FOCUS IS STORED. 25.5's lasso recolour "
+      + "stamps every selected box's document after a rebuild, with no focus "
+      + "anywhere in it, so it says so and is written without a comparison",
+      TextFlushPolicy.ShouldWriteBack(seed, false, true, null, live5) &&
+      TextFlushPolicy.NeedsTheDocument(seed, false, true),
+      "touched -> written");
+
+Check("50 - AND A REACH WHOSE BASELINE COULD NOT BE CAPTURED FALLS BACK TO "
+      + "WRITING. If the control refused to serialise at the moment of focus "
+      + "there is nothing to compare against, and the pre-50 behaviour is the "
+      + "safe answer: losing an edit is worse than storing a paragraph",
+      TextFlushPolicy.ShouldWriteBack(seed, true, false, null, live5),
+      "reached with no baseline -> written");
+
+// ---- 5h. THE CHEAP REFUSAL COMES FIRST ------------------------------------
+Check("50 - a box nobody has been near is refused BEFORE the control is asked "
+      + "for its document, so a page of untouched boxes now costs no RTF "
+      + "serialisation per flush at all - and FlushTexts runs on every save, "
+      + "every undo, every page change and every export",
+      !TextFlushPolicy.NeedsTheDocument(seed, false, false) &&
+      TextFlushPolicy.NeedsTheDocument(seed, true, false),
+      "untouched -> no GetText; reached -> GetText");
+
+// ===========================================================================
 foreach (var line in log) Console.WriteLine(line);
 Console.WriteLine();
 if (failures == 0)
@@ -648,6 +828,67 @@ static string RtfDoc(string table, string body) =>
 
 static string Cols(string rtf) =>
     string.Join(",", RtfRunParser.RunColours(rtf).Select(c => c ?? "auto"));
+
+// ---------------------------------------------------------------------------
+// PART 5's fixtures and its one model.
+//
+// A STORED Quill document, in the exact shape all 106 in the library are in:
+// header, colour table, generator group, one paragraph of words, a run of empty
+// paragraphs, then RichEdit's own final \pard...\par, the closing brace, a CRLF
+// and a NUL. Every one of those tail details was read off the real file rather
+// than guessed - the NUL included, which is how GetText terminates the buffer
+// and which all 106 carry.
+static string StoredDoc(string body, int emptyParagraphs)
+{
+    const string Nl = "\r\n";
+    var sb = new StringBuilder();
+    sb.Append(@"{\rtf1\fbidis\ansi\ansicpg1252\deff0\nouicompat\deflang2057{\fonttbl{\f0\fnil Segoe UI;}}").Append(Nl);
+    sb.Append(@"{\colortbl ;\red250\green249\blue245;}").Append(Nl);
+    sb.Append(@"{\*\generator Riched20 3.1.0008}\viewkind4\uc1 ").Append(Nl);
+    sb.Append(@"\pard\sl300\slmult1\cf1\f0\fs24 ").Append(body).Append(@"\par").Append(Nl);
+    for (int i = 0; i < emptyParagraphs; i++) sb.Append(@"\par").Append(Nl);
+    sb.Append(Nl).Append(@"\pard\sl300\slmult1\par").Append(Nl);
+    sb.Append('}').Append(Nl).Append('\0');
+    return sb.ToString();
+}
+
+// THE ONE MODELLED THING IN THIS FILE. RichEdit's reader takes the document's
+// final \par as a terminator and opens an empty paragraph after it; its writer
+// then emits that paragraph too. So SetText(x) followed by GetText() returns x
+// with one more "\par\r\n" in the trailing run - six characters, in the exact
+// position the stored documents show it, immediately before the CRLF that
+// introduces RichEdit's own closing \pard. 5a measures the six.
+//
+// This is a model of WINDOWS, not of Quill. A RichEditBox needs a window; what
+// the harness can link is the DECISION in front of it, and TextFlushPolicy is
+// linked out of src/Quill and not restated here.
+static string RichEditRoundTrip(string rtf)
+{
+    int at = rtf.LastIndexOf("\r\n\\pard", StringComparison.Ordinal);
+    return at < 0 ? rtf : rtf[..at] + "\\par\r\n" + rtf[at..];
+}
+
+// What one string has that the other does not, found by common prefix and
+// suffix - no RTF knowledge, so 5a's "six characters, and they are \par\r\n" is
+// a measurement of the model and not a restatement of it.
+static string Added(string before, string after)
+{
+    int p = 0;
+    while (p < before.Length && p < after.Length && before[p] == after[p]) p++;
+    int s = 0;
+    while (s < before.Length - p && s < after.Length - p &&
+           before[before.Length - 1 - s] == after[after.Length - 1 - s]) s++;
+    return after[p..(after.Length - s)];
+}
+
+// The characters of a document, ignoring every control word - enough to show
+// that a formatting-only edit moves no character, which is what makes 5g's
+// bold case the counterexample to the cheaper fix.
+static string Plain(string rtf) =>
+    string.Concat(RtfRunParser.Parse(rtf, 16f, "").SelectMany(l => l.Select(r => r.Text)));
+
+static string Escape(string s) =>
+    "\"" + s.Replace("\\", "\\\\").Replace("\r", "\\r").Replace("\n", "\\n").Replace("\0", "\\0") + "\"";
 
 // ---------------------------------------------------------------------------
 static Color FromY(double y)
