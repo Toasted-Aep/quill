@@ -43,13 +43,33 @@ public enum GridPart
 /// 0 is the left/top edge, 1 the right/bottom, and anything outside that is off
 /// the frame. Fractions rather than canvas coordinates because the same shape
 /// has to draw into an 86 DIP thumbnail, a 300 DIP preview strip and a page of
-/// unbounded canvas, and only the frame differs.</summary>
+/// unbounded canvas, and only the frame differs.
+///
+/// <para>This is also, unconverted, the unit CONCEPTS-REF §15.5c's measurement
+/// used: "fractions of the ORIGINAL 2880x1800 frame", x as a fraction of the
+/// 2880 width and every y as a fraction of the 1800 height — exactly what
+/// <see cref="HorizonF"/> applied to a frame's height and <see cref="VpXF"/>
+/// applied to its width already mean here. So a measured row drops straight
+/// into this record with no rescaling: the "convert once" step §15.5c's own
+/// remarks call for is applying the fraction to whatever frame is at hand
+/// (<c>GridArt.Draw</c>'s bounded strip, or <c>MainWindow.PlacePerspectiveShape</c>'s
+/// <see cref="Quill.Models.NotePage.RefFrame"/>), not any change to the number
+/// itself — see <see cref="GridPresets.Shape"/> for where that one conversion
+/// lives.</para></summary>
 /// <param name="HorizonF">Where the horizon crosses the frame (§12.4's 1/2, 1/4, 3/4).</param>
 /// <param name="VpXF">1–3 vanishing points along the horizon. Distance apart is
 /// §12.4's Narrow / Wide / Ultrawide.</param>
+/// <param name="ThirdXF">3-point only: the third point's x. §15.5d.2 found this
+/// is NOT the frame's centre line for most three-point presets — only measured
+/// `3 Point` (0.5004) sits close to it — so this has to be its own measured
+/// number rather than the assumed 0.5 three call sites used to hardcode
+/// independently (GridPresets.Shape, GridArt.DrawPerspective and
+/// MainWindow.PlacePerspectiveShape all wrote literal 0.5, which is the exact
+/// "same quantity computed in more than one place" shape §0 and §49 both
+/// warn about). Null only for a kind/preset with no third point.</param>
 /// <param name="ThirdYF">3-point only: the third point's y. Above the horizon
 /// unless the preset name says <c>Below</c>.</param>
-public sealed record VpShape(double HorizonF, double[] VpXF, double? ThirdYF);
+public sealed record VpShape(double HorizonF, double[] VpXF, double? ThirdXF, double? ThirdYF);
 
 /// <summary>Everything a grid renderer needs, gathered off the page. A plain
 /// mutable bag: the editor page mutates one field per control and hands the same
@@ -171,53 +191,24 @@ public sealed class GridSpec
 public static class GridPresets
 {
     // =======================================================================
-    // 14.5 - QUARTERING THE REFERENCE FRAME
+    // 14.5's QUARTERING GRAMMAR — SUPERSEDED 2026-08-25, see CONCEPTS-REF
+    // §15.5b/§15.5d. This used to be the whole of Shape(): a fraction plus a
+    // separation-in-quarters plus two boolean modifiers (Side, Below),
+    // re-derived from the preset's NAME on every call. It was a reasonable
+    // guess before Concepts was actually measured, and the guess was wrong in
+    // a specific, load-bearing way: §15.5d.4 found a POSITION name (`1/4
+    // Narrow` vs `Side Narrow`) can move the horizon and leave the points
+    // alone, exactly what §15.5b already found `Below` doing, so position and
+    // spread and the horizon are NOT three independent axes multiplying out
+    // into a grammar — "THE THREE AXES ARE NOT SEPARABLE. Do not build the
+    // grammar" (§15.5b.3). §15.1's own ruling already said to mirror Concepts
+    // exactly with no cross product; the measurement then said the same thing
+    // about the numbers that the enumeration had already said about the names.
     //
-    // Every position below is an integer number of QUARTERS of the reference
-    // frame, because that is how 14.5 says the points are placed:
-    //
-    //     quarter 1 - the first vanishing point
-    //     quarter 2 - the centre
-    //     quarter 3 - the second vanishing point
-    //
-    // So the plain "2 Point" preset puts its points on the frame's own quarter
-    // marks, 0.25 and 0.75, and the named presets move OFF THAT QUARTERING
-    // rather than off the window's edge - which is what makes "Side" mean "off
-    // the frame" instead of "at the edge of whatever is on screen right now".
-    //
-    // What this replaced: separations of 1.7, 3.2 and 6.0 FRAME WIDTHS with the
-    // bare preset defaulting to 3.2, which put the left point of a default
-    // 2-point grid more than a frame width off the left edge. That is the
-    // "far left edge of the page" 14.5 rejects.
+    // So Shape() below is now a LOOKUP into the 19 individually measured
+    // configurations §15.5c's table records — not a formula — and nothing
+    // computes a preset's geometry from its name any more.
     // =======================================================================
-    private const double Q = 0.25;
-
-    // Half the separation between the outer points, IN QUARTERS. Narrow IS the
-    // quartering - one quarter either side of centre - and each step out adds
-    // another quarter, so every point still lands on a quarter mark: Wide on the
-    // frame's own edges, Ultrawide one quarter beyond them.
-    //
-    // FORK, flagged to the user: 14.5 fixes the quartering and 12.4 orders the
-    // three names, but neither says how much wider Wide and Ultrawide are than
-    // Narrow. One quarter per step is the reading that keeps every preset on a
-    // quarter mark of the frame; the alternative (a geometric run, so Ultrawide
-    // goes nearly orthographic) cannot be quartered.
-    private const int HalfNarrow = 1;   // points at 0.25 / 0.75 - the quartering
-    private const int HalfWide = 2;     // points at 0.00 / 1.00 - the frame edges
-    private const int HalfUltra = 3;    // points at -0.25 / 1.25 - off both edges
-
-    // "Side puts a point off the edge" (12.4). The pair keeps its separation and
-    // slides two quarters - half a frame - to the left, so the FIRST point is
-    // always off the frame whichever separation it is carrying. Anchoring the
-    // first point AT a fixed -0.25 instead would have made "Side Ultrawide"
-    // identical to plain "Ultrawide", since that is already where the centred
-    // arrangement puts it.
-    private const int SideShift = 2;
-
-    // The third point sits on the frame's vertical centre line - quarter 2, the
-    // same centre the horizon's points are measured from - four quarters, one
-    // whole frame height, from the horizon.
-    private const int ThirdQuarters = 4;
 
     private static readonly string[] NoPresets = { };
 
@@ -337,64 +328,75 @@ public static class GridPresets
         _ => "3 Point",
     };
 
+    // =======================================================================
+    // CONCEPTS-REF §15.5c — THE 19 MEASURED SHAPES, taken verbatim off "The
+    // complete table — fractions of the ORIGINAL 2880x1800 frame". Six rows
+    // (marked "100%" there) were read straight off a frozen 100% capture; the
+    // other thirteen (marked "10%") were recovered through a zoomed-out
+    // capture and an explicitly measured, leave-one-out-controlled mapping
+    // back to frame fractions, worst control residual 0.0084 of the frame
+    // (§15.5c). `1/4 Wide` (3-Point) is the one hybrid row: its horizon and
+    // two on-horizon points are the 100% figures, its third point is the 10%
+    // one, per §15.5c's "On the one hybrid row" note.
+    //
+    // THESE ARE THE SOURCE OF TRUTH. Not re-derived, not fitted, not rounded
+    // beyond what the table itself already carries — a checker that wants to
+    // confirm that is tools/GridPresetProof, which links this class directly
+    // rather than re-typing the numbers a second time.
+    //
+    // The third point's x is carried explicitly (VpShape.ThirdXF) rather than
+    // assumed to be the frame's centre line: §15.5d.2 found it is NOT, for
+    // every 3-Point preset except the near-centred `3 Point` itself.
+    // =======================================================================
+
+    private static readonly Dictionary<string, VpShape> OnePointShapes = new()
+    {
+        ["1 Point"] = new VpShape(0.4989, new[] { 0.4998 }, null, null),
+    };
+
+    private static readonly Dictionary<string, VpShape> TwoPointShapes = new()
+    {
+        ["2 Point"]        = new VpShape(0.4989, new[] { 0.2570, 0.7430 }, null, null),
+        ["1/2 Narrow"]     = new VpShape(-0.7231, new[] { -0.2300, 2.5563 }, null, null),
+        ["1/4 Narrow"]     = new VpShape(-0.0529, new[] { -1.1019, 1.6514 }, null, null),
+        ["Side Narrow"]    = new VpShape(0.8948, new[] { -1.0947, 1.6514 }, null, null),
+        ["1/2 Wide"]       = new VpShape(-0.2534, new[] { -0.5026, 0.9590 }, null, null),
+        ["1/4 Wide"]       = new VpShape(0.2822, new[] { 0.1918, 1.5112 }, null, null),
+        ["Side Wide"]      = new VpShape(0.6173, new[] { -0.7445, 0.7166 }, null, null),
+        ["1/2 Wide Below"] = new VpShape(1.1996, new[] { -0.5004, 0.9563 }, null, null),
+        ["Side Ultrawide"] = new VpShape(0.4989, new[] { 0.0839, 0.7009 }, null, null),
+    };
+
+    private static readonly Dictionary<string, VpShape> ThreePointShapes = new()
+    {
+        ["3 Point"]              = new VpShape(0.8322, new[] { 0.2221, 0.7777 }, 0.5004, 0.1657),
+        ["3/4 Narrow"]           = new VpShape(-1.3411, new[] { -0.8953, 1.7131 }, 0.3220, 9.1370),
+        ["1/2 Narrow"]           = new VpShape(-0.8715, new[] { -0.6686, 1.9270 }, 0.5979, 9.5874),
+        ["3/4 Wide"]             = new VpShape(-0.3387, new[] { -0.0653, 1.2334 }, 0.5849, 5.7983),
+        ["1/4 Wide"]             = new VpShape(0.2211, new[] { -0.2695, 1.0207 }, 0.3925, 7.2412),
+        ["Side Wide Below"]      = new VpShape(0.8423, new[] { 0.0392, 1.3012 }, 0.5819, 5.2342),
+        ["1/4 Wide Below"]       = new VpShape(0.7764, new[] { -0.4048, 1.0532 }, 0.3207, 5.1821),
+        ["3/4 Ultrawide Below"]  = new VpShape(1.3365, new[] { -0.0967, 1.0895 }, 0.4957, -0.4554),
+        ["3/4 Ultrawide"]        = new VpShape(-0.5642, new[] { -0.1638, 1.1556 }, 0.4923, 0.8827),
+    };
+
     /// <summary>The frame-relative shape a perspective preset describes, as
-    /// FRACTIONS of 14.5's reference frame. Returns null for a lattice grid, and
-    /// the default shape for <c>Custom</c> so the preview has something to draw
-    /// before the user has moved a point.
-    ///
-    /// <para>Read the name and the answer falls out of the quartering: a fraction
-    /// is where the horizon crosses the frame, Narrow / Wide / Ultrawide is how
-    /// many quarters the points sit either side of the centre, Side slides the
-    /// pair off the frame, and Below drops the third point beneath the horizon
-    /// instead of above it.</para></summary>
+    /// FRACTIONS of 14.5's reference frame — §15.5c's measured table, looked up
+    /// by name. Returns null for a lattice grid (<paramref name="vpCount"/> 0),
+    /// and the row's own default preset's shape for <c>Custom</c> or any other
+    /// unrecognised name, so the preview has something to draw before the user
+    /// has moved a point.</summary>
     public static VpShape? Shape(GridKind kind, string preset, int vpCount)
     {
-        if (vpCount == 0) return null;
-        // 14.4: one point, on the frame's centre, with a horizon through it. No
-        // separation to name and nothing else to place.
-        if (vpCount == 1) return new VpShape(0.5, new[] { 0.5 }, null);
-
-        // Read the name: a fraction, a separation, and the two modifiers.
-        double horizon = Fraction(preset) ?? 0.5;   // no fraction = quarter 2
-        int half = HalfQuarters(preset);
-        bool side = preset.Contains("Side", StringComparison.Ordinal);
-        bool below = preset.Contains("Below", StringComparison.Ordinal);
-
-        // Centred on quarter 2, then slid left by SideShift quarters if the name
-        // says Side. Both points stay on quarter marks either way.
-        double centre = 0.5 - (side ? SideShift * Q : 0);
-        double x0 = centre - half * Q;
-        double x1 = centre + half * Q;
-
-        if (vpCount == 2)
+        var table = kind switch
         {
-            // A 2-point grid has no third point for "Below" to move, so the only
-            // reading left of the word is the eye line dropping a quarter further
-            // down the frame. FORK, flagged to the user: §12.4 defines Below only
-            // for the third point but its own 2-Point row contains
-            // "1/2 Wide Below".
-            if (below) horizon += Q;
-            return new VpShape(horizon, new[] { x0, x1 }, null);
-        }
-
-        double reach = ThirdQuarters * Q;
-        double third = below ? horizon + reach : horizon - reach;
-        return new VpShape(horizon, new[] { x0, x1, 0.5 }, third);
+            GridKind.OnePoint => OnePointShapes,
+            GridKind.TwoPoint => TwoPointShapes,
+            GridKind.ThreePoint => ThreePointShapes,
+            _ => null,
+        };
+        if (table == null || vpCount == 0) return null;
+        if (table.TryGetValue(preset, out var shape)) return shape;
+        return table[DefaultPreset(vpCount)];
     }
-
-    private static double? Fraction(string preset)
-    {
-        if (preset.Contains("3/4", StringComparison.Ordinal)) return 0.75;
-        if (preset.Contains("1/4", StringComparison.Ordinal)) return 0.25;
-        if (preset.Contains("1/2", StringComparison.Ordinal)) return 0.5;
-        return null;
-    }
-
-    /// <summary>How many quarters each point sits from the pair's centre. The
-    /// bare "2 Point" / "3 Point" carries no separation word and takes the
-    /// quartering itself, which is Narrow's value.</summary>
-    private static int HalfQuarters(string preset) =>
-        preset.Contains("Ultrawide", StringComparison.Ordinal) ? HalfUltra
-        : preset.Contains("Wide", StringComparison.Ordinal) ? HalfWide
-        : HalfNarrow;
 }
