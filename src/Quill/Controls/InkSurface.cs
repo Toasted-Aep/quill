@@ -978,6 +978,62 @@ public sealed class InkSurface : UserControl
         return rtf.Substring(i, System.Math.Min(end - i + 1, 120));
     }
 
+    /// <summary>§50: the control's own serialisation of a box, captured the
+    /// moment something reached that box — focus, in every case the app has.
+    /// Absent means nothing has been near this box since it was built.
+    ///
+    /// <para>Captured at REACH rather than at build on purpose. 40.5/43.1
+    /// established that the template pushes <c>Foreground</c> into the document
+    /// after <c>Loaded</c>, so a baseline taken inside <c>BuildTextUi</c> would
+    /// differ from the settled document and report a change nobody made. Nobody
+    /// can focus a box that has not finished loading.</para></summary>
+    private readonly Dictionary<Guid, string?> _textReached = new();
+
+    /// <summary>§50: boxes Quill itself has edited on the user's behalf with no
+    /// focus involved — 25.5's whole-box recolour is the one path that does
+    /// that. Always written back, comparison or no comparison.</summary>
+    private readonly HashSet<Guid> _textTouched = new();
+
+    /// <summary>§50: the box has been reached, so record what its document looked
+    /// like at that moment. Once per build — a second focus must not move the
+    /// baseline forward over an edit made during the first.</summary>
+    private void NoteTextReached(Guid id, RichEditBox box)
+    {
+        if (_textReached.ContainsKey(id)) return;
+        try
+        {
+            box.Document.GetText(TextGetOptions.FormatRtf, out string at);
+            _textReached[id] = at;
+        }
+        catch
+        {
+            // A box that cannot be read cannot be compared. Record the reach
+            // with no baseline; TextFlushPolicy then falls back to writing,
+            // which is the behaviour that predates §50.
+            _textReached[id] = null;
+        }
+    }
+
+    /// <summary>§50: Quill edited this box without anyone focusing it.</summary>
+    private void NoteTextTouched(Guid id) => _textTouched.Add(id);
+
+    /// <summary>Stores each live <c>RichEditBox</c>'s document back into its
+    /// model — but only for a box something has actually been near.
+    ///
+    /// <para><b>§50: an untouched box is NOT written back, and that is the whole
+    /// of the fix.</b> Windows' RTF writer is not idempotent: <c>SetText</c> then
+    /// <c>GetText</c> returns the document plus one empty paragraph, the six
+    /// characters <c>\par\r\n</c>. Writing that back unconditionally — which is
+    /// what this method did at some thirty call sites — made the extra paragraph
+    /// part of the stored document, so the next open added another. All 106
+    /// stored notes carry the result; 20.8% of the library's RTF is empty
+    /// paragraphs. The decision now lives in <see cref="TextFlushPolicy"/>,
+    /// which is a plain function over strings so a harness can link it.</para>
+    ///
+    /// <para><b>The cheap refusal comes first.</b> A page of boxes nobody has
+    /// been near costs no <c>GetText</c> at all now, where before it cost one
+    /// full RTF serialisation per box per flush — and this runs on every save,
+    /// every undo, every page change and every export.</para></summary>
     public void FlushTexts()
     {
         if (_page == null) return;
@@ -985,11 +1041,21 @@ public sealed class InkSurface : UserControl
         {
             var model = _page.Texts.FirstOrDefault(t => t.Id == id);
             if (model == null) continue;
+            bool reached = _textReached.ContainsKey(id);
+            bool touched = _textTouched.Contains(id);
+            if (!TextFlushPolicy.NeedsTheDocument(model.Rtf, reached, touched)) continue;
             ui.Box.Document.GetText(TextGetOptions.FormatRtf, out string rtf);
             // §46.2: this is where a flattened document is written OVER the
             // model, so the probe records what is about to be saved.
             if (GeometryProbe.On)
                 GeometryProbe.Write("[3.3]", $"flush id={id} -> {ProbeCtbl(rtf)}");
+            _textReached.TryGetValue(id, out string? baseline);
+            if (!TextFlushPolicy.ShouldWriteBack(model.Rtf, reached, touched, baseline, rtf))
+            {
+                if (GeometryProbe.On)
+                    GeometryProbe.Write("[8.7]", $"flush id={id} SKIPPED reached={reached} touched={touched}");
+                continue;
+            }
             model.Rtf = rtf;
         }
     }
@@ -4140,6 +4206,16 @@ public sealed class InkSurface : UserControl
             // The boxes are XAML, not Win2D: only a rebuild re-reads the field,
             // and BuildTextUi's stamp is what puts the colour on the screen.
             RebuildTextLayer();
+            // §50: AND THE STAMP STILL REACHES THE FILE. This is the one path
+            // that edits a box's document with no focus anywhere in it - a lasso
+            // recolour stamps every box in the selection - so the boxes are
+            // marked touched AFTER the rebuild, which is what clears the latch.
+            // Without this, 25.2's stored RTF would keep the old colour while
+            // the field carried the new one. Nothing READS the stale one
+            // (ResolveChosenColours hands a field-coloured box's runs back as
+            // "take the box's answer"), but a fix for one defect should not
+            // quietly introduce a disagreement another section closed.
+            foreach (var t in texts) NoteTextTouched(t.Id);
         }
         _inkCacheDirty = true;
         PublishSelection();
@@ -4197,6 +4273,7 @@ public sealed class InkSurface : UserControl
                 FlushTexts();                                  // capture the words as they stand
                 PushAction(new RecolourTextsAction(new List<TextElement> { t }, hex), _page);
                 StampTextColour(box, c);
+                NoteTextTouched(t.Id);                         // §50: the stamp is an edit
                 FlushTexts();                                  // and store the stamped RTF
                 ContentChanged?.Invoke();
             }
@@ -9299,6 +9376,13 @@ public sealed class InkSurface : UserControl
         FlushTexts(); // persist any live edits before tearing boxes down (prevents resets)
         _textLayer.Children.Clear();
         _textUi.Clear();
+        // §50: the reach baselines and the touch latches belong to the boxes
+        // that are being destroyed. FlushTexts above has already had its last
+        // look at them, so clearing here cannot lose an edit - and carrying a
+        // stale baseline into a freshly built box would compare the new
+        // document against an old one.
+        _textReached.Clear();
+        _textTouched.Clear();
         ActiveTextBox = null;
         LastTextBox = null;
         if (_page == null) return;
@@ -9346,6 +9430,13 @@ public sealed class InkSurface : UserControl
 
     private void BuildTextUi(TextElement t)
     {
+        // §50: this box is about to be rebuilt from t.Rtf, so whatever was known
+        // about the last incarnation is gone with it. BuildTextUi is called on
+        // its own - SpawnTextBox, the clone path, MaterializePendingText - and
+        // not only from RebuildTextLayer, so the reset belongs here as well.
+        _textReached.Remove(t.Id);
+        _textTouched.Remove(t.Id);
+
         var container = new Grid();
         container.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         container.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -9743,6 +9834,14 @@ public sealed class InkSurface : UserControl
 
         box.GotFocus += (_, _) =>
         {
+            // §50: THE MOMENT THIS BOX WAS REACHED. Every edit path in the app
+            // arrives through ActiveTextBox or LastTextBox, and both are
+            // assigned here and nowhere else, so this is the one gate every
+            // change has to pass - typing, paste, dictation, the AI rewrite, the
+            // symbol picker, and all of the format bar. Recording the document
+            // as it stands NOW is what lets FlushTexts tell an edit from a
+            // click that changed nothing.
+            NoteTextReached(t.Id, box);
             ActiveTextBox = box;
             LastTextBox = box;
             ActiveTextChanged?.Invoke(box);
@@ -9777,6 +9876,8 @@ public sealed class InkSurface : UserControl
                 // focus from the box the user just tapped into
                 _textLayer.Children.Remove(container);
                 _textUi.Remove(t.Id);
+                _textReached.Remove(t.Id);   // §50: the box is gone with its baseline
+                _textTouched.Remove(t.Id);
                 ContentChanged?.Invoke();
             }
         };
