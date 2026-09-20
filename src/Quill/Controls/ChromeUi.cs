@@ -314,7 +314,11 @@ internal static class ChromeUi
             Foreground = new SolidColorBrush(enabled ? Ink : Dim),
         });
 
-        var slider = Toggle(on, changed, enabled);
+        // The label rides onto the toggle itself, not only onto this row's Grid.
+        // A Grid's own automation peer offers no pattern and is not a Tab stop,
+        // so a screen reader lands on the toggle directly - and the toggle is the
+        // thing that has to say what it is.
+        var slider = Toggle(on, changed, enabled, name: label);
         slider.HorizontalAlignment = HorizontalAlignment.Right;
         grid.Children.Add(slider);
         if (tip != null) ToolTipService.SetToolTip(grid, tip);
@@ -322,11 +326,62 @@ internal static class ChromeUi
         return grid;
     }
 
-    /// <summary>The bare pill.</summary>
-    public static FrameworkElement Toggle(bool on, Action<bool> changed, bool enabled = true)
+    /// <summary>The bare pill.
+    ///
+    /// <para><b>Built on a real <see cref="Microsoft.UI.Xaml.Controls.Primitives.ToggleButton"/>
+    /// now, not a bare <see cref="Grid"/> with a <c>Tapped</c> handler.</b> A
+    /// Grid's automation peer is a plain <c>FrameworkElementAutomationPeer</c>: it
+    /// offers no pattern at all, so UIA could read whatever ambient Name this
+    /// control carried and had nothing to call to change it and nothing to ask
+    /// for its state. That was every row built from this method - the layers
+    /// panel, Precision, Comments, the export pane's two checkboxes - not one
+    /// panel's defect. (Settings draws a visually similar pill from its own,
+    /// separately authored toggle in <c>SettingsWindow.cs</c> — see the note left
+    /// there. That copy is NOT touched by this fix and carries the identical
+    /// gap.)</para>
+    ///
+    /// <para><b>One path flips it, not two.</b> <c>ToggleButtonAutomationPeer</c>'s
+    /// <c>IToggleProvider.Toggle()</c> calls the control's own <c>OnToggle()</c> -
+    /// the exact method a pointer click or a Space/Enter key press already runs -
+    /// so an assistive client and the mouse share one code path to the same
+    /// <c>IsChecked</c> flip. That is the same discipline §49.1 puts on the
+    /// layer-visibility answer this control most often drives: one fact, asked
+    /// once, never two ideas of it that could disagree. Because
+    /// <c>Checked</c>/<c>Unchecked</c> fire from that one flip regardless of which
+    /// of the two reached it, <paramref name="changed"/> below is invoked exactly
+    /// where the old <c>Tapped</c> handler used to invoke it - once, with the
+    /// state actually reached - and now automation reaches the same call.</para>
+    ///
+    /// <para><b>The state is real, not shadowed.</b> The old bare pill kept its
+    /// own local <c>bool state</c> that WinUI never heard about; a hidden field is
+    /// not something automation can read. <c>IsChecked</c> IS the state now, and
+    /// <c>ToggleButtonAutomationPeer</c> already raises UIA's
+    /// <c>ToggleState</c>-changed event whenever it moves - nothing here raises it
+    /// by hand, and nothing here needs to.</para>
+    ///
+    /// <para>Chrome stays bare: <see cref="ClearToggleChrome"/> neutralises the
+    /// stock template's own backgrounds and borders on this one instance -
+    /// the same technique <c>MeasurementMenu.StripToggleChrome</c> uses for the
+    /// padlock, kept as its own copy here rather than shared so this fix touches
+    /// one file - leaving the authored track-and-knob as the only thing drawn.
+    /// The template itself is left alone, so the hit-testing, keyboard focus and
+    /// automation peer it brings all stay real; only its paint is silenced.
+    /// <c>MinWidth</c>/<c>MinHeight</c> are zeroed for the same reason
+    /// <c>MeasurementMenu.LockButton</c> zeroes them on its padlock: the stock
+    /// style's own minimums are bigger than this 44x24 pill, and <c>Width</c>
+    /// alone does not override a minimum.</para>
+    ///
+    /// <para><b>Not established here:</b> that a real screen reader announces this
+    /// correctly. WinUI files cannot be linked into this repo's console harnesses
+    /// (see e.g. <c>tools/HandleProof/HandleProof.csproj</c>'s own note on
+    /// <c>SelectionChrome.cs</c>), and instantiating a live
+    /// <c>ToggleButton</c>/<c>AutomationPeer</c> needs a running WinUI window,
+    /// which this fix does not launch. What is established is the framework
+    /// contract a real <c>ToggleButton</c> carries, and that this control now
+    /// uses one.</para></summary>
+    public static FrameworkElement Toggle(bool on, Action<bool> changed, bool enabled = true, string? name = null)
     {
         const double w = 44, h = 24, knob = 18;
-        bool state = on;
 
         var track = new Border
         {
@@ -334,6 +389,7 @@ internal static class ChromeUi
             Height = h,
             CornerRadius = new CornerRadius(h / 2),
             BorderThickness = new Thickness(1),
+            IsHitTestVisible = false,
         };
         var dot = new Border
         {
@@ -346,13 +402,42 @@ internal static class ChromeUi
             Background = new SolidColorBrush(Colors.White),
             BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0x00, 0x00, 0x00)),
             BorderThickness = new Thickness(1),
+            IsHitTestVisible = false,
         };
         var slide = new TranslateTransform();
         dot.RenderTransform = slide;
 
+        // Purely visual - the ToggleButton below is what is hittable, focusable
+        // and automatable; this Grid only carries the authored pixels.
+        var pill = new Grid { Width = w, Height = h, IsHitTestVisible = false };
+        pill.Children.Add(track);
+        pill.Children.Add(dot);
+
+        var host = new Microsoft.UI.Xaml.Controls.Primitives.ToggleButton
+        {
+            Content = pill,
+            Width = w,
+            Height = h,
+            MinWidth = 0,
+            MinHeight = 0,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(h / 2),
+            Background = new SolidColorBrush(Colors.Transparent),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            IsTabStop = true,
+            IsEnabled = enabled,
+            Opacity = enabled ? 1 : 0.5,
+            IsChecked = on,
+        };
+        ClearToggleChrome(host);
+        if (name != null) Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(host, name);
+
         void Paint()
         {
             // brush-level writes only
+            bool state = host.IsChecked == true;
             track.Background = new SolidColorBrush(state
                 ? (enabled ? ToggleOn : Color.FromArgb(0x66, ToggleOn.R, ToggleOn.G, ToggleOn.B))
                 : Wash(0x2E));
@@ -361,23 +446,41 @@ internal static class ChromeUi
         }
         Paint();
 
-        var host = new Grid
-        {
-            Width = w,
-            Height = h,
-            Background = new SolidColorBrush(Colors.Transparent),
-            Opacity = enabled ? 1 : 0.5,
-        };
-        host.Children.Add(track);
-        host.Children.Add(dot);
-        if (enabled)
-            host.Tapped += (_, _) =>
-            {
-                state = !state;
-                Paint();
-                changed(state);
-            };
+        // Checked/Unchecked fire from the one place IsChecked actually changes -
+        // ToggleButton.OnToggle - so this runs once whether a pointer, a Space
+        // key, or an assistive client's IToggleProvider.Toggle() call is what
+        // got there. Nothing else in this method ever assigns IsChecked after
+        // construction, so there is no external-sync case to guard against here
+        // the way MeasurementMenu.PaintLock has to for its padlock.
+        host.Checked += (_, _) => { Paint(); changed(true); };
+        host.Unchecked += (_, _) => { Paint(); changed(false); };
+
         return host;
+    }
+
+    /// <summary>Neutralises the stock <c>ToggleButton</c>'s own backgrounds and
+    /// borders on ONE instance, so the authored track-and-knob pill stays the
+    /// only thing drawn while the template - and the hit-testing, keyboard focus
+    /// and automation peer it comes with - stays real. Written as resource
+    /// overrides rather than a replacement <c>ControlTemplate</c> for the same
+    /// reason <c>MeasurementMenu.StripToggleChrome</c> is: a hand-rolled template
+    /// would have to re-declare the visual states and the automation surface,
+    /// which is exactly the part that must not be got wrong again.</summary>
+    private static void ClearToggleChrome(Microsoft.UI.Xaml.Controls.Primitives.ToggleButton b)
+    {
+        var clear = new SolidColorBrush(Colors.Transparent);
+        foreach (var key in new[]
+        {
+            "ToggleButtonBackground", "ToggleButtonBackgroundPointerOver", "ToggleButtonBackgroundPressed",
+            "ToggleButtonBackgroundDisabled", "ToggleButtonBackgroundChecked", "ToggleButtonBackgroundCheckedPointerOver",
+            "ToggleButtonBackgroundCheckedPressed", "ToggleButtonBackgroundCheckedDisabled",
+            "ToggleButtonBorderBrush", "ToggleButtonBorderBrushPointerOver", "ToggleButtonBorderBrushPressed",
+            "ToggleButtonBorderBrushDisabled", "ToggleButtonBorderBrushChecked", "ToggleButtonBorderBrushCheckedPointerOver",
+            "ToggleButtonBorderBrushCheckedPressed", "ToggleButtonBorderBrushCheckedDisabled",
+        })
+        {
+            b.Resources[key] = clear;
+        }
     }
 
     // =====================================================================
