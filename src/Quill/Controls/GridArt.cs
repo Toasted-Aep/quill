@@ -230,8 +230,13 @@ internal static class GridArt
         var pts = new List<Vector2>();
         for (int i = 0; i < shape.VpXF.Length; i++)
             pts.Add(new Vector2((float)shape.VpXF[i] * fw * sx, horizon));
-        if (shape.ThirdYF is double ty && pts.Count == 3)
-            pts[2] = new Vector2(w * 0.5f, (float)ty * fh * sy);
+        // The third point's x is its OWN measured fraction (VpShape.ThirdXF),
+        // not the frame's centre line - §15.5d.2 found most 3-point presets
+        // put it well off-centre. The 0.5 fallback only covers a shape that
+        // somehow carries a ThirdYF with no ThirdXF, which none of the 19
+        // measured presets do.
+        if (shape.ThirdYF is double ty)
+            pts.Add(new Vector2((float)(shape.ThirdXF ?? 0.5) * fw * sx, (float)ty * fh * sy));
 
         int rays = Math.Clamp(s.Density, 3, 96);
         float rayW = Math.Max(0.5f, lw * 0.75f);

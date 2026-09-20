@@ -7799,6 +7799,19 @@ public sealed partial class MainWindow : Window
                            !string.Equals(p.GridPreset, s.Preset, StringComparison.Ordinal);
         bool countMoved = s.IsPerspective && (p.Perspective?.Vps.Count ?? 0) != s.VpCount;
 
+        // Snapshotted BEFORE anything below moves it, and only when there is
+        // something to lose: a preset (or a point-count change) that OVERWRITES
+        // an existing hand-placed or previously-preset grid gets a way back
+        // (SetPerspectivePresetAction, pushed below); a page with no points yet
+        // is not replacing anything, so no undo entry is pushed for it, exactly
+        // as turning any OTHER grid kind on has never been an undo step.
+        var priorDef = p.Perspective;
+        bool hadPoints = priorDef != null && priorDef.Vps.Count > 0;
+        string? priorPreset = p.GridPreset;
+        var priorVps = hadPoints ? priorDef!.Vps.Select(v => new CanvasPoint(v.X, v.Y)).ToList() : null;
+        double priorHorizonY = priorDef?.HorizonY ?? 0;
+        double priorAngle = priorDef?.HorizonAngle ?? 0;
+
         p.GridPreset = s.Preset == "Custom" ? null : s.Preset;
         p.GridSpacing = Math.Max(2, s.Spacing);
         p.GridDivisions = s.Divisions <= 1 ? 0 : Math.Clamp(s.Divisions, 2, 64);
@@ -7817,7 +7830,18 @@ public sealed partial class MainWindow : Window
             p.Perspective ??= new PerspectiveDef();
             p.Perspective.RayCount = Math.Clamp(s.Density, 4, 96);
             if (presetMoved || countMoved || p.Perspective.Vps.Count == 0)
+            {
                 PlacePerspectiveShape(p.Perspective, s);
+                if (hadPoints)
+                {
+                    var def = p.Perspective;
+                    var toVps = def.Vps.Select(v => new CanvasPoint(v.X, v.Y)).ToList();
+                    Surface.ApplyPageAction(new SetPerspectivePresetAction(
+                        def, priorPreset, p.GridPreset,
+                        priorHorizonY, priorAngle, priorVps!,
+                        def.HorizonY, def.HorizonAngle, toVps));
+                }
+            }
         }
         else
         {
@@ -7907,8 +7931,14 @@ public sealed partial class MainWindow : Window
         def.Vps.Clear();
         foreach (double xf in shape.VpXF)
             def.Vps.Add(new CanvasPoint(fx + xf * fw, def.HorizonY));
-        if (shape.ThirdYF is double t && def.Vps.Count == 3)
-            def.Vps[2] = new CanvasPoint(fx + 0.5 * fw, fy + t * fh);
+        // The third point's x comes from its OWN measured fraction
+        // (VpShape.ThirdXF), not a hardcoded frame centre - §15.5d.2 found
+        // most 3-point presets put it well off-centre. This used to write a
+        // literal 0.5 here, independently of the same literal 0.5 GridArt and
+        // GridPresets.Shape each wrote - three copies of one assumption, the
+        // shape of defect §0 and §49 both describe.
+        if (shape.ThirdYF is double t)
+            def.Vps.Add(new CanvasPoint(fx + (shape.ThirdXF ?? 0.5) * fw, fy + t * fh));
     }
 
     // ---- 12.6: the on-canvas vanishing-point editor -----------------------
