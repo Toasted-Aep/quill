@@ -5207,3 +5207,234 @@ e–h tested it four ways. It maximises regardless.
   BUILD and RUN in separate columns, so a build failure cannot read as a passing
   suite. All ten: build ok, run PASS. `LayerRoundTrip` = 83 checks.
   `TextColourRoundTrip` builds with **120 warnings** (the app itself is 0).
+
+# Run 25 — 2026-09-20 — the layers CRUD, and the controls that reach none of it
+
+`main` == `integration` == both remotes @ `770aa21`, tree clean. Clean
+`--no-incremental` x64 Debug: **0 warnings, 0 errors**. **All ten harnesses
+build AND pass**; `LayerRoundTrip` reports **83 checks**, the same number §49.7
+recorded — `16a557a` added no harness coverage at all.
+
+Sent to screen-verify `16a557a` (add / rename / reorder / delete, `ActiveLayerKey`
+stamping at "twelve places", and layer order in the draw path).
+
+## The headline: the operations exist and nothing can reach them
+
+`16a557a` added `AddLayerAction`, `RenameLayerAction`, `MoveLayerAction`,
+`InkSurface.ApplyLayerAction` and `InkSurface.SetActiveLayer`. **Not one of them
+is called from anywhere in the app.** The only occurrences outside their own
+definitions and `Services/UndoRedo.cs` are a comment in `ChromeBars.cs:1359`:
+
+```
+$ grep -rn "AddLayerAction|RenameLayerAction|MoveLayerAction|RemoveLayerAction|
+            ApplyLayerAction|SetActiveLayer" src/Quill --include=*.cs
+  ChromeBars.cs:1359   (a comment)
+  InkSurface.cs:3654   public void SetActiveLayer      (definition)
+  InkSurface.cs:3677   public void ApplyLayerAction    (definition)
+  LayerModels.cs       (two doc comments)
+```
+
+`BuildLayersPanel` is **unchanged** by that commit: one row per layer carrying a
+name, a visibility switch and an opacity slider, exactly as §49.5 built it. Its
+own caption still tells the user
+
+> *"This page has one layer, so hiding it hides the page. Making a second one is
+> **not built yet** — add, rename and reorder land together."*
+
+and the method comment above it still says *"No reorder, no rename, no add, no
+delete."* **Both statements were true when written and are false now.** This is
+§49.4's defect one level up: §49.4 was a renderer the user could not reach, and
+this is a set of undoable operations the user cannot reach — with the panel
+actively saying they do not exist.
+
+The practical consequence for this run: **checks 1, 2, 4 and 5 cannot be
+performed by clicking, because there is no control to click.** They were measured
+against the real actions through the real serialiser instead, and the reorder was
+put on the glass by seeding the two orders by hand — the same way §49.5's
+two-layer page had to be seeded, and for the same reason.
+
+## CHECK 1 — reorder changes draw order ON THE GLASS: **PASS**
+
+Two opaque bars on one scanline, overlapping on page x 500..700 and nowhere else:
+
+| | layer key | colour | page x |
+|---|---|---|---|
+| blue | 0 | `#1B5FC1` | 200..700 |
+| orange | 1 | `#E07A1F` | 500..1000 |
+
+Whichever layer paints last owns the overlap, so the **boundary between the two
+colours** is the entire measurement. Seeded twice, launched twice, measured off
+the screenshots (`scratchpad/vp25/ab-overlap.png`, `ba-overlap.png` — cropped to
+bare Quill canvas, 0 desktop pixels):
+
+| `Layers` order | blue run (screen px) | orange run | boundary | owns the overlap |
+|---|---|---|---|---|
+| `[0, 1]` (AB) | 480..1079 (600 px) | 1080..1806 (727 px) | **1080** | ORANGE — layer 1 on top |
+| `[1, 0]` (BA) | 480..1585 (1106 px) | 1586..1806 (221 px) | **1586** | BLUE — layer 0 on top |
+
+**The boundary moved 506 px and the ink on top changed.** Both bars are still on
+the page in both orders — the built-in control, so neither order was achieved by
+losing a bar.
+
+**And no element's `LayerKey` moved.** Read back off disk *after the app had
+loaded the page and saved it itself*, the census is identical across both orders:
+strokes `[0, 1, 1, 0]`, shape `[1]`, text `[1]`, `ActiveLayer` 1. Reorder is a
+list move, exactly as 18.2 requires.
+
+Calibration note, because the first number was wrong: the orange and green bars
+BOTH end at screen x≈1805 — that is the **window's right edge clipping them**,
+not the page. Anchoring the scale on a clipped end put the boundary at "page 562"
+and meant nothing. The sound reading is differential — the same boundary measured
+twice — and it needs no calibration at all.
+
+## CHECK 2 — delete a non-empty layer, then undo: **PASS, no data loss**
+
+Run through `RemoveLayerAction` on a layer carrying a stroke, a shape and a text
+box. Undo brings back **the layer and its contents**, every element still naming
+the layer it belonged to, and the restoration **survives save → reload**. The
+"stop and report" condition did not arise.
+
+**But 18.7 and 18.12 item 3 are now stale and say the opposite of the code.**
+`d6e4a6d` deliberately flipped the enum: `DeleteContent` is the zero value and
+the default, on the user's own ruling. §18.7 still reads *"Deleting a layer
+reassigns its content to the base layer by default (`LayerRemoval.ReassignToBase`).
+Deleting the content with it is available and is **never** the default."* The code
+is right and the prose is wrong; corrected in §49.9.
+
+## CHECK 3 — the twelve stamping sites, and the ones that are not
+
+The count is honest. A census of every `new PenStroke` / `new ShapeElement` /
+`new TextElement` with an object initialiser under `src/Quill`
+(`scratchpad/vp25_stamp_audit.py`) finds **19** sites:
+
+- **7** stamp `ActiveLayerKey`
+- **5** stamp another element's key — all of them table cells taking the
+  **table's** key, which is 18.10 and is correct
+- **7** stamp nothing
+- 1 has no initialiser
+
+7 + 5 = **twelve**, which is what the commit claims.
+
+**The seven that stamp nothing were the real question, and all seven are
+innocent.** This is what the previous attempt was auditing when it stopped:
+
+| site | what it is | verdict |
+|---|---|---|
+| `BrushesWindow.cs:626` | `SampleStroke` — the brush strip's throwaway sample | never on a page |
+| `BrushesWindow.cs:781` | `RenderMark` — a pen-cell icon | never on a page |
+| `ToolWheel.cs:2731` | the eraser's preview ring | never on a page |
+| `InkSurface.cs:5936` | the wet mid-stroke preview | **deliberate** — commented: carries no key so a hidden base layer cannot blank the ink under the nib |
+| `InkSurface.cs:6727` | `PreviewCircle` | only callers are `ToolWheel.cs:2757/2771` — preview only |
+| `InkSurface.cs:7484` | a grain-pass `ShapeElement` clone | render-time clone, `layerMul` already composed |
+| `MainWindow.xaml.cs:9922` | PDF import building a **brand-new page** | `ActiveLayer` is 0 on a new page, so unstamped == stamped 0 |
+| `InkSurface.cs:7597` | `new TextElement[rows, cols]` | a regex false positive — an array, not an element |
+
+The clone paths that the regex cannot see are covered too:
+`PenStroke.CloneWithPoints` and both `Clone()` methods carry `LayerKey`
+(`NoteModels.cs:163/248/322`), and `tools/CloneRoundTrip`'s 36 checks assert it.
+
+**Not established either way:** cross-page paste re-keying, which 18.10 names as
+an obligation. Keys are page-scoped, and nothing in this run exercised a paste
+between pages.
+
+## CHECK 4 — add: **PASS**
+
+A new layer appears above, `ActiveLayer` follows it, existing content does not
+move, and on disk the new layer carries exactly `Key, Name, Opacity, CreatedTicks`
+— **no `"Hidden": false`, no `"Locked": false`**. Undoing the first add takes the
+whole `Layers` array away again, so "add a layer, change your mind" leaves the
+page costing what it cost before (18.4). Redo restores the **same key**, so
+nothing stamped with it is orphaned.
+
+Confirmed independently on a real app save: after both launches above,
+`"Hidden"` and `"Locked"` appear **zero times** in `library.json`.
+
+## CHECK 5 — rename, then clear it: **PASS**
+
+A name persists and survives save → reload. Clearing it writes `""` on disk and
+**not** the derived `"Layer 2"`, and `DisplayName` goes back to deriving it — the
+two stay different things, which is what 18 asks for. Three spaces normalise to
+`""` and the action calls itself "Clear layer name".
+
+## CHECK 6 — §49.3's round trip across the new operations: **PASS**
+
+Through add → rename → reorder → delete → undo, every element's own opacity came
+back untouched (`0.62`, `0.46`, and the absent ones still absent). Confirmed
+again on the glass runs: `0.31`, `0.73`, `0.46` and two absent, unchanged after
+the app loaded and saved a reordered page.
+
+## A documentation claim that does not hold
+
+`MoveLayerAction`'s own doc comment says:
+
+> *"`tools/LayerRoundTrip` asserts the whole element census is unmoved across a
+> reorder, with a negative control that shows the assertion can fail."*
+
+Neither half is true of the harness as it stands. Its section 12 reorders with
+`PageLayers.Move` — **not** `MoveLayerAction`, which no harness ever constructs —
+compares `back.Strokes` only (**not** shapes, **not** texts, so not "the whole
+element census"), and the string "negative control" does not occur anywhere in
+`tools/LayerRoundTrip/Program.cs`. The claim is filed, not fixed: a harness change
+is not a verification run's business.
+
+The property itself **does** hold, measured over strokes, shapes and texts both in
+memory and on disk, by `scratchpad/vp25/LayerOps`.
+
+## How the unreachable operations were measured
+
+`scratchpad/vp25/LayerOps` — a scratch harness, deliberately **not** in `tools/`,
+so the ten stay ten. Same pattern as `tools/LayerRoundTrip`: the real
+`NoteModels.cs`, `LayerModels.cs`, `LibraryStore.cs`, `SyncLog.cs` and
+`UndoRedo.cs` `<Compile Include>`d straight out of `src/Quill`, run against a
+temp `QUILL_DATA_FOLDER` with a hard abort if `LibraryStore` resolves outside it.
+**43 checks, all holding.**
+
+Two traps it records, both already paid for:
+
+- **`LibraryStore.Save` is a no-op until `EnableSaving()` is called**, and it
+  fails silently. A first version of this harness "passed" everything while every
+  `Save` returned at its first line.
+- **It does not restore SyncLog state and `tools/LayerRoundTrip` does.**
+  `LibraryStore.Save` calls `SyncLog.OnSaved` unconditionally and the cursor file
+  lives outside the data folder (18.11). Run under an external snapshot guard;
+  the guard **did not fire** — `synccursors.json` and `deviceid.txt` came back
+  byte-identical (`F54B9BA9…`, `A69724E3…`). Measured, not assumed, and the
+  missing restore is still a latent hazard in that scratch harness.
+
+## Machine notes added this run
+
+- **A presence-gate driver that refused a CLEAR gate.** Guarding a launch on
+  `if ($LASTEXITCODE -ne 0)` after calling `vp25_presence.ps1` with `&` aborts a
+  **clear** gate: the script only calls `exit` on the blocked path, so on the
+  clear path `$LASTEXITCODE` keeps whatever it held — and in a fresh PowerShell
+  session where no native exe has run, that is `$null`, which is `-ne 0`. It
+  failed safe this time. Gate on the **verdict line** instead:
+  `($g | Where-Object { $_ -match 'VERDICT\s*:\s*CLEAR' }).Count -eq 1`. Same
+  family as run 24's `Select-Object -First 1`: a driver reporting something it
+  never observed.
+- **A person was at the machine at dispatch+8 min** — 12 cursor moves, 336 px
+  displacement, idle resetting 58.9 s → 9 s. Nothing was launched and nothing
+  injected until a later probe came back with **zero displacement and zero
+  resets**, idle climbing. Run 24's correction held up: displacement is the
+  signal, stillness is not.
+- **Both protected libraries byte-identical at the end**, mtimes untouched:
+  `Documents\Quill\library.json` 53,582,459 / `0C32CE6C…`, and
+  `%LOCALAPPDATA%\LectureInk\library.json` 6,461,655 / `0C6F1B7F…`. Paint tiles
+  under `%LOCALAPPDATA%\Quill\paint` unchanged at 20 files.
+- `scratchpad/vp25data` is left seeded in **BA** order and working — point
+  `QUILL_DATA_FOLDER` at it. `scratchpad/vp25_launch.ps1` seeds `settings.json`
+  every launch (fixed windowed bounds, because placement is captured on `Closed`),
+  refuses to start on a missing build output, and carries the SyncLog guard
+  inline. `scratchpad/vp25_seed.py AB|BA` flips the order.
+- **The window clips the canvas at screen x≈1805 and y≈1250** at the seeded
+  bounds, which is why two different bars appeared to end at the same place.
+  Anything measured near those edges is measuring the window.
+
+## Not reached this run
+
+- **New ink's stamping was not put on the glass.** `ActiveLayerKey` is correct by
+  audit and by harness, but no stroke was drawn by injected input to watch it
+  land on layer 1. The seeded `ActiveLayer` is 1 in `vp25data`, so this is one
+  drag away.
+- **Cross-page paste re-keying** (18.10) — untested.
+- **Export** — still unaudited, exactly as §49.7 left it.

@@ -26,3 +26,9 @@ scratchpad/__pycache__/
 # Python bytecode from the tools/ checkers
 __pycache__/
 *.pyc
+
+# Run 25: FULL-SCREEN captures are never committed. A screen-verification run
+# shoots the whole desktop to prove the window is really there, and the desktop
+# behind it is the user's own. Only crops taken strictly inside Quill's canvas
+# go in the repo; the `*-page.png` originals stay local.
+scratchpad/vp25/*-page.png
