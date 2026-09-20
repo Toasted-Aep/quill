@@ -1457,6 +1457,72 @@ public class HeaderRowAction : IPageAction
     public void Undo(NotePage page) => _table.HeaderRow = _from;
 }
 
+/// <summary>CONCEPTS-REF §12.4: picking a named preset REPLACES §12.6's
+/// hand-placed vanishing points (or an earlier preset's) with no way back,
+/// which is destructive the moment there was something on the page worth
+/// keeping. This is the way back — the whole of what a preset overwrites, and
+/// nothing else a grid-editor commit can also change in the same call:
+/// spacing, weight, colour, density, confine, angle and orientation stay
+/// exactly as undoable as they were before this action existed, which is to
+/// say not at all. Wiring the rest of the grid editor into undo is a separate
+/// job (see MainWindow.ApplyGridSpec's caller for what pushes this one, and
+/// the docs write-up for why the rest is out of scope here).
+///
+/// <para><b>The captured <see cref="PerspectiveDef"/> instance is REATTACHED
+/// to <c>page.Perspective</c> on every Do/Undo, not merely mutated in
+/// place.</b> Normally it is the same object the page already holds — 12.5's
+/// commit path only ever creates one via <c>??=</c> — but a perspective grid
+/// can be switched off (<c>page.Perspective = null</c>) and back on between
+/// this action being pushed and later being undone, which hands the page a
+/// DIFFERENT instance. Setting <c>page.Perspective</c> explicitly, the same
+/// way <c>RemoveLayerAction</c> reinserts the very <c>Layer</c> object it
+/// removed rather than trusting it to still be there, is what keeps that
+/// sequence from undoing into an orphaned object nobody draws.</para>
+///
+/// <para>Never pushed when the page had no points to lose — see the
+/// constructor's caller — so turning a perspective kind on for the first time
+/// is not itself an undo step, matching how switching ON any other grid kind
+/// never has been.</para></summary>
+public class SetPerspectivePresetAction : IPageAction
+{
+    private readonly PerspectiveDef _def;
+    private readonly string? _fromPreset, _toPreset;
+    private readonly double _fromHorizonY, _toHorizonY;
+    private readonly double _fromAngle, _toAngle;
+    private readonly List<CanvasPoint> _fromVps, _toVps;
+
+    public SetPerspectivePresetAction(PerspectiveDef def, string? fromPreset, string? toPreset,
+        double fromHorizonY, double fromAngle, List<CanvasPoint> fromVps,
+        double toHorizonY, double toAngle, List<CanvasPoint> toVps)
+    {
+        _def = def;
+        _fromPreset = fromPreset; _toPreset = toPreset;
+        _fromHorizonY = fromHorizonY; _toHorizonY = toHorizonY;
+        _fromAngle = fromAngle; _toAngle = toAngle;
+        _fromVps = fromVps; _toVps = toVps;
+    }
+
+    public string Description => "Apply grid preset";
+    public bool TouchesText => false;
+
+    public void Do(NotePage page)
+    {
+        page.GridPreset = _toPreset;
+        page.Perspective = _def;
+        _def.HorizonY = _toHorizonY;
+        _def.HorizonAngle = _toAngle;
+        _def.Vps = _toVps.Select(v => new CanvasPoint(v.X, v.Y)).ToList();
+    }
+
+    public void Undo(NotePage page)
+    {
+        page.GridPreset = _fromPreset;
+        _def.HorizonY = _fromHorizonY;
+        _def.HorizonAngle = _fromAngle;
+        _def.Vps = _fromVps.Select(v => new CanvasPoint(v.X, v.Y)).ToList();
+    }
+}
+
 public class UndoRedoManager
 {
     private readonly Stack<IPageAction> _undo = new();
