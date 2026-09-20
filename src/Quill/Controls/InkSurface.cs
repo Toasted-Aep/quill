@@ -3622,6 +3622,21 @@ public sealed class InkSurface : UserControl
         ContentChanged?.Invoke();
     }
 
+    /// <summary>CONCEPTS-REF §12.4: a way back for a preset that overwrites an
+    /// existing perspective grid (see <c>SetPerspectivePresetAction</c>).
+    /// Deliberately the THIN wrapper next to <see cref="ApplyLayerAction"/>'s
+    /// thick one — a preset touches no selection, no text layer and no layer
+    /// visibility, so routing it through that tail would run three refreshes
+    /// this change has no business needing. The action has already mutated
+    /// the page by the time its one caller reaches here
+    /// (<paramref name="alreadyDone"/> defaults to that), so this only makes
+    /// the mutation land on the undo stack instead of nowhere.</summary>
+    public void ApplyPageAction(IPageAction action, bool alreadyDone = true)
+    {
+        if (_page == null) return;
+        PushAction(action, _page, alreadyDone);
+    }
+
     // =======================================================================
     // §18.5 / 49.8 — THE DRAW PATH'S LAYER ORDER.
     //
