@@ -151,8 +151,8 @@ public static class CopicPalette
             "G09:139828 G07:32b444 G05:61c86c G03:81d489 G02:a1dba7 G00:c5e8c9 G000:def2e0 G0000:eef8ef",
             "G19:009d43 G17:37b54a G16:1bb55c G14:8cd585 G12:cee8cb",
             "G29:456150 G28:00793c G24:96ca9a G21:b9dbbc G20:eaf4e5",
-            "G46:67a950 G43:b8d6a4 G40:e8edbe",
-            "G85:83926c G82:abbc7e",
+            "G46:67a950 G43:b8d6a4 G40:d0f2ce",
+            "G85:83926c G82:7cc67e",
             "G99:3b5c2a G97:52783d G95:77995c G94:83946a G93:a7c48c G91:d3e3be",
         }),
         ("blue-green", "Blue Green", new[]
@@ -199,10 +199,10 @@ public static class CopicPalette
             "RV19:ad2972 RV17:c5428a RV14:ee6ea9 RV13:f59cc6 RV11:f8c2db RV10:fadbe9",
             "RV29:d72866 RV25:ef7da3 RV23:f8b4cb RV21:ffbcce",
             "RV34:dd7c9c RV32:f4abb4",
-            "RV42:ffa79b",
+            "RV42:f4a7cc",
             "RV55:e485b6 RV52:f9c9de",
-            "RV69:81494a RV66:a95c8d RV63:e8afd8",
-            "RV99:614d4f RV95:bc8797 RV93:e0b0bc RV91:f3d8db",
+            "RV69:953663 RV66:a95c8d RV63:e8afd8",
+            "RV99:83385a RV95:bc8797 RV93:e0b0bc RV91:f3d8db",
         }),
         ("red", "Red", new[]
         {

@@ -93,7 +93,7 @@ Status key: `TODO` · `IN FLIGHT` · `NEEDS SCREEN` · `DONE` · `RULING NEEDED`
 
 ## Standing rulings the user still owes
 
-- **COPIC seam** — RV42, RV69, RV99, G40, G82 carry almost all of it. A hand-extension, not a re-sourcing.
+- **COPIC seam** — **SETTLED 2026-09-21 (§54).** RV42, RV69, RV99, G40, G82 re-derived from the palette's own neighbours; the user chose Option B (dusty) for RV69 and RV99 from a before/after render. Paste-ready values for `copicColors.js` are in §54.5.
 - **Pen colour in the pen icon** — 48 of 72 pen/paper pairs under 3:1, worst 1.01:1. Live behind `ToolWheel.PenColourInIcon`; needs an outline or a non-page-derived base.
 - **Blueprint / Brown Paper dial seats** — excluded from §29's floor because the gate is on L\* not on ratio. Verified to read as clear discs, but if they ever read as absent that gate is a ruling.
 - **§28.4's WinUI hover-wash** on `BottomMenu` — WinUI's own plate, not ours.

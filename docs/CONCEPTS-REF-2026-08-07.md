@@ -10614,3 +10614,131 @@ than "harmless".
 
 **Left standing:** cross-page paste re-keying; export, still unaudited exactly as
 49.7 left it; and the whole of 49.8 — four operations with no control on them.
+
+## 54. The five seam tiles, re-derived from the user's own palette — 2026-09-21
+
+§11.27 added 49 Sketch codes from Concepts' table and accepted the calibration
+seam that came with them. The visual pass (VISUAL-PASS-RESUME, "The seam,
+measured on the palette the wheel actually draws") measured that seam family by
+family, as hue distance outside the band of the family's own kept codes, and
+found five tiles carrying almost all of what a viewer sees: `RV42` (a peach
+among magentas), `RV69` and `RV99` (browns), `G40` (a pale khaki) and `G82`.
+
+**The ruling, in two parts.** First: derive those five *from their own
+neighbours* in the palette, and show the before/after rendered before anything
+is committed. Then, shown two renders for `RV69` and `RV99`, the user chose
+**Option B** (below). Nothing was committed until that choice was made.
+
+### 54.1 What this does and does not change
+
+It re-sources nothing and does not touch the 309. No external dataset, web
+lookup or recollection of a physical marker informed any value. Each tile keeps
+exactly one thing from its current value, its **lightness**, so it stays at its
+place in the column's dark-to-light ramp.
+
+Codes, order, column membership and layout are unmoved: the same 72 columns,
+the same codes in the same order, and the same `MaxRings` — **9** before and
+after, derived from the palette. (§11.27's figure of 17 predates §26.2's
+per-series columns.)
+
+§11.27's rule still stands: the permanent fix is for the user to extend
+`copicColors.js`, and 54.5 gives the five entries to paste. Until then these are
+agent-derived values the user approved on a render, not reference values.
+
+### 54.2 Method
+
+- **Space:** CIELAB / LCh(ab), D65, the same formulae as `PageTheme.ToLab`.
+- **L\*:** the tile's own current value, for all five.
+- **Hue, all five:** the circular mean of the family's **kept** hues (the codes
+  from the user's own `copicColors.js`), weighted by `w * C*` with
+  `w = exp(-0.5 * (dL*/10)^2)`. The ten invented codes are excluded as sources,
+  as §11.27 requires; that leaves 16 RV and 20 G kept codes.
+- **Chroma, RV42, G40, G82:** the `w`-weighted mean of the kept C\*.
+- **Chroma, RV69 and RV99 (Option B):** continued down the tile's **own
+  column**. A line C\* = a·L\* + b is fitted to the other tiles of the same
+  column and read off at the tile's own L\*:
+  - RV6, from `RV66` (L\* 49.51, C\* 40.21) and `RV63` (77.74, 29.99) — an exact
+    two-point line, a = −0.3620, b = 58.13, giving C\* 44.48;
+  - RV9, from `RV95`, `RV93`, `RV91` — a least-squares fit, a = −0.4671,
+    b = 52.65, giving C\* 36.38.
+
+  Those column tiles are themselves Concepts-sourced (§11.27's 49). Using them
+  for chroma is what the user's "own column neighbours" choice permits, and it
+  is the one place this section takes more than lightness from a Concepts ink.
+  Hue still comes from the kept codes only.
+- **Gamut:** no tile needed clamping under Option B.
+- **Seam metric:** the table's script, `scratchpad/seam2.py`, is not on disk.
+  Its metric was rebuilt (`scratchpad/copic/metric_search.py` in the session
+  scratchpad) and reproduces every figure of the published table: all nine
+  bands to 0.1°, all eight quoted distances to rounding. HSV hue; the family
+  centre is the unweighted circular mean of its kept codes; the band is the
+  largest kept deviation from that centre; a code's distance is its deviation
+  from that centre.
+
+### 54.3 The option that was not chosen
+
+**Option A** took chroma for `RV69` and `RV99` from the kept codes too, as for
+the other three. The only kept RV inks near their lightness are `RV19`, `RV29`,
+`RV17` and `RV09`, all vivid, so A produced `RV69 #ab0e67` and `RV99 #a10060`
+(C\* 63.1 and 62.0; RV99 clamped from 62.8) — hot magenta at the base of columns
+whose other tiles are dusty (`RV66` C\* 40, `RV95` C\* 23). A hue seam became a
+saturation seam. B's tiles read as the dark end of `RV66` and `RV95`.
+
+Both renders were checked tile by tile against the palette text before the user
+saw them (174 of 174 tiles and 21 of 21 in the zoom matched their labels).
+
+### 54.4 Before and after
+
+| code | before | after | L\* | C\* before / after | HSV distance before / after | band | outside before / after |
+|---|---|---|---|---|---|---|---|
+| RV42 | `ffa79b` | `f4a7cc` | 76.8 | 36.7 / 34.4 | 39.5 / 3.5 | ±12.3 | 27.2 / 0 |
+| RV69 | `81494a` | `953663` | 37.7 | 25.8 / 44.7 | 31.2 / 3.9 | ±12.3 | 18.9 / 0 |
+| RV99 | `614d4f` | `83385a` | 34.8 | 9.0 / 36.4 | 26.3 / 5.1 | ±12.3 | 14.0 / 0 |
+| G40 | `e8edbe` | `d0f2ce` | 92.3 | 24.1 / 22.3 | 51.7 / 1.4 | ±32.1 | 19.6 / 0 |
+| G82 | `abbc7e` | `7cc67e` | 73.6 | 33.7 / 47.5 | 41.6 / 3.6 | ±32.1 | 9.5 / 0 |
+
+L\* moved by at most 0.05 on any tile, from 8-bit rounding. All five now sit
+inside their family's kept band. Every RV and G column's L\* still rises from
+inside to outside, with two exceptions that predate this change and are not
+caused by it: G9 (`G95` 59.41 then `G94` 59.02) and G1 (`G17` 65.24 then `G16`
+65.00).
+
+**What the render still shows, and was accepted:** `G82` is now brighter and
+greener than `G85`, the tile inside it in the G8 column — a hue step of about 18°
+(h 124 → 142); likewise `G40` is cooler than `G43` and `G46` inside it. The
+columns are continuous in lightness, not in hue.
+
+**Still outside their band, and out of scope** (the ruling named five):
+
+| code | outside by |
+|---|---|
+| RV91 | 13.3 |
+| RV32 | 12.6 |
+| RV93 | 5.0 |
+| RV21 | 3.9 |
+| RV95 | 1.9 |
+| RV34 | 0.2 |
+| G85 | 2.3 |
+| G94 | 1.7 |
+| R02 | 1.8 |
+| R30 | 1.8 |
+
+`RV32` is nearly as far out as `RV91` and is missing from the published seam
+table, which lists only three codes per family. That table also gives RV 12
+added codes; §11.27 and `CopicPalette.cs` both give 13.
+
+### 54.5 For `copicColors.js`
+
+```
+RV42:f4a7cc RV69:953663 RV99:83385a G40:d0f2ce G82:7cc67e
+```
+
+Once these five are in the user's own file they stop being agent-derived values
+and become the user's, which is the only way §11.27 allows the seam to close.
+
+### 54.6 What is not established
+
+- **Not seen in Quill.** Every render was drawn offline from the palette text
+  and `ColorWheel`'s layout maths. No capture of the live picker has been taken.
+- No harness under `tools/` links `CopicPalette`, so nothing in the suite would
+  notice these values changing again.
