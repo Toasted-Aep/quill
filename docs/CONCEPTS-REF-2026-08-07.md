@@ -10619,8 +10619,14 @@ than "harmless".
 
 8.7 filed the defect and stopped short of the fix: a stored text box's RTF
 grows by about six characters every open-and-close, without bound. `23e6056`
-closed it. This section is the missing citation — ten places in the code say
-"CONCEPTS-REF 50" or "§50" and until now there was no 50 for them to point at.
+closed it. This section is the missing citation. It was first written saying
+"ten places in the code say 'CONCEPTS-REF 50' or '§50'" without counting; a
+repo-wide grep for that literal text instead finds **15 lines in three
+files** as of `7b521b9` — 12 in `InkSurface.cs`, 1 in `TextFlushPolicy.cs`,
+and 2 in `SettingsWindow.cs` (a comment naming a defect §57 fixed, not this
+one — see §57 and its note on the collision). Re-run after those two
+`SettingsWindow.cs` lines were repointed at §57, the count of lines actually
+citing 50 is **13, in two files** (`InkSurface.cs`, `TextFlushPolicy.cs`).
 Written after the fact, from the commit, the file it touched and the harness
 it extended; nothing here was run on screen and §50.5 says so plainly.
 
@@ -10681,10 +10687,12 @@ restating it in a fixture. Two things are tracked per box, in `InkSurface`:
   so the moment of reach is always after that settle.
 - `_textTouched: HashSet<Guid>` — boxes Quill itself edited with no focus
   involved. The one path that does this is 25.5's lasso recolour
-  (`RestyleTexts`, which calls `RebuildTextLayer` then
-  `NoteTextTouched(t.Id)` for every box in the selection) and the single-box
-  stamp in `StampTextColour`'s caller, which calls `NoteTextTouched` right
-  after the stamp and before the second `FlushTexts`.
+  (`RecolourSelection` in `InkSurface.cs`, which calls `RebuildTextLayer`
+  then `NoteTextTouched(t.Id)` for every box in the selection — an earlier
+  draft of this section named this method `RestyleTexts`, which does not
+  exist in the file) and the single-box stamp in `StampTextColour`'s
+  caller, which calls `NoteTextTouched` right after the stamp and before
+  the second `FlushTexts`.
 
 `FlushTexts` (`InkSurface.cs`) reads both per box before it will even ask the
 control for its document:
@@ -10814,3 +10822,112 @@ steady, not that Quill would take the code any other path. The 106 already-
 grown notes stop growing on their very next open and carry their accumulated
 empty paragraphs forward unchanged; nothing recovers them, and nothing in
 this commit was written to try.
+
+**A comment in this section's own code is now known inaccurate, and is left
+rather than silently patched elsewhere.** §50.3 above quotes `InkSurface.cs`
+saying `ActiveTextBox`/`LastTextBox` are assigned in the `GotFocus` handler
+"and nowhere else" (`InkSurface.cs` ~9852). That is false: `FocusTextAt`
+(`InkSurface.cs` ~7946) also assigns `ActiveTextBox = ui.Box` directly, on
+the tap-to-focus path, with no `GotFocus` handler in between. It does not
+reopen §50's own reasoning — `FocusTextAt` calls `ui.Box.Focus(...)`
+immediately before that assignment, which still fires `GotFocus` and still
+runs `NoteTextReached`, so the reach baseline this section depends on is
+still captured on that path — but the comment overstates where the *field*
+itself is written, and a reader tracing `ActiveTextBox` by that comment
+alone would miss a real assignment. `InkSurface.cs` is untouched by this
+section: another agent's branch already touches that file, and a
+comment-only fix there is not worth the collision. Recorded here instead,
+against the section whose text made the claim.
+
+## 57 ChromeUi.Toggle gets a UIA pattern — 2026-09-20, and the number 50 briefly claimed twice
+
+`8dc0c9d` gave every row built from `ChromeUi.Toggle` — the layers panel,
+Precision, Comments, the export pane's two checkboxes — a real UIA toggle
+pattern. It landed four minutes before `23e6056`, the RTF fix §50 documents,
+and both commits' own comments cited "§50" for two unrelated defects before
+either section existed. This is the missing citation for `8dc0c9d`; §50 keeps
+the RTF fix and this section is written from `8dc0c9d` itself and the code it
+left behind, not run on screen, exactly as §50.5 says of its own commit.
+
+### 57.1 The defect: a bare Grid with a Tapped handler is invisible to UIA
+
+`ChromeUi.Toggle` built its pill from a plain `Grid`: two `Border`s for the
+track and the knob, a `Tapped` handler flipping a local `bool state` WinUI
+never heard about, and `changed(state)` called on flip. A `Grid`'s own
+automation peer is a plain `FrameworkElementAutomationPeer` — it exposes no
+`IToggleProvider`, no `IInvokeProvider`, nothing an assistive client can call,
+and it is not a keyboard tab stop. Run 24 found this reachable from every
+toggle row `ChromeUi.Toggle` draws: a screen reader could read a row's label
+and hear its current state if the row's own text said so, but had no pattern
+to call and no way to change it. The defect was in the shared control, not in
+one panel, which is why it was filed against the vocabulary rather than
+patched per caller.
+
+### 57.2 The fix: build it on a real ToggleButton, so the framework supplies the pattern
+
+The commit did not write a UIA pattern by hand. It rebuilt the same pill on
+`Microsoft.UI.Xaml.Controls.Primitives.ToggleButton`, kept the authored
+track-and-knob visuals as `Content` on that control, and stripped the stock
+template's own paint with `ClearToggleChrome` — writing `Transparent` over
+the `ToggleButtonBackground*`/`ToggleButtonBorderBrush*` resource keys the
+template reads, rather than replacing the template outright, so the template
+itself and everything it wires up — hit-testing, keyboard focus, and the
+automation peer — stay real underneath the silenced paint.
+
+`ToggleButtonAutomationPeer` then supplies `IToggleProvider` for free:
+`Toggle()` on that peer calls the control's own `OnToggle()`, the identical
+method a pointer click or a Space/Enter key press already runs. `IsChecked`
+is the real state now (the old shadow `bool state` local is gone), and
+`Checked`/`Unchecked` fire from that one place regardless of which of the
+three inputs — mouse, keyboard, or an assistive client's `Toggle()` call —
+reached it; `changed(true)`/`changed(false)` are wired off those events, so
+callers see the same single invocation the old `Tapped` handler produced.
+This is the same shape §49.1 and §49.2 require of layer visibility and
+selection — one fact, asked once, never a second idea of it that can
+disagree — applied here to "is the toggle on" instead. The label was also
+moved to ride onto the toggle itself, via `AutomationProperties.SetName`, so
+a screen reader lands on a named control rather than an unnamed one
+announcing only "toggle, on".
+
+### 57.3 What was verified, and what was not
+
+**Verified, by the commit's own record and by re-reading the diff in this
+run:** the console harnesses build and the ten harnesses' checks pass
+unaffected — this change touches no console-runnable code, only
+`ChromeUi.cs` and a comment in `SettingsWindow.cs` — and the framework
+contract is real: a `ToggleButton` genuinely exposes `IToggleProvider`
+through `ToggleButtonAutomationPeer`, and `Toggle()` genuinely runs
+`OnToggle()`, which is documented WinUI behaviour this change relies on
+rather than reimplements.
+
+**Not established, and the commit says so itself rather than this section
+inferring it:** that a real screen reader announces the control correctly.
+None of this repo's console harnesses can instantiate a live `ToggleButton`
+or a live `AutomationPeer` — that needs a running WinUI window, same
+limitation §50.4 hits for `RichEditBox` — and this fix did not launch the
+app to listen to one. What is established is that the control now offers the
+pattern; whether Narrator or another assistive client reads it the way a
+user needs is, in the commit's own words, "a check owed".
+
+### 57.4 The SettingsWindow.cs collision, and how it was resolved
+
+`SettingsWindow.cs` draws its own, separately authored toggle — 53×35 with
+its own eased animation, not `ChromeUi.Toggle`'s 44×24 — built the same way
+`ChromeUi.Toggle` used to be: a bare `Grid` with a `Tapped` handler, no
+`IToggleProvider`. `8dc0c9d` added a comment there flagging that this second
+toggle carries the identical defect and is *not* touched by the fix, because
+it is not the same code; that comment cited "§50" for the defect this
+section describes, four minutes before a second, unrelated commit
+(`23e6056`) also claimed "§50" for the RTF fix that document now carries.
+Both citations were written before either section existed in this file, so
+neither commit was wrong about what it meant — they collided only once both
+sections had to be written after the fact, into the same number.
+
+The two `SettingsWindow.cs` comment lines (`~3585`, `~3588`) now cite `§57`
+in place of `§50`, and the collision is resolved by giving this defect its
+own number rather than by picking one commit as the "real" 50. §50 keeps the
+RTF fix throughout — no text in §50 describes this defect, and no text here
+describes the RTF fix. `SettingsWindow.cs`'s own toggle is still not fixed by
+either commit: it remains a bare `Grid` with a `Tapped` handler, and a
+matching fix there would mean building it on a `ToggleButton` the same way,
+which nothing in this repository has done yet.
