@@ -314,7 +314,9 @@ public sealed partial class MainWindow : Window
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
         _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); FadeOut(StatusText, 220); };
         _zoomTimer.Tick += (_, _) => { _zoomTimer.Stop(); FadeOut(ZoomBorder, 180); };
-        Closed += (_, _) => { CaptureWindowPlacement(); SaveNow(); Surface.FlushPaint(); LibraryStore.Flush(); };
+        // §56: closing releases every live text box, so the flush in front of
+        // the last SaveNow is a releasing one (trim on next edit only).
+        Closed += (_, _) => { CaptureWindowPlacement(); try { Surface.FlushTexts(releasing: true); } catch { } SaveNow(); Surface.FlushPaint(); LibraryStore.Flush(); };
 
         // pen panel dragging -> dock to an edge
         PenGrip.ManipulationMode = ManipulationModes.TranslateX | ManipulationModes.TranslateY;
@@ -4134,7 +4136,12 @@ public sealed partial class MainWindow : Window
     {
         if (_uiReady) { LibraryStore.RecordRecent(_library, nb, sec, page); ScheduleSave(); }
         bool pageChanged = !ReferenceEquals(_curPage, page);
-        if (_curPage != null) SaveNow();
+        // §56: LoadPage below tears every live text box down, so this flush is a
+        // RELEASING one - an edited box drops its trailing empty paragraphs past
+        // the first before SaveNow stores the page. (LoadPage's own rebuild
+        // cannot do it: by then _page is the NEW page and the old boxes have no
+        // model to write to.)
+        if (_curPage != null) { Surface.FlushTexts(releasing: true); SaveNow(); }
         _curNb = nb;
         _curSec = sec;
         _curPage = page;
