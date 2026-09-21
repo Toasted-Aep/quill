@@ -10707,9 +10707,11 @@ restating it in a fixture. Two things are tracked per box, in `InkSurface`:
   build**: a second focus must not move it forward over an edit made during
   the first. Both latches belong to one incarnation of a box and are cleared
   whenever it is destroyed or rebuilt — in `RebuildTextLayer` after its last
-  `FlushTexts`, at the top of `BuildTextUi` (which also runs alone, from
-  `SpawnTextBox`, the clone path and `MaterializePendingText`), and when an
-  empty box is torn down. Carrying a stale baseline into a freshly built box
+  `FlushTexts`, at the top of `BuildTextUi` (which also runs on its own, from
+  `SpawnTextBox` — the path `MaterializePendingText` goes through —
+  `AddTextElement` and the clone path `DuplicateEditingText`; the code comment
+  above that reset lists its callers inexactly), and when an empty box is
+  torn down. Carrying a stale baseline into a freshly built box
   would compare the new document against an old one.
 
 `FlushTexts` (`InkSurface.cs`) reads both per box before it will even ask the
@@ -10808,8 +10810,9 @@ immediately before this fix, in a temporary `git worktree` removed after the
 comparison — in the same configuration reports the identical **0 Error(s)**,
 **120 Warning(s)**, all `CS0436`: the warnings predate `23e6056` and this
 commit added none. `dotnet run` against the built tool prints **50 checks,
-all PASS, 0 FAIL** — the **38** pre-existing RTF-colour checks from §40–§43
-untouched, plus the **12** listed above.
+all PASS, 0 FAIL** — the **38** pre-existing checks untouched (16 on §25's
+page ink rule and whole-box colour reaching the file, Parts 1–2; 22 on
+§43/§40.5's per-run colour, Parts 3–4), plus the **12** listed above.
 
 ### 50.5 WHAT IS NOT ESTABLISHED
 
@@ -10856,22 +10859,35 @@ edited here: other branches touch both, and a comment-only fix is not worth
 the collision. §50.3 is corrected.
 
 **What the second assignment could mean — plausible, not shown.**
-`FocusTextAt` calls `ui.Box.Focus(FocusState.Pointer)` and **discards its
-result**, then sets `ActiveTextBox` regardless. If that focus succeeds,
-`GotFocus` fires first and `NoteTextReached` captures the baseline, and
-nothing changes. If it fails, no `GotFocus`, no baseline, and the box is
-"not reached": `ShouldWriteBack` then refuses to store it — while the format
-bar, which acts on `ActiveTextBox`, can still change it. That would be an
-edit Quill does not save. The harness's fallback check does **not** cover
-this: it covers a reach whose serialisation failed, not a reach that never
-happened. Whether `Focus()` can fail on that path was not tested, and nothing
-here was run. Filed as TODO 8.14.
+`FocusTextAt` calls `ui.Box.Focus(FocusState.Pointer)`, **discards its
+result**, and sets `ActiveTextBox` regardless, synchronously. WinUI documents
+`GotFocus` as raised asynchronously, so the handler — and `NoteTextReached` —
+runs after that assignment; when the focus succeeds the baseline is still
+captured and nothing changes. When it fails there is no `GotFocus` and no
+baseline, and the box is "not reached": `FlushTexts` drops it at
+`NeedsTheDocument`, before the control is even asked for its document —
+unless its stored RTF is empty, or it was touched (`SetTextColour` marks a box
+touched, so a colour change on it is still saved). Meanwhile the format bar,
+which acts on `ActiveTextBox`, can still change it.
+
+A second shape of the same risk: the format bar's font, size and style-preset
+handlers (`MainWindow.xaml.cs` `FontCombo_Changed` ~9243, the preset handler
+~9380, `SetSelectionSize` ~11144, and the font line ~11141) make their edit
+**and then** call `ActiveTextBox.Focus(Programmatic)`. On a box that was not
+yet reached, a focus that succeeds there captures a baseline that already
+contains the edit, so `ShouldWriteBack` sees no change and refuses.
+
+Either way the edit would not be stored. The harness's fallback check does
+**not** cover this: it covers a reach whose serialisation failed, not a reach
+that never happened or came after the edit. Whether either path occurs in
+practice was not tested, and nothing here was run. Filed as TODO 8.14.
 
 ## 57 ChromeUi.Toggle gets a UIA pattern — 2026-09-20, and the number 50 briefly claimed twice
 
-`8dc0c9d` gave every row built from `ChromeUi.Toggle` — the layers panel,
-Precision, Comments, the export pane's two checkboxes — a real UIA toggle
-pattern. It landed four minutes before `23e6056`, the RTF fix §50 documents,
+`8dc0c9d` rebuilt every row made from `ChromeUi.Toggle` — the layers panel,
+Precision, Comments, the export pane's two checkboxes — on a real
+`ToggleButton`, whose automation peer carries the UIA toggle pattern by the
+framework's documented contract (§57.3 says what that rests on). It landed four minutes before `23e6056`, the RTF fix §50 documents,
 and both commits' own comments cited "§50" for two unrelated defects before
 either section existed. This is the missing citation for `8dc0c9d`; §50 keeps
 the RTF fix and this section is written from `8dc0c9d` itself and the code it
@@ -10902,7 +10918,8 @@ template reads, rather than replacing the template outright, so the template
 itself and everything it wires up — hit-testing, keyboard focus, and the
 automation peer — stay real underneath the silenced paint.
 
-`ToggleButtonAutomationPeer` then supplies `IToggleProvider` for free:
+`ToggleButtonAutomationPeer` then supplies `IToggleProvider` for free, as
+WinUI documents it (taken on trust — §57.3):
 `Toggle()` on that peer calls the control's own `OnToggle()`, the identical
 method a pointer click or a Space/Enter key press already runs. `IsChecked`
 is the real state now (the old shadow `bool state` local is gone), and
@@ -10936,7 +10953,8 @@ inferring it:** that a real screen reader announces the control correctly.
 None of this repo's console harnesses can instantiate a live `ToggleButton`
 or a live `AutomationPeer` — that needs a running WinUI window, same
 limitation §50.4 hits for `RichEditBox` — and this fix did not launch the
-app to listen to one. What is established is that the control now offers the
+app to listen to one. What is established is that the control is now a
+`ToggleButton`, which by the framework's documented contract offers the
 pattern; whether Narrator or another assistive client reads it the way a
 user needs is still to be checked — in the commit's own words, "That check
 is owed."
@@ -10963,3 +10981,55 @@ describes the RTF fix. `SettingsWindow.cs`'s own toggle is still not fixed by
 either commit: it remains a bare `Grid` with a `Tapped` handler, and a
 matching fix there would mean building it on a `ToggleButton` the same way,
 which nothing in this repository has done yet.
+
+## 58 Layer order and visibility outside the stroke-against-stroke case — 2026-09-21
+
+§49.9's screen pass is headed "Layer order on the glass: the thing 49 left
+out, and it works". It does work — **for strokes**. Both bars it measured are
+strokes (`scratchpad/vp25_seed.py`), so it compared one layer's ink against
+another's within a single element type. §49.9 is a historical record and is
+not edited; this section says what it did not test. Everything below is from
+reading the code; nothing here was run on screen.
+
+### 58.1 The canvas: across element types, type order beats layer order
+
+`InkSurface.DrawRegion` runs the shape passes for **every** layer (~5825–5846),
+then `DrawPaint` (~5852), then the stroke passes for **every** layer
+(~5891–5896). Text boxes are live controls in a XAML `_textLayer` added to the
+grid after `_canvas` (~512–513), so they sit above all Win2D ink. So on screen:
+
+- a shape on the top layer draws **under** a stroke on the bottom layer;
+- text on the bottom layer draws **over** a stroke on the top layer.
+
+That contradicts §18.5 ("across layers, layer order wins"). The gallery
+thumbnail walks `PageLayers.InOrder` (~10260), and so does the PSD writer
+(branch, unmerged), so the canvas disagrees with both.
+
+### 58.2 The ruling
+
+The user ruled on 2026-09-21:
+
+- **Interleave shapes and strokes per layer on the canvas now** — each layer's
+  shapes and strokes drawn together, bottom layer first — so reordering
+  layers works for all ink.
+- **Text stays above all ink for now**, and the Layers panel says so plainly.
+  Putting text into the layer order (drawing resting text into the canvas and
+  keeping a live control only while editing) is later, separate work.
+- **Oil paint moves below every layer**, just above the paper. §53 keeps paint
+  outside the layer model; this fixes where that single height is.
+
+### 58.3 Exports: visibility is ignored by the vector path
+
+`InkSurface.BuildVectorPageAsync` walks `_page.Texts`, `_page.Shapes` and
+`_page.Strokes` directly (~8956–9093) and has no reference to layers,
+`Hidden`, `EffectiveOpacity`, `InOrder` or the layer multiplier, so **a hidden
+layer exports at full strength**, in type order. It serves:
+
+- vector PDF, SVG and HTML;
+- **and a multi-page flattened PDF**: `ExportWindow.WriteRasterAsync` routes a
+  flattened PDF of a section or notebook through `CollectVectors`, which calls
+  `BuildVectorPageAsync` for each page.
+
+A single-page flattened PDF, PNG and JPG are captures of the canvas
+(`CaptureAsync`), so they inherit the canvas's order (58.1) and its handling
+of `Hidden`. PSD follows `InOrder` (branch, unmerged). Filed as TODO 8.9.
