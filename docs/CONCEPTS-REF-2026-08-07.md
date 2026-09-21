@@ -10650,7 +10650,7 @@ Read fresh in `paint-outside-layers`, not carried over from run 25:
 |---|---|---|
 | Gallery / cover thumbnail (`InkSurface.RenderPageThumbnail`) | **No.** It walks `PageLayers.InOrder` buckets of `Shapes`, `Strokes` and `Texts` only (`InkSurface.cs:10260-10289`); no call to `DrawPaint`, no reference to `PaintStore` or a paint tile anywhere in the method. | — |
 | Raster PDF / PNG export (`ExportWindow.CaptureAsync`) | **Yes**, at paint's normal z. This path calls `RenderTargetBitmap.RenderAsync` on the live `InkSurface` control (`ExportWindow.cs:592-594`), which runs the ordinary `DrawRegion` → `DrawPaint` path pixel-for-pixel. | Same as on screen: above shapes/images, below ink. |
-| Vector PDF / SVG / HTML export (`InkSurface.BuildVectorPageAsync`) | **No.** The method builds `Paths`, `Dots`, `Images` and `Texts` from `_page.Shapes`/`_page.Texts` only; there is no `Paint` identifier anywhere in its body (`InkSurface.cs:8956` through its `return new PdfVectorPage(...)`). A painted stroke is silently absent from every vector or HTML export. | — |
+| Vector PDF / SVG / HTML export (`InkSurface.BuildVectorPageAsync`) | **No.** The method builds `Paths`, `Dots`, `Images` and `Texts` from `_page.Strokes`, `_page.Shapes`, `_page.Texts` and `_page.Grid` only; there is no `Paint` identifier anywhere in its body (`InkSurface.cs:8956` through its `return new PdfVectorPage(...)`). A painted stroke is silently absent from every vector or HTML export. | — |
 | Copy/paste, duplicate-selection (`InkSurface.CopySelection`, `DuplicateSelection`) | **No**, and there is nothing for paint to opt into here: both operate strictly on `_selected`/`_selShapes`/`_selTexts` (strokes, shapes, texts), cloned through `ElementClone`/`CloneStroke`/`CloneShape`/`CloneText`. Paint is not a selectable element and is never read by either method. | — |
 | Duplicate **page** (a whole `NotePage` copied as a new page) | **Not established.** No such feature exists in this codebase to inspect — there is no page-level clone/duplicate anywhere in `MainWindow.xaml.cs` or elsewhere, and nothing in it references `PaintStore` or `PaintTile`. What would happen to a page's paint tiles if page duplication is ever built is an open question for that feature, not answered here. | — |
 
@@ -10665,7 +10665,7 @@ the documented behaviour, not a surprise to be found later.
 
 `18.6`'s "what belongs to a layer" table (`PenStroke`, `ShapeElement`,
 `TextElement`) does not mention paint because §18 is 2026-08-18 and oil paint
-(§47) is 2026-09-08 — eleven days later. §18 is a historical record and is not
+(§47) is 2026-09-08 — twenty-one days later. §18 is a historical record and is not
 edited here; 49.10 item 1 already set the precedent of correcting §18's prose
 from a later section rather than rewriting it in place, and this section
 follows the same rule. The correction, going forward, is this one: **oil paint
