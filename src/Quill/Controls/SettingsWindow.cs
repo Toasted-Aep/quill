@@ -3582,10 +3582,10 @@ public sealed class SettingsWindow
     //
     // NOT ChromeUi.Toggle. This window authors its own pill at its own size
     // (53x35 vs ChromeUi's 44x24) with its own eased animation, so it carries
-    // the identical no-automation-peer defect §50 fixed on ChromeUi.Toggle - a
+    // the identical no-automation-peer defect §57 fixed on ChromeUi.Toggle - a
     // bare Grid with a Tapped handler, no IToggleProvider, nothing for UIA to
     // read or call - but is NOT touched by that fix, because it is not the same
-    // code. See docs/CONCEPTS-REF-2026-08-07.md §50 for why the two were found
+    // code. See docs/CONCEPTS-REF-2026-08-07.md §57 for why the two were found
     // to be separate rather than shared, and for what a matching fix here would
     // look like.
     // =======================================================================
