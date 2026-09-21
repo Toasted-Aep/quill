@@ -752,7 +752,7 @@ Check("50 - a box nobody has been near is refused BEFORE the control is asked "
 // PART 6 - 56: TRIM ON NEXT EDIT ONLY
 // ===========================================================================
 //
-// The product owner's ruling on §50.5's open question: "Trim on next edit
+// The product owner's ruling on section 50.5's open question: "Trim on next edit
 // only." When the user actually edits a box, the trailing empty paragraphs past
 // the first are dropped as it saves. A note nobody edits is never rewritten.
 //
@@ -766,7 +766,7 @@ Check("50 - a box nobody has been near is refused BEFORE the control is asked "
 //   MIRRORED - Flush56 below restates the ORDER InkSurface.FlushTexts calls
 //              those functions in (NeedsTheDocument, ShouldWriteBack on the
 //              UNTRIMMED document, then MayTrim, then the range). InkSurface
-//              cannot be linked; the order is short and is quoted in §56.
+//              cannot be linked; the order is short and is quoted in section 56.
 //   MODELLED - the live RichEdit document: its plain text (one '\r' per
 //              paragraph mark, the writer's "\par"), and what deleting a run
 //              of paragraph marks through ITextRange does to what the writer
@@ -912,14 +912,14 @@ Check("56 - A BOX OF NOTHING BUT EMPTY PARAGRAPHS keeps exactly ONE paragraph "
 // ---- 6h. WHILE THE BOX IS LIVE, THE EDIT IS STORED AND NOTHING IS TRIMMED --
 var r6h = Flush56(grown56, true, false, grown56Live, grownEdited, releasing: false);
 Check("56 - A FLUSH WHILE THE BOX IS STILL LIVE (the autosave timer, an export, "
-      + "the AI panel) stores the edit exactly as §50 does and trims NOTHING. "
+      + "the AI panel) stores the edit exactly as section 50 does and trims NOTHING. "
       + "The trim waits for the box to be released, so it never deletes under a "
       + "caret and never lands on the box's own undo stack",
       r6h.Wrote && r6h.Dropped == 0 && r6h.Stored == grownEdited &&
       !TextFlushPolicy.MayTrim(grown56, true, false, grown56Live, grownEdited, releasing: false),
       $"written untrimmed ({r6h.Stored.Length} chars), dropped {r6h.Dropped}");
 
-Check("56 - A REACH WITH NO BASELINE IS WRITTEN (§50's fallback) BUT NOT "
+Check("56 - A REACH WITH NO BASELINE IS WRITTEN (section 50's fallback) BUT NOT "
       + "TRIMMED: nothing established that it was edited",
       Flush56(grown56, true, false, null, grown56Live, true) is { Wrote: true, Dropped: 0 },
       "fallback write, 0 dropped");
@@ -938,19 +938,19 @@ for (int i = 0; i < Opens; i++)
 
     string livePre = RichEditRoundTrip(pre56);
     string typedPre = livePre.Replace("lecture notes" + new string('!', i), word);
-    if (TextFlushPolicy.ShouldWriteBack(pre56, true, false, livePre, typedPre)) pre56 = typedPre;   // §50 alone
+    if (TextFlushPolicy.ShouldWriteBack(pre56, true, false, livePre, typedPre)) pre56 = typedPre;   // section 50 alone
 }
-Check($"56 - {Opens} SESSIONS, EACH ONE A REAL EDIT: under §50 alone every edited "
+Check($"56 - {Opens} SESSIONS, EACH ONE A REAL EDIT: under section 50 alone every edited "
       + $"session keeps the open's extra paragraph, so the note ends {Opens} "
       + "paragraphs longer (the control this check is required to show red); "
       + "with the trim, every session ends in exactly the no-growth document and "
       + "the only growth is the characters actually typed",
       allMinimal && editedOut == StoredDoc("lecture notes" + new string('!', Opens), 0) &&
       TrailingEmpties(pre56) == TrailingEmpties(grown56) + Opens,
-      $"§50 alone: {TrailingEmpties(grown56)} -> {TrailingEmpties(pre56)} trailing empties; "
+      $"section 50 alone: {TrailingEmpties(grown56)} -> {TrailingEmpties(pre56)} trailing empties; "
       + $"with 56: {TrailingEmpties(editedOut)} after every one of {Opens} sessions: {allMinimal}");
 
-// ---- 6j. §50's FIXED POINT STILL HOLDS, NOW WITH THE RELEASING PATH -------
+// ---- 6j. section 50's FIXED POINT STILL HOLDS, NOW WITH THE RELEASING PATH -------
 string seedOut = seed, trimmedOut = StoredDoc("lecture notes!", 0);
 string trimmedIn = trimmedOut;
 int fpWrites = 0;
@@ -962,11 +962,92 @@ for (int i = 0; i < Opens; i++)
     seedOut = a.Stored; trimmedOut = b.Stored;
     if (a.Wrote || b.Wrote) fpWrites++;
 }
-Check($"50 + 56 - §50's {Opens}-session fixed point holds through the releasing "
+Check($"50 + 56 - section 50's {Opens}-session fixed point holds through the releasing "
       + "flush, for part 5's seed AND for a note the trim has already shortened: "
       + "once trimmed, a note nobody edits again stays trimmed, byte for byte",
       seedOut == seed && trimmedOut == trimmedIn && fpWrites == 0,
       $"{fpWrites} writes in {Opens * 2} released sessions");
+
+// ---- 6k. THE RANGE FUNCTION ITSELF, SWEPT - NO MODEL AT ALL ----------------
+// Everything above goes through LiveDoc, the modelled RichEdit document. This
+// part does not: it asks the LINKED TextFlushPolicy.EmptyParagraphMarksToDrop
+// directly, over every plain-text shape from "nothing" to 60 trailing marks,
+// behind six different heads (no content, a word, a sentence, a word with
+// three deliberate blank lines inside it, a soft line break, a lone space),
+// and removes the range it returns with string.Remove. So these three checks
+// hold whatever RichEdit does; they are about the decision, not the control.
+string[] heads56 = { "", "x", "lecture notes", "a\r\r\rb", "a\vb", " " };
+int sweep56 = 0, finalHit = 0, beforeRun = 0, notMark = 0, contentHit = 0, wrongResult = 0;
+string? firstWrong = null;
+foreach (var head in heads56)
+{
+    for (int marks = 0; marks <= 60; marks++)
+    {
+        sweep56++;
+        string p = head + new string('\r', marks);
+        var (s, l) = TextFlushPolicy.EmptyParagraphMarksToDrop(p);
+        int trail = 0;
+        while (trail < p.Length && p[p.Length - 1 - trail] == '\r') trail++;
+        int runStart = p.Length - trail;
+        bool hasContent = runStart > 0;
+        string expected = hasContent
+            ? head + new string('\r', Math.Min(marks, 2))
+            : new string('\r', Math.Min(marks, 1));
+        string result = p;
+        if (l > 0)
+        {
+            if (s < 0 || s + l > p.Length) { wrongResult++; firstWrong ??= $"{Escape(p)} -> out of bounds [{s},+{l})"; continue; }
+            if (s + l > p.Length - 1) finalHit++;
+            if (s < runStart) beforeRun++;
+            for (int i = s; i < s + l; i++) if (p[i] != '\r') { notMark++; break; }
+            if (hasContent && s <= runStart && s + l > runStart) contentHit++;
+            result = p.Remove(s, l);
+        }
+        else if (l < 0) { wrongResult++; firstWrong ??= $"{Escape(p)} -> negative length"; continue; }
+        if (result != expected) { wrongResult++; firstWrong ??= $"{Escape(p)} -> {Escape(result)}, expected {Escape(expected)}"; }
+    }
+}
+Check($"56 - THE STORY'S FINAL PARAGRAPH MARK IS NEVER IN THE RANGE, over {sweep56} "
+      + "shapes of the linked function with no model in between - so a box, "
+      + "including one that is nothing but empty paragraphs, can never be "
+      + "trimmed to less than one paragraph",
+      finalHit == 0 && TextFlushPolicy.EmptyParagraphMarksToDrop("\r\r\r\r") == (0, 3),
+      $"{finalHit} of {sweep56} ranges reach the final mark; \"\\r\\r\\r\\r\" -> "
+      + $"{TextFlushPolicy.EmptyParagraphMarksToDrop("\r\r\r\r")}");
+Check("56 - NOTHING BEFORE THE TRAILING RUN IS EVER IN THE RANGE: not an interior "
+      + "blank line (\"a\\r\\r\\rb\" keeps all three), not a soft line break, not "
+      + "a character - only paragraph marks of the trailing run",
+      beforeRun == 0 && notMark == 0,
+      $"{beforeRun} ranges start before the trailing run, {notMark} contain a non-mark");
+Check("56 - THE CONTENT'S OWN PARAGRAPH MARK IS KEPT, AND THE RESULT IS "
+      + "CANONICAL: content + its mark + exactly ONE empty paragraph (\"past the "
+      + "first\"), an empty box is exactly one mark, and a shape that is already "
+      + "minimal is left alone",
+      contentHit == 0 && wrongResult == 0,
+      $"{contentHit} ranges take the content's mark, {wrongResult} wrong results"
+      + (firstWrong is null ? "" : $"; first: {firstWrong}"));
+
+// ---- 6l. THE UNDO SNAPSHOT (MIRRORED ORDER) --------------------------------
+// RecolourTextsAction is the ONE Quill undo action that captures a box's whole
+// RTF (UndoRedo.cs) and restores it on Ctrl+Z. InkSurface.RecolourSelection
+// flushes, captures that snapshot, then rebuilds the text layer - and the
+// rebuild is a releasing flush, so it trims. If the flush in front of the
+// capture were an ordinary one, the snapshot would hold the untrimmed document
+// and one Ctrl+Z of the recolour would bring every dropped paragraph back.
+// RecolourSelection's flush is therefore a releasing one (every box is torn
+// down two lines later anyway). The harness cannot link RecolourSelection;
+// this shows what each ORDER puts in the snapshot, through the linked policy.
+string snapPlain = Flush56(grown56, true, false, grown56Live, grownEdited, releasing: false).Stored;
+string snapReleasing = Flush56(grown56, true, false, grown56Live, grownEdited, releasing: true).Stored;
+Check("56 - THE RECOLOUR UNDO SNAPSHOT IS TAKEN AFTER THE TRIM: with the flush in "
+      + "front of the capture made a releasing one, what Ctrl+Z restores is the "
+      + "trimmed document (1 trailing empty). With an ordinary flush there - the "
+      + "draft's order - the snapshot carries all 48 and the undo would "
+      + "resurrect them",
+      TrailingEmpties(snapReleasing) == 1 && TrailingEmpties(snapPlain) == 48 &&
+      snapReleasing == r6b.Stored,
+      $"snapshot after a releasing flush: {TrailingEmpties(snapReleasing)} trailing empties; "
+      + $"after an ordinary flush: {TrailingEmpties(snapPlain)}");
 
 // ===========================================================================
 foreach (var line in log) Console.WriteLine(line);
@@ -1131,7 +1212,7 @@ static string StoredDocWith(string body, int emptyParagraphs, string finalParagr
 }
 
 // How many empty paragraphs a document ends in, AFTER its last content
-// paragraph - the number §50 counted in the library (47 for StoredDoc(x, 46)).
+// paragraph - the number section 50 counted in the library (47 for StoredDoc(x, 46)).
 static int TrailingEmpties(string rtf)
 {
     string plain = LiveDoc.Parse(rtf).Plain();
