@@ -10814,3 +10814,288 @@ steady, not that Quill would take the code any other path. The 106 already-
 grown notes stop growing on their very next open and carry their accumulated
 empty paragraphs forward unchanged; nothing recovers them, and nothing in
 this commit was written to try.
+
+## 56 Trim on next edit: an edited box drops the empty paragraphs it grew — 2026-09-21
+
+§50 stopped the growth and pruned nothing: the 106 notes that had already
+grown keep their trailing empty paragraphs, 17,346 characters of them. §50.5
+left open whether they should be pruned. The product owner's ruling:
+**"Trim on next edit only."** When the user actually edits a box, the trailing
+empty paragraphs past the first are dropped as it saves. A note nobody edits
+is never rewritten, so there is no migration of the library.
+
+Built on branch `rtf-trim-on-edit`, off `main` `7b521b9`. A first attempt was
+cut off by a session limit and checkpointed unverified as `e96b5a3`. This run
+built it, ran it, kept most of it and changed three things (§56.6). **Nothing
+here was run on screen.** §56.7 says exactly which parts were proven by
+execution and which only by reading.
+
+### 56.1 Where the trim happens
+
+The trim happens on exactly one path: a write-back that §50 already allows,
+for a box the user edited, **at the moment that box is released**. Released
+means its live `RichEditBox` is about to be torn down. There are three ways:
+
+- `InkSurface.RebuildTextLayer`, which destroys every box on the line after
+  its flush (a page load, an undo that touches text, moving a text
+  selection, a table reflow, a layer-visibility change, and so on);
+- `MainWindow.SwitchToPage` and the window's `Closed` handler, which now
+  call `SaveNow(releasing: true)`. That is **one** flush, a releasing one,
+  in front of the save;
+- `InkSurface.RecolourSelection`'s flush in front of its undo snapshot, when
+  texts are selected. `RebuildTextLayer` follows it unconditionally (§56.4
+  explains why this one flush has to be releasing).
+
+Every other flush is unchanged from §50: the autosave timer, exports, the AI
+panel, the flush at the start of `Undo`/`Redo`, and the roughly thirty
+`FlushTexts()` call sites. Their parameterless form is
+`FlushTexts(releasing: false)`.
+
+### 56.2 How the trim works: through the control's own document, never as RTF text
+
+§50.2 rejected normalising RTF because "a second parser is a second thing to
+maintain and a new way to lose formatting". §56 does not normalise RTF. No
+RTF string is edited anywhere. It works in four steps.
+
+1. **The decision is pure and lives in `TextFlushPolicy`**, beside §50's, so
+   the harness links it from the real file:
+   - `MayTrim(stored, reached, touched, documentWhenReached, live, releasing)`
+     is true only when `releasing` is true **and** an edit is established.
+     An edit is established when Quill touched the box (25.5's recolour), or
+     when the box was reached **with a recorded baseline** and the live
+     document differs from that baseline. Being focused is not an edit
+     (§50.4's 5d). A reach whose baseline capture failed is still written
+     back by §50's fallback, but it is not trimmed, because nothing
+     established an edit. `FlushTexts` asks `MayTrim` **after**
+     `ShouldWriteBack`, on the untrimmed document, so the trim can never be
+     the difference that makes a box look edited.
+   - `EmptyParagraphMarksToDrop(plain)` takes the story's plain text as the
+     control reports it, with one `'\r'` per paragraph mark. It returns a
+     `(Start, Length)` range inside the **trailing run** of `'\r'`. When the
+     box has content, the range keeps the content's own mark and the story's
+     final mark: the content, then **one** empty paragraph ("past the
+     first"). When the box is nothing but empty paragraphs, it keeps only the
+     final mark, which is a valid empty box. The first character that is not
+     a paragraph mark ends the run: a letter, a soft break (`'\v'`) or an
+     object. So interior blank lines are never in the range. If the text
+     does not end in `'\r'`, the answer is "drop nothing".
+2. **The deletion goes through the control.**
+   `InkSurface.TrimTrailingEmptyParagraphs` expands a range to the story,
+   reads its plain text and asks the policy for the range. It deletes the
+   range with `ITextRange.Text = ""`, then stores
+   `Document.GetText(FormatRtf)`. The stored bytes are therefore the
+   control's own serialisation, which is §50.2's condition. The trim needs
+   no second parser because it never reads RTF.
+3. **It refuses rather than guesses**, and a refusal returns `null`, so the
+   untrimmed edit is stored exactly as §50 would store it. It refuses in any
+   of these cases:
+   - the story's position span is not the same length as its plain text
+     (hidden text or objects would shift the indices);
+   - the doomed range is not all `'\r'` when it is re-read just before the
+     delete;
+   - after the delete, the story's plain text is not the old text with
+     exactly that range removed;
+   - after the delete, the surviving final paragraph's `ParagraphFormat`,
+     or its mark's `CharacterFormat`, fails `IsEqual` against a clone taken
+     before the delete.
+
+   If any post-delete check fails, the document is put back from the
+   serialisation read at the start of the trim.
+4. **The result stays a fixed point.** Once trimmed, a note nobody edits
+   again is never written again (§50's rule is untouched). When it is next
+   edited, it is trimmed back to one trailing empty paragraph.
+
+### 56.3 The caret and selection: the trim waits, and nothing is restored
+
+The brief allowed two choices: defer the trim, or restore the caret and
+selection exactly. **This work defers it, to release.** A box that is
+released has no caret or selection left to move, so nothing needs
+restoring. The deciding reason is undo, not the caret. A trim that runs
+while the box stays alive puts a deletion on that `RichEditBox`'s own undo
+stack. `MainWindow.UndoAccel_Invoked` hands Ctrl+Z to the box whenever the
+box has focus, so one Ctrl+Z would bring all 47 paragraphs back. The live
+document would then differ from the baseline and be written back with all
+47. A trim on focus loss has the same problem, because the user can refocus
+the box.
+
+**What waiting costs:** the trim reaches disk at the first release after the
+edit, not at the first autosave. An edit followed by a crash or a kill
+before any release stores the untrimmed edit, which is §50's behaviour. That
+box is trimmed the next time it is edited and released.
+
+### 56.4 Undo
+
+Established by reading `UndoRedo.cs`, `InkSurface.Undo`/`Redo` and
+`MainWindow.UndoAccel_Invoked`:
+
+- **The box's own undo history.** The trim never runs on a box that outlives
+  the flush. The box rebuilt afterwards is a new control with an empty undo
+  history. Ctrl+Z inside a focused box, just after typing, undoes the typing
+  and nothing else, because no trim has happened yet.
+- **Quill's undo stack.** Typing is not on it. There is no text-edit
+  action. `RecolourTextsAction` is the **only** action that captures a
+  box's whole RTF, and it restores that RTF on undo. `RecolourSelection`
+  flushes, captures the snapshot, then rebuilds. In the draft the flush was
+  an ordinary one, so the trim happened in the rebuild **after** the
+  capture. One Ctrl+Z of that recolour would then have restored the
+  untrimmed document and resurrected every dropped paragraph. That flush is
+  now releasing, so the snapshot holds the trimmed document (harness 6l).
+- **Not changed, and said plainly.** `SetTextColour` recolours the box
+  under the caret **in place**, and its snapshot is taken from a box that
+  stays alive. That snapshot is untrimmed, and trimming there would delete
+  under the caret. If a later release trims the box and the user then undoes
+  that colour change, the snapshot brings the paragraphs back, along with
+  reverting everything else in the document to the moment of the recolour.
+  That is `RecolourTextsAction`'s existing whole-document semantics.
+  Likewise, `DuplicateSelection` clones from an ordinary flush, so a clone of
+  an edited, grown box carries the untrimmed RTF while the original is
+  trimmed at the rebuild.
+- **Found by reading, pre-existing, not fixed here.** `Undo()` flushes,
+  undoes, then calls `RebuildTextLayer`, and that method flushes again
+  before it clears the latches. After `SetTextColour`, the box's touched
+  latch is still set, so the rebuild's flush writes the live, stamped
+  document back over the RTF that `RecolourTextsAction.Undo` has just
+  restored. Before §50 the flush was unconditional, so this predates both
+  §50 and §56. §56 only adds that the re-written document is also trimmed.
+
+### 56.5 The proof, by execution
+
+**`tools/TextColourRoundTrip` part 6: 16 checks, on top of §50's 50.** The
+tool now reports **66 checks, all PASS, exit 0**. The build reports 0 errors
+and 120 warnings, every one of them the pre-existing `CS0436`. The checks
+link `MayTrim` and `EmptyParagraphMarksToDrop` from `src/Quill`. They
+mirror `FlushTexts`' order in `Flush56`, because `InkSurface` cannot be
+linked. They model the live document in `LiveDoc`, where a paragraph is the
+RTF between two `\par`, its plain text is its characters plus `'\r'`, and a
+mark is deleted through that model.
+
+| check | what it proves |
+|---|---|
+| 6a | The model is calibrated. Parse then serialise is the identity. The grown fixture's plain text is the words plus 49 `'\r'` (content mark + 47 stored + 1 from the open). |
+| 6b ×2 | **Grown fixture (1 real paragraph + 47 empty), edited, released:** 47 marks dropped, and the result is byte-identical to the same words with no growth: exactly one trailing empty paragraph. Everything up to and including the content's own `\par` is the exact prefix, and the closing `\pard…\par` is the exact suffix. |
+| 6c | **Bold, italic, colour (`\cf2`) and size (`\fs36`) runs, a centred last content paragraph and a right-aligned, indented final paragraph** all come through byte for byte. |
+| 6d | **Reached, not edited**, released in each of 200 sessions: byte-identical, 0 writes, and `MayTrim` itself answers false. |
+| 6e | **Never reached**, 200 released sessions: byte-identical, 0 writes. |
+| 6f | **Text, three deliberate blank lines, more text, then growth:** the interior blank lines survive, and only the trailing run is dropped. |
+| 6g | **A box that is nothing but empty paragraphs** keeps exactly one mark, its header, its final paragraph's formatting and the writer's tail. Braces balance. |
+| 6h ×2 | A flush while the box is live stores the edit untrimmed. A reach with no baseline is written (§50's fallback) but not trimmed. |
+| 6i | **200 edited sessions:** under §50 alone the note ends 200 paragraphs longer (47 → 247 trailing empties). With the trim, every session ends in exactly the no-growth document. |
+| 6j | **§50's 200-session fixed point** still holds through the releasing flush, for part 5's seed and for an already-trimmed note: 0 writes in 400 sessions. |
+| 6k ×3 | **No model at all.** The linked range function over 366 plain-text shapes (0–60 trailing marks behind six heads, among them `"a\r\r\rb"` and a soft break). Its range never contains the final mark, never starts before the trailing run, never contains a non-mark and never takes the content's mark. The result is always content + exactly one empty paragraph, or one mark for an empty box. |
+| 6l | The recolour undo snapshot taken after a releasing flush has 1 trailing empty paragraph. After an ordinary flush (the draft's order) it would have 48. |
+
+The 200-session growth test from §50 (5b–5f) still passes unchanged.
+
+**Negative controls, each proven red by breaking the real code.**
+`tools/TextColourRoundTrip/negative_controls_56.py` edits
+`src/Quill/Services/TextFlushPolicy.cs`. For each mutant it rebuilds the
+harness, requires a **clean build** (0 errors, the same 120 `CS0436`, so a
+build failure cannot pass as a red run) and **a non-zero harness exit**.
+It then restores the file byte for byte (sha256 checked) and rebuilds green.
+Run on this branch:
+
+| mutant | checks that went red |
+|---|---|
+| A: trim a box that was reached but not edited (a reach counts as an edit) | 2 (6d, and 6h's no-baseline case) |
+| B: drop interior blank lines (the first run of marks instead of the trailing one) | 3 (6f, 6k interior, 6k canonical) |
+| C1: the range also takes the story's final paragraph mark | 7 (6b, 6c, 6f, 6g, 6i, 6k final, 6l) |
+| C2: the range takes the content's own mark, leaving no empty paragraph | 7 (6b ×2, 6c, 6f, 6i, 6k canonical, 6l) |
+| D: trim while the box is still live (`releasing` ignored) | 2 (6h, 6l) |
+| E: an all-empty box emptied to nothing | 3 (6g, 6k final, 6k canonical) |
+
+After restoring: 66 checks held, exit 0.
+
+**Builds and every harness, on this branch.**
+`dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64` reports
+**0 warnings, 0 errors**. The .NET harnesses under `tools/` all build and
+exit 0: CloneRoundTrip, ExportRotRoundTrip, HandleProof, LayerRoundTrip,
+PanelProof, PaperProof, SeatProof, TextColourRoundTrip (66/66),
+TextRotRoundTrip and VeilRoundTrip. All report 0 warnings except
+TextColourRoundTrip's 120 `CS0436`. The source-reading Python checks:
+`canvas_infinite_check.py` (13/13) and `click_select_check.py` (35/35) pass.
+`bottom_bar_check.py`, `measurement_menu_check.py`,
+`text_quick_actions_check.py` and `selection_present_check.py` (a
+`NameError`) exit 1. Each was also run against a `git archive` of `main`
+`7b521b9`, and the output was identical apart from file paths, so all four
+failures predate this branch. `measure_vp.py` and `vpsweep/` are screen
+measurement tools and were not run.
+
+### 56.6 What was kept, changed and discarded from `e96b5a3`
+
+**Kept:**
+- `MayTrim` and `EmptyParagraphMarksToDrop`, unchanged;
+- `FlushTexts(bool releasing)` and its call order;
+- `TrimTrailingEmptyParagraphs`' document-model design and its first three
+  refusals;
+- `RebuildTextLayer` as a releasing flush;
+- part 6 checks 6a–6j and the `LiveDoc`/`Flush56` scaffolding.
+
+The draft built and ran green unchanged (62 checks). That was verified
+before anything was changed.
+
+**Changed:**
+- **One flush per save.** The draft's page switch and close ran a releasing
+  flush, then an ordinary one inside `SaveNow`. `SaveNow(bool releasing)`
+  now makes that a single flush. This also removes the draft's swallowed
+  exception around the close-time flush.
+- **`RecolourSelection`'s flush is now releasing** (§56.4). Without that,
+  one Ctrl+Z could resurrect the trimmed paragraphs.
+- **A fourth refusal:** final-paragraph and final-mark format equality
+  (§56.2).
+- Part 6's output no longer prints a mis-encoded `§`.
+
+**Added:** 6k, 6l and the negative-control script. The draft had no negative
+control that broke the real code.
+
+**Discarded:** nothing else.
+
+### 56.7 WHAT IS NOT ESTABLISHED
+
+**Not verified on screen.** Quill was not launched and no live
+`RichEditBox` existed in this run. No library was read or written. The
+effect on the 106 real notes is inferred from §50's measurements, not
+observed.
+
+**Proven by execution:**
+- the two pure decision functions, linked from the shipping file;
+- the order in which `FlushTexts` calls them, as **mirrored** in `Flush56`
+  (restated, not linked);
+- what that order does to documents in the writer's shape, under the
+  `LiveDoc` **model**;
+- that each negative control turns the harness red;
+- that Quill and every harness build as stated.
+
+**Only reasoned about, from reading and from §50's measurements, and never
+executed:**
+- **The model's premise.** RichEdit's story text is assumed to hold one
+  `'\r'` per `\par` its writer emits, including the final mark. That is
+  consistent with §50's measured +6 per round trip, but no one has observed
+  the plain text of a real grown box. If the premise is off by one mark,
+  the function keeps one paragraph too many. It never takes the content's
+  mark (6k).
+- **What `ITextRange.GetText(None)`, `Expand(Story)` and `Text = ""` do** on
+  a real story. This includes whether positions map one-to-one. A box
+  containing a link (`LinkifyBox` adds field text) probably fails the length
+  check and is **never trimmed**. That is inferred, not observed.
+- **Which paragraph's formatting RichEdit keeps** when marks are deleted.
+  Instead of assuming it, the code checks it with `IsEqual` and refuses on
+  a mismatch.
+- **What the control emits after the delete.** 6b's byte equality compares
+  against the **model**'s serialisation, not Windows'.
+- **The restore path.** `SetText(FormatRtf, before)` on a failed
+  post-check adds §50's one paragraph to the live box. The model stores the
+  pre-trim serialisation, so nothing the user wrote is lost. The restore has
+  never been exercised.
+- **The `Closed` handler.** That the document is still editable there is
+  assumed. If it is not, the trim refuses and the untrimmed edit is saved.
+- **Re-entrancy.** The `TextChanged` handlers that the delete fires were
+  read (`AutoSizeBubble`, `AutoGrowCellRow`, `ContentChanged` →
+  `ScheduleSave`). None of them touches `_textUi` during the flush's loop.
+- **What the user sees.** The box presumably comes back shorter after the
+  release that trims it, because the trailing blank lines were part of its
+  auto-height. Not seen.
+
+**By the ruling, and worth knowing:** the trim does not care who typed the
+trailing blank lines. A user who deliberately ends a note with several
+blank lines keeps only one of them the next time that note is edited and
+released. Interior blank lines are always kept.
