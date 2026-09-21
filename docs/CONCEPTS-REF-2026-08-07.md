@@ -10407,3 +10407,210 @@ after a fifth probe came back **CLEAR** — zero moves, zero resets, idle climbi
   `Documents\Quill\library.json` 53,582,459 / `0C32CE6C…` and
   `%LOCALAPPDATA%\LectureInk\library.json` 6,461,655 / `0C6F1B7F…`, mtimes
   untouched. No paint tile was written under `%LOCALAPPDATA%\Quill\paint`.
+
+### 49.8 The four operations — built, undoable, and reachable by nothing
+
+`16a557a` added `AddLayerAction`, `RenameLayerAction` and `MoveLayerAction`
+beside the `RemoveLayerAction` 18.12 already required, plus
+`InkSurface.ApplyLayerAction`, `InkSurface.ActiveLayerKey` /
+`SetActiveLayer`, and **layer order in the draw path**. All four actions are
+modelled on `RestyleStrokesAction` / `LockMixedAction`: capture the before, and
+be re-runnable so redo restores **identity** rather than a copy.
+
+**The headline is what did not land with them.** Not one of the four actions,
+and neither of the two `InkSurface` entry points, is called from anywhere in the
+app. Outside their own definitions and `Services/UndoRedo.cs` the only occurrence
+is a comment. `BuildLayersPanel` is untouched by that commit — still a name, a
+visibility switch and an opacity slider per row, exactly as 49.5 built it — and
+its own caption still tells the user:
+
+> *"This page has one layer, so hiding it hides the page. Making a second one is
+> **not built yet** — add, rename and reorder land together."*
+
+with the method comment above it repeating *"No reorder, no rename, no add, no
+delete."* Both were true when written. **Neither is true now.**
+
+This is 49.4's shape exactly, one level up. 49.4 was a renderer that honoured a
+model the user could not reach; this is a set of undoable operations the user
+cannot reach, **with the UI actively saying they do not exist**. The difference
+is only that the copy now under-claims instead of over-claiming, and a caption
+that lies in the modest direction is still a caption that lies.
+
+### 49.9 The screen pass, run 25 — `main` @ `770aa21`
+
+Clean `--no-incremental` x64 Debug, **0 warnings, 0 errors**. **All ten harnesses
+build AND pass.** `LayerRoundTrip` reports **83 checks** — the same number 49.7
+recorded, so `16a557a` added **no harness coverage at all** for what it built.
+
+#### Layer order on the glass: the thing 49 left out, and it works
+
+Two opaque bars on one scanline, overlapping on page x 500..700 and nowhere
+else — blue (`#1B5FC1`, key 0) over x 200..700, orange (`#E07A1F`, key 1) over
+x 500..1000. Whichever layer paints last owns the overlap, so the **boundary
+between the two colours is the whole measurement**. Seeded in both orders by
+hand, because nothing in the app can reorder a layer.
+
+| `Layers` | blue run | orange run | boundary | owns the overlap |
+|---|---|---|---|---|
+| `[0, 1]` | 480..1079 | 1080..1806 | **1080** | ORANGE — layer 1 on top |
+| `[1, 0]` | 480..1585 | 1586..1806 | **1586** | BLUE — layer 0 on top |
+
+**The boundary moved 506 px and the ink on top changed.** Both bars are still on
+the page in both orders — the built-in control, so neither result was reached by
+losing a bar. Read back off disk *after the app had loaded the page and saved it
+itself*, the element census is identical across both orders: strokes
+`[0, 1, 1, 0]`, shape `[1]`, text `[1]`. **Reorder is a list move and repoints
+nothing**, which is 18.2 measured rather than asserted.
+
+`DrawPaint` sits at `InkSurface.cs:5852`, **between** the shape passes and the
+stroke passes — see 49.10 item 3 for what that means.
+
+#### The four operations, measured through the real actions
+
+Unreachable by click, so measured by `scratchpad/vp25/LayerOps` — a scratch
+harness, deliberately **not** in `tools/` so the ten stay ten, `<Compile
+Include>`ing the real `NoteModels.cs`, `LayerModels.cs`, `LibraryStore.cs`,
+`SyncLog.cs` and `UndoRedo.cs` and running against an isolated
+`QUILL_DATA_FOLDER` with a hard abort. **43 checks, all holding.**
+
+- **Add.** A second layer appears on top, `ActiveLayer` follows it, existing
+  content does not move, and on disk the new layer carries exactly
+  `Key, Name, Opacity, CreatedTicks` — **no `"Hidden": false`, no
+  `"Locked": false"`**. Undoing the *first* add takes the whole `Layers` array
+  away again (18.4), and redo restores the **same key**, so nothing stamped with
+  it is orphaned. Confirmed independently on the glass runs: `"Hidden"` and
+  `"Locked"` occur **zero times** in a `library.json` the app itself wrote.
+- **Rename, then clear it.** A cleared name writes `""` on disk and **not** the
+  derived `"Layer 2"`; `DisplayName` goes back to deriving it, and the two stay
+  different things. Three spaces normalise to `""`.
+- **Delete a non-empty layer, then undo.** The layer **and its contents** come
+  back, every element still naming the layer it belonged to, and the restoration
+  **survives save → reload**. No data loss.
+- **49.3's round trip, across all four.** Every element's own opacity came back
+  untouched — `0.62`, `0.46`, and the absent ones still absent.
+
+#### 18.9 seam 5 on the glass, and the twelve
+
+A mouse drag with a vector pen, on a page whose `ActiveLayer` is seeded to 1,
+lands a stroke carrying **`LayerKey: 1`**. Stamping works where a user can reach
+it.
+
+The count of twelve is honest: a census of every `new PenStroke` /
+`new ShapeElement` / `new TextElement` with an object initialiser under
+`src/Quill` finds **19** sites — **7** stamping `ActiveLayerKey`, **5** stamping
+a table's key for its cells (18.10, and correct), **7** stamping nothing, and one
+with no initialiser. 7 + 5 = twelve.
+
+**The seven that stamp nothing are the interesting number, and all seven are
+innocent:** `BrushesWindow.cs:626/781` and `ToolWheel.cs:2731` are previews that
+never reach a page; `InkSurface.cs:5936` is the wet mid-stroke preview and is
+*deliberately* unstamped, with a comment saying a lookup would blank the ink
+under the nib whenever the base layer happened to be hidden; `InkSurface.cs:6727`
+is `PreviewCircle`, whose only callers are two ToolWheel previews;
+`InkSurface.cs:7484` is a render-time grain clone that already carries the
+multiplier; `MainWindow.xaml.cs:9922` is PDF import building a **brand-new page**,
+where `ActiveLayer` is 0 and unstamped is identical to stamped-0. The
+"no initialiser" entry is `new TextElement[rows, cols]` — an array, not an
+element, and a false positive of the census regex.
+
+The clone paths a regex cannot see hold too: `CloneWithPoints` and both
+`Clone()` methods carry `LayerKey` (`NoteModels.cs:163/248/322`), asserted by
+`tools/CloneRoundTrip`'s 36 checks. **Cross-page paste re-keying (18.10) remains
+untested** — nothing in this run pasted between pages.
+
+### 49.10 Four things that were not what they looked like
+
+**1. 18.7 and 18.12 item 3 now say the opposite of the code.** Both state that
+deleting a layer *"reassigns its content to the base layer by default"* and that
+deleting the content *"is never the default"*. `d6e4a6d` deliberately flipped
+that: `DeleteContent` is the zero value and the default, on the user's own
+ruling, and `LayerModels.cs` says so at length in the enum's own doc comment.
+**The code is right and the prose is stale.** Read the enum, not 18.7.
+
+**2. `MoveLayerAction`'s doc comment claims a proof that does not exist.** It
+says *"`tools/LayerRoundTrip` asserts the whole element census is unmoved across
+a reorder, with a negative control that shows the assertion can fail."* The
+harness's section 12 reorders with `PageLayers.Move` — **never**
+`MoveLayerAction`, which no harness constructs — compares `back.Strokes` **only**
+(not shapes, not texts, so not "the whole element census"), and the string
+"negative control" does not occur anywhere in `tools/LayerRoundTrip/Program.cs`.
+The property itself **does** hold over all three lists, in memory and on disk;
+it is the citation that is wrong.
+
+**3. OIL PAINT IS OUTSIDE THE LAYER MODEL ENTIRELY, and 18 never says so.**
+`OilBrush.cs`, `PaintStore.cs` and `PaintTileCodec.cs` contain **zero**
+occurrences of `LayerKey` and **zero** of `PageLayers`. Paint is tiles, not
+elements, so it takes no `ActiveLayerKey`, cannot be hidden by hiding a layer,
+cannot be moved by reordering one, and is not deleted by deleting one.
+`DrawPaint` is called once at `InkSurface.cs:5852`, **outside both pass loops** —
+above every shape on every layer and below every stroke on every layer, at one
+fixed z the layer list cannot address.
+
+18.6's "what belongs to a layer" table lists `PenStroke`, `ShapeElement` and
+`TextElement` and does not mention paint, because **18 predates oil paint**
+(18 is 2026-08-18; §47 is 2026-09-08). This is a gap in the model, not a bug in
+the commit — but a user who hides every layer and still sees their paint has
+found it, and nothing written down would have warned them.
+
+**4. A stroke that "vanished" was oil paint, and the search was in the wrong
+place — 47.1's lesson, repeated on me.** A mouse drag laid visible ink that never
+appeared in `page.Strokes`, with Quill still running, four seconds after the
+gesture. Two controls ruled out an open gesture: moving the mouse with no button
+down did **not** extend the mark, and an explicit `Up()` changed neither the mark
+nor the model. The active pen was `Pens[0]`, `Pen = 14` — **`PenType.Oil`** — so
+the ink had gone to a tile at
+`%LOCALAPPDATA%\Quill\paint\1a03473ea99f227e\a9f274631add4c318c385db862dfb97b\`,
+exactly where 47.1 says paint lives and nowhere near the data folder. Nothing was
+lost and nothing was broken; the measurement was pointed at the wrong store.
+
+**And on the way, 47.4's un-reproducible defect got a recipe.** 47.4 reports that
+`BeginLoad` can upload a tile before the `CanvasVirtualControl` has a device —
+*"harmless here and not reproducible on demand"*. It reproduced **twice in a
+row**: the oil stroke saved on one launch rendered **0 px** at the next launch's
+boot, and again at the launch after that, with
+`paint.crashlog` carrying *"tile 0,0 upload failed: The parameter is incorrect. …
+The control does not currently have a CanvasDevice associated with it."* The
+tiles were on disk and 8,370 bytes the whole time. Paint the user has saved is
+invisible until something else forces a reload, which is a stronger statement
+than "harmless".
+
+| launch | what the oil band held |
+|---|---|
+| 1, after painting | **3,355 px** — the fresh stroke |
+| 2, at boot | **0 px** — the saved stroke did not come back |
+| 2, after painting again | **3,355 px** |
+| 3, at boot | **0 px** — again |
+
+### 49.11 Machine notes, and what is left
+
+- **A presence-gate driver that refused a CLEAR gate.** Guarding a launch on
+  `if ($LASTEXITCODE -ne 0)` after calling the gate script with `&` **aborts on a
+  clear gate**: the script calls `exit` only on the blocked path, so on the clear
+  path `$LASTEXITCODE` keeps whatever it held — and in a fresh PowerShell session
+  where no native exe has run, that is `$null`, which is `-ne 0`. It failed safe,
+  which is the only reason it cost nothing. Gate on the **verdict line** instead.
+  Same family as 49.7's `Select-Object -First 1`: a driver reporting something it
+  never observed.
+- **A person was at the machine eight minutes after dispatch** — 12 cursor moves,
+  336 px displacement, idle resetting 58.9 s → 9 s. Nothing was launched and
+  nothing injected until a later probe returned zero displacement and zero
+  resets. 49.7 item 3's correction held: displacement is the signal.
+- **The seeded window clips the canvas at screen x≈1805 and y≈1250.** Two
+  different bars appeared to end at the same x because both were meeting the
+  window edge; anchoring a page↔screen scale on a clipped end produced a boundary
+  of "page 562" that meant nothing. The sound reading was differential — the same
+  boundary measured in both orders — and needed no calibration at all.
+- **Run 25 wrote paint tiles**, unavoidably, by painting: five files under
+  `%LOCALAPPDATA%\Quill\paint\1a03473ea99f227e\` (the hash of the scratch data
+  folder, so the real library never reads them). Left in place rather than
+  deleted. Both protected libraries verified **byte-identical**, mtimes
+  untouched: `Documents\Quill\library.json` 53,582,459 / `0C32CE6C…` and
+  `%LOCALAPPDATA%\LectureInk\library.json` 6,461,655 / `0C6F1B7F…`;
+  `synccursors.json` and `deviceid.txt` likewise.
+- `scratchpad/vp25data` is left seeded in **BA** order with a vector pen active.
+  `vp25_launch.ps1` (seeds fixed bounds every launch, carries the SyncLog guard),
+  `vp25_seed.py AB|BA`, `vp25_drag_only.ps1` (hit-tests, and logs **after**
+  `SendInput`), `vp25_presence.ps1`, `vp25_stamp_audit.py`.
+
+**Left standing:** cross-page paste re-keying; export, still unaudited exactly as
+49.7 left it; and the whole of 49.8 — four operations with no control on them.
