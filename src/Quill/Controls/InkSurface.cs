@@ -1034,7 +1034,20 @@ public sealed class InkSurface : UserControl
     /// been near costs no <c>GetText</c> at all now, where before it cost one
     /// full RTF serialisation per box per flush — and this runs on every save,
     /// every undo, every page change and every export.</para></summary>
-    public void FlushTexts()
+    public void FlushTexts() => FlushTexts(releasing: false);
+
+    /// <summary>§56: the same flush, told whether the live boxes are about to
+    /// be RELEASED — torn down by <see cref="RebuildTextLayer"/>, by a page
+    /// switch, or by the window closing. Only a releasing flush may drop an
+    /// edited box's trailing empty paragraphs ("trim on next edit only"), because
+    /// the trim deletes through the live document: on a box that outlives the
+    /// flush it would take blank lines out from under a caret that may be on
+    /// them, and it would sit on top of the control's own undo stack, where one
+    /// Ctrl+Z in the box (MainWindow routes Ctrl+Z to the RichEditBox whenever
+    /// one has focus) would bring the paragraphs back. A released box has
+    /// neither a caret nor an undo history anyone can reach again. Every other
+    /// flush behaves exactly as §50 left it.</summary>
+    public void FlushTexts(bool releasing)
     {
         if (_page == null) return;
         foreach (var (id, ui) in _textUi)
@@ -1056,7 +1069,76 @@ public sealed class InkSurface : UserControl
                     GeometryProbe.Write("[8.7]", $"flush id={id} SKIPPED reached={reached} touched={touched}");
                 continue;
             }
+            // §56: TRIM ON NEXT EDIT ONLY. Asked AFTER ShouldWriteBack, on the
+            // untrimmed document, so the trim can never be the difference that
+            // makes a box look edited - a box that was only focused is refused
+            // above and never reaches this line.
+            if (TextFlushPolicy.MayTrim(model.Rtf, reached, touched, baseline, rtf, releasing))
+            {
+                string? trimmed = TrimTrailingEmptyParagraphs(ui.Box);
+                if (trimmed != null)
+                {
+                    if (GeometryProbe.On)
+                        GeometryProbe.Write("[8.7]", $"flush id={id} TRIMMED {rtf.Length} -> {trimmed.Length}");
+                    rtf = trimmed;
+                }
+            }
             model.Rtf = rtf;
+        }
+    }
+
+    /// <summary>§56: deletes a released box's trailing empty paragraphs past
+    /// the first THROUGH ITS OWN DOCUMENT MODEL and returns the control's own
+    /// serialisation of the result, or null when nothing was dropped.
+    ///
+    /// <para>No RTF is edited as a string: the characters to delete are chosen
+    /// by <see cref="TextFlushPolicy.EmptyParagraphMarksToDrop"/> over the
+    /// story's plain text, deleted with <c>ITextRange</c>, and what is stored is
+    /// whatever <c>GetText(FormatRtf)</c> then says — bytes the control emitted,
+    /// which is §50.2's condition.</para>
+    ///
+    /// <para>Every step refuses rather than guesses: the story's text must map
+    /// one character to one position (no hidden or object text that would
+    /// shift the indices), the range must be nothing but paragraph marks
+    /// immediately before it is deleted, and afterwards the story must read
+    /// exactly as the old text with that range removed. If the last check
+    /// fails the document is put back from the serialisation read at the start
+    /// of this flush — the box is being released, so the only cost is §50's
+    /// one extra paragraph, and nothing the user wrote is lost.</para></summary>
+    private static string? TrimTrailingEmptyParagraphs(RichEditBox box)
+    {
+        var doc = box.Document;
+        string before;
+        try { doc.GetText(TextGetOptions.FormatRtf, out before); }
+        catch { return null; }
+        try
+        {
+            var story = doc.GetRange(0, 0);
+            story.Expand(Microsoft.UI.Text.TextRangeUnit.Story);
+            story.GetText(TextGetOptions.None, out string plain);
+            if (story.StartPosition != 0 || story.EndPosition - story.StartPosition != plain.Length) return null;
+            var (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(plain);
+            if (length <= 0) return null;
+
+            var cut = doc.GetRange(start, start + length);
+            cut.GetText(TextGetOptions.None, out string doomed);
+            if (doomed != new string('\r', length)) return null;
+            cut.Text = string.Empty;
+
+            var check = doc.GetRange(0, 0);
+            check.Expand(Microsoft.UI.Text.TextRangeUnit.Story);
+            check.GetText(TextGetOptions.None, out string after);
+            if (after != plain.Remove(start, length))
+            {
+                try { doc.SetText(TextSetOptions.FormatRtf, before); } catch { }
+                return null;
+            }
+            doc.GetText(TextGetOptions.FormatRtf, out string trimmed);
+            return trimmed;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -9388,7 +9470,10 @@ public sealed class InkSurface : UserControl
 
     public void RebuildTextLayer()
     {
-        FlushTexts(); // persist any live edits before tearing boxes down (prevents resets)
+        // persist any live edits before tearing boxes down (prevents resets).
+        // §56: RELEASING - every box below is destroyed on the next line, so an
+        // edited box may have its trailing empty paragraphs dropped here.
+        FlushTexts(releasing: true);
         _textLayer.Children.Clear();
         _textUi.Clear();
         // §50: the reach baselines and the touch latches belong to the boxes

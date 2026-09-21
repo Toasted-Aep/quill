@@ -749,6 +749,226 @@ Check("50 - a box nobody has been near is refused BEFORE the control is asked "
       "untouched -> no GetText; reached -> GetText");
 
 // ===========================================================================
+// PART 6 - 56: TRIM ON NEXT EDIT ONLY
+// ===========================================================================
+//
+// The product owner's ruling on §50.5's open question: "Trim on next edit
+// only." When the user actually edits a box, the trailing empty paragraphs past
+// the first are dropped as it saves. A note nobody edits is never rewritten.
+//
+// WHAT IS LINKED AND WHAT IS MODELLED - the same split as part 5, one level
+// deeper:
+//
+//   LINKED   - TextFlushPolicy.MayTrim (is this write one the trim may ride
+//              on?) and TextFlushPolicy.EmptyParagraphMarksToDrop (which
+//              characters of the control's plain text are the marks to
+//              delete?). Both out of src/Quill, both pure.
+//   MIRRORED - Flush56 below restates the ORDER InkSurface.FlushTexts calls
+//              those functions in (NeedsTheDocument, ShouldWriteBack on the
+//              UNTRIMMED document, then MayTrim, then the range). InkSurface
+//              cannot be linked; the order is short and is quoted in §56.
+//   MODELLED - the live RichEdit document: its plain text (one '\r' per
+//              paragraph mark, the writer's "\par"), and what deleting a run
+//              of paragraph marks through ITextRange does to what the writer
+//              emits next. LiveDoc below. It is a model of WINDOWS and it is
+//              only asked about fixtures in the writer's own shape.
+
+// ---- 6a. THE MODEL IS CALIBRATED ------------------------------------------
+string grown56 = StoredDoc("lecture notes", 46);          // 1 real paragraph + 47 empty
+string grown56Live = RichEditRoundTrip(grown56);           // what the control holds once opened
+var grownModel = LiveDoc.Parse(grown56Live);
+string grownPlain = grownModel.Plain();
+Check("56 - the modelled live document is calibrated: parsing and re-serialising "
+      + "the writer's output is the identity, and its plain text is the words "
+      + "followed by one '\\r' per \\par the writer emits (49 here: the content's "
+      + "own mark, 47 stored empties and the one the open added)",
+      grownModel.Serialise() == grown56Live &&
+      grownPlain == "lecture notes" + new string('\r', 49) &&
+      Regex.Matches(grown56Live, @"\\par(?![a-z])").Count == 49,
+      $"round trip identity: {grownModel.Serialise() == grown56Live}, plain = \"lecture notes\" + "
+      + $"{grownPlain.Length - "lecture notes".Length} x \\r");
+
+// ---- 6b. THE GROWN NOTE, EDITED -------------------------------------------
+// Open (the control's round trip), focus (the baseline is what it holds
+// then), one keystroke, then the box is released - a page switch, a rebuild,
+// the window closing.
+string grownEdited = grown56Live.Replace("lecture notes", "lecture notes!");
+var r6b = Flush56(grown56, reached: true, touched: false, baseline: grown56Live, grownEdited, releasing: true);
+string expected6b = StoredDoc("lecture notes!", 0);
+string contentPrefix = grownEdited[..(grownEdited.IndexOf("lecture notes!", StringComparison.Ordinal) + "lecture notes!".Length)] + "\\par\r\n";
+Check("56 - A GROWN NOTE THAT IS EDITED COMES OUT WITH EXACTLY ONE TRAILING "
+      + "EMPTY PARAGRAPH. 1 real paragraph + 47 stored empties (+1 from the open) "
+      + "in, the edit stored, 47 marks dropped, and the result is byte for byte "
+      + "the document the same words make with no growth at all",
+      r6b.Wrote && r6b.Dropped == 47 && r6b.Stored == expected6b &&
+      TrailingEmpties(r6b.Stored) == 1,
+      $"{grown56.Length} chars stored -> {r6b.Stored.Length}; dropped {r6b.Dropped}; "
+      + $"trailing empty paragraphs {TrailingEmpties(grown56)} -> {TrailingEmpties(r6b.Stored)}");
+
+Check("56 - ...and everything BEFORE the trailing run is untouched: header, "
+      + "colour table, the content paragraph's own formatting and words, up to "
+      + "and including its own \\par, are the exact prefix of what the user left "
+      + "in the box; the final paragraph (RichEdit's closing \\pard...\\par) is "
+      + "the exact suffix",
+      r6b.Stored.StartsWith(contentPrefix, StringComparison.Ordinal) &&
+      r6b.Stored.EndsWith("\r\n\\pard\\sl300\\slmult1\\par\r\n}\r\n\0", StringComparison.Ordinal),
+      $"prefix {contentPrefix.Length} chars identical, closing paragraph identical");
+
+// ---- 6c. FORMATTED RUNS, AND A LAST CONTENT PARAGRAPH WITH ITS OWN FORMAT --
+const string RunsBody = @"\b bold\b0  \i italic\i0  \cf2 red words\cf1  \fs36 large\fs24  plain\par" + "\r\n"
+                      + @"\pard\qc\sl300\slmult1\i centred closing line\i0";
+const string OwnFinal = @"\pard\qr\li720\sl300\slmult1";
+string fmt = StoredDocWith(RunsBody, 46, OwnFinal);
+string fmtLive = RichEditRoundTrip(fmt);
+string fmtEdited = fmtLive.Replace("plain", "plainly");
+var r6c = Flush56(fmt, true, false, fmtLive, fmtEdited, true);
+string expected6c = StoredDocWith(RunsBody.Replace("plain", "plainly"), 0, OwnFinal);
+Check("56 - BOLD, ITALIC, COLOUR AND SIZE RUNS, A CENTRED LAST CONTENT PARAGRAPH "
+      + "AND A RIGHT-ALIGNED INDENTED FINAL PARAGRAPH all come through the trim "
+      + "byte for byte. Only whole empty paragraphs are removed, and each of them "
+      + "is a bare \\par with no control word in it, so no formatting state is "
+      + "carried or dropped by removing it",
+      r6c.Wrote && r6c.Dropped == 47 && r6c.Stored == expected6c &&
+      r6c.Stored.Contains(@"\b bold\b0  \i italic\i0  \cf2 red words\cf1  \fs36 large\fs24  plainly", StringComparison.Ordinal) &&
+      r6c.Stored.Contains(@"\pard\qc\sl300\slmult1\i centred closing line\i0\par", StringComparison.Ordinal) &&
+      r6c.Stored.Contains(OwnFinal + @"\par", StringComparison.Ordinal) &&
+      TrailingEmpties(r6c.Stored) == 1,
+      $"{fmt.Length} -> {r6c.Stored.Length} chars; equal to the no-growth document: {r6c.Stored == expected6c}");
+
+// ---- 6d. REACHED BUT NOT EDITED: BYTE-IDENTICAL ---------------------------
+string reachedOut = grown56;
+int reachedWrites = 0, reachedDrops = 0;
+for (int i = 0; i < Opens; i++)
+{
+    string live = RichEditRoundTrip(reachedOut);
+    var r = Flush56(reachedOut, true, false, live, live, releasing: true);
+    reachedOut = r.Stored; if (r.Wrote) reachedWrites++; reachedDrops += r.Dropped;
+}
+Check($"56 - THE SAME GROWN NOTE, REACHED BUT NOT EDITED, {Opens} TIMES AND "
+      + "RELEASED EVERY TIME, IS BYTE-IDENTICAL. The ruling is \"next EDIT\": a "
+      + "focus is not an edit, so the 47 empties stay exactly where they are. "
+      + "The policy itself says no, not only the write gate in front of it",
+      reachedOut == grown56 && reachedWrites == 0 && reachedDrops == 0 &&
+      !TextFlushPolicy.MayTrim(grown56, true, false, grown56Live, grown56Live, true),
+      $"{reachedWrites} writes, {reachedDrops} marks dropped, byte-identical: {reachedOut == grown56}; "
+      + $"MayTrim(reached, unedited) = {TextFlushPolicy.MayTrim(grown56, true, false, grown56Live, grown56Live, true)}");
+
+// ---- 6e. NEVER REACHED: BYTE-IDENTICAL ------------------------------------
+string neverOut = grown56;
+int neverWrites = 0;
+for (int i = 0; i < Opens; i++)
+{
+    string live = RichEditRoundTrip(neverOut);
+    var r = Flush56(neverOut, false, false, null, live, releasing: true);
+    neverOut = r.Stored; if (r.Wrote) neverWrites++;
+}
+Check($"56 - A GROWN NOTE NOTHING EVER REACHES is byte-identical after {Opens} "
+      + "released sessions - no migration of the library, not even of a note "
+      + "whose page is opened every day",
+      neverOut == grown56 && neverWrites == 0 &&
+      !TextFlushPolicy.MayTrim(grown56, false, false, null, grown56Live, true),
+      $"{neverWrites} writes, byte-identical: {neverOut == grown56}");
+
+// ---- 6f. INTERIOR BLANK LINES ARE THE USER'S ------------------------------
+const string GapBody = @"first thought\par" + "\r\n" + @"\par" + "\r\n" + @"\par" + "\r\n" + @"\par" + "\r\n" + "after the gap";
+string gap = StoredDocWith(GapBody, 5, @"\pard\sl300\slmult1");
+string gapLive = RichEditRoundTrip(gap);
+string gapEdited = gapLive.Replace("after the gap", "after the gap, edited");
+var r6f = Flush56(gap, true, false, gapLive, gapEdited, true);
+string expected6f = StoredDocWith(GapBody.Replace("after the gap", "after the gap, edited"), 0, @"\pard\sl300\slmult1");
+var gapRange = TextFlushPolicy.EmptyParagraphMarksToDrop(LiveDoc.Parse(gapEdited).Plain());
+string gapPlain = LiveDoc.Parse(gapEdited).Plain();
+Check("56 - TEXT, THREE DELIBERATE BLANK LINES, MORE TEXT, THEN GROWTH: the three "
+      + "interior blank lines survive and only the TRAILING run is dropped. The "
+      + "range the policy returns starts after the last word's own mark",
+      r6f.Wrote && r6f.Stored == expected6f &&
+      LiveDoc.Parse(r6f.Stored).Plain().Contains("first thought\r\r\r\rafter the gap, edited\r", StringComparison.Ordinal) &&
+      gapRange.Start > gapPlain.LastIndexOf("edited", StringComparison.Ordinal) + "edited".Length &&
+      TrailingEmpties(r6f.Stored) == 1,
+      $"range [{gapRange.Start},+{gapRange.Length}) of {gapPlain.Length}; interior marks kept: "
+      + $"{LiveDoc.Parse(r6f.Stored).Plain().Contains("first thought\r\r\r\r", StringComparison.Ordinal)}");
+
+// ---- 6g. AN EMPTY BOX STAYS A VALID EMPTY BOX -----------------------------
+// A box that is nothing but empty paragraphs (a table cell, which is exempt
+// from LostFocus's discard, is where this can survive to be saved).
+string emptyBox = StoredDocWith("", 3, @"\pard\sl300\slmult1");
+string emptyLive = RichEditRoundTrip(emptyBox);
+var r6g = Flush56(emptyBox, false, true, null, emptyLive, true);     // touched: 25.5's recolour
+var emptyOut = LiveDoc.Parse(r6g.Stored);
+Check("56 - A BOX OF NOTHING BUT EMPTY PARAGRAPHS keeps exactly ONE paragraph "
+      + "mark - one empty paragraph, which is what an empty box is - and keeps "
+      + "the header, its closing paragraph's own formatting and the writer's "
+      + "tail. The final mark is never inside the range, so it cannot be emptied "
+      + "to nothing",
+      r6g.Wrote && emptyOut.Plain() == "\r" &&
+      r6g.Stored.StartsWith(emptyBox[..emptyBox.IndexOf(@"\pard", StringComparison.Ordinal)], StringComparison.Ordinal) &&
+      r6g.Stored.EndsWith(@"\pard\sl300\slmult1\par" + "\r\n}\r\n\0", StringComparison.Ordinal) &&
+      r6g.Stored.Count(c => c == '{') == r6g.Stored.Count(c => c == '}') &&
+      TextFlushPolicy.EmptyParagraphMarksToDrop("\r") == (1, 0) &&
+      TextFlushPolicy.EmptyParagraphMarksToDrop("") == (0, 0),
+      $"plain {Escape(LiveDoc.Parse(emptyLive).Plain())} -> {Escape(emptyOut.Plain())}; "
+      + "already-minimal \"\\r\" -> nothing to drop");
+
+// ---- 6h. WHILE THE BOX IS LIVE, THE EDIT IS STORED AND NOTHING IS TRIMMED --
+var r6h = Flush56(grown56, true, false, grown56Live, grownEdited, releasing: false);
+Check("56 - A FLUSH WHILE THE BOX IS STILL LIVE (the autosave timer, an export, "
+      + "the AI panel) stores the edit exactly as §50 does and trims NOTHING. "
+      + "The trim waits for the box to be released, so it never deletes under a "
+      + "caret and never lands on the box's own undo stack",
+      r6h.Wrote && r6h.Dropped == 0 && r6h.Stored == grownEdited &&
+      !TextFlushPolicy.MayTrim(grown56, true, false, grown56Live, grownEdited, releasing: false),
+      $"written untrimmed ({r6h.Stored.Length} chars), dropped {r6h.Dropped}");
+
+Check("56 - A REACH WITH NO BASELINE IS WRITTEN (§50's fallback) BUT NOT "
+      + "TRIMMED: nothing established that it was edited",
+      Flush56(grown56, true, false, null, grown56Live, true) is { Wrote: true, Dropped: 0 },
+      "fallback write, 0 dropped");
+
+// ---- 6i. 200 EDITED SESSIONS: BOUNDED; THE PRE-56 EDIT PATH: NOT ----------
+string editedOut = grown56, pre56 = grown56;
+bool allMinimal = true;
+for (int i = 0; i < Opens; i++)
+{
+    string word = "lecture notes" + new string('!', i + 1);
+    string live = RichEditRoundTrip(editedOut);
+    string typed56 = live.Replace("lecture notes" + new string('!', i), word);
+    var r = Flush56(editedOut, true, false, live, typed56, releasing: true);
+    editedOut = r.Stored;
+    if (editedOut != StoredDoc(word, 0)) allMinimal = false;
+
+    string livePre = RichEditRoundTrip(pre56);
+    string typedPre = livePre.Replace("lecture notes" + new string('!', i), word);
+    if (TextFlushPolicy.ShouldWriteBack(pre56, true, false, livePre, typedPre)) pre56 = typedPre;   // §50 alone
+}
+Check($"56 - {Opens} SESSIONS, EACH ONE A REAL EDIT: under §50 alone every edited "
+      + $"session keeps the open's extra paragraph, so the note ends {Opens} "
+      + "paragraphs longer (the control this check is required to show red); "
+      + "with the trim, every session ends in exactly the no-growth document and "
+      + "the only growth is the characters actually typed",
+      allMinimal && editedOut == StoredDoc("lecture notes" + new string('!', Opens), 0) &&
+      TrailingEmpties(pre56) == TrailingEmpties(grown56) + Opens,
+      $"§50 alone: {TrailingEmpties(grown56)} -> {TrailingEmpties(pre56)} trailing empties; "
+      + $"with 56: {TrailingEmpties(editedOut)} after every one of {Opens} sessions: {allMinimal}");
+
+// ---- 6j. §50's FIXED POINT STILL HOLDS, NOW WITH THE RELEASING PATH -------
+string seedOut = seed, trimmedOut = StoredDoc("lecture notes!", 0);
+string trimmedIn = trimmedOut;
+int fpWrites = 0;
+for (int i = 0; i < Opens; i++)
+{
+    var a = Flush56(seedOut, false, false, null, RichEditRoundTrip(seedOut), true);
+    string tl = RichEditRoundTrip(trimmedOut);
+    var b = Flush56(trimmedOut, true, false, tl, tl, true);
+    seedOut = a.Stored; trimmedOut = b.Stored;
+    if (a.Wrote || b.Wrote) fpWrites++;
+}
+Check($"50 + 56 - §50's {Opens}-session fixed point holds through the releasing "
+      + "flush, for part 5's seed AND for a note the trim has already shortened: "
+      + "once trimmed, a note nobody edits again stays trimmed, byte for byte",
+      seedOut == seed && trimmedOut == trimmedIn && fpWrites == 0,
+      $"{fpWrites} writes in {Opens * 2} released sessions");
+
+// ===========================================================================
 foreach (var line in log) Console.WriteLine(line);
 Console.WriteLine();
 if (failures == 0)
@@ -891,6 +1111,67 @@ static string Escape(string s) =>
     "\"" + s.Replace("\\", "\\\\").Replace("\r", "\\r").Replace("\n", "\\n").Replace("\0", "\\0") + "\"";
 
 // ---------------------------------------------------------------------------
+// PART 6's fixtures and its mirror of FlushTexts.
+//
+// StoredDoc's shape with a colour table that has a second colour, a body that
+// may hold several paragraphs of its own, and a closing paragraph whose
+// paragraph formatting the caller chooses.
+static string StoredDocWith(string body, int emptyParagraphs, string finalParagraph)
+{
+    const string Nl = "\r\n";
+    var sb = new StringBuilder();
+    sb.Append(@"{\rtf1\fbidis\ansi\ansicpg1252\deff0\nouicompat\deflang2057{\fonttbl{\f0\fnil Segoe UI;}}").Append(Nl);
+    sb.Append(@"{\colortbl ;\red250\green249\blue245;\red200\green30\blue30;}").Append(Nl);
+    sb.Append(@"{\*\generator Riched20 3.1.0008}\viewkind4\uc1 ").Append(Nl);
+    sb.Append(@"\pard\sl300\slmult1\cf1\f0\fs24 ").Append(body).Append(@"\par").Append(Nl);
+    for (int i = 0; i < emptyParagraphs; i++) sb.Append(@"\par").Append(Nl);
+    sb.Append(Nl).Append(finalParagraph).Append(@"\par").Append(Nl);
+    sb.Append('}').Append(Nl).Append('\0');
+    return sb.ToString();
+}
+
+// How many empty paragraphs a document ends in, AFTER its last content
+// paragraph - the number §50 counted in the library (47 for StoredDoc(x, 46)).
+static int TrailingEmpties(string rtf)
+{
+    string plain = LiveDoc.Parse(rtf).Plain();
+    int run = 0;
+    while (run < plain.Length && plain[plain.Length - 1 - run] == '\r') run++;
+    return run < plain.Length ? run - 1 : run;
+}
+
+// InkSurface.FlushTexts' order, restated because InkSurface cannot be linked.
+// Every DECISION in it is the linked TextFlushPolicy; the only thing modelled
+// is the live document (LiveDoc) the trim is applied to.
+//
+//   1. NeedsTheDocument   - refuse before touching the control
+//   2. ShouldWriteBack    - on the UNTRIMMED live document: the trim is never
+//                           itself the edit that justifies a write
+//   3. MayTrim            - is this write one the trim may ride on?
+//   4. EmptyParagraphMarksToDrop over the control's plain text, the range
+//      deleted through the document model, re-serialised, stored.
+static (string Stored, bool Wrote, int Dropped) Flush56(
+    string stored, bool reached, bool touched, string? baseline, string live, bool releasing)
+{
+    if (!TextFlushPolicy.NeedsTheDocument(stored, reached, touched)) return (stored, false, 0);
+    if (!TextFlushPolicy.ShouldWriteBack(stored, reached, touched, baseline, live)) return (stored, false, 0);
+    int dropped = 0;
+    if (TextFlushPolicy.MayTrim(stored, reached, touched, baseline, live, releasing))
+    {
+        var doc = LiveDoc.Parse(live);
+        var (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(doc.Plain());
+        // InkSurface refuses unless every character in the range is a
+        // paragraph mark; so does the model.
+        if (length > 0 && doc.DeleteMarks(start, length) is { } trimmed)
+        {
+            live = trimmed.Serialise();
+            dropped = length;
+        }
+    }
+    return (live, true, dropped);
+}
+
+// ---------------------------------------------------------------------------
 static Color FromY(double y)
 {
     // The neutral grey with the given relative luminance - the inverse of the
@@ -939,4 +1220,88 @@ static List<string> SvgFills(string svg)
     return doc.Descendants(ns + "text")
               .Select(e => (string?)e.Attribute("fill") ?? "")
               .ToList();
+}
+
+// ---------------------------------------------------------------------------
+// PART 6's ONE MODELLED THING: the live RichEdit document, as the writer
+// serialises it. A model of WINDOWS, not of Quill, and deliberately narrow:
+//
+//   * a document is a header (everything before the first \pard), a list of
+//     paragraphs (the RTF between one \par and the next), and the writer's
+//     tail after the last \par;
+//   * its plain text is each paragraph's characters followed by '\r' - one
+//     '\r' per \par the writer emits, which is what makes part 5's
+//     round-trip model and the stored library consistent (N stored \par, one
+//     more after an open);
+//   * deleting paragraph mark k through ITextRange removes paragraph k when it
+//     is a bare empty paragraph (no characters, no control words - nothing to
+//     carry); otherwise its RTF is merged into paragraph k+1, whose mark (and
+//     so whose \pard) survives. Only the bare case occurs on the trim's real
+//     path; the merge exists so a negative control that deletes the WRONG
+//     mark produces a wrong document instead of an exception.
+//
+// It is never asked about anything but fixtures in the writer's own shape,
+// and 6a checks that Parse then Serialise is the identity on them.
+sealed class LiveDoc
+{
+    private static readonly Regex ParTok = new(@"\\par(?![a-z])", RegexOptions.Compiled);
+    private static readonly Regex ControlWord = new(@"\\[a-zA-Z]+-?\d* ?", RegexOptions.Compiled);
+
+    private readonly string _header;
+    private readonly List<string> _paras;
+    private readonly string _tail;
+
+    private LiveDoc(string header, List<string> paras, string tail)
+    { _header = header; _paras = paras; _tail = tail; }
+
+    public static LiveDoc Parse(string rtf)
+    {
+        int body = rtf.IndexOf(@"\pard", StringComparison.Ordinal);
+        if (body < 0) body = rtf.Length;
+        var pieces = ParTok.Split(rtf[body..]);
+        return new LiveDoc(rtf[..body], pieces[..^1].ToList(), pieces[^1]);
+    }
+
+    public string Serialise()
+    {
+        var sb = new StringBuilder(_header);
+        foreach (var p in _paras) sb.Append(p).Append(@"\par");
+        return sb.Append(_tail).ToString();
+    }
+
+    private static string Chars(string para) =>
+        ControlWord.Replace(para.Replace("\r\n", ""), "");
+
+    public string Plain() => string.Concat(_paras.Select(p => Chars(p) + "\r"));
+
+    // Deletes plain-text characters [start, start+length) - which must all be
+    // paragraph marks, or the edit is refused (null), exactly as InkSurface
+    // refuses. Returns the document the writer would then serialise.
+    public LiveDoc? DeleteMarks(int start, int length)
+    {
+        string plain = Plain();
+        if (start < 0 || length <= 0 || start + length > plain.Length) return null;
+        for (int i = start; i < start + length; i++) if (plain[i] != '\r') return null;
+        // plain index -> paragraph index: count the marks before it.
+        var doomed = new HashSet<int>();
+        int para = 0;
+        for (int i = 0; i < start + length; i++)
+        {
+            if (plain[i] != '\r') continue;
+            if (i >= start) doomed.Add(para);
+            para++;
+        }
+        var outp = new List<string>();
+        string carry = "";
+        for (int k = 0; k < _paras.Count; k++)
+        {
+            string p = carry + _paras[k];
+            carry = "";
+            if (!doomed.Contains(k)) { outp.Add(p); continue; }
+            bool bare = p.Replace("\r\n", "").Length == 0;
+            if (!bare) carry = p;          // merged into the next paragraph
+        }
+        if (carry.Length > 0) return null; // the story's final mark cannot go
+        return new LiveDoc(_header, outp, _tail);
+    }
 }

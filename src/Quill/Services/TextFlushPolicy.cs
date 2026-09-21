@@ -64,6 +64,13 @@ namespace Quill.Services;
 /// tidy them would be the same unasked-for write this rule exists to
 /// stop.</para>
 ///
+/// <para><b>§56 added the pruning, on edit only.</b> The product owner ruled
+/// "trim on next edit only": <see cref="MayTrim"/> and
+/// <see cref="EmptyParagraphMarksToDrop"/> let a box the user actually edited
+/// drop its trailing empty paragraphs past the first when it is released. A
+/// note nobody edits is still never written; the paragraph above remains true
+/// of every such note.</para>
+///
 /// <para>Kept as plain static functions over strings, with no reference to
 /// <c>RichEditBox</c> or to WinUI at all, so <c>tools/TextColourRoundTrip</c>
 /// can link the shipping decision instead of restating it. None of the ten
@@ -111,5 +118,97 @@ public static class TextFlushPolicy
         // than to silence. Losing an edit is worse than writing a paragraph.
         if (documentWhenReached is null) return true;
         return !string.Equals(documentWhenReached, live, System.StringComparison.Ordinal);
+    }
+
+    // =======================================================================
+    // CONCEPTS-REF 56: TRIM ON NEXT EDIT ONLY
+    // =======================================================================
+
+    /// <summary>CONCEPTS-REF 56: whether this write-back is one the trailing
+    /// empty paragraphs may be dropped on.
+    ///
+    /// <para><b>The ruling.</b> The product owner's words were "trim on next edit
+    /// only": when the user actually edits a box, the trailing empty paragraphs
+    /// past the first are dropped as it saves; a note nobody edits is never
+    /// rewritten, so there is no migration of the library. §50 stopped the growth
+    /// and deliberately pruned nothing; this is the pruning, and it is confined
+    /// to the one moment a box is being written for a reason the user
+    /// gave.</para>
+    ///
+    /// <para>True only when ALL of these hold:</para>
+    /// <list type="number">
+    /// <item><description><b>The box is being released</b> — its live control is
+    /// about to be torn down (a text-layer rebuild, a page switch, the window
+    /// closing). The trim edits the live document, and doing that to a box that
+    /// outlives the flush would put a deletion on the control's own undo stack
+    /// (one Ctrl+Z inside the box would bring the paragraphs back) and would
+    /// take blank lines out from under a caret that may be sitting on them.
+    /// A released box has no caret to move and no undo history anyone can
+    /// reach again, so the trim waits for that moment instead of restoring
+    /// either.</description></item>
+    /// <item><description><b>An edit is established</b> — Quill touched the box
+    /// on the user's behalf (25.5's recolour), or the box was reached WITH a
+    /// recorded baseline and the live document differs from it. A box that was
+    /// only focused is not an edit (§50.4's 5d) and is not trimmed; a reach
+    /// whose baseline could not be captured is written back by
+    /// <see cref="ShouldWriteBack"/> as a fallback, but nothing established that
+    /// it was edited, so it is not trimmed either. A box with nothing stored
+    /// is trimmed only if one of the two edit facts also holds.</description></item>
+    /// </list>
+    /// <para>Deliberately NOT a second copy of <see cref="ShouldWriteBack"/>'s
+    /// order: it asks a narrower question, and every case it answers true is a
+    /// case <see cref="ShouldWriteBack"/> also answers true.</para></summary>
+    public static bool MayTrim(
+        string? stored, bool reached, bool touched, string? documentWhenReached, string live, bool releasing)
+    {
+        if (!releasing) return false;
+        if (touched) return true;
+        if (!reached || documentWhenReached is null) return false;
+        return !string.Equals(documentWhenReached, live, System.StringComparison.Ordinal);
+    }
+
+    /// <summary>CONCEPTS-REF 56: which paragraph marks at the end of a document
+    /// are the empty paragraphs to drop, given the document's plain text as the
+    /// control reports it (<c>ITextRange.GetText(TextGetOptions.None)</c> over
+    /// the whole story, where a paragraph mark is <c>'\r'</c>).
+    ///
+    /// <para>Returns a character range <c>(Start, Length)</c> in that string;
+    /// <c>Length == 0</c> means drop nothing. The caller deletes exactly that
+    /// range through the control's own document (<c>ITextRange</c>), so the
+    /// bytes stored afterwards are still the control's own serialisation — no
+    /// RTF is edited as a string anywhere, which is §50.2's objection to a
+    /// normaliser met rather than argued with.</para>
+    ///
+    /// <para><b>What is kept, exactly.</b> The trailing run of <c>'\r'</c> is
+    /// the only thing ever touched; the first character that is not a paragraph
+    /// mark — a letter, a space, a line break (<c>'\v'</c>), an embedded object
+    /// — ends the run, so every interior blank line survives. Of the run:</para>
+    /// <list type="bullet">
+    /// <item><description>When the box has content, the content's own paragraph
+    /// mark (the first <c>'\r'</c> of the run) and the story's final mark (the
+    /// last character) are kept: the content, then ONE empty paragraph — "past
+    /// the first", as ruled. Everything between is dropped.</description></item>
+    /// <item><description>When the box is nothing but empty paragraphs, only the
+    /// final mark is kept: one empty paragraph, which is what an empty box is.
+    /// The final mark is never inside the range, so the result is always a
+    /// valid document.</description></item></list>
+    ///
+    /// <para><b>Refusal is the failure mode.</b> Text that does not end in a
+    /// paragraph mark is a shape this function does not understand, and it
+    /// answers "drop nothing". If the control's string ever left out the
+    /// story's final mark, the last <c>'\r'</c> seen here would be an empty
+    /// paragraph and the one after it would survive too: one paragraph kept too
+    /// many, never the content's mark taken.</para></summary>
+    public static (int Start, int Length) EmptyParagraphMarksToDrop(string? plain)
+    {
+        if (string.IsNullOrEmpty(plain) || plain[^1] != '\r') return (plain?.Length ?? 0, 0);
+        int run = 0;
+        while (run < plain.Length && plain[plain.Length - 1 - run] == '\r') run++;
+        bool hasContent = run < plain.Length;
+        int keep = hasContent ? 2 : 1;
+        int drop = run - keep;
+        if (drop <= 0) return (plain.Length, 0);
+        int start = plain.Length - 1 - drop;   // the final mark, at Length-1, stays
+        return (start, drop);
     }
 }
