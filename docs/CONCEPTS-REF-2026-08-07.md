@@ -10614,3 +10614,203 @@ than "harmless".
 
 **Left standing:** cross-page paste re-keying; export, still unaudited exactly as
 49.7 left it; and the whole of 49.8 — four operations with no control on them.
+
+## 50 A text box grew six characters every time it was opened — 2026-09-20
+
+8.7 filed the defect and stopped short of the fix: a stored text box's RTF
+grows by about six characters every open-and-close, without bound. `23e6056`
+closed it. This section is the missing citation — ten places in the code say
+"CONCEPTS-REF 50" or "§50" and until now there was no 50 for them to point at.
+Written after the fact, from the commit, the file it touched and the harness
+it extended; nothing here was run on screen and §50.5 says so plainly.
+
+### 50.1 The defect, and why it is exact rather than approximate
+
+`RichEditBox`'s document is not idempotent under its own round trip.
+`SetText(FormatRtf, x)` followed by `GetText(FormatRtf)` does not return `x`;
+it returns `x` plus one more trailing empty paragraph — the literal six
+characters `\par\r\n`. `InkSurface.FlushTexts` stored that result back into
+`TextElement.Rtf` for every box on the page, unconditionally, at roughly
+thirty call sites: every save, every undo, every page change, every export,
+and on close. So the extra paragraph became part of `x`, and the next open
+added another on top of it, forever. 49.7 measured the ladder on one box —
+264 → 294 → 306 → 312 characters, every step a multiple of six, two of the
+four steps with nothing in the app touched at all — and the commit measured
+the real library rather than inferring from one box: **all 106 stored
+documents end in a run of empty paragraphs**, 23 of them carrying 47, 21
+carrying 7, 13 carrying 43, 9 carrying 39, and boxes that share a page carry
+*identical* counts, which is the signature of a per-session increment and not
+of anybody pressing Return. 17,346 of the library's 83,195 stored RTF
+characters — 20.8% — are empty paragraphs past the first.
+
+### 50.2 Why the fix is a rule about writing, and not a rule about RTF
+
+The commit records that normalising the document on the way out — trimming
+the paragraph the control added before storing it — was considered and
+rejected. A normaliser is a second RTF parser that has to stay correct
+against every document Windows' control can produce, on a project that
+already has one RTF parser (`RtfRunParser`, §40–§43) earning its keep; it is a
+new way to lose formatting nobody has modelled, and it puts bytes on disk
+that no control ever emitted, which is its own kind of dishonesty about where
+a note's content came from. The question the defect actually asks is
+narrower than "how do we clean up the RTF": it is *why is a document nobody
+edited being written back at all?* Framed that way the fix is a policy about
+**when `FlushTexts` may write**, not a transform on **what** it writes. Quill
+now either stores exactly what the control produced, or it stores nothing —
+never a doctored middle document that exists only on disk.
+
+### 50.3 What "a box nobody edited does not dirty its page" means in code
+
+The decision lives in `Quill.Services.TextFlushPolicy`, a static class over
+plain strings with no reference to `RichEditBox` or WinUI, so that
+`tools/TextColourRoundTrip` can link the actual shipping decision instead of
+restating it in a fixture. Two things are tracked per box, in `InkSurface`:
+
+- `_textReached: Dictionary<Guid, string?>` — the control's own serialisation
+  of a box, captured the moment something reached it. "Reached" is focus, and
+  only focus: every edit path in the app — typing, paste, dictation, the AI
+  rewrite, the symbol picker, every format-bar control — reaches a box only
+  through `ActiveTextBox` or `LastTextBox`, and both are assigned in the
+  `GotFocus` handler (`InkSurface.cs`, `box.GotFocus += ...` calling
+  `NoteTextReached`) and nowhere else. A box only ever displayed cannot have
+  changed, so it is never in this dictionary. The capture happens *at* reach
+  and not at build time on purpose — 40.5/43.1 established that the template
+  pushes `Foreground` into the document after `Loaded`, so a baseline taken
+  inside `BuildTextUi` would differ from the settled document and report a
+  change nobody made; nobody can focus a box that has not finished loading,
+  so the moment of reach is always after that settle.
+- `_textTouched: HashSet<Guid>` — boxes Quill itself edited with no focus
+  involved. The one path that does this is 25.5's lasso recolour
+  (`RestyleTexts`, which calls `RebuildTextLayer` then
+  `NoteTextTouched(t.Id)` for every box in the selection) and the single-box
+  stamp in `StampTextColour`'s caller, which calls `NoteTextTouched` right
+  after the stamp and before the second `FlushTexts`.
+
+`FlushTexts` (`InkSurface.cs`) reads both per box before it will even ask the
+control for its document:
+
+```
+bool reached = _textReached.ContainsKey(id);
+bool touched = _textTouched.Contains(id);
+if (!TextFlushPolicy.NeedsTheDocument(model.Rtf, reached, touched)) continue;
+```
+
+`NeedsTheDocument` refuses before any `GetText` call at all when the model
+already has something stored and the box is neither reached nor touched —
+which is the common case, a page of boxes nobody has been near, and it now
+costs no RTF serialisation whatsoever where before it cost one per box per
+flush. Past that gate, `ShouldWriteBack` makes the actual call, in a fixed
+order where each refusal is separate and the first match wins: nothing
+stored → always write (a brand-new box's first words must reach disk even if
+every other latch missed it); touched → always write (Quill's own edit has
+to keep up with the field); not reached → never write (the fixed point — the
+model comes back unchanged no matter how many times the box is loaded and
+saved); reached with a recorded baseline → write only if the live document
+differs from that baseline **byte for byte, ordinally**, not on any reading
+of its text — a bold run moves no character and still has to be caught, so
+the comparison has to be on the bytes. A reach whose baseline could not be
+captured (the `try`/`catch` around `GetText` in `NoteTextReached`) falls back
+to writing, because losing an edit is worse than storing a paragraph.
+
+In plain terms: a box that is focused and then left alone is compared byte
+for byte to what it looked like at the moment it was reached, and if nothing
+moved, nothing is written — the model keeps exactly what was on disk before.
+A box that *is* edited is written, and it carries the one paragraph the
+control added along with the edit, because that paragraph belongs to the
+control's own document and stripping it is the normalising §50.2 declined to
+do. Growth becomes one paragraph per session in which the note was actually
+changed, instead of one per session in which it was merely opened.
+
+### 50.4 What the harness proves, and its negative controls
+
+`tools/TextColourRoundTrip` cannot construct a `RichEditBox` — none of the
+ten harnesses can, all ten need a window they do not have — so it links
+`TextFlushPolicy` itself (the real decision) against a **modelled** RichEdit
+round trip (`RichEditRoundTrip`, a function that appends one `\par\r\n`
+immediately before the document's closing `\pard`, in the exact position the
+real library shows it — this is a model of *Windows*, not of Quill, and the
+file says so). Part 5 (`Program.cs`, after the RTF-colour checks) is 15
+checks:
+
+- **5a calibrates the model rather than assuming it**: one modelled round
+  trip on a seeded stored-shape document adds exactly six characters, and
+  they are `\par\r\n` — the unit both 49.7's ladder and all 106 stored
+  documents are made of.
+- **5b is the negative control, run before anything is claimed fixed**: the
+  *pre-50* rule — write the document back on every flush, unconditionally —
+  reproduced verbatim and run for 200 opens. It grows the stored document by
+  200 paragraphs and 1,200 characters, unbounded, and the check asserts that
+  it does — a checker that cannot go red proves nothing, so the defect is
+  demonstrated failing before the fix is asked to pass anything.
+- **5c is the fixed point**: the same 200 opens, this time gated through
+  `TextFlushPolicy` with the box never reached and never touched. Zero writes
+  in 200 opens, byte-identical in and out.
+- **5d adds a second negative-adjacent control**: 200 sessions where the box
+  *is* focused (reached) but nothing is typed, baseline compared in full.
+  Zero writes — a click is not an edit.
+- **5e reproduces 49.7's exact ladder** and explains the step sizes: one
+  `SetText`/`GetText` cycle is +6 (a plain open/close), two cycles is +12
+  (a session that also rebuilds the text layer, e.g. a layer-visibility
+  toggle) — and asserts neither is written back under the policy.
+- **5f is the one that answers whether existing damage can heal**: a document
+  seeded with 47 trailing empty paragraphs — the shape 23 of the 106 stored
+  notes are actually in — run through 200 more opens under the policy. Length
+  in equals length out, unchanged and not shortened. This is the harness's
+  half of the answer to §50.5's open question, and §50.5 spells out why it is
+  only half.
+- **5g is the positive control the whole design has to survive**: four
+  separate shapes that *must* still be written — a keystroke, a
+  formatting-only change that moves no character (the case that specifically
+  rules out a cheaper text-only comparison), a brand-new box with nothing
+  stored, and a box Quill touched without focus. All four assert `true`.
+- **5h asserts the cheap-refusal ordering**: `NeedsTheDocument` is false for
+  an untouched box and true for a reached one, i.e. the control is never
+  asked for its document at all on the common path.
+
+The tool built clean and ran clean in this session: `dotnet build
+tools/TextColourRoundTrip/TextColourRoundTrip.csproj -c Debug
+--no-incremental` reports **0 Error(s)** and **120 Warning(s)**, every one of
+them `CS0436` (the project's own `Shim.cs` defining a `Color` that collides
+with `Microsoft.Windows.SDK.NET`'s). Building `23e6056^` — the commit
+immediately before this fix, in a temporary `git worktree` removed after the
+comparison — in the same configuration reports the identical **0 Error(s)**,
+**120 Warning(s)**, all `CS0436`: the warnings predate `23e6056` and this
+commit added none. `dotnet run` against the built tool prints **50 checks,
+all PASS, 0 FAIL** — the 35 pre-existing RTF-colour checks from §40–§43
+untouched, plus the 15 listed above.
+
+### 50.5 WHAT IS NOT ESTABLISHED
+
+**Not verified on screen.** No launch, no live `RichEditBox`, no real
+library touched, in this session or in `23e6056`'s own record (its message
+says so and this section changes nothing about that). Everything in §50.4 is
+a harness linking the shipping policy against a *modelled* control; the
+model is calibrated against measurements 49.7 and the commit took from the
+real library and from a real launch, but a model is not a screen.
+
+**The open question, and it is answered by reading the code, not left
+open.** The commit's own message asks it directly: does the fix only *stop*
+further growth, or does it also let the 106 already-grown notes *recover*?
+Reading `TextFlushPolicy.ShouldWriteBack` and every call site in
+`InkSurface.FlushTexts` answers it: **the fix only stops further growth.**
+There is no code path anywhere in the change that trims, normalises or
+otherwise shortens a stored `TextElement.Rtf`. The one place a stored value
+is ever replaced is `model.Rtf = rtf;` in `FlushTexts`, and `rtf` there is
+always the control's own live serialisation, unmodified — never a doctored
+or shortened version of it. A box that is reached and found unchanged writes
+nothing at all, so an already-grown note that nobody edits keeps every one
+of its accumulated empty paragraphs, unchanged, indefinitely. A box that
+*is* edited is written back whole, carrying its existing growth forward
+plus whatever the control's own round trip adds for that one session — one
+more paragraph, not a reset to zero. §50.2 already gives the reason by
+design: trimming what is already on disk is the same unasked-for write to a
+box nobody currently cares about that this rule exists to refuse, and
+`TextFlushPolicy` was written to have no opinion about bytes that are
+already stored. The harness's 5f is the empirical shadow of the same
+answer — a 47-empty-paragraph document put through 200 more opens comes out
+at the same length it went in, not shorter — but the code reading is what
+actually settles it, because 5f can only prove the harness's *model* holds
+steady, not that Quill would take the code any other path. The 106 already-
+grown notes stop growing on their very next open and carry their accumulated
+empty paragraphs forward unchanged; nothing recovers them, and nothing in
+this commit was written to try.
