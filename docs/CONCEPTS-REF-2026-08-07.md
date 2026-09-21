@@ -10620,13 +10620,14 @@ than "harmless".
 8.7 filed the defect and stopped short of the fix: a stored text box's RTF
 grows by about six characters every open-and-close, without bound. `23e6056`
 closed it. This section is the missing citation. It was first written saying
-"ten places in the code say 'CONCEPTS-REF 50' or '§50'" without counting; a
-repo-wide grep for that literal text instead finds **15 lines in three
-files** as of `7b521b9` — 12 in `InkSurface.cs`, 1 in `TextFlushPolicy.cs`,
-and 2 in `SettingsWindow.cs` (a comment naming a defect §57 fixed, not this
-one — see §57 and its note on the collision). Re-run after those two
-`SettingsWindow.cs` lines were repointed at §57, the count of lines actually
-citing 50 is **13, in two files** (`InkSurface.cs`, `TextFlushPolicy.cs`).
+"ten places in the code say 'CONCEPTS-REF 50' or '§50'" without counting.
+Counted with `git grep` for those two literals across the whole repository
+**except this document**, at `7b521b9`: **16 lines in four files** — 12 in
+`InkSurface.cs`, 1 in `TextFlushPolicy.cs`, 1 in `docs/TODO.md` (item 8.7),
+and 2 in `SettingsWindow.cs`, which named a different defect (see §57 and its
+note on the collision). At `6254e4b`, after those two `SettingsWindow.cs`
+lines were repointed at §57: **14 lines in three files**, 13 of them in
+`src/`.
 Written after the fact, from the commit, the file it touched and the harness
 it extended; nothing here was run on screen and §50.5 says so plainly.
 
@@ -10676,23 +10677,40 @@ restating it in a fixture. Two things are tracked per box, in `InkSurface`:
   of a box, captured the moment something reached it. "Reached" is focus, and
   only focus: every edit path in the app — typing, paste, dictation, the AI
   rewrite, the symbol picker, every format-bar control — reaches a box only
-  through `ActiveTextBox` or `LastTextBox`, and both are assigned in the
-  `GotFocus` handler (`InkSurface.cs`, `box.GotFocus += ...` calling
-  `NoteTextReached`) and nowhere else. A box only ever displayed cannot have
-  changed, so it is never in this dictionary. The capture happens *at* reach
+  through `ActiveTextBox` or `LastTextBox`. Both are assigned in the
+  `GotFocus` handler (`InkSurface.cs`, `box.GotFocus += ...`, which also calls
+  `NoteTextReached`) — and `ActiveTextBox` is **also** assigned directly in
+  `FocusTextAt` (`InkSurface.cs` ~7946), right after a `Focus()` call whose
+  result is discarded. An earlier draft of this section said "and nowhere
+  else"; that was false, and §50.5 records what the second assignment could
+  mean. A box only ever displayed cannot have changed, so it is never in this
+  dictionary. The capture happens *at* reach
   and not at build time on purpose — 40.5/43.1 established that the template
   pushes `Foreground` into the document after `Loaded`, so a baseline taken
   inside `BuildTextUi` would differ from the settled document and report a
   change nobody made; nobody can focus a box that has not finished loading,
   so the moment of reach is always after that settle.
-- `_textTouched: HashSet<Guid>` — boxes Quill itself edited with no focus
-  involved. The one path that does this is 25.5's lasso recolour
+- `_textTouched: HashSet<Guid>` — boxes Quill itself edited on the user's
+  behalf. Two paths set it. The first is 25.5's lasso recolour
   (`RecolourSelection` in `InkSurface.cs`, which calls `RebuildTextLayer`
   then `NoteTextTouched(t.Id)` for every box in the selection — an earlier
   draft of this section named this method `RestyleTexts`, which does not
-  exist in the file) and the single-box stamp in `StampTextColour`'s
-  caller, which calls `NoteTextTouched` right after the stamp and before
-  the second `FlushTexts`.
+  exist in the file), which involves no focus at all. The second is
+  `SetTextColour`, the single-box colour stamp — one of `StampTextColour`'s
+  three callers; the other two are inside `BuildTextUi` and restore a stored
+  colour rather than edit — which acts on the focused `ActiveTextBox`, so
+  that box is normally reached as well; it calls `NoteTextTouched` right
+  after the stamp and before its second `FlushTexts`, which makes the write
+  unconditional rather than dependent on the comparison.
+
+  **Lifetime of both latches.** The reach baseline is taken **once per
+  build**: a second focus must not move it forward over an edit made during
+  the first. Both latches belong to one incarnation of a box and are cleared
+  whenever it is destroyed or rebuilt — in `RebuildTextLayer` after its last
+  `FlushTexts`, at the top of `BuildTextUi` (which also runs alone, from
+  `SpawnTextBox`, the clone path and `MaterializePendingText`), and when an
+  empty box is torn down. Carrying a stale baseline into a freshly built box
+  would compare the new document against an old one.
 
 `FlushTexts` (`InkSurface.cs`) reads both per box before it will even ask the
 control for its document:
@@ -10737,7 +10755,7 @@ ten harnesses can, all ten need a window they do not have — so it links
 round trip (`RichEditRoundTrip`, a function that appends one `\par\r\n`
 immediately before the document's closing `\pard`, in the exact position the
 real library shows it — this is a model of *Windows*, not of Quill, and the
-file says so). Part 5 (`Program.cs`, after the RTF-colour checks) is 15
+file says so). Part 5 (`Program.cs`, after the RTF-colour checks) is **12**
 checks:
 
 - **5a calibrates the model rather than assuming it**: one modelled round
@@ -10771,6 +10789,12 @@ checks:
   formatting-only change that moves no character (the case that specifically
   rules out a cheaper text-only comparison), a brand-new box with nothing
   stored, and a box Quill touched without focus. All four assert `true`.
+- **A reach whose baseline could not be captured falls back to writing**: if
+  the control refused to serialise at the moment of focus there is nothing
+  to compare against, and the pre-50 behaviour is the safe answer — losing an
+  edit is worse than storing a paragraph. Note what this covers and what it
+  does not: a reach that happened with no baseline, not a reach that never
+  happened (§50.5).
 - **5h asserts the cheap-refusal ordering**: `NeedsTheDocument` is false for
   an untouched box and true for a reached one, i.e. the control is never
   asked for its document at all on the common path.
@@ -10784,8 +10808,8 @@ immediately before this fix, in a temporary `git worktree` removed after the
 comparison — in the same configuration reports the identical **0 Error(s)**,
 **120 Warning(s)**, all `CS0436`: the warnings predate `23e6056` and this
 commit added none. `dotnet run` against the built tool prints **50 checks,
-all PASS, 0 FAIL** — the 35 pre-existing RTF-colour checks from §40–§43
-untouched, plus the 15 listed above.
+all PASS, 0 FAIL** — the **38** pre-existing RTF-colour checks from §40–§43
+untouched, plus the **12** listed above.
 
 ### 50.5 WHAT IS NOT ESTABLISHED
 
@@ -10823,21 +10847,25 @@ grown notes stop growing on their very next open and carry their accumulated
 empty paragraphs forward unchanged; nothing recovers them, and nothing in
 this commit was written to try.
 
-**A comment in this section's own code is now known inaccurate, and is left
-rather than silently patched elsewhere.** §50.3 above quotes `InkSurface.cs`
-saying `ActiveTextBox`/`LastTextBox` are assigned in the `GotFocus` handler
-"and nowhere else" (`InkSurface.cs` ~9852). That is false: `FocusTextAt`
-(`InkSurface.cs` ~7946) also assigns `ActiveTextBox = ui.Box` directly, on
-the tap-to-focus path, with no `GotFocus` handler in between. It does not
-reopen §50's own reasoning — `FocusTextAt` calls `ui.Box.Focus(...)`
-immediately before that assignment, which still fires `GotFocus` and still
-runs `NoteTextReached`, so the reach baseline this section depends on is
-still captured on that path — but the comment overstates where the *field*
-itself is written, and a reader tracing `ActiveTextBox` by that comment
-alone would miss a real assignment. `InkSurface.cs` is untouched by this
-section: another agent's branch already touches that file, and a
-comment-only fix there is not worth the collision. Recorded here instead,
-against the section whose text made the claim.
+**"Nowhere else" was false, in two comments and in this section's first
+draft.** `ActiveTextBox` is also assigned in `FocusTextAt` (`InkSurface.cs`
+~7946), the tap-to-focus path. The same false claim stands in the comment
+near `InkSurface.cs` ~9852 and in `TextFlushPolicy.cs`'s own summary (~40-42,
+"both of those are assigned in `GotFocus` and nowhere else"). Neither file is
+edited here: other branches touch both, and a comment-only fix is not worth
+the collision. §50.3 is corrected.
+
+**What the second assignment could mean — plausible, not shown.**
+`FocusTextAt` calls `ui.Box.Focus(FocusState.Pointer)` and **discards its
+result**, then sets `ActiveTextBox` regardless. If that focus succeeds,
+`GotFocus` fires first and `NoteTextReached` captures the baseline, and
+nothing changes. If it fails, no `GotFocus`, no baseline, and the box is
+"not reached": `ShouldWriteBack` then refuses to store it — while the format
+bar, which acts on `ActiveTextBox`, can still change it. That would be an
+edit Quill does not save. The harness's fallback check does **not** cover
+this: it covers a reach whose serialisation failed, not a reach that never
+happened. Whether `Focus()` can fail on that path was not tested, and nothing
+here was run. Filed as TODO 8.14.
 
 ## 57 ChromeUi.Toggle gets a UIA pattern — 2026-09-20, and the number 50 briefly claimed twice
 
@@ -10884,21 +10912,24 @@ reached it; `changed(true)`/`changed(false)` are wired off those events, so
 callers see the same single invocation the old `Tapped` handler produced.
 This is the same shape §49.1 and §49.2 require of layer visibility and
 selection — one fact, asked once, never a second idea of it that can
-disagree — applied here to "is the toggle on" instead. The label was also
-moved to ride onto the toggle itself, via `AutomationProperties.SetName`, so
-a screen reader lands on a named control rather than an unnamed one
-announcing only "toggle, on".
+disagree — applied here to "is the toggle on" instead. The label is also
+set on the toggle itself, via `AutomationProperties.SetName`, so a screen
+reader lands on a named control rather than an unnamed one announcing only
+"toggle, on". It was added there, not moved: `ToggleRow` still names the
+row's `Grid` as well, as before.
 
 ### 57.3 What was verified, and what was not
 
-**Verified, by the commit's own record and by re-reading the diff in this
-run:** the console harnesses build and the ten harnesses' checks pass
-unaffected — this change touches no console-runnable code, only
-`ChromeUi.cs` and a comment in `SettingsWindow.cs` — and the framework
-contract is real: a `ToggleButton` genuinely exposes `IToggleProvider`
-through `ToggleButtonAutomationPeer`, and `Toggle()` genuinely runs
-`OnToggle()`, which is documented WinUI behaviour this change relies on
-rather than reimplements.
+**Verified, by the commit's own record and by re-reading the diff:** the
+console harnesses build and the ten harnesses' checks pass unaffected — this
+change touches no console-runnable code, only `ChromeUi.cs` and a comment in
+`SettingsWindow.cs` — and the control is now built on a `ToggleButton`.
+
+**Taken on trust, not executed:** that a `ToggleButton` exposes
+`IToggleProvider` through `ToggleButtonAutomationPeer`, and that `Toggle()`
+runs `OnToggle()`. That is documented WinUI behaviour the change relies on
+rather than reimplements; reading a diff cannot verify how the framework
+behaves, and no harness links `ChromeUi.cs` or runs a live peer.
 
 **Not established, and the commit says so itself rather than this section
 inferring it:** that a real screen reader announces the control correctly.
@@ -10907,7 +10938,8 @@ or a live `AutomationPeer` — that needs a running WinUI window, same
 limitation §50.4 hits for `RichEditBox` — and this fix did not launch the
 app to listen to one. What is established is that the control now offers the
 pattern; whether Narrator or another assistive client reads it the way a
-user needs is, in the commit's own words, "a check owed".
+user needs is still to be checked — in the commit's own words, "That check
+is owed."
 
 ### 57.4 The SettingsWindow.cs collision, and how it was resolved
 
