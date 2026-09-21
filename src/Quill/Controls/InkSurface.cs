@@ -1123,12 +1123,28 @@ public sealed class InkSurface : UserControl
             var cut = doc.GetRange(start, start + length);
             cut.GetText(TextGetOptions.None, out string doomed);
             if (doomed != new string('\r', length)) return null;
+
+            // The paragraph that survives at the end must still be the one that
+            // was there: its paragraph formatting and its mark's character
+            // formatting are captured now and compared after the delete. Which
+            // mark RichEdit keeps when marks are deleted is behaviour of the
+            // control that no harness here can execute, so it is checked, not
+            // assumed.
+            int last = plain.Length - 1;
+            var finalBefore = doc.GetRange(last, last + 1);
+            var paraBefore = finalBefore.ParagraphFormat.GetClone();
+            var charBefore = finalBefore.CharacterFormat.GetClone();
+
             cut.Text = string.Empty;
 
             var check = doc.GetRange(0, 0);
             check.Expand(Microsoft.UI.Text.TextRangeUnit.Story);
             check.GetText(TextGetOptions.None, out string after);
-            if (after != plain.Remove(start, length))
+            int lastAfter = after.Length - 1;
+            var finalAfter = lastAfter >= 0 ? doc.GetRange(lastAfter, lastAfter + 1) : null;
+            if (after != plain.Remove(start, length) || finalAfter == null ||
+                !finalAfter.ParagraphFormat.IsEqual(paraBefore) ||
+                !finalAfter.CharacterFormat.IsEqual(charBefore))
             {
                 try { doc.SetText(TextSetOptions.FormatRtf, before); } catch { }
                 return null;
@@ -4285,7 +4301,12 @@ public sealed class InkSurface : UserControl
         string hex = ColorUtil.ToHex(c);
         // RecolourTextsAction captures each box's RTF so undo can put the words
         // back exactly, so the words have to BE in the model first.
-        if (texts.Count > 0) FlushTexts();
+        // §56: a RELEASING flush, because RebuildTextLayer below tears every box
+        // down whenever texts is non-empty. It has to trim HERE, before the
+        // snapshot: if the rebuild's own flush did the trimming, the snapshot
+        // would hold the untrimmed document and one Ctrl+Z of this recolour
+        // would bring every dropped paragraph back.
+        if (texts.Count > 0) FlushTexts(releasing: true);
 
         var parts = new List<IPageAction>();
         if (strokes.Count > 0)
