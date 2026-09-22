@@ -1805,6 +1805,13 @@ public sealed class InkSurface : UserControl
             }
         }
         var hitShape = HitShape(pos, tol);
+        // §58.5: a selectable stroke on a HIGHER layer is drawn over this shape,
+        // so the press is not the shape's. It falls through, and the click-select
+        // armed by the caller picks the stroke on release (HitStrokeForClick).
+        if (hitShape != null && _page.Layers is { Count: > 1 } &&
+            HitStrokeForClick(pos) is { } overStroke &&
+            StrokeLayerAbove(overStroke, hitShape))
+            hitShape = null;
         if (hitShape != null)
         {
             _activeShape = hitShape;
@@ -1988,12 +1995,23 @@ public sealed class InkSurface : UserControl
         // so a query box of `reach` cannot drop a stroke that the wider per-
         // stroke pad below would have caught (FindStrokeNear reasons the same).
         var cand = StrokeCandidates(p.X - reach, p.Y - reach, p.X + reach, p.Y + reach);
+        // §58.5: across layers the topmost stroke is the plan's, not the list's
+        // - see TopmostShape. One layer: first hit from the back, as ever.
+        var plan = CurrentDrawPlan(_page);
+        bool multi = plan.LayerCount > 1;
+        PenStroke? best = null;
+        int bestStep = -1;
         for (int i = _page.Strokes.Count - 1; i >= 0; i--)
         {
             var s = _page.Strokes[i];
             var pts = s.Points;
             if (pts.Count == 0) continue;
             if (cand != null && !cand.Contains(s)) continue;
+            if (multi)
+            {
+                int step = plan.StepOf(DrawStepKind.Strokes, s.LayerKey);
+                if (step < 0 || (best != null && step <= bestStep)) continue;
+            }
             // 17.10's scope and padlock bind here as well as on the lasso. A
             // click that selects and a lasso that selects are the mouse tool's
             // two gestures, not two tools, so they cannot disagree about what is
@@ -2003,18 +2021,20 @@ public sealed class InkSurface : UserControl
             float pad = reach + s.Size;
             s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
             if (p.X < bx0 - pad || p.X > bx1 + pad || p.Y < by0 - pad || p.Y > by1 + pad) continue;
+            bool hit = false;
             if (pts.Count == 1)
-            {
-                if (Vector2.Distance(p, new Vector2(pts[0].X, pts[0].Y)) <= pad) return s;
-                continue;
-            }
-            for (int j = 1; j < pts.Count; j++)
-                if (GeometryUtil.DistToSegment(p,
-                        new Vector2(pts[j - 1].X, pts[j - 1].Y),
-                        new Vector2(pts[j].X, pts[j].Y)) <= pad)
-                    return s;
+                hit = Vector2.Distance(p, new Vector2(pts[0].X, pts[0].Y)) <= pad;
+            else
+                for (int j = 1; j < pts.Count && !hit; j++)
+                    hit = GeometryUtil.DistToSegment(p,
+                              new Vector2(pts[j - 1].X, pts[j - 1].Y),
+                              new Vector2(pts[j].X, pts[j].Y)) <= pad;
+            if (!hit) continue;
+            if (!multi) return s;
+            best = s;
+            bestStep = plan.StepOf(DrawStepKind.Strokes, s.LayerKey);
         }
-        return null;
+        return best;
     }
 
     /// <summary>Makes one stroke the entire selection — what a click leaves
@@ -6507,37 +6527,56 @@ public sealed class InkSurface : UserControl
         var w = ToWorld(screenPt);
         float slop = 3f / ViewZoom;   // small screen-constant tolerance
 
+        // §58.5: the colour UNDER THE EYE is the topmost drawn element by the
+        // draw plan. With one layer every stroke's step is above every shape's,
+        // so this is the old "strokes first, then shapes, each from the back".
+        var plan = CurrentDrawPlan(_page);
+        bool multi = plan.LayerCount > 1;
+        PenStroke? topStroke = null;
+        int topStrokeStep = -1;
         var stCand = StrokeCandidates(w.X - 24, w.Y - 24, w.X + 24, w.Y + 24);
         for (int i = _page.Strokes.Count - 1; i >= 0; i--)
         {
             var st = _page.Strokes[i];
             if (stCand != null && !stCand.Contains(st)) continue;
+            int step = plan.StepOf(DrawStepKind.Strokes, st.LayerKey);
+            if (step < 0 || (topStroke != null && step <= topStrokeStep)) continue;
             float r = st.Size * 0.5f + slop;
             var pts = st.Points;
-            for (int j = 0; j + 1 < pts.Count; j++)
+            bool hit = false;
+            for (int j = 0; j + 1 < pts.Count && !hit; j++)
             {
                 var a = new Vector2(pts[j].X, pts[j].Y);
                 var b = new Vector2(pts[j + 1].X, pts[j + 1].Y);
                 var ab = b - a;
                 float len2 = ab.LengthSquared();
                 float t = len2 < 1e-6f ? 0f : Math.Clamp(Vector2.Dot(w - a, ab) / len2, 0f, 1f);
-                if (Vector2.DistanceSquared(w, a + ab * t) <= r * r)
-                {
-                    try { return ColorUtil.Parse(st.Color); } catch { return null; }
-                }
+                hit = Vector2.DistanceSquared(w, a + ab * t) <= r * r;
             }
+            if (!hit) continue;
+            topStroke = st;
+            topStrokeStep = step;
+            if (!multi) break;
         }
 
+        // The old shape walk skipped a shape whose colour did not parse and
+        // tried the next one down; TopmostShape keeps that by asking for it.
         var shCand = ShapeCandidates(w.X - 24, w.Y - 24, w.X + 24, w.Y + 24);
-        for (int i = _page.Shapes.Count - 1; i >= 0; i--)
+        var topShape = TopmostShape(sh =>
         {
-            var sh = _page.Shapes[i];
-            if (shCand != null && !shCand.Contains(sh)) continue;
+            if (shCand != null && !shCand.Contains(sh)) return false;
             var b = ShapeBounds(sh);
             if (w.X < b.Left - slop || w.X > b.Right + slop ||
-                w.Y < b.Top - slop || w.Y > b.Bottom + slop) continue;
-            try { return ColorUtil.Parse(sh.Color); } catch { }
+                w.Y < b.Top - slop || w.Y > b.Bottom + slop) return false;
+            try { ColorUtil.Parse(sh.Color); return true; } catch { return false; }
+        });
+        int topShapeStep = topShape == null ? -1 : plan.StepOf(DrawStepKind.Shapes, topShape.LayerKey);
+
+        if (topStroke != null && topStrokeStep > topShapeStep)
+        {
+            try { return ColorUtil.Parse(topStroke.Color); } catch { return null; }
         }
+        if (topShape != null) return ColorUtil.Parse(topShape.Color);
 
         bareGround = true;
         try { return ColorUtil.Parse(_page.Background); } catch { return null; }
@@ -7453,13 +7492,68 @@ public sealed class InkSurface : UserControl
     {
         if (_page == null) return null;
         var cand = ShapeCandidates(pos.X - tol, pos.Y - tol, pos.X + tol, pos.Y + tol);
+        return TopmostShape(s => (cand == null || cand.Contains(s)) &&
+                                 DistToShapeOutline(s, pos) <= tol + s.Size);
+    }
+
+    // =======================================================================
+    // §58.5 — "TOPMOST" IS THE DRAW PLAN READ BACKWARDS.
+    //
+    // Every pick that answers with ONE element under the pointer asks the same
+    // DrawPlan the canvas paints with: of two hits, the one whose step is later
+    // is on top, and within one step the later list index is
+    // (DrawPlan.IsAbove). A layer the plan does not draw (hidden or 0%, §49.1)
+    // has no step, so nothing on it can be picked - it is not on top of
+    // anything, it is not there. With one layer every hit of a type shares one
+    // step, so the pick is "the last in the list", exactly the backwards walk
+    // these loops always made, and they still stop at the first hit.
+    // =======================================================================
+
+    /// <summary>The topmost drawn shape satisfying <paramref name="hit"/>.</summary>
+    private ShapeElement? TopmostShape(Func<ShapeElement, bool> hit)
+    {
+        if (_page == null) return null;
+        var plan = CurrentDrawPlan(_page);
+        bool multi = plan.LayerCount > 1;
+        ShapeElement? best = null;
+        int bestStep = -1;
         for (int i = _page.Shapes.Count - 1; i >= 0; i--)
         {
-            if (cand != null && !cand.Contains(_page.Shapes[i])) continue;
-            if (DistToShapeOutline(_page.Shapes[i], pos) <= tol + _page.Shapes[i].Size)
-                return _page.Shapes[i];
+            var s = _page.Shapes[i];
+            int step = plan.StepOf(DrawStepKind.Shapes, s.LayerKey);
+            if (step < 0) continue;                         // not drawn
+            if (best != null && step <= bestStep) continue; // lower index, not higher step: underneath
+            if (!hit(s)) continue;
+            if (!multi) return s;
+            best = s;
+            bestStep = step;
         }
-        return null;
+        return best;
+    }
+
+    /// <summary>§58.5: true when <paramref name="stroke"/> is painted above
+    /// <paramref name="shape"/> BECAUSE ITS LAYER IS HIGHER. Within one layer a
+    /// press on a shape has always grabbed the shape even where that layer's own
+    /// strokes are drawn over it (shapes then strokes), and 18.5 keeps a layer's
+    /// internal behaviour exactly as it was - so only the layer order can hand
+    /// the press to the stroke. False on a one-layer page, always.</summary>
+    private bool StrokeLayerAbove(PenStroke stroke, ShapeElement shape)
+    {
+        if (_page == null) return false;
+        var plan = CurrentDrawPlan(_page);
+        if (plan.LayerCount <= 1) return false;
+        return plan.StepOf(DrawStepKind.Strokes, stroke.LayerKey) >= 0 &&
+               plan.BucketOf(stroke.LayerKey) > plan.BucketOf(shape.LayerKey);
+    }
+
+    /// <summary>The shape counterpart of <see cref="StrokeLayerAbove"/>.</summary>
+    private bool ShapeLayerAbove(ShapeElement shape, PenStroke stroke)
+    {
+        if (_page == null) return false;
+        var plan = CurrentDrawPlan(_page);
+        if (plan.LayerCount <= 1) return false;
+        return plan.StepOf(DrawStepKind.Shapes, shape.LayerKey) >= 0 &&
+               plan.BucketOf(shape.LayerKey) > plan.BucketOf(stroke.LayerKey);
     }
 
     /// <summary>Returns the resize ANCHOR (opposite corner / other endpoint) if a handle was hit.</summary>
@@ -7941,29 +8035,25 @@ public sealed class InkSurface : UserControl
     /// <summary>Topmost axes shape whose bounds contain the world point (#28-batch2).</summary>
     public ShapeElement? AxesShapeAt(Vector2 pos)
     {
-        if (_page == null) return null;
-        for (int i = _page.Shapes.Count - 1; i >= 0; i--)
+        // §58.5: topmost by the draw plan.
+        return TopmostShape(s =>
         {
-            var s = _page.Shapes[i];
-            if (s.Kind is not (ShapeKind.AxesXY or ShapeKind.AxesXYZ)) continue;
+            if (s.Kind is not (ShapeKind.AxesXY or ShapeKind.AxesXYZ)) return false;
             var b = ShapeBounds(s);
-            if (pos.X >= b.Left && pos.X <= b.Right && pos.Y >= b.Top && pos.Y <= b.Bottom) return s;
-        }
-        return null;
+            return pos.X >= b.Left && pos.X <= b.Right && pos.Y >= b.Top && pos.Y <= b.Bottom;
+        });
     }
 
     /// <summary>Topmost equation image whose bounds contain the world point (#27-batch2).</summary>
     public ShapeElement? EquationShapeAt(Vector2 pos)
     {
-        if (_page == null) return null;
-        for (int i = _page.Shapes.Count - 1; i >= 0; i--)
+        // §58.5: topmost by the draw plan.
+        return TopmostShape(s =>
         {
-            var s = _page.Shapes[i];
-            if (s.Kind != ShapeKind.Image || s.EquationLatex == null) continue;
+            if (s.Kind != ShapeKind.Image || s.EquationLatex == null) return false;
             var b = ShapeBounds(s);
-            if (pos.X >= b.Left && pos.X <= b.Right && pos.Y >= b.Top && pos.Y <= b.Bottom) return s;
-        }
-        return null;
+            return pos.X >= b.Left && pos.X <= b.Right && pos.Y >= b.Top && pos.Y <= b.Bottom;
+        });
     }
 
     /// <summary>Swaps an equation image for a re-rendered one in place, keeping
@@ -10100,22 +10190,37 @@ public sealed class InkSurface : UserControl
     {
         if (_page == null) return null;
         var cand = StrokeCandidates(pos.X - tol, pos.Y - tol, pos.X + tol, pos.Y + tol);
-        foreach (var s in _page.Strokes)
+        // §58.5: on a page with layers, the topmost DRAWN stroke by the plan; a
+        // hidden layer's ink is not there to tap. A one-layer page keeps this
+        // method's historical answer - the FIRST hit in list order - except that
+        // a hidden layer's ink no longer answers there either.
+        var plan = CurrentDrawPlan(_page);
+        bool multi = plan.LayerCount > 1;
+        PenStroke? best = null;
+        int bestStep = -1, bestIdx = -1;
+        for (int k = 0; k < _page.Strokes.Count; k++)
         {
+            var s = _page.Strokes[k];
             if (cand != null && !cand.Contains(s)) continue;
+            int step = plan.StepOf(DrawStepKind.Strokes, s.LayerKey);
+            if (step < 0) continue;   // not drawn (§49.1)
+            if (multi && best != null && !DrawPlan.IsAbove(step, k, bestStep, bestIdx)) continue;
             // cheap bbox reject before the per-point scan (FindStrokeNear has
             // always done this; HitStroke was the one path that didn't)
             s.GetBounds(out float mnX, out float mnY, out float mxX, out float mxY);
             if (pos.X < mnX - tol || pos.X > mxX + tol || pos.Y < mnY - tol || pos.Y > mxY + tol) continue;
-            for (int i = 0; i < s.Points.Count - 1; i++)
+            bool hit = false;
+            for (int i = 0; i < s.Points.Count - 1 && !hit; i++)
             {
                 var from = new Vector2(s.Points[i].X, s.Points[i].Y);
                 var to = new Vector2(s.Points[i + 1].X, s.Points[i + 1].Y);
-                if (GeometryUtil.DistToSegment(pos, from, to) <= tol)
-                    return s;
+                hit = GeometryUtil.DistToSegment(pos, from, to) <= tol;
             }
+            if (!hit) continue;
+            if (!multi) return s;
+            best = s; bestStep = step; bestIdx = k;
         }
-        return null;
+        return best;
     }
 
     private void OnCanvasTapped(object sender, TappedRoutedEventArgs e)
@@ -10125,6 +10230,12 @@ public sealed class InkSurface : UserControl
         float tol = 10f / ViewZoom;
 
         var hitStroke = HitStroke(pos, tol);
+        // §58.5: a touch tap that lands where a shape on a HIGHER layer covers
+        // the stroke is the shape's, so it goes to the shape branch below.
+        bool touchShape = e.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch && !HandDrawMode;
+        if (hitStroke != null && touchShape && _page.Layers is { Count: > 1 } &&
+            HitShape(pos, tol) is { } overShape && ShapeLayerAbove(overShape, hitStroke))
+            hitStroke = null;
         if (hitStroke != null)
         {
             StrokeTapped?.Invoke(hitStroke);
