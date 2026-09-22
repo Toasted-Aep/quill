@@ -278,14 +278,14 @@ public static class PageLayers
         var all = All(page);
         int n = all.Count;
 
-        // key -> bucket. First occurrence wins, so a duplicated key (which
-        // NextKey makes impossible but a hand-edited file does not) cannot make
-        // content vanish into the second one.
-        var bucketOf = new Dictionary<int, int>(n);
-        for (int i = 0; i < n; i++) bucketOf.TryAdd(all[i].Key, i);
-
-        int fallback = bucketOf.TryGetValue(BaseKey, out int b) ? b : 0;
-        int Bucket(int key) => bucketOf.TryGetValue(key, out int i) ? i : fallback;
+        // key -> bucket. ONE resolver, shared with DrawPlan (58.4), so the
+        // canvas and this seam cannot disagree about where an orphan lands:
+        // first occurrence wins, so a duplicated key (which NextKey makes
+        // impossible but a hand-edited file does not) cannot make content
+        // vanish into the second one, and an unknown key falls to the base
+        // layer's bucket, or the bottom one when even that is missing (18.7).
+        var plan = new DrawPlan(all);
+        int Bucket(int key) => plan.BucketOf(key);
 
         var shapes = new List<ShapeElement>[n];
         var strokes = new List<PenStroke>[n];
@@ -448,4 +448,210 @@ public static class PageLayers
         => s.Kind == ShapeKind.Image && !string.IsNullOrEmpty(s.ImagePath)
             ? System.IO.Path.GetFileName(s.ImagePath!)
             : s.Kind.ToString();
+}
+
+/// <summary>What one <see cref="DrawStep"/> paints.</summary>
+public enum DrawStepKind
+{
+    /// <summary>The page's oil paint (OILPAINT, §49.10 item 3). Tiles, not
+    /// elements, and outside the layer model - so it has one height and the
+    /// layer list cannot address it. Always the FIRST step (58.2).</summary>
+    Paint,
+    /// <summary>One layer's shapes (and image attachments), in list order.</summary>
+    Shapes,
+    /// <summary>One layer's strokes, in list order.</summary>
+    Strokes,
+    /// <summary>One layer's text boxes. On the canvas these are live XAML
+    /// controls in a layer above the Win2D surface, so text sits above ALL ink
+    /// whatever the layer order (58.2, for now); the plan says so by putting
+    /// every Texts step after every ink step.</summary>
+    Texts,
+}
+
+/// <summary>One step of the paint order. <see cref="Bucket"/> is the layer's
+/// index in <see cref="PageLayers.All"/> - the same index
+/// <see cref="PageLayers.InOrder"/> yields it at - and -1 for
+/// <see cref="DrawStepKind.Paint"/>. <see cref="Multiplier"/> is
+/// <see cref="PageLayers.EffectiveOpacity(Layer)"/> for that layer (1 for
+/// paint), carried for callers that have no surface to ask.</summary>
+public readonly record struct DrawStep(DrawStepKind Kind, int Bucket, float Multiplier);
+
+/// <summary>
+/// THE PAINT ORDER ACROSS ELEMENT TYPES (CONCEPTS-REF 58.2 / 58.4) - the one
+/// definition the canvas, the gallery thumbnail and hit-testing iterate.
+///
+/// <para><b>The ruling, in order:</b> oil paint first, just above the paper
+/// and grid and below every layer; then each VISIBLE layer bottom first, its
+/// shapes then its strokes (18.9's tuple order, so within a layer nothing
+/// moves); then every visible layer's text, above all ink. Reordering the
+/// stack therefore reorders shapes and strokes together.</para>
+///
+/// <para><b>Visibility is not decided here.</b> A layer is left out exactly
+/// when <see cref="PageLayers.EffectiveOpacity(Layer)"/> is 0 - hidden, or
+/// dropped to 0% - which is §49.1's one fact, asked the one way. There is no
+/// second idea of "is this layer showing".</para>
+///
+/// <para><b>Buckets resolve the way <see cref="PageLayers.InOrder"/> does,
+/// because InOrder calls <see cref="BucketOf"/>.</b> First layer with a
+/// matching key wins; an unknown key falls to the base layer's bucket, or the
+/// bottom one when the page has no base layer - visible, never dropped
+/// (18.7).</para>
+///
+/// <para><b>Win2D-free and cheap.</b> The plan holds the layer list's keys and
+/// at most 3 x layers + 1 steps; it does not copy the page's element lists,
+/// so a 60 Hz draw loop can build one per frame and filter the lists it
+/// already walks by <see cref="BucketOf"/>. A page with no Layers array or one
+/// layer has ONE bucket, and <see cref="BucketOf"/> answers 0 without looking
+/// at the key.</para>
+/// </summary>
+public sealed class DrawPlan
+{
+    private readonly int[] _keys;
+    private readonly int _fallback;
+    // per bucket: the index in Steps of its Shapes / Strokes / Texts step, or
+    // -1 when the layer is not drawn.
+    private readonly int[] _shapeStep, _strokeStep, _textStep;
+    private readonly DrawStep[] _steps;
+
+    /// <summary>The plan for a page, from <see cref="PageLayers.All"/>.</summary>
+    public static DrawPlan For(NotePage page) => new(PageLayers.All(page));
+
+    public DrawPlan(IReadOnlyList<Layer> layers)
+    {
+        int n = layers.Count;
+        _keys = new int[n];
+        _fallback = -1;
+        for (int i = 0; i < n; i++)
+        {
+            _keys[i] = layers[i].Key;
+            if (_fallback < 0 && layers[i].Key == PageLayers.BaseKey) _fallback = i;
+        }
+        if (_fallback < 0) _fallback = 0;
+
+        _shapeStep = new int[n];
+        _strokeStep = new int[n];
+        _textStep = new int[n];
+        var steps = new List<DrawStep>(3 * n + 1);
+
+        // 58.2 item 2: paint below every layer, drawn once, before any ink.
+        steps.Add(new DrawStep(DrawStepKind.Paint, -1, 1f));
+
+        // 58.2 item 1: each layer's shapes and strokes together, bottom first.
+        for (int i = 0; i < n; i++)
+        {
+            _shapeStep[i] = _strokeStep[i] = _textStep[i] = -1;
+            float m = PageLayers.EffectiveOpacity(layers[i]);
+            if (m <= 0f) continue;   // §49.1: 0 means hidden - draw nothing
+            _shapeStep[i] = steps.Count;
+            steps.Add(new DrawStep(DrawStepKind.Shapes, i, m));
+            _strokeStep[i] = steps.Count;
+            steps.Add(new DrawStep(DrawStepKind.Strokes, i, m));
+        }
+
+        // 58.2 item 3: text above all ink, whatever the layer order.
+        for (int i = 0; i < n; i++)
+        {
+            float m = PageLayers.EffectiveOpacity(layers[i]);
+            if (m <= 0f) continue;
+            _textStep[i] = steps.Count;
+            steps.Add(new DrawStep(DrawStepKind.Texts, i, m));
+        }
+
+        _steps = steps.ToArray();
+    }
+
+    /// <summary>Every step, in paint order.</summary>
+    public IReadOnlyList<DrawStep> Steps => _steps;
+
+    /// <summary>How many layers (buckets) the page has. 1 for a page with no
+    /// Layers array.</summary>
+    public int LayerCount => _keys.Length;
+
+    /// <summary>Which bucket an element with this key paints in. See the class
+    /// remarks for the resolution rule; it is InOrder's.</summary>
+    public int BucketOf(int layerKey)
+    {
+        if (_keys.Length <= 1) return 0;
+        for (int i = 0; i < _keys.Length; i++) if (_keys[i] == layerKey) return i;
+        return _fallback;
+    }
+
+    /// <summary>The index in <see cref="Steps"/> at which an element of this
+    /// kind and key is painted, or -1 when its layer is not drawn. HIT-TESTING
+    /// reads this in reverse: of two elements under the pointer, the one with
+    /// the higher step is on top, and within one step the later list index is.
+    /// Paint has no key and is not asked for here.</summary>
+    public int StepOf(DrawStepKind kind, int layerKey)
+    {
+        int b = BucketOf(layerKey);
+        return kind switch
+        {
+            DrawStepKind.Shapes => _shapeStep[b],
+            DrawStepKind.Strokes => _strokeStep[b],
+            DrawStepKind.Texts => _textStep[b],
+            _ => -1,
+        };
+    }
+
+    /// <summary>"Is (stepA, indexA) painted above (stepB, indexB)?" - the one
+    /// comparison every topmost pick makes. A step of -1 (not drawn) is never
+    /// above anything.</summary>
+    public static bool IsAbove(int stepA, int indexA, int stepB, int indexB)
+        => stepA >= 0 && (stepA > stepB || (stepA == stepB && indexA > indexB));
+
+    /// <summary>Where a single image holding EVERY stroke (the canvas's big-page
+    /// ink cache, #43) may be drawn without changing the picture: the index of
+    /// the first Strokes step that has strokes in it, or -1 when no such place
+    /// exists because a layer's SHAPES sit between two layers' strokes. With one
+    /// layer this is simply that layer's Strokes step, which is where the cache
+    /// has always been drawn relative to shapes.</summary>
+    public int InkCacheStep(NotePage page)
+    {
+        if (_keys.Length <= 1) return _strokeStep[0];
+        var strokesIn = new bool[_keys.Length];
+        var shapesIn = new bool[_keys.Length];
+        foreach (var s in page.Strokes) strokesIn[BucketOf(s.LayerKey)] = true;
+        foreach (var s in page.Shapes) shapesIn[BucketOf(s.LayerKey)] = true;
+        int first = -1, last = -1;
+        for (int i = 0; i < _steps.Length; i++)
+            if (_steps[i].Kind == DrawStepKind.Strokes && strokesIn[_steps[i].Bucket])
+            {
+                if (first < 0) first = i;
+                last = i;
+            }
+        if (first < 0) return -1;
+        for (int i = first + 1; i < last; i++)
+            if (_steps[i].Kind == DrawStepKind.Shapes && shapesIn[_steps[i].Bucket]) return -1;
+        return first;
+    }
+
+    /// <summary>The plan expanded over a page: every step, and for each element
+    /// step every element of that type in that bucket, in list order - exactly
+    /// the walk the canvas makes. Paint yields one entry with a null element.
+    /// Allocates an iterator; for a one-off render (the thumbnail) or a proof,
+    /// not a per-frame loop.</summary>
+    public IEnumerable<(DrawStep Step, object? Element)> Sequence(NotePage page)
+    {
+        foreach (var step in _steps)
+        {
+            switch (step.Kind)
+            {
+                case DrawStepKind.Paint:
+                    yield return (step, null);
+                    break;
+                case DrawStepKind.Shapes:
+                    foreach (var s in page.Shapes)
+                        if (BucketOf(s.LayerKey) == step.Bucket) yield return (step, s);
+                    break;
+                case DrawStepKind.Strokes:
+                    foreach (var s in page.Strokes)
+                        if (BucketOf(s.LayerKey) == step.Bucket) yield return (step, s);
+                    break;
+                case DrawStepKind.Texts:
+                    foreach (var t in page.Texts)
+                        if (BucketOf(t.LayerKey) == step.Bucket) yield return (step, t);
+                    break;
+            }
+        }
+    }
 }
