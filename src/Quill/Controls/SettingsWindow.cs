@@ -2484,7 +2484,7 @@ public sealed class SettingsWindow
         var link = new HyperlinkButton
         {
             HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 22, 0, 6),
+            Margin = new Thickness(0, 22, 0, 0),
             Padding = new Thickness(6, 4, 6, 4),
         };
         var text = new TextBlock
@@ -2496,7 +2496,7 @@ public sealed class SettingsWindow
         };
         link.Content = text;
         ToolTipService.SetToolTip(link,
-            "Puts this panel's own settings back to their defaults — the page's grid and artboard, the units, the tool palette, the theme and the interaction settings. Your notebooks, pens and pages are not touched.");
+            "Puts this panel's own settings back to their defaults — the page's grid and artboard, the units, the tool palette, the theme and the interaction settings. Your notebooks, pens and pages are not touched. It also turns Touch draw off, so afterwards only the pen marks the page — a mouse drag will not.");
 
         link.Click += (_, _) =>
         {
@@ -2511,7 +2511,19 @@ public sealed class SettingsWindow
             _restoreArmed = false;
             RestoreDefaults();
         };
-        return link;
+
+        // Stated here too, not only in the tooltip above: a tooltip needs a
+        // hover, which a touch reader has no way to give it, and this is a
+        // one-way door pressed twice in a row — it deserves to be read, not
+        // just hovered over.
+        var caption = Caption("This also turns Touch draw off — afterwards only the pen marks the page, and a mouse drag will not.");
+        caption.TextAlignment = TextAlignment.Center;
+        caption.HorizontalAlignment = HorizontalAlignment.Center;
+
+        var col = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+        col.Children.Add(link);
+        col.Children.Add(caption);
+        return col;
     }
 
     private void RestoreDefaults()
@@ -2528,7 +2540,13 @@ public sealed class SettingsWindow
         lib.KeyboardShortcuts = true;
         lib.KeyPreset = "Quill";
         lib.KeyOverrides.Clear();
-        lib.FingerAction = "UseActiveTool";
+        // Pen-first: pairs with _h.SetTouchDraw(false) below. The two used to
+        // disagree — this wrote "UseActiveTool" while SetTouchDraw(false) is
+        // "DoNothing" in the Finger Action row's own table — so whichever one
+        // the reader saw right after Restore Defaults flipped on the next
+        // launch, when MainWindow re-derives HandDrawMode from FingerAction
+        // alone.
+        lib.FingerAction = "DoNothing";
         lib.GestureBindings.Clear();
 
         lib.ThemeSource = "Manual";
@@ -2875,13 +2893,15 @@ public sealed class SettingsWindow
         if (_h.MouseMode != null && _h.SetMouseMode != null)
         {
             // §16.3 — a control that does nothing must not look live. Touch draw
-            // (HandDrawMode) is the shipped default since c16056c, and
-            // InkSurface's ONLY call to HandleMousePress sits inside
-            // "tool == Pen && !isPen && !HandDrawMode". So while Touch draw is
-            // on, the mouse marks the page like the pen and NONE of these four
-            // modes is dispatched - not Grab, not Select, not Move, not Normal.
-            // Shown and disabled with the reason, which is the same treatment
-            // the Finger Action row gives the actions Quill cannot dispatch.
+            // (HandDrawMode) is the shipped default on a fresh install, since
+            // c16056c — but NOT after Restore Defaults, which deliberately turns
+            // it back off (pen-first). InkSurface's ONLY call to HandleMousePress
+            // sits inside "tool == Pen && !isPen && !HandDrawMode". So while Touch
+            // draw is on, the mouse marks the page like the pen and NONE of these
+            // four modes is dispatched - not Grab, not Select, not Move, not
+            // Normal. Shown and disabled with the reason, which is the same
+            // treatment the Finger Action row gives the actions Quill cannot
+            // dispatch.
             bool modesLive = !_h.TouchDraw();
 
             box.Children.Add(Spacer(16));
