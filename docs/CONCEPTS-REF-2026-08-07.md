@@ -11224,3 +11224,54 @@ Nothing in the app can yet make a second layer or reorder one (49.8), so every
 multi-layer case above needs a seeded page. The on-screen method is the
 two-bar method of run 25 (49.9), with a shape on one layer and a stroke on the
 other.
+
+### 58.9 The on-screen confirmation, planned and not yet run
+
+This is run 25's two-bar method (49.9), with a SHAPE on one layer and a STROKE
+on the other. Run it on an isolated instance (`QUILL_DATA_FOLDER`) and never on
+the user's `library.json`. Injected mouse drags leave no ink, so every element
+is SEEDED into the page JSON, not drawn.
+
+1. **Seed.** One page, `Layers [A key 0, B key 1]`. Two elements cross one
+   scanline and overlap on page x 500..700 and nowhere else:
+   - an OPAQUE shape bar: a solid-colour image attachment, blue `#1B5FC1`,
+     x 200..700;
+   - a stroke bar: a straight orange `#E07A1F` stroke, size 40, x 500..1000.
+
+   Seed four pages, so the result cannot be read off one arrangement:
+
+   | Page | Shape | Stroke | `Layers` | Owns the overlap |
+   |---|---|---|---|---|
+   | 1 | key 0 | key 1 | `[0, 1]` | orange (stroke on top) |
+   | 2 | key 0 | key 1 | `[1, 0]` | **blue (shape on top)** |
+   | 3 | key 1 | key 0 | `[0, 1]` | blue |
+   | 4 | key 1 | key 0 | `[1, 0]` | orange |
+
+   Pages 2 and 3 are the cases 58.1 got wrong.
+2. **Measure** the colour runs along the scanline in a screen capture, as 49.9
+   did. The boundary between the colours is the measurement. The control is
+   that both runs are present, and non-empty, on every page.
+3. **Negative control.** Open the same seed in a build of main `53ba67a`.
+   Orange should own the overlap on ALL FOUR pages, which is 58.1's defect. If
+   main and this branch give the same picture, the measurement cannot see the
+   change.
+4. **Paint under both.** Add oil paint across the whole overlap. Expect paint
+   to show only where neither bar covers it, and never over the image or the
+   stroke. On main, paint covers the shape bar and sits under the stroke.
+   **Precondition:** `PaintStore` always writes under
+   `%LOCALAPPDATA%\Quill\paint\{hash of the data folder}`, even for an isolated
+   instance (`PaintStore.cs` ~226–242). The house rules forbid touching that
+   tree, so this leg needs the user's explicit go-ahead before it runs.
+5. **Text over both.** Seed a text box on key 0 (the bottom layer) across the
+   overlap. Its glyphs must sit over both bars on all four pages. Open the
+   Layers panel and read the new sentence.
+6. **Selection.** On each page, with the Select tool and selection scope set to All layers, click inside the
+   overlap. The selection must be the element that owns the overlap in the
+   table above. On page 2, a press-and-drag on the overlap must MOVE the shape.
+   On page 1, the press must NOT grab the shape, and the click must select the
+   stroke. Repeat with the eyedropper: it must return the colour that owns the
+   overlap.
+7. **Big-page leg (optional).** Add 2500+ tiny strokes on key 0, away from the
+   bars, and repeat step 2 on pages 1 and 2. Page 2 puts B's shape between A's
+   strokes and B's strokes, so the ink cache must stand down (58.4), and the
+   picture must match the small page.
