@@ -599,6 +599,186 @@ if (oplogs.Length == 1)
 }
 
 // ---------------------------------------------------------------------------
+// 16. 58.2 / 58.4 - THE DRAW PLAN: layer order across element types.
+// ---------------------------------------------------------------------------
+// The REAL DrawPlan out of LayerModels.cs - the function InkSurface.DrawRegion
+// iterates, the thumbnail walks and hit-testing reads in reverse. Pure, so it
+// is asked directly: which element is painted when.
+{
+    // Layer A (key 0, bottom) and layer B (key 1, top), each holding one shape,
+    // one stroke and one text box.
+    var dp = new NotePage();
+    var aSh = new ShapeElement { LayerKey = 0 };
+    var bSh = new ShapeElement { LayerKey = 1 };
+    var aSt = new PenStroke { LayerKey = 0, Color = "#111111" };
+    var bSt = new PenStroke { LayerKey = 1, Color = "#222222" };
+    var aTx = new TextElement { LayerKey = 0 };
+    var bTx = new TextElement { LayerKey = 1 };
+    // The layers first: NextKey scans the elements too (18.7), so adding layer
+    // B after elements already claiming key 1 would hand B key 2.
+    PageLayers.Materialise(dp);
+    var addedB = PageLayers.Add(dp);            // on top
+    // List order deliberately NOT layer order: B's shape and stroke come first
+    // in their lists, so a plan that walked lists flat would get it wrong.
+    dp.Shapes.Add(bSh); dp.Shapes.Add(aSh);
+    dp.Strokes.Add(bSt); dp.Strokes.Add(aSt);
+    dp.Texts.Add(bTx); dp.Texts.Add(aTx);
+    Check("58.4 - setup: layer B has key 1 and sits on top of A (key 0)",
+          addedB.Key == 1 && PageLayers.All(dp).Select(l => l.Key).SequenceEqual(new[] { 0, 1 }));
+
+    List<object> Ink(NotePage p) => DrawPlan.For(p).Sequence(p)
+        .Where(e => e.Step.Kind is DrawStepKind.Shapes or DrawStepKind.Strokes)
+        .Select(e => e.Element!).ToList();
+    string Names(List<object> seq) => string.Join(", ", seq.Select(o =>
+        ReferenceEquals(o, aSh) ? "A.shape" : ReferenceEquals(o, aSt) ? "A.stroke" :
+        ReferenceEquals(o, bSh) ? "B.shape" : ReferenceEquals(o, bSt) ? "B.stroke" : "?"));
+
+    var ab = Ink(dp);
+    Check("58.2 - two layers each holding a shape and a stroke paint A.shapes, "
+          + "A.strokes, B.shapes, B.strokes",
+          ab.Count == 4 && ReferenceEquals(ab[0], aSh) && ReferenceEquals(ab[1], aSt)
+          && ReferenceEquals(ab[2], bSh) && ReferenceEquals(ab[3], bSt), Names(ab));
+
+    var plan = DrawPlan.For(dp);
+    Check("58.2 - so B's shape is painted ABOVE A's stroke - the case type order "
+          + "got wrong",
+          plan.StepOf(DrawStepKind.Shapes, 1) > plan.StepOf(DrawStepKind.Strokes, 0));
+
+    Check("58.2 - paint is the FIRST step, and there is exactly one",
+          plan.Steps.Count > 0 && plan.Steps[0].Kind == DrawStepKind.Paint
+          && plan.Steps.Count(s => s.Kind == DrawStepKind.Paint) == 1,
+          string.Join(" ", plan.Steps.Select(s => s.Kind + (s.Bucket >= 0 ? s.Bucket.ToString() : ""))));
+
+    int lastInk = plan.Steps.Select((s, i) => (s, i))
+        .Where(x => x.s.Kind is DrawStepKind.Shapes or DrawStepKind.Strokes).Max(x => x.i);
+    int firstText = plan.Steps.Select((s, i) => (s, i))
+        .Where(x => x.s.Kind == DrawStepKind.Texts).Min(x => x.i);
+    Check("58.2 - text is above ALL ink whatever the layer order: every Texts step "
+          + "comes after every shape and stroke step", firstText > lastInk);
+
+    // Reorder: B to the bottom. A list move, nothing repointed (18.2).
+    PageLayers.Move(dp, 1, 0);
+    var ba = Ink(dp);
+    Check("58.2 - reordering the stack swaps them: B.shapes, B.strokes, A.shapes, "
+          + "A.strokes",
+          ba.Count == 4 && ReferenceEquals(ba[0], bSh) && ReferenceEquals(ba[1], bSt)
+          && ReferenceEquals(ba[2], aSh) && ReferenceEquals(ba[3], aSt), Names(ba));
+    var planBA = DrawPlan.For(dp);
+    Check("58.4 - and hit-testing's answer turns over with it: A's shape is now "
+          + "above B's stroke",
+          DrawPlan.IsAbove(planBA.StepOf(DrawStepKind.Shapes, 0), 0,
+                           planBA.StepOf(DrawStepKind.Strokes, 1), 0)
+          && !DrawPlan.IsAbove(planBA.StepOf(DrawStepKind.Strokes, 1), 0,
+                               planBA.StepOf(DrawStepKind.Shapes, 0), 0));
+    Check("58.4 - within one layer a stroke is above that layer's shape, and a "
+          + "later list index above an earlier one",
+          DrawPlan.IsAbove(planBA.StepOf(DrawStepKind.Strokes, 0), 0,
+                           planBA.StepOf(DrawStepKind.Shapes, 0), 5)
+          && DrawPlan.IsAbove(planBA.StepOf(DrawStepKind.Strokes, 0), 2,
+                              planBA.StepOf(DrawStepKind.Strokes, 0), 1));
+    PageLayers.Move(dp, 1, 1);                  // back to A bottom, B top
+
+    // Hidden, and 0% - one fact, EffectiveOpacity (49.1).
+    var layerB = PageLayers.Of(dp, 1);
+    layerB.Hidden = true;
+    var hid = DrawPlan.For(dp);
+    var hidSeq = hid.Sequence(dp).Where(e => e.Element != null).Select(e => e.Element!).ToList();
+    Check("49.1 - a HIDDEN layer yields nothing: no step, no shape, no stroke, no text",
+          !hid.Steps.Any(s => s.Bucket == 1)
+          && !hidSeq.Any(o => ReferenceEquals(o, bSh) || ReferenceEquals(o, bSt) || ReferenceEquals(o, bTx))
+          && hid.StepOf(DrawStepKind.Shapes, 1) == -1 && hid.StepOf(DrawStepKind.Strokes, 1) == -1,
+          Names(Ink(dp)));
+    Check("49.1 - and the visible layer still draws in full",
+          Ink(dp).Count == 2 && hidSeq.Any(o => ReferenceEquals(o, aTx)));
+    Check("58.4 - a hidden layer's element is never 'above' anything to a hit-test",
+          !DrawPlan.IsAbove(hid.StepOf(DrawStepKind.Strokes, 1), 9,
+                            hid.StepOf(DrawStepKind.Shapes, 0), 0));
+    layerB.Hidden = false;
+    layerB.Opacity = 0f;
+    Check("49.1 - a layer at 0% opacity is the SAME fact as hidden: nothing drawn",
+          !DrawPlan.For(dp).Steps.Any(s => s.Bucket == 1));
+    layerB.Opacity = 0.4f;
+    var faded = DrawPlan.For(dp);
+    Check("18.8 - a layer at 40% draws, and its steps carry EffectiveOpacity as the "
+          + "multiplier",
+          faded.Steps.Where(s => s.Bucket == 1).All(s => Math.Abs(s.Multiplier - 0.4f) < 1e-6)
+          && faded.Steps.Count(s => s.Bucket == 1) == 3);
+    layerB.Opacity = 1f;
+
+    // 18.7: an unknown key is drawn - in the base layer's bucket.
+    var dpOrphan = new PenStroke { LayerKey = 99, Color = "#999999" };
+    dp.Strokes.Add(dpOrphan);
+    var withOrphan = DrawPlan.For(dp).Sequence(dp).ToList();
+    int orphanAt = withOrphan.FindIndex(e => ReferenceEquals(e.Element, dpOrphan));
+    Check("18.7 - an element whose key names no layer is DRAWN, not dropped",
+          orphanAt >= 0 && withOrphan[orphanAt].Step.Kind == DrawStepKind.Strokes);
+    Check("18.7 - and it paints with the base layer (A), below B's shape",
+          orphanAt >= 0 && withOrphan[orphanAt].Step.Bucket == PageLayers.All(dp).ToList().FindIndex(l => l.Key == 0)
+          && orphanAt < withOrphan.FindIndex(e => ReferenceEquals(e.Element, bSh)));
+    Check("18.7 - it was not rewritten: its key is still 99", dpOrphan.LayerKey == 99);
+
+    // InOrder and the plan share one resolver: every element lands in the same
+    // bucket both ways.
+    var dpBuckets = PageLayers.InOrder(dp).ToList();
+    var dplan = DrawPlan.For(dp);
+    bool agree = true;
+    for (int b = 0; b < dpBuckets.Count; b++)
+    {
+        foreach (var s in dpBuckets[b].Shapes) agree &= dplan.BucketOf(s.LayerKey) == b;
+        foreach (var s in dpBuckets[b].Strokes) agree &= dplan.BucketOf(s.LayerKey) == b;
+        foreach (var t in dpBuckets[b].Texts) agree &= dplan.BucketOf(t.LayerKey) == b;
+    }
+    Check("18.9 - InOrder's buckets and the plan's agree for every element, the "
+          + "orphan included", agree);
+    dp.Strokes.Remove(dpOrphan);
+
+    // The big-page ink cache (#43) draws every stroke as one image. Where it
+    // may do so without changing the picture:
+    Check("58.4 - ink cache: with B's SHAPE between A's strokes and B's strokes, "
+          + "one all-strokes image has no correct height (-1)",
+          DrawPlan.For(dp).InkCacheStep(dp) == -1);
+    dp.Shapes.Remove(bSh);
+    var noBShape = DrawPlan.For(dp);
+    Check("58.4 - ink cache: with no shape between them it is A's Strokes step",
+          noBShape.InkCacheStep(dp) == noBShape.StepOf(DrawStepKind.Strokes, 0));
+    dp.Shapes.Insert(0, bSh);
+}
+{
+    // 18.5 / 58.2: a page with NO Layers array, and one with one layer, paint
+    // their elements exactly as the old loop walked them - every shape in list
+    // order, then every stroke in list order. Only paint moved (below it all).
+    var op = new NotePage();
+    var s1 = new ShapeElement(); var s2 = new ShapeElement();
+    var k1 = new PenStroke { Color = "#1" }; var k2 = new PenStroke { Color = "#2" };
+    var k3 = new PenStroke { LayerKey = 42, Color = "#3" };   // orphan: still drawn
+    var t1 = new TextElement();
+    op.Shapes.Add(s1); op.Shapes.Add(s2);
+    op.Strokes.Add(k1); op.Strokes.Add(k2); op.Strokes.Add(k3);
+    op.Texts.Add(t1);
+    var oldOrder = new List<object> { s1, s2, k1, k2, k3, t1 };
+
+    bool SameAsOld(NotePage p)
+    {
+        var seq = DrawPlan.For(p).Sequence(p).Where(e => e.Element != null)
+                                           .Select(e => e.Element!).ToList();
+        return seq.Count == oldOrder.Count && seq.Zip(oldOrder).All(z => ReferenceEquals(z.First, z.Second));
+    }
+    var implicitPlan = DrawPlan.For(op);
+    Check("58.4 - a page with no Layers array has ONE bucket and the plan Paint, "
+          + "Shapes, Strokes, Texts",
+          PageLayers.IsImplicit(op) && implicitPlan.LayerCount == 1
+          && implicitPlan.Steps.Select(s => s.Kind).SequenceEqual(new[]
+             { DrawStepKind.Paint, DrawStepKind.Shapes, DrawStepKind.Strokes, DrawStepKind.Texts }));
+    Check("58.4 - and it paints every element in exactly the old order", SameAsOld(op));
+    PageLayers.Materialise(op);
+    Check("58.4 - a page with ONE real layer paints them in exactly the old order too",
+          !PageLayers.IsImplicit(op) && SameAsOld(op));
+    Check("58.4 - the one-layer ink cache sits at that layer's Strokes step, where "
+          + "it always sat relative to shapes",
+          DrawPlan.For(op).InkCacheStep(op) == 2);
+}
+
+// ---------------------------------------------------------------------------
 Report();
 return failures > 0 ? 1 : 0;
 
