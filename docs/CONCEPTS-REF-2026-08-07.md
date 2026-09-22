@@ -10882,6 +10882,73 @@ Either way the edit would not be stored. The harness's fallback check does
 that never happened or came after the edit. Whether either path occurs in
 practice was not tested, and nothing here was run. Filed as TODO 8.14.
 
+## 53 Oil paint stays outside the layer model, on the record — 2026-09-21
+
+**THE RULING (product owner).** Oil paint stays OUT of the layer model. This is
+not a gap to close later; it is stated plainly here and in the Layers panel, so
+that a user who hides every layer and still sees their paint has not found a
+bug — they have found the documented shape of the feature.
+
+### 53.1 The verified facts (49.10 item 3, checked again in this worktree)
+
+Read fresh in `paint-outside-layers`, not carried over from run 25:
+
+- `OilBrush.cs`, `PaintStore.cs` and `PaintTileCodec.cs` contain **zero**
+  occurrences of `LayerKey` and **zero** of `PageLayers`. Paint is tiles
+  (`PaintTile`, world-aligned, 512 world units square — `PaintStore.cs:15-48`),
+  not elements, and nothing in those three files asks a layer anything.
+- Paint takes no `ActiveLayerKey`. `InkSurface.ActiveLayerKey` resolves through
+  `PageLayers.Active` for new *ink*; nothing analogous exists for paint, and
+  `OilBrush`/`PaintStore` never read it.
+- Hiding, reordering or deleting a layer never touches paint. Layer visibility
+  is applied at draw time through `LayerMultiplier` → `PageLayers.EffectiveOpacity`,
+  called from `DrawShape`/`DrawStroke`; `DrawPaint` calls neither.
+- `DrawPaint` is called exactly once, at `InkSurface.cs:5852`, **outside both
+  pass loops** — the shape pass loop ends at line 5847 and the stroke pass
+  begins after it. It sits at one fixed z: above every shape and every image on
+  every layer, below every vector ink stroke on every layer, for the reason
+  given in the comment above the call (`InkSurface.cs:5849-5851`) — paint is
+  read as a painting with notes over it, and that reading must survive however
+  the layer stack is hidden or reordered.
+
+### 53.2 What else reads the page, checked by reading each path
+
+| Path | Includes paint? | At what z |
+|---|---|---|
+| Gallery / cover thumbnail (`InkSurface.RenderPageThumbnail`) | **No.** It walks `PageLayers.InOrder` buckets of `Shapes`, `Strokes` and `Texts` only (`InkSurface.cs:10260-10289`); no call to `DrawPaint`, no reference to `PaintStore` or a paint tile anywhere in the method. | — |
+| Raster PDF / PNG export (`ExportWindow.CaptureAsync`) | **Yes**, at paint's normal z. This path calls `RenderTargetBitmap.RenderAsync` on the live `InkSurface` control (`ExportWindow.cs:592-594`), which runs the ordinary `DrawRegion` → `DrawPaint` path pixel-for-pixel. | Same as on screen: above shapes/images, below ink. |
+| Vector PDF / SVG / HTML export (`InkSurface.BuildVectorPageAsync`) | **No.** The method builds `Paths`, `Dots`, `Images` and `Texts` from `_page.Strokes`, `_page.Shapes`, `_page.Texts` and `_page.Grid` only; there is no `Paint` identifier anywhere in its body (`InkSurface.cs:8956` through its `return new PdfVectorPage(...)`). A painted stroke is silently absent from every vector or HTML export. | — |
+| Copy/paste, duplicate-selection (`InkSurface.CopySelection`, `DuplicateSelection`) | **No**, and there is nothing for paint to opt into here: both operate strictly on `_selected`/`_selShapes`/`_selTexts` (strokes, shapes, texts), cloned through `ElementClone`/`CloneStroke`/`CloneShape`/`CloneText`. Paint is not a selectable element and is never read by either method. | — |
+| Duplicate **page** (a whole `NotePage` copied as a new page) | **Not established.** No such feature exists in this codebase to inspect — there is no page-level clone/duplicate anywhere in `MainWindow.xaml.cs` or elsewhere, and nothing in it references `PaintStore` or `PaintTile`. What would happen to a page's paint tiles if page duplication is ever built is an open question for that feature, not answered here. | — |
+
+### 53.3 What a user will see
+
+Hide every layer on a page that has an oil-paint stroke on it: **the paint
+remains on screen.** Nothing in the model or the draw path removes it, because
+nothing in either ever associated it with a layer to begin with. This is now
+the documented behaviour, not a surprise to be found later.
+
+### 53.4 18.6 predates this, and stays as written
+
+`18.6`'s "what belongs to a layer" table (`PenStroke`, `ShapeElement`,
+`TextElement`) does not mention paint because §18 is 2026-08-18 and oil paint
+(§47) is 2026-09-08 — twenty-one days later. §18 is a historical record and is not
+edited here; 49.10 item 1 already set the precedent of correcting §18's prose
+from a later section rather than rewriting it in place, and this section
+follows the same rule. The correction, going forward, is this one: **oil paint
+is a fourth category, explicitly outside the table, not a fifth row inside
+it.**
+
+### 53.5 What is NOT decided here
+
+**PSD export's own decision is out of scope.** A PSD is layers by definition,
+and a separate, unmerged branch owns PSD export (Wave 8 item 8.2 disabled it
+pending "neither a layer model nor a PSD writer"; that writer is not this
+branch's work). Whether that export puts paint on its own PSD layer, flattens
+it into the composite, or omits it is that branch's decision to make and
+record when it merges — this section rules on the live app's layer model only,
+not on a file format that does not exist yet.
+
 ## 54. The five seam tiles, re-derived from the user's own palette — 2026-09-21
 
 §11.27 added 49 Sketch codes from Concepts' table and accepted the calibration
