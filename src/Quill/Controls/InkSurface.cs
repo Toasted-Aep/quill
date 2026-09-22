@@ -3704,50 +3704,55 @@ public sealed class InkSurface : UserControl
     }
 
     // =======================================================================
-    // §18.5 / 49.8 — THE DRAW PATH'S LAYER ORDER.
+    // §18.5 / 49.8 / 58.4 — THE DRAW PATH'S LAYER ORDER.
     //
     // "Within a layer, the existing type order is preserved exactly. Across
-    // layers, layer order wins." Until 49.8 the renderer honoured a layer's
-    // Hidden and Opacity and NOT its position, so reordering the stack changed
-    // the model and nothing on the glass.
+    // layers, layer order wins." 49.8 made the stroke loop and the shape loop
+    // each walk the layers bottom first, but ran ALL shapes before ALL strokes,
+    // so across element types type order still beat layer order (58.1). 58.4
+    // hands the whole order to DrawPlan (LayerModels.cs, Win2D-free, proved by
+    // tools/LayerRoundTrip): paint, then per visible layer shapes then strokes.
     //
-    // PageLayers.InOrder is the declared seam for that order and it ALLOCATES -
-    // three fresh Lists per layer on every call. That is right for the panel and
-    // for PSD export, which ask once; it is wrong for a loop that runs at 60 Hz
-    // on a page with thousands of strokes. So the draw path reaches the same
-    // order by making ONE PASS PER LAYER over the list it already holds and
-    // skipping what is not in that pass: same sequence out, nothing allocated.
+    // PageLayers.InOrder ALLOCATES three Lists per layer on every call, which is
+    // wrong for a loop that runs at 60 Hz on a page with thousands of strokes.
+    // So the draw loops walk the plan's steps and filter the list they already
+    // hold by DrawPlan.BucketOf - same sequence out, nothing per element
+    // allocated. A page with one layer (every page that exists today) has ONE
+    // Shapes step and ONE Strokes step, and the per-element bucket test
+    // short-circuits on LayerCount before it looks at anything.
     //
-    // A page with one layer runs exactly one pass, and the per-element test
-    // short-circuits on the pass count before it looks at anything. Every page
-    // that exists today has one layer, so this cannot move a pixel on any of
-    // them.
+    // The plan itself is small but DrawRegion runs once per invalidated REGION,
+    // so it is kept here and rebuilt only when what it depends on - the layer
+    // list's keys, in order, and each layer's EffectiveOpacity - changes. The
+    // comparison is exact (no hash), and walks the list in place, so a reorder,
+    // a hide or an opacity change is seen on the very next region.
     // =======================================================================
 
-    /// <summary>How many passes the draw loops make. 1 unless the page really
-    /// carries more than one layer.</summary>
-    private int LayerPassCount => _page?.Layers is { Count: > 1 } ls ? ls.Count : 1;
+    private DrawPlan? _drawPlan;
+    private int[] _drawPlanKeys = Array.Empty<int>();
+    private float[] _drawPlanMul = Array.Empty<float>();
 
-    /// <summary>Which pass an element paints in, bottom layer = 0.
-    ///
-    /// <para>Resolves exactly the way <see cref="PageLayers.InOrder"/> does —
-    /// first layer with a matching key wins, an unknown key falls to the base
-    /// layer's pass, and a page with no base layer falls to the bottom-most one.
-    /// Written to match rather than to be obvious, because a draw order and an
-    /// export order that disagreed about where an orphan lands would be 49.1's
-    /// hazard in the one place it is hardest to see.</para></summary>
-    private int LayerPass(int layerKey)
+    /// <summary>§58.4: the paint order for this page, from
+    /// <see cref="DrawPlan"/>. Cached; see the block comment above.</summary>
+    private DrawPlan CurrentDrawPlan(NotePage page)
     {
-        var ls = _page?.Layers;
-        if (ls is not { Count: > 1 }) return 0;
-        int fallback = 0;
-        bool haveFallback = false;
-        for (int i = 0; i < ls.Count; i++)
+        var ls = page.Layers;
+        int n = ls?.Count ?? 0;
+        bool same = _drawPlan != null && _drawPlanKeys.Length == n;
+        for (int i = 0; same && i < n; i++)
+            if (ls![i].Key != _drawPlanKeys[i] ||
+                PageLayers.EffectiveOpacity(ls[i]) != _drawPlanMul[i]) same = false;
+        if (same) return _drawPlan!;
+
+        _drawPlan = new DrawPlan(PageLayers.All(page));
+        _drawPlanKeys = new int[n];
+        _drawPlanMul = new float[n];
+        for (int i = 0; i < n; i++)
         {
-            if (ls[i].Key == layerKey) return i;
-            if (!haveFallback && ls[i].Key == PageLayers.BaseKey) { fallback = i; haveFallback = true; }
+            _drawPlanKeys[i] = ls![i].Key;
+            _drawPlanMul[i] = PageLayers.EffectiveOpacity(ls[i]);
         }
-        return fallback;
+        return _drawPlan;
     }
 
     private void SelectWithLasso(List<Vector2> poly)
@@ -5279,8 +5284,31 @@ public sealed class InkSurface : UserControl
             }
             else
             {
-                foreach (var sh in _selShapes) DrawShape(ds, sh);
-                foreach (var s in _selected) DrawStroke(ds, _canvas, s, System.Numerics.Vector2.Zero, null);
+                // §58.4: shapes and strokes in the canvas's order - per layer,
+                // bottom first - so a copied image stacks the way the page does.
+                // One layer: all shapes, then all strokes, as before.
+                var plan = _page != null ? CurrentDrawPlan(_page) : null;
+                bool multi = plan is { LayerCount: > 1 };
+                if (!multi)
+                {
+                    foreach (var sh in _selShapes) DrawShape(ds, sh);
+                    foreach (var s in _selected) DrawStroke(ds, _canvas, s, System.Numerics.Vector2.Zero, null);
+                }
+                else
+                    foreach (var step in plan!.Steps)
+                    {
+                        if (step.Kind == DrawStepKind.Shapes)
+                        {
+                            foreach (var sh in _selShapes)
+                                if (plan.BucketOf(sh.LayerKey) == step.Bucket) DrawShape(ds, sh);
+                        }
+                        else if (step.Kind == DrawStepKind.Strokes)
+                        {
+                            foreach (var s in _selected)
+                                if (plan.BucketOf(s.LayerKey) == step.Bucket)
+                                    DrawStroke(ds, _canvas, s, System.Numerics.Vector2.Zero, null);
+                        }
+                    }
                 // Text boxes and table cells are XAML RichEditBox overlays the
                 // drawing session can't reach; draw them last (on top of shapes)
                 // so a copied selection keeps its text. _selTexts already holds
@@ -5821,13 +5849,89 @@ public sealed class InkSurface : UserControl
         var vBR = ToWorld(new Vector2((float)region.Right, (float)region.Bottom));
         float visMinX = vTL.X, visMinY = vTL.Y, visMaxX = vBR.X, visMaxY = vBR.Y;
 
-        // §18.5 / 49.8: ACROSS LAYERS, LAYER ORDER WINS - see LayerPassCount.
-        int shapePasses = LayerPassCount;
-        for (int pass = 0; pass < shapePasses; pass++)
+        // §58.4: THE PAINT ORDER ACROSS ELEMENT TYPES IS DrawPlan's, and this
+        // loop only walks it: oil paint once, below every layer; then each
+        // visible layer bottom first, its shapes then its strokes; text is XAML
+        // above the canvas (the plan's Texts steps draw nothing here). Until
+        // 58.4 this ran every layer's shapes, then paint, then every layer's
+        // strokes, so a top-layer shape drew UNDER a bottom-layer stroke (58.1).
+        // The per-element bodies below are unchanged; only the loops moved.
+        var plan = CurrentDrawPlan(_page);
+        bool multiLayer = plan.LayerCount > 1;
+
+        // Big pages draw settled ink from the offscreen cache (#43); anything
+        // that offsets strokes (replay, selection move, free space) falls back
+        // to the classic per-stroke path so offsets stay live.
+        // 16.7: the cache holds RENDERED pixels, so it cannot follow a fade that
+        // moves every frame. It stands down for the duration rather than being
+        // rebuilt 190 ms in a row, which is what marking it dirty per frame would
+        // cost on exactly the pages (2500+ strokes) that need it most.
+        // §58.4: the cache is ONE image of every stroke, so it can stand in for
+        // the Strokes steps only where no shape is painted between two layers'
+        // strokes; InkCacheStep says where that is, or -1 (per-stroke path).
+        bool cacheEligible = !_replaying && !_movingSel && !_spacing && !Veiling &&
+                             _page.Strokes.Count >= InkCacheThreshold && AudioPlayheadPosition == null;
+        int cacheStep = cacheEligible ? plan.InkCacheStep(_page) : -1;
+        bool cacheDrawn = false;
+
+        PenStroke? activeStroke = null;
+        if (AudioPlayheadPosition != null && RecordingStartTicks != null)
         {
+            long elapsedTicks = AudioPlayheadPosition.Value.Ticks;
+            long bestDiff = long.MaxValue;
+            foreach (var s in _page.Strokes)
+            {
+                long offsetTicks = s.CreatedTicks - RecordingStartTicks.Value;
+                if (offsetTicks >= 0 && offsetTicks <= elapsedTicks)
+                {
+                    long diff = elapsedTicks - offsetTicks;
+                    if (diff < bestDiff)
+                    {
+                        bestDiff = diff;
+                        activeStroke = s;
+                    }
+                }
+            }
+        }
+
+        var steps = plan.Steps;
+        for (int si = 0; si < steps.Count; si++)
+        {
+            var step = steps[si];
+            if (step.Kind == DrawStepKind.Paint)
+            {
+                // Raster paint (OILPAINT §1.2) sits BELOW EVERY LAYER, just
+                // above the paper and grid (58.2 item 2). §53 keeps it outside
+                // the layer model, so it has this one height. It leaves the ink
+                // cache below completely untouched.
+                DrawPaint(ds, visMinX, visMinY, visMaxX, visMaxY);
+                continue;
+            }
+            if (step.Kind == DrawStepKind.Texts) continue;   // XAML, above the canvas (58.2 item 3)
+
+            if (step.Kind == DrawStepKind.Strokes)
+            {
+                // REPLAY draws the strokes after every Shapes step, in LIST
+                // order (below): `idx` is a position in _page.Strokes and the
+                // replay cursor counts in that order. A replay is an animation
+                // of how the page was DRAWN, not how it is stacked.
+                if (_replaying) continue;
+                if (cacheStep >= 0)
+                {
+                    // Steps below cacheStep hold no strokes by InkCacheStep's
+                    // definition; steps above it are already in the image.
+                    if (si < cacheStep || cacheDrawn) continue;
+                    cacheDrawn = TryDrawInkCache(ds, sender, visMinX, visMinY, visMaxX, visMaxY);
+                    if (cacheDrawn) continue;
+                    cacheStep = -1;   // the cache failed: per-stroke from here up
+                }
+                DrawStrokeStep(step.Bucket);
+                continue;
+            }
+
             foreach (var sh in _page.Shapes)
             {
-                if (shapePasses > 1 && LayerPass(sh.LayerKey) != pass) continue;
+                if (multiLayer && plan.BucketOf(sh.LayerKey) != step.Bucket) continue;
                 var sb = ShapeBounds(sh);
                 if (sb.Right < visMinX - 8 || sb.Left > visMaxX + 8 ||
                     sb.Bottom < visMinY - 8 || sb.Top > visMaxY + 8) continue;
@@ -5846,85 +5950,58 @@ public sealed class InkSurface : UserControl
             }
         }
 
-        // Raster paint (OILPAINT §1.2) sits ABOVE shapes and images and BELOW
-        // all vector ink: notes are annotations over a painting and must stay
-        // legible, and it leaves the ink cache below completely untouched.
-        DrawPaint(ds, visMinX, visMinY, visMaxX, visMaxY);
-
-        // Big pages draw settled ink from the offscreen cache (#43); anything
-        // that offsets strokes (replay, selection move, free space) falls back
-        // to the classic per-stroke path so offsets stay live.
-        // 16.7: the cache holds RENDERED pixels, so it cannot follow a fade that
-        // moves every frame. It stands down for the duration rather than being
-        // rebuilt 190 ms in a row, which is what marking it dirty per frame would
-        // cost on exactly the pages (2500+ strokes) that need it most.
-        bool cacheEligible = !_replaying && !_movingSel && !_spacing && !Veiling &&
-                             _page.Strokes.Count >= InkCacheThreshold && AudioPlayheadPosition == null;
-        if (!(cacheEligible && TryDrawInkCache(ds, sender, visMinX, visMinY, visMaxX, visMaxY)))
+        // REPLAY: every stroke after every layer's shapes, in list order - the
+        // order the page was drawn in, which is what the replay cursor counts.
+        // A hidden layer's strokes still draw nothing here: DrawStroke asks
+        // LayerMultiplier, and 0 means hidden (§49.1).
+        if (_replaying)
         {
-            PenStroke? activeStroke = null;
-            if (AudioPlayheadPosition != null && RecordingStartTicks != null)
-            {
-                long elapsedTicks = AudioPlayheadPosition.Value.Ticks;
-                long bestDiff = long.MaxValue;
-                foreach (var s in _page.Strokes)
-                {
-                    long offsetTicks = s.CreatedTicks - RecordingStartTicks.Value;
-                    if (offsetTicks >= 0 && offsetTicks <= elapsedTicks)
-                    {
-                        long diff = elapsedTicks - offsetTicks;
-                        if (diff < bestDiff)
-                        {
-                            bestDiff = diff;
-                            activeStroke = s;
-                        }
-                    }
-                }
-            }
-
             int idx = 0;
-            // §18.5 / 49.8. REPLAY forces a single pass: `idx` below is a
-            // position in _page.Strokes and the replay cursor counts in that
-            // order, so a per-layer walk would replay the page in the wrong
-            // sequence. A replay is an animation of how the page was DRAWN,
-            // which is list order, not how it is stacked.
-            int strokePasses = _replaying ? 1 : LayerPassCount;
-            for (int pass = 0; pass < strokePasses; pass++)
+            foreach (var s in _page.Strokes)
             {
-                foreach (var s in _page.Strokes)
+                var off = Vector2.Zero;
+                if (_movingSel && _selectedSet.Contains(s)) off = new Vector2(_moveDx, _moveDy);
+                else if (_spacing && s.Points.Count > 0 && s.MinY >= _spaceY) off = new Vector2(0, (float)_spaceDelta);
+
+                if (AudioPlayheadPosition != null && RecordingStartTicks != null)
                 {
-                    if (strokePasses > 1 && LayerPass(s.LayerKey) != pass) continue;
-                    var off = Vector2.Zero;
-                    if (_movingSel && _selectedSet.Contains(s)) off = new Vector2(_moveDx, _moveDy);
-                    else if (_spacing && s.Points.Count > 0 && s.MinY >= _spaceY) off = new Vector2(0, (float)_spaceDelta);
+                    long strokeOffsetTicks = s.CreatedTicks - RecordingStartTicks.Value;
+                    if (strokeOffsetTicks > AudioPlayheadPosition.Value.Ticks) continue;
+                }
 
-                    if (AudioPlayheadPosition != null && RecordingStartTicks != null)
-                    {
-                        long strokeOffsetTicks = s.CreatedTicks - RecordingStartTicks.Value;
-                        if (strokeOffsetTicks > AudioPlayheadPosition.Value.Ticks) continue;
-                    }
+                if (idx > _replayStroke) break;
+                int? limit = idx == _replayStroke ? _replayPoint : null;
+                DrawStroke(ds, sender, s, off, limit);
+                idx++;
+            }
+        }
 
-                    if (_replaying)
+        // One layer's strokes, per stroke: the body the loop has always had.
+        void DrawStrokeStep(int bucket)
+        {
+            foreach (var s in _page!.Strokes)
+            {
+                if (multiLayer && plan.BucketOf(s.LayerKey) != bucket) continue;
+                var off = Vector2.Zero;
+                if (_movingSel && _selectedSet.Contains(s)) off = new Vector2(_moveDx, _moveDy);
+                else if (_spacing && s.Points.Count > 0 && s.MinY >= _spaceY) off = new Vector2(0, (float)_spaceDelta);
+
+                if (AudioPlayheadPosition != null && RecordingStartTicks != null)
+                {
+                    long strokeOffsetTicks = s.CreatedTicks - RecordingStartTicks.Value;
+                    if (strokeOffsetTicks > AudioPlayheadPosition.Value.Ticks) continue;
+                }
+
+                s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
+                float pad = s.Size * 2.5f + 6f;
+                if (bx1 + off.X >= visMinX - pad && bx0 + off.X <= visMaxX + pad &&
+                    by1 + off.Y >= visMinY - pad && by0 + off.Y <= visMaxY + pad)
+                {
+                    if (s == activeStroke)
                     {
-                        if (idx > _replayStroke) break;
-                        int? limit = idx == _replayStroke ? _replayPoint : null;
-                        DrawStroke(ds, sender, s, off, limit);
+                        DrawStrokeGlow(ds, sender, s, off);
                     }
-                    else
-                    {
-                        s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
-                        float pad = s.Size * 2.5f + 6f;
-                        if (bx1 + off.X >= visMinX - pad && bx0 + off.X <= visMaxX + pad &&
-                            by1 + off.Y >= visMinY - pad && by0 + off.Y <= visMaxY + pad)
-                        {
-                            if (s == activeStroke)
-                            {
-                                DrawStrokeGlow(ds, sender, s, off);
-                            }
-                            DrawStroke(ds, sender, s, off, null, veil: !IsSubject(s));
-                        }
-                    }
-                    idx++;
+                    DrawStroke(ds, sender, s, off, null, veil: !IsSubject(s));
                 }
             }
         }
@@ -10257,34 +10334,43 @@ public sealed class InkSurface : UserControl
                 // export will iterate. A page with one layer yields ONE bucket
                 // holding these three lists in this order, so every cached PNG
                 // stays bit-identical and nothing is invalidated.
-                foreach (var bucket in PageLayers.InOrder(page))
+                //
+                // §58.4: now through DrawPlan.Sequence, the SAME order the
+                // canvas walks - InOrder's buckets, with every layer's text
+                // after all ink as it is on the glass (58.2 item 3). The
+                // thumbnail has never drawn oil paint, so the Paint step is
+                // skipped. With one layer the sequence is shapes, strokes,
+                // texts in list order, exactly the old walk.
+                foreach (var (step, element) in DrawPlan.For(page).Sequence(page))
                 {
-                    float lm = PageLayers.EffectiveOpacity(bucket.Layer);
-                    if (lm <= 0f) continue;
-
-                    foreach (var sh in bucket.Shapes)
+                    float lm = step.Multiplier;
+                    switch (element)
                     {
-                        var color = ThumbFade(forceInk ?? ColorUtil.Parse(sh.Color), lm);
-                        ds.DrawRectangle(new Rect(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H)), color, Math.Max(1f, sh.Size));
-                    }
-
-                    foreach (var s in bucket.Strokes)
-                    {
-                        var color = ThumbFade(forceInk ?? ColorUtil.Parse(s.Color), lm);
-                        for (int i = 1; i < s.Points.Count; i++)
+                        case ShapeElement sh:
                         {
-                            ds.DrawLine(new Vector2(s.Points[i - 1].X, s.Points[i - 1].Y), new Vector2(s.Points[i].X, s.Points[i].Y), color, s.Size);
+                            var color = ThumbFade(forceInk ?? ColorUtil.Parse(sh.Color), lm);
+                            ds.DrawRectangle(new Rect(sh.X, sh.Y, Math.Max(1, sh.W), Math.Max(1, sh.H)), color, Math.Max(1f, sh.Size));
+                            break;
                         }
-                    }
-
-                    foreach (var t in bucket.Texts)
-                    {
-                        string txt = StripRtf(t.Rtf);
-                        if (string.IsNullOrEmpty(txt)) continue;
-                        using var layout = new CanvasTextLayout(device, txt,
-                            new CanvasTextFormat { FontSize = 16f },
-                            (float)Math.Max(24, t.Width), 4000);
-                        ds.DrawTextLayout(layout, (float)t.X, (float)t.Y, ThumbFade(textCol, lm));
+                        case PenStroke s:
+                        {
+                            var color = ThumbFade(forceInk ?? ColorUtil.Parse(s.Color), lm);
+                            for (int i = 1; i < s.Points.Count; i++)
+                            {
+                                ds.DrawLine(new Vector2(s.Points[i - 1].X, s.Points[i - 1].Y), new Vector2(s.Points[i].X, s.Points[i].Y), color, s.Size);
+                            }
+                            break;
+                        }
+                        case TextElement t:
+                        {
+                            string txt = StripRtf(t.Rtf);
+                            if (string.IsNullOrEmpty(txt)) continue;
+                            using var layout = new CanvasTextLayout(device, txt,
+                                new CanvasTextFormat { FontSize = 16f },
+                                (float)Math.Max(24, t.Width), 4000);
+                            ds.DrawTextLayout(layout, (float)t.X, (float)t.Y, ThumbFade(textCol, lm));
+                            break;
+                        }
                     }
                 }
             }
@@ -10427,21 +10513,25 @@ public sealed class InkSurface : UserControl
                     cds.Clear(Colors.Transparent);
                     cds.Transform = Matrix3x2.CreateTranslation((float)-world.X, (float)-world.Y) *
                                     Matrix3x2.CreateScale(scale);
-                    // §18.5 / 49.8: the cache holds RENDERED pixels, so the
-                    // order it bakes them in is the order they are seen in. It
-                    // has to make the same per-layer walk the live loop makes,
-                    // or a page would reorder itself the moment it crossed
-                    // InkCacheThreshold.
-                    int cachePasses = LayerPassCount;
-                    for (int pass = 0; pass < cachePasses; pass++)
+                    // §18.5 / 49.8 / 58.4: the cache holds RENDERED pixels, so
+                    // the order it bakes them in is the order they are seen in.
+                    // It walks the same plan's Strokes steps the live loop
+                    // walks, or a page would reorder itself the moment it
+                    // crossed InkCacheThreshold. A hidden layer has no step.
+                    var cachePlan = CurrentDrawPlan(_page!);
+                    bool cacheMulti = cachePlan.LayerCount > 1;
+                    foreach (var step in cachePlan.Steps)
+                    {
+                    if (step.Kind != DrawStepKind.Strokes) continue;
                     foreach (var s in _page!.Strokes)
                     {
-                        if (cachePasses > 1 && LayerPass(s.LayerKey) != pass) continue;
+                        if (cacheMulti && cachePlan.BucketOf(s.LayerKey) != step.Bucket) continue;
                         s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
                         float pad = s.Size * 2.5f + 6f;
                         if (bx1 < world.Left - pad || bx0 > world.Right + pad ||
                             by1 < world.Top - pad || by0 > world.Bottom + pad) continue;
                         DrawStroke(cds, sender, s, Vector2.Zero, null);
+                    }
                     }
                 }
                 _inkCacheWorld = world;
