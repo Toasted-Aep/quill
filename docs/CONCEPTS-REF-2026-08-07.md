@@ -11033,3 +11033,194 @@ layer exports at full strength**, in type order. It serves:
 A single-page flattened PDF, PNG and JPG are captures of the canvas
 (`CaptureAsync`), so they inherit the canvas's order (58.1) and its handling
 of `Hidden`. PSD follows `InOrder` (branch, unmerged). Filed as TODO 8.9.
+
+### 58.4 The canvas now draws the plan — 2026-09-22 (branch `layer-order-canvas`)
+
+58.2 is implemented. Built and measured headlessly; **not run on screen** (58.8).
+
+**One definition, Win2D-free.** `DrawPlan` (`src/Quill/Models/LayerModels.cs`,
+beside `PageLayers`) is the paint order as a list of steps:
+
+1. `Paint` — once, first: below every layer, just above the paper, grid,
+   perspective guides, artboard and title (all drawn before it, as before).
+2. For each layer bottom first **whose `EffectiveOpacity` is above 0**:
+   `Shapes`, then `Strokes` (18.9's tuple order, so nothing moves inside a
+   layer).
+3. `Texts` for every visible layer, after all ink (58.2 item 3).
+
+Visibility is `PageLayers.EffectiveOpacity(layer) > 0` and nothing else — §49.1's
+one fact asked the one way. Buckets resolve through `DrawPlan.BucketOf`, and
+`PageLayers.InOrder` now calls the same resolver, so the canvas, the panel, the
+thumbnail and the PSD seam cannot disagree about where an orphaned key lands:
+first matching key wins, an unknown key goes to the base layer's bucket (or the
+bottom one if even that is missing) and is drawn (18.7). A page with no `Layers`
+array, or with one layer, has one bucket and the plan `Paint, Shapes, Strokes,
+Texts`.
+
+**`InkSurface.DrawRegion` (~5833) walks `plan.Steps`.** `Paint` calls
+`DrawPaint`; `Shapes` and `Strokes` run the per-element bodies they always
+ran, filtered by `plan.BucketOf(e.LayerKey) == step.Bucket` (the filter is
+skipped outright when `LayerCount` is 1); `Texts` draws nothing, because text
+is the XAML `_textLayer` over the canvas. Only the loops moved; the shape body,
+the stroke body (now the local `DrawStrokeStep`, ~6000) and every `DrawShape` /
+`DrawStroke` call are as they were. `LayerPassCount` and `LayerPass` are gone.
+
+**The one visible change on a one-layer page is paint's height**, which is the
+ruling: the old order was shapes, paint, strokes; it is now paint, shapes,
+strokes. A one-layer page with no oil paint draws exactly the sequence it drew
+before.
+
+**Cost on a one-layer page — reasoned, not timed.** The plan is cached on the
+surface (`CurrentDrawPlan`, ~3757) and rebuilt only when the layer keys, their
+order or any layer's `EffectiveOpacity` differ from the snapshot — an exact
+element-by-element compare, no hash. With no `Layers` array that compare is a
+length check against 0, so after the first build a region costs no allocation.
+The loops are: 4 steps, one pass over `Shapes`, one over `Strokes` — the same
+two passes as before — plus a local-function call. The per-element bucket test
+short-circuits on `multiLayer` before it reads a key. So a one-layer page does
+the same element work as before plus a 4-iteration step loop per region. A
+multi-layer page makes one pass over each list per visible layer, as 49.8's
+`LayerPass` loops already did.
+
+**Caches and previews, each checked:**
+
+- **Ink cache (#43, pages at 2500+ strokes).** It is ONE image of every
+  stroke, so it can stand in for the `Strokes` steps only if no shape is
+  painted between two layers' strokes. `DrawPlan.InkCacheStep` answers the
+  step to draw it at (the first `Strokes` step that has strokes), or -1 when a
+  layer's shapes sit between; -1 means the per-stroke path. Steps below that
+  step are empty by definition and skipped; steps above it are already in the
+  image. If `TryDrawInkCache` fails, that step and every later one draw per
+  stroke. The cache BUILD walks the same plan's `Strokes` steps, so a hidden
+  layer is not baked in. `_inkCacheDirty` is still set by `LayersChanged`, and
+  the plan cache sees the same change on its own. With one layer,
+  `InkCacheStep` is that layer's `Strokes` step, so the cache sits exactly
+  where it sat relative to shapes.
+- **`_contentMaxDirty`**: does not exist on main (the field is gone, ~863);
+  nothing to keep.
+- **`DrawRegionBlurred` (~5806)** renders through `DrawRegion`, so it inherits
+  the plan with no change.
+- **16.7's selection veil**: a per-element `veil:` argument (`IsSubject`), and
+  the veil stands the ink cache down (`!Veiling`). Neither depends on order;
+  unchanged.
+- **Replay**: keeps list order (the replay cursor counts positions in
+  `_page.Strokes`), drawn after every `Shapes` step. Hidden-layer strokes still
+  draw nothing there, through `DrawStroke`'s `LayerMultiplier`.
+- **Previews drawn after the ink** — the wet stroke, the shape being adjusted,
+  selection chrome, rubber bands — are unchanged and still sit on top.
+- **Gallery thumbnail (~10455)** now walks `DrawPlan.For(page).Sequence(page)`
+  instead of `InOrder`'s buckets, so its text follows all ink as it does on the
+  glass. It still draws no oil paint. One layer: the same shapes, strokes,
+  texts sequence, so no cached PNG changes. `ThumbnailCache.Stamp` does not
+  carry a code version, so a multi-layer page's PNG cached under the old walk
+  keeps the old text stacking until the page next changes.
+- **Copy as image (`CaptureSelectionAsync`, ~5268)** draws the selected shapes
+  and strokes per layer in plan order; one layer is unchanged.
+- **Not touched**: `BuildVectorPageAsync` (vector PDF / SVG / HTML, and the
+  multi-page flattened PDF) still ignores layers entirely — 58.3, TODO 8.9,
+  separate work. Single-page flattened PDF, PNG and JPG are captures of the
+  canvas, so they now inherit the new order.
+
+### 58.5 Hit-testing: "topmost" is the plan read backwards
+
+Every pick that answers with ONE element under the pointer now asks the same
+cached plan: a later step is on top, within one step a later list index is
+(`DrawPlan.IsAbove`), and a layer the plan does not draw has no step, so
+nothing on it can be picked. With one layer every hit of a type shares a step,
+so each loop still stops at its first hit from the back.
+
+| Scan | What it does now |
+|---|---|
+| `HitShape` (press grab), `AxesShapeAt`, `EquationShapeAt` | through `TopmostShape` (~7513) |
+| `HitStrokeForClick` (~1990, 16.10's click-select; `CanCatch` at its old place) | topmost stroke by the plan |
+| `TryBeginShapeOrSelectionDrag` (~1813) | a press on a shape gives way to a catchable stroke on a **higher layer** and falls through to click-select, which picks that stroke on release |
+| `OnCanvasTapped` (~10237, touch) | a shape on a higher layer beats the stroke under it |
+| `HitStroke` (~10189, tap to seek audio) | across layers, the topmost drawn stroke; a hidden layer's ink no longer answers |
+| `SampleColorAt` (~6523, eyedropper) | the topmost drawn stroke or shape; with one layer it is still "strokes first, then shapes" |
+
+**Left alone, because they do not choose:** the lasso and rectangle select
+(`SelectWithLasso`, whose `CanCatch` calls sit at ~3776–3801) take everything
+they enclose; the eraser removes everything it touches; the object-eraser
+preview (`FindStrokeNear`) previews a gesture that removes every stroke it
+touches. `FocusTextAt` picks text boxes, which are above all ink by 58.2 item 3.
+
+**One exception, kept on purpose:** within ONE layer, a press on a shape still
+grabs the shape, even where that layer's own strokes are drawn over it. That
+is how it behaved before, and 18.5 keeps a layer's internal behaviour exactly.
+Only a higher layer can take the press from the shape (`StrokeLayerAbove`).
+
+**Changes on a one-layer page:** none, except that `HitShape`, `HitStroke` and
+the eyedropper no longer pick an element on a layer whose `EffectiveOpacity`
+is 0. Before this, `HitShape` had no visibility test at all, so a shape on a
+hidden layer could be grabbed.
+
+**Read, not changed:** `HitShape` still does not ask `CanCatch`, so a shape on
+a LOCKED layer, or outside the Active-layer scope, can still be grabbed by a
+press. That is not about order. It was already true on main.
+
+### 58.6 What `tools/LayerRoundTrip` proves
+
+Section 16 of the harness runs the REAL `DrawPlan` (the harness links
+`LayerModels.cs`). On main 53ba67a the harness says "83 checks held" and prints
+84 PASS lines. The 84th is the isolation check, printed after the summary. The
+brief's "84" counted that line. On this branch: **106 held**, 107 PASS lines,
+0 FAIL, from a fresh `--no-incremental` build.
+
+What it checks: two layers each holding a shape and a stroke paint A.shapes,
+A.strokes, B.shapes, B.strokes, so B's shape is above A's stroke. Reordering the
+stack swaps them. Paint is the first step, and there is exactly one. Text
+follows all ink. A hidden layer, and a layer at 0%, yield no step and nothing
+drawn, while the visible layer draws in full. An orphaned key is drawn, with
+the base layer. `InOrder` agrees with the plan bucket for bucket. `StepOf` and
+`IsAbove` turn over with a reorder. A hidden element is never "above" anything.
+`InkCacheStep` is -1 when a shape sits between two layers' strokes, and is the
+right step when none does. A page with no `Layers` array, and a page with one
+real layer, paint every element in exactly the old order.
+
+**Negative controls, re-run in this job.** Each is a compiling mutation of
+`LayerModels.cs`: the harness built with 0 errors and 0 warnings, and the
+source was restored byte-identical (SHA-256 compared) afterwards.
+
+| Mutation | Result |
+|---|---|
+| the old type-order plan: all shapes, paint, all strokes | 8 FAIL |
+| paint between the bottom layer's shapes and strokes | 2 FAIL |
+| a hidden layer drawn (the `EffectiveOpacity` skip removed) | 4 FAIL |
+| restored | 106 held, 0 FAIL |
+
+**What the harness cannot reach:** `InkSurface` is WinUI and Win2D and is not
+linked. So the harness proves the plan, and it does NOT prove that
+`DrawRegion`, the ink cache, or the hit-tests iterate the plan correctly. That
+part was read and compiled, not executed.
+
+### 58.7 The Layers panel
+
+`ChromeBars.BuildLayersPanel` adds one sentence to its caption: "Text boxes
+always sit above the drawing, whatever the layer order." Nothing else in the
+caption changed.
+
+Main does not carry the paint-outside-layers branch's sentence about paint, and
+this branch adds none. That line lands with that branch. Its wording has to be
+reconciled at merge with this branch's fact: paint is **below every layer**.
+
+### 58.8 What is NOT established
+
+Nothing in 58.4–58.7 was seen on screen. Quill was not launched. The following
+are unobserved:
+
+- that a shape on the top layer now draws over a stroke on the bottom layer, on
+  the glass, in both seeded orders;
+- that oil paint now sits under shapes, images and strokes on the glass;
+- that a text box still sits over both;
+- that clicking the overlap selects the visually top element, and that a press
+  on a bottom-layer shape under a top-layer stroke no longer grabs the shape;
+- that the ink cache path (2500+ strokes) draws the same picture as the
+  per-stroke path on a multi-layer page, including the -1 fallback;
+- any frame-time measurement. The one-layer cost claim in 58.4 is reasoning
+  about loop counts and allocations, not a timing;
+- that the gallery thumbnail of a multi-layer page matches its canvas.
+
+Nothing in the app can yet make a second layer or reorder one (49.8), so every
+multi-layer case above needs a seeded page. The on-screen method is the
+two-bar method of run 25 (49.9), with a shape on one layer and a stroke on the
+other.
