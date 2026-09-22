@@ -1386,7 +1386,8 @@ public sealed class ChromeBars
         panel.Children.Add(ChromeUi.Caption(
             "Hiding a layer takes its ink off the page and out of reach of the selection tools. Opacity " +
             "multiplies what is drawn — it is never written into the marks themselves, so hiding a layer, " +
-            "saving, and showing it again gives every mark back exactly as it was."));
+            "saving, and showing it again gives every mark back exactly as it was. Oil paint is not on a " +
+            "layer, so hiding or reordering layers leaves it exactly as it was."));
 
         // TOP LAYER FIRST. InOrder yields BOTTOM first because that is paint
         // order; a layers list reads the other way up, which is the same
