@@ -193,6 +193,19 @@ public static class TextFlushPolicy
     /// The final mark is never inside the range, so the result is always a
     /// valid document.</description></item></list>
     ///
+    /// <para><b>What <c>Start</c> also means.</b> The first character of the
+    /// range is the mark of the FIRST trailing empty paragraph - the blank line
+    /// the user typed, if one of them is theirs - while the mark that survives
+    /// is the story's last. They are different paragraphs, so the survivor's
+    /// formatting is not the first one's; <c>InkSurface</c> copies it across
+    /// after the delete (section 56.8).</para>
+    ///
+    /// <para><b>What this function cannot see, and the caller must.</b> Plain
+    /// text does not distinguish a paragraph mark from a table's cell mark or
+    /// row end - all three are <c>'\r'</c>. The refusal for tables therefore
+    /// cannot live here; it lives in
+    /// <see cref="ContainsTableStructure"/>, over the RTF.</para>
+    ///
     /// <para><b>Refusal is the failure mode.</b> Text that does not end in a
     /// paragraph mark is a shape this function does not understand, and it
     /// answers "drop nothing". If the control's string ever left out the
@@ -211,4 +224,61 @@ public static class TextFlushPolicy
         int start = plain.Length - 1 - drop;   // the final mark, at Length-1, stays
         return (start, drop);
     }
+
+    /// <summary>CONCEPTS-REF 56 round 2: whether the control's own
+    /// serialisation shows TABLE STRUCTURE - in which case nothing is trimmed
+    /// at all.
+    ///
+    /// <para><b>Why a document Quill itself cannot build still has to be
+    /// refused.</b> In RichEdit a table's CELL marks and its ROW-END marks are
+    /// carriage returns in the story's plain text, exactly like paragraph
+    /// marks, and <see cref="EmptyParagraphMarksToDrop"/> is handed nothing but
+    /// that plain text. Driven with a table-shaped story - <c>cell_one</c>
+    /// followed by four carriage returns: the filled cell's mark, an empty
+    /// cell's mark, the row end and the story's final mark - it answers
+    /// <c>(9, 2)</c>, which is the empty cell AND the row end. Deleting those
+    /// would not drop blank lines, it would destroy the table, which is exactly
+    /// the kind of loss section 56 promises cannot happen. Quill models no RTF
+    /// table of its own (no <c>\trowd</c>, <c>\cell</c>, <c>\row</c> or
+    /// <c>\intbl</c> anywhere in src/Quill), but <c>MainWindow</c>'s two
+    /// <c>Document.Selection.Paste(0)</c> calls have no sanitiser in front of
+    /// them, so a table pasted from Word or a browser is reachable.</para>
+    ///
+    /// <para><b>A GATE, not a parser.</b> This is a refusal test over the
+    /// string the control itself just produced. It never parses, never edits
+    /// and never stores anything, so section 50.2's objection to a second RTF
+    /// parser does not arise: a second parser is a thing that has to stay
+    /// CORRECT about every document Windows can write, and this only has to
+    /// stay SUSPICIOUS. Nothing better was available - the whole
+    /// <c>Microsoft.UI.Text</c> namespace of the Windows App SDK 1.8 winmd this
+    /// project builds against carries 584 identifiers and not one of them is
+    /// table-shaped (the nearest is <c>TabLeader</c>), so neither
+    /// <c>ITextRange</c> nor <c>ITextParagraphFormat</c> can be asked whether a
+    /// paragraph sits in a table.</para>
+    ///
+    /// <para><b>Conservative on purpose: any doubt means do not trim.</b> Plain
+    /// ordinal substring matching, so a literal <c>\cell</c> the user TYPED
+    /// (RTF writes it <c>\\cell</c>, which contains it) trips the gate too. A
+    /// false positive costs one un-trimmed edit - section 50's behaviour, which
+    /// is the fallback this whole design already stands on - and a false
+    /// negative would cost a table. <c>\itap</c> is deliberately NOT in the
+    /// list: <c>\itap0</c> is a declaration of NOT being in a table and a
+    /// writer may emit it unconditionally, which would silently disable the
+    /// trim everywhere instead of only over tables.</para></summary>
+    public static bool ContainsTableStructure(string? rtf)
+    {
+        if (string.IsNullOrEmpty(rtf)) return false;
+        foreach (string word in TableWords)
+            if (rtf.Contains(word, System.StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    /// <summary>The control words only table structure produces. <c>\cell</c>
+    /// also catches <c>\cellx</c>, a cell boundary; the three <c>\nest</c>
+    /// words are nested tables, which carry their own vocabulary.</summary>
+    private static readonly string[] TableWords =
+    {
+        @"\intbl", @"\trowd", @"\cell", @"\row",
+        @"\nestcell", @"\nestrow", @"\nesttableprops",
+    };
 }

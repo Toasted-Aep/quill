@@ -1104,13 +1104,41 @@ public sealed class InkSurface : UserControl
     /// exactly as the old text with that range removed. If the last check
     /// fails the document is put back from the serialisation read at the start
     /// of this flush — the box is being released, so the only cost is §50's
-    /// one extra paragraph, and nothing the user wrote is lost.</para></summary>
+    /// one extra paragraph, and nothing the user wrote is lost.</para>
+    ///
+    /// <para><b>56.8, TABLES.</b> A table's cell marks and row ends are
+    /// carriage returns in the story's plain text, so the range function cannot
+    /// tell them from paragraph marks and would happily delete an empty cell
+    /// and a row end. Quill writes no table RTF, but MainWindow's two
+    /// <c>Document.Selection.Paste(0)</c> calls have no sanitiser in front of
+    /// them. Before anything else, the control's own serialisation is put to
+    /// <see cref="TextFlushPolicy.ContainsTableStructure"/> - a refusal test
+    /// over the string, never a parse and never an edit - and a box that shows
+    /// any table structure is not trimmed at all.</para>
+    ///
+    /// <para><b>56.8, THE SURVIVOR'S FORMATTING.</b> The mark that has to
+    /// survive is the story's last, but the blank line the USER left is the
+    /// FIRST of the trailing run. Its paragraph formatting, and its mark's
+    /// character formatting, are captured before the delete and copied onto the
+    /// survivor after it - and only when they differ, so the ordinary case puts
+    /// no extra edit through the control. The copy is verified exactly as the
+    /// delete is, with <c>IsEqual</c> and an unchanged plain text; if it does
+    /// not take, the document goes back and the edit is stored
+    /// untrimmed.</para></summary>
     private static string? TrimTrailingEmptyParagraphs(RichEditBox box)
     {
         var doc = box.Document;
         string before;
         try { doc.GetText(TextGetOptions.FormatRtf, out before); }
         catch { return null; }
+        // 56.8: TABLES. A cell mark and a row end are both '\r' in the story's
+        // plain text, so EmptyParagraphMarksToDrop cannot tell them from
+        // paragraph marks - driven with a table-shaped story it answers with
+        // the empty cell AND the row end, and deleting those would destroy the
+        // table rather than drop blank lines. This is a gate and nothing else:
+        // a substring test over the string the control has just produced. Any
+        // doubt stores the untrimmed edit, which is 50's own behaviour.
+        if (TextFlushPolicy.ContainsTableStructure(before)) return null;
         try
         {
             var story = doc.GetRange(0, 0);
@@ -1135,6 +1163,14 @@ public sealed class InkSurface : UserControl
             var paraBefore = finalBefore.ParagraphFormat.GetClone();
             var charBefore = finalBefore.CharacterFormat.GetClone();
 
+            // 56.8: and the formatting of the FIRST trailing empty paragraph -
+            // the range's own Start, which is the blank line the user typed if
+            // any of them is theirs. The survivor is forced (the story's final
+            // mark cannot be deleted); its formatting is not.
+            var firstEmpty = doc.GetRange(start, start + 1);
+            var paraFirst = firstEmpty.ParagraphFormat.GetClone();
+            var charFirst = firstEmpty.CharacterFormat.GetClone();
+
             cut.Text = string.Empty;
 
             var check = doc.GetRange(0, 0);
@@ -1148,6 +1184,34 @@ public sealed class InkSurface : UserControl
             {
                 try { doc.SetText(TextSetOptions.FormatRtf, before); } catch { }
                 return null;
+            }
+            // 56.8: the survivor now carries the LAST trailing mark's
+            // formatting (the check above proves the control kept it). What the
+            // user set on their own blank line is the FIRST one's, so it is
+            // copied across - only when the two differ, so the ordinary case
+            // makes no further edit - and then verified the same way: IsEqual
+            // on both formats, and a plain text that has not moved. If it does
+            // not take, the document goes back and the edit is stored
+            // untrimmed, which is 50's behaviour and loses nothing the user
+            // wrote.
+            if (!finalAfter.ParagraphFormat.IsEqual(paraFirst) ||
+                !finalAfter.CharacterFormat.IsEqual(charFirst))
+            {
+                finalAfter.ParagraphFormat = paraFirst;
+                finalAfter.CharacterFormat = charFirst;
+                var recheck = doc.GetRange(0, 0);
+                recheck.Expand(Microsoft.UI.Text.TextRangeUnit.Story);
+                recheck.GetText(TextGetOptions.None, out string afterCopy);
+                var copied = afterCopy.Length == after.Length && after.Length > 0
+                    ? doc.GetRange(after.Length - 1, after.Length)
+                    : null;
+                if (afterCopy != after || copied == null ||
+                    !copied.ParagraphFormat.IsEqual(paraFirst) ||
+                    !copied.CharacterFormat.IsEqual(charFirst))
+                {
+                    try { doc.SetText(TextSetOptions.FormatRtf, before); } catch { }
+                    return null;
+                }
             }
             doc.GetText(TextGetOptions.FormatRtf, out string trimmed);
             return trimmed;
