@@ -1013,20 +1013,31 @@ if (oplogs.Length == 1)
         for (int i = 0; i < 20; i++) p.Shapes.Add(new ShapeElement { LayerKey = keys[0] });   // bottom only
         return p;
     }
-    long PerPass(DrawPlan pl, NotePage p, long pass, out bool sameAnswers)
+    // Counted REGION BY REGION: what the first region of the pass walked, and
+    // the most any LATER region of the same pass walked.
+    long PerPass(DrawPlan pl, NotePage p, long pass, out bool sameAnswers, out long firstRegion, out long laterMax)
     {
         long before = pl.InkCacheElementVisits;
         int first = pl.InkCacheStep(p, pass);
+        firstRegion = pl.InkCacheElementVisits - before;
         sameAnswers = true;
-        for (int r = 1; r < Regions; r++) sameAnswers &= pl.InkCacheStep(p, pass) == first;
+        laterMax = 0;
+        for (int r = 1; r < Regions; r++)
+        {
+            long v0 = pl.InkCacheElementVisits;
+            sameAnswers &= pl.InkCacheStep(p, pass) == first;
+            laterMax = Math.Max(laterMax, pl.InkCacheElementVisits - v0);
+        }
         return pl.InkCacheElementVisits - before;
     }
 
     var one = Big(1); var onePlan = DrawPlan.For(one);
-    long oneWork = PerPass(onePlan, one, 1, out bool oneSame);
+    long oneWork = PerPass(onePlan, one, 1, out bool oneSame, out long oneFirst, out long oneLater);
     var five = Big(5); var fivePlan = DrawPlan.For(five);
-    long fiveWork = PerPass(fivePlan, five, 1, out bool fiveSame);
+    long fiveWork = PerPass(fivePlan, five, 1, out bool fiveSame, out long fiveFirst, out long fiveLater);
     int n5 = five.Strokes.Count + five.Shapes.Count;
+    Console.WriteLine($"COST per region: 1 layer first={oneFirst} later(max)={oneLater}; "
+                      + $"5 layers first={fiveFirst} later(max)={fiveLater}");
 
     // What 58.4 paid: the walk on EVERY region of the pass.
     var rawPlan = DrawPlan.For(five);
@@ -1038,10 +1049,11 @@ if (oplogs.Length == 1)
                 + $"(58.4's per-region walk: {rawWork} per pass = {rawWork / Regions}/region); page = {n5} elements";
     Console.WriteLine("COST " + cost);
     Check("58.10 check 1 - one layer: a whole pass walks NO elements (O(1) per region, as on main)",
-          oneWork == 0 && oneSame, cost);
+          oneWork == 0 && oneFirst == 0 && oneLater == 0 && oneSame, cost);
     Check("58.10 check 1 - five layers: a whole pass of 120 regions walks the page ONCE, so "
           + "every region after the first is O(1)",
-          fiveWork == n5 && fiveSame, cost);
+          fiveWork == n5 && fiveFirst == n5 && fiveLater == 0 && fiveSame,
+          $"first region {fiveFirst}, each later region at most {fiveLater}; " + cost);
     Check("58.10 check 1 - and 58.4's per-region cost is what that replaces: 120 walks per pass",
           rawWork == (long)Regions * n5, cost);
     Check("58.10 check 1 - the memoised answer is the raw answer",

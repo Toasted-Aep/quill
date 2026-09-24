@@ -561,7 +561,7 @@ public readonly struct LayerBuckets
     }
 }
 
-//// <summary>One step of the paint order. <see cref="Bucket"/> is the layer's
+/// <summary>One step of the paint order. <see cref="Bucket"/> is the layer's
 /// index in <see cref="PageLayers.All"/> - the same index
 /// <see cref="PageLayers.InOrder"/> yields it at - and -1 for
 /// <see cref="DrawStepKind.Paint"/> and <see cref="DrawStepKind.WetPaint"/>.
