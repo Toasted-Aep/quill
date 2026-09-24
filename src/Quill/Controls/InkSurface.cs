@@ -495,7 +495,28 @@ public sealed class InkSurface : UserControl
         {
             var reason = args.Reason;
             if (reason == Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesReason.NewDevice)
+            {
                 PaperTextures.Invalidate();
+                // §58.10 ruling B: a device loss ends a live oil gesture. Its
+                // scratch targets belong to the LOST device, so they can be
+                // neither committed nor drawn: the brush is dropped (scratch
+                // with it) and the pen gesture ended, so nothing wet is left to
+                // draw on top and the rest of the stroke does not turn into
+                // vector ink. The next oil stroke builds a fresh brush.
+                if (_oil != null)
+                {
+                    bool wasLive = _oil.Active;
+                    var dead = _oil;
+                    _oil = null;
+                    _oilStore = null;
+                    try { dead.Dispose(); } catch { }
+                    if (wasLive && _gestureTool == ToolType.Pen)
+                    {
+                        ResetGesture();
+                        try { _canvas.ReleasePointerCaptures(); } catch { }
+                    }
+                }
+            }
             if (reason != Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesReason.FirstTime)
                 PaperTextures.SetDisplayDpi(_canvas.Dpi);
         };
@@ -831,6 +852,12 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     public void LoadPage(NotePage page)
     {
+        // §58.10 ruling B: a page switch mid-oil-stroke ends the gesture ON THE
+        // OUTGOING PAGE - committed into its tiles and its undo stack while
+        // _page is still that page - before OpenPaintForPage below flushes and
+        // drops its store. Without this the brush stayed live with the old
+        // page's scratch and the WetPaint step would draw it over the new page.
+        SettleOilGesture(endPenGesture: true);
         StopReplay();
         CancelPendingText();
         _page = page;
@@ -1939,35 +1966,21 @@ public sealed class InkSurface : UserControl
     }
 
     // Preview which stroke the object eraser would remove (#53).
+    //
+    // §58.10 (check 2): the preview CHOOSES one stroke to tint, so it chooses
+    // the way every single-answer pick does - LayerPick.Topmost, the visually
+    // topmost by the draw plan, and never one on a layer that draws nothing
+    // (ruling A). It used to take the FIRST hit in raw list order with no layer
+    // test, so it could tint a stroke underneath, or one on a hidden or 0%
+    // layer. No lock or scope test: the eraser does not ask them either.
     private PenStroke? FindStrokeNear(Vector2 p, float radius)
     {
         if (_page == null) return null;
-        static float DistSeg(Vector2 pt, Vector2 a, Vector2 b)
-        {
-            var ab = b - a;
-            float len2 = ab.LengthSquared();
-            if (len2 < 1e-6f) return Vector2.Distance(pt, a);
-            float t = Math.Clamp(Vector2.Dot(pt - a, ab) / len2, 0f, 1f);
-            return Vector2.Distance(pt, a + ab * t);
-        }
         var cand = StrokeCandidates(p.X - radius, p.Y - radius, p.X + radius, p.Y + radius);
-        foreach (var s in _page.Strokes)
-        {
-            if (cand != null && !cand.Contains(s)) continue;
-            s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
-            float pad = radius + s.Size;
-            if (p.X < bx0 - pad || p.X > bx1 + pad || p.Y < by0 - pad || p.Y > by1 + pad) continue;
-            var pts = s.Points;
-            if (pts.Count == 1)
-            {
-                if (Vector2.Distance(p, new Vector2(pts[0].X, pts[0].Y)) <= pad) return s;
-                continue;
-            }
-            for (int i = 1; i < pts.Count; i++)
-                if (DistSeg(p, new Vector2(pts[i - 1].X, pts[i - 1].Y), new Vector2(pts[i].X, pts[i].Y)) <= pad)
-                    return s;
-        }
-        return null;
+        return LayerPick.Topmost(CurrentDrawPlan(_page), _page.Strokes, DrawStepKind.Strokes,
+            s => s.LayerKey,
+            cand == null ? null : s => cand.Contains(s),
+            s => StrokeWithin(s, p, radius + s.Size));
     }
 
     /// <summary>
@@ -1995,46 +2008,39 @@ public sealed class InkSurface : UserControl
         // so a query box of `reach` cannot drop a stroke that the wider per-
         // stroke pad below would have caught (FindStrokeNear reasons the same).
         var cand = StrokeCandidates(p.X - reach, p.Y - reach, p.X + reach, p.Y + reach);
-        // §58.5: across layers the topmost stroke is the plan's, not the list's
-        // - see TopmostShape. One layer: first hit from the back, as ever.
-        var plan = CurrentDrawPlan(_page);
-        bool multi = plan.LayerCount > 1;
-        PenStroke? best = null;
-        int bestStep = -1;
-        for (int i = _page.Strokes.Count - 1; i >= 0; i--)
-        {
-            var s = _page.Strokes[i];
-            var pts = s.Points;
-            if (pts.Count == 0) continue;
-            if (cand != null && !cand.Contains(s)) continue;
-            if (multi)
-            {
-                int step = plan.StepOf(DrawStepKind.Strokes, s.LayerKey);
-                if (step < 0 || (best != null && step <= bestStep)) continue;
-            }
+        // §58.5: across layers the topmost stroke is the plan's, not the list's.
+        // One layer: first hit from the back, as ever. §58.10 ruling A: the walk
+        // is LayerPick.Topmost, which refuses an undrawn layer FIRST and
+        // unconditionally - 58.4 tested it only inside `if (multi)`, so on a
+        // one-layer page at 0% a click still found ink the plan did not draw.
+        return LayerPick.Topmost(CurrentDrawPlan(_page), _page.Strokes, DrawStepKind.Strokes,
+            s => s.LayerKey,
             // 17.10's scope and padlock bind here as well as on the lasso. A
             // click that selects and a lasso that selects are the mouse tool's
             // two gestures, not two tools, so they cannot disagree about what is
             // selectable - which is exactly what a second copy of this test in
             // one of the two paths would eventually produce.
-            if (!CanCatch(s.LayerKey, s.Locked)) continue;
-            float pad = reach + s.Size;
-            s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
-            if (p.X < bx0 - pad || p.X > bx1 + pad || p.Y < by0 - pad || p.Y > by1 + pad) continue;
-            bool hit = false;
-            if (pts.Count == 1)
-                hit = Vector2.Distance(p, new Vector2(pts[0].X, pts[0].Y)) <= pad;
-            else
-                for (int j = 1; j < pts.Count && !hit; j++)
-                    hit = GeometryUtil.DistToSegment(p,
-                              new Vector2(pts[j - 1].X, pts[j - 1].Y),
-                              new Vector2(pts[j].X, pts[j].Y)) <= pad;
-            if (!hit) continue;
-            if (!multi) return s;
-            best = s;
-            bestStep = plan.StepOf(DrawStepKind.Strokes, s.LayerKey);
-        }
-        return best;
+            s => s.Points.Count > 0 && (cand == null || cand.Contains(s)) && CanCatch(s.LayerKey, s.Locked),
+            s => StrokeWithin(s, p, reach + s.Size));
+    }
+
+    /// <summary>The geometry every stroke pick shares: is <paramref name="p"/>
+    /// within <paramref name="pad"/> of the stroke's polyline (a single point
+    /// counts as a dot)? Bounds first, then per segment.</summary>
+    private static bool StrokeWithin(PenStroke s, Vector2 p, float pad)
+    {
+        var pts = s.Points;
+        if (pts.Count == 0) return false;
+        s.GetBounds(out float bx0, out float by0, out float bx1, out float by1);
+        if (p.X < bx0 - pad || p.X > bx1 + pad || p.Y < by0 - pad || p.Y > by1 + pad) return false;
+        if (pts.Count == 1)
+            return Vector2.Distance(p, new Vector2(pts[0].X, pts[0].Y)) <= pad;
+        for (int j = 1; j < pts.Count; j++)
+            if (GeometryUtil.DistToSegment(p,
+                    new Vector2(pts[j - 1].X, pts[j - 1].Y),
+                    new Vector2(pts[j].X, pts[j].Y)) <= pad)
+                return true;
+        return false;
     }
 
     /// <summary>Makes one stroke the entire selection — what a click leaves
@@ -2771,6 +2777,11 @@ public sealed class InkSurface : UserControl
 
     private void ResetGesture()
     {
+        // §58.10 ruling B: every gesture that ends ends its oil brush too. On
+        // the normal lift CommitGesture has already ended it, so this is a
+        // no-op there; it catches a reset that arrives with the brush live.
+        // endPenGesture false: this IS the gesture ending.
+        SettleOilGesture(endPenGesture: false);
         _activePointer = null;
         _gestureTool = null;
         _wet = null;
@@ -3595,12 +3606,15 @@ public sealed class InkSurface : UserControl
     ///
     /// <para>The lock half is the ELEMENT's own <c>Locked</c> flag, which is a
     /// different thing from a locked layer and is the one the padlock control
-    /// switches: open padlock = INCLUDE, closed = IGNORE.</para></summary>
+    /// switches: open padlock = INCLUDE, closed = IGNORE.</para>
+    ///
+    /// <para>§58.10 ruling A: the body is <see cref="LayerPick.Catchable"/>
+    /// (Win2D-free, run by tools/LayerRoundTrip), and CanSelect now refuses a
+    /// layer at 0% as well as a hidden one - <see cref="PageLayers.IsVisible(Layer)"/>.</para></summary>
     private bool CanCatch(int layerKey, bool elementLocked)
     {
         if (_page == null) return true;
-        if (IgnoreLocked && elementLocked) return false;
-        return PageLayers.CanSelect(_page, layerKey, SelectScope);
+        return LayerPick.Catchable(_page, layerKey, elementLocked, IgnoreLocked, SelectScope);
     }
 
     /// <summary>§49 / 18.8: THE RENDER-TIME LAYER ANSWER, and the only place the
@@ -3651,9 +3665,22 @@ public sealed class InkSurface : UserControl
         _inkCacheDirty = true;
         if (visibilityChanged) RebuildTextLayer();
         else if (_page != null)
+        {
+            // §58.10 ruling A: an opacity slider that reaches 0% HAS changed
+            // visibility - 0% is hidden (PageLayers.IsVisible) - so a box whose
+            // layer now draws nothing must stop existing, exactly as a hidden
+            // layer's does, or it stays focusable and hit-testable at opacity 0.
+            // Leaving 0% brings it back. Only a crossing pays for the rebuild;
+            // every other slider tick just moves the multiplier.
+            bool crossed = false;
             foreach (var t in _page.Texts)
-                if (_textUi.TryGetValue(t.Id, out var ui))
-                    ui.Container.Opacity = LayerMultiplier(t.LayerKey);
+                if (PageLayers.IsVisible(_page, t.LayerKey) != _textUi.ContainsKey(t.Id)) { crossed = true; break; }
+            if (crossed) RebuildTextLayer();
+            else
+                foreach (var t in _page.Texts)
+                    if (_textUi.TryGetValue(t.Id, out var ui))
+                        ui.Container.Opacity = LayerMultiplier(t.LayerKey);
+        }
         _canvas.Invalidate();
     }
 
@@ -3794,35 +3821,34 @@ public sealed class InkSurface : UserControl
         }
         var lsCand = poly.Count > 0 ? StrokeCandidates(lx0, ly0, lx1, ly1) : null;
         var lhCand = poly.Count > 0 ? ShapeCandidates(lx0, ly0, lx1, ly1) : null;
-        foreach (var s in _page.Strokes)
-        {
-            if (s.Points.Count == 0) continue;
-            if (lsCand != null && !lsCand.Contains(s)) continue;
-            if (!CanCatch(s.LayerKey, s.Locked)) continue;
-            int inside = s.Points.Count(p => GeometryUtil.PointInPolygon(new Vector2(p.X, p.Y), poly));
-            // Partial: any part of the stroke inside the lasso catches it.
-            // Complete: the whole stroke has to be inside (UI-SPEC-V2 1.3).
-            if (SelectPartial ? inside > 0 : inside == s.Points.Count)
+        // §58.10 ruling A: the element walk and its gate are LayerPick.Lasso
+        // (Win2D-free, run by tools/LayerRoundTrip), whose gate is
+        // LayerPick.Catchable - the one CanCatch and the click use. Only the
+        // geometry is supplied from here; it is the geometry this loop had.
+        var caughtStrokes = new List<PenStroke>();
+        var caughtShapes = new List<ShapeElement>();
+        LayerPick.Lasso(_page, IgnoreLocked, SelectScope,
+            lsCand == null ? null : s => lsCand.Contains(s),
+            s =>
             {
-                _selected.Add(s);
-                _selectedSet.Add(s);
-            }
-        }
-        foreach (var sh in _page.Shapes)
-        {
-            if (lhCand != null && !lhCand.Contains(sh)) continue;
-            if (!CanCatch(sh.LayerKey, sh.Locked)) continue;
-            var r = ShapeBounds(sh);
-            var c = new Vector2((float)(r.X + r.Width / 2), (float)(r.Y + r.Height / 2));
-            if (GeometryUtil.PointInPolygon(c, poly)) { _selShapes.Add(sh); _selShapeSet.Add(sh); }
-        }
-        foreach (var t in _page.Texts)
-        {
-            if (!CanCatch(t.LayerKey, t.Locked)) continue;
+                int inside = s.Points.Count(p => GeometryUtil.PointInPolygon(new Vector2(p.X, p.Y), poly));
+                // Partial: any part of the stroke inside the lasso catches it.
+                // Complete: the whole stroke has to be inside (UI-SPEC-V2 1.3).
+                return SelectPartial ? inside > 0 : inside == s.Points.Count;
+            },
+            lhCand == null ? null : sh => lhCand.Contains(sh),
+            sh =>
+            {
+                var r = ShapeBounds(sh);
+                var c = new Vector2((float)(r.X + r.Width / 2), (float)(r.Y + r.Height / 2));
+                return GeometryUtil.PointInPolygon(c, poly);
+            },
             // The CENTRE, which a rotation about that same centre does not move -
             // so this test is already rotation-correct and stays that way.
-            if (GeometryUtil.PointInPolygon(TextCentreWorld(t), poly)) _selTexts.Add(t);
-        }
+            t => GeometryUtil.PointInPolygon(TextCentreWorld(t), poly),
+            caughtStrokes, caughtShapes, _selTexts);
+        foreach (var s in caughtStrokes) { _selected.Add(s); _selectedSet.Add(s); }
+        foreach (var sh in caughtShapes) { _selShapes.Add(sh); _selShapeSet.Add(sh); }
         _activeShape = null; // a multi-selection supersedes the single active shape
         RecomputeSelectionBounds();
     }
@@ -5572,8 +5598,16 @@ public sealed class InkSurface : UserControl
         return $"{ex.GetType().Name} hresult=0x{ex.HResult:X8}{lost}: {message}";
     }
 
+    /// <summary>§58.10 check 1: which draw pass this is. Bumped once per
+    /// <see cref="OnRegionsInvalidated"/>, and the ONLY key
+    /// <see cref="DrawPlan.InkCacheStep(NotePage, long)"/> memoises on, so every
+    /// region of one pass shares one walk of the page and the next pass - after
+    /// any edit - walks afresh. DrawRegion has no other caller.</summary>
+    private long _drawPass;
+
     private void OnRegionsInvalidated(CanvasVirtualControl sender, CanvasRegionsInvalidatedEventArgs args)
     {
+        _drawPass++;
         EnsureRefFrame();
         float blur = CurrentBlurRadius();
         // §27: counted per PASS, not per region. Every region used to log its own
@@ -5668,9 +5702,24 @@ public sealed class InkSurface : UserControl
     /// surfaced for the substrate memory measurement.</summary>
     public (int Tiles, long Bytes) PaintMemory => _paint == null ? (0, 0L) : (_paint.TileCount, _paint.ResidentBytes);
 
-    private void DrawPaint(CanvasDrawingSession ds, float visMinX, float visMinY, float visMaxX, float visMaxY)
+    /// <summary>Composites paint tiles over the visible world rect.
+    /// <paramref name="what"/> is <see cref="DrawPlan.PaintAt"/>'s answer for the
+    /// step being drawn (§58.10 ruling B): the Paint step, below every layer,
+    /// asks for the SETTLED tiles only; the WetPaint step, above all ink, asks
+    /// for the live gesture's SCRATCH only, and only while the gesture lasts.
+    /// Neither step ever asks for both, so the scratch cannot be drawn twice.
+    /// Until 58.10 this drew the scratch straight over each settled tile at
+    /// paint's own height, so a stroke painted over an opaque image or ink
+    /// showed nothing until the lift.</summary>
+    private void DrawPaint(CanvasDrawingSession ds, float visMinX, float visMinY, float visMaxX, float visMaxY,
+                           PaintSource what)
     {
-        if (_paint == null || _paint.TileCount == 0) return;
+        bool settled = (what & PaintSource.Settled) != 0 && _paint != null && _paint.TileCount > 0;
+        // The scratch does not need a settled tile under it: the FIRST stroke on
+        // a page has no committed tile yet, and the old `TileCount == 0` early
+        // return hid that stroke's wet paint until the lift (read, not seen).
+        bool wet = (what & PaintSource.Wet) != 0 && _oil is { Active: true, ScratchTileCount: > 0 };
+        if (!settled && !wet) return;
         // ds.Transform is ALREADY world-space here (scale * translate * regionT).
         // Do not touch it: the tiles draw at their world rects and pan/zoom fall
         // out of the composed transform for free. Clobbering it is exactly what
@@ -5687,12 +5736,13 @@ public sealed class InkSurface : UserControl
                 var src = new Rect(0, 0, ts, ts);
                 // settled paint comes through the cached lit tile, so steady
                 // state is one DrawImage per visible tile (§3.3)
-                if (_paint.TryGet(tx, ty, out var tile))
+                if (settled && _paint!.TryGet(tx, ty, out var tile))
                     ds.DrawImage(tile.EnsureLit(_canvas), world, src, 1f, interp);
-                // the live gesture's scratch draws straight on top so the wet
-                // stroke appears immediately; it is lit when it commits (§1.3)
-                if (_oil != null && _oil.TryGetScratchColour(tx, ty, out var wet))
-                    ds.DrawImage(wet, world, src, 1f, interp);
+                // the live gesture's scratch - at the WetPaint step, above all
+                // ink, so the wet stroke is seen immediately over anything; it
+                // is lit and settles below the ink when it commits (§1.3, 58.10)
+                if (wet && _oil!.TryGetScratchColour(tx, ty, out var scratch))
+                    ds.DrawImage(scratch, world, src, 1f, interp);
             }
     }
 
@@ -5758,6 +5808,38 @@ public sealed class InkSurface : UserControl
         ContentChanged?.Invoke();   // persists HasPaint; the spatial index is untouched
     }
 
+    /// <summary>
+    /// §58.10 ruling B: ENDS a live oil gesture that is ending some other way
+    /// than a lift - a page switch, the surface unloading, the window closing,
+    /// a gesture reset. The wet scratch draws ABOVE the ink only while
+    /// <see cref="OilGestureActive"/>, so a gesture that ended without its
+    /// brush ending would leave the scratch on top (and, before 58.10, stranded
+    /// at paint height until the next stroke committed it).
+    ///
+    /// <para>Commits, exactly as a lift does (<see cref="EndOilStroke"/>: the
+    /// scratch goes into the settled tiles, one undo action), so no painted
+    /// work is dropped. If that cannot run - no page, or it throws - the brush
+    /// is CANCELLED, dropping the scratch, because a scratch on top of a page
+    /// it no longer belongs to is worse than a lost wet stroke. Either way the
+    /// brush is inactive and holds no scratch afterwards.</para>
+    ///
+    /// <para>Also ends the pen gesture that carried it: otherwise the rest of
+    /// the pointer stream, with oil no longer active, would draw and commit a
+    /// VECTOR stroke (the pen path only suppresses its vector preview while
+    /// <see cref="OilGestureActive"/>).</para>
+    /// </summary>
+    private void SettleOilGesture(bool endPenGesture)
+    {
+        if (!OilGestureActive) return;
+        try { if (_page != null) EndOilStroke(); } catch { }
+        if (_oil is { Active: true }) _oil.Cancel();
+        if (endPenGesture && _gestureTool == ToolType.Pen)
+        {
+            ResetGesture();
+            try { _canvas.ReleasePointerCaptures(); } catch { }
+        }
+    }
+
     private void OpenPaintForPage(NotePage page)
     {
         try
@@ -5787,8 +5869,14 @@ public sealed class InkSurface : UserControl
     }
 
     /// <summary>App close / explicit save: block briefly so a debounced paint
-    /// write cannot be lost with the process.</summary>
-    public void FlushPaint() => _paint?.FlushBlocking();
+    /// write cannot be lost with the process. §58.10: a live oil gesture is
+    /// settled first, so its wet stroke is committed and written rather than
+    /// left in scratch.</summary>
+    public void FlushPaint()
+    {
+        SettleOilGesture(endPenGesture: true);
+        _paint?.FlushBlocking();
+    }
 
     /// <summary>Store for the live page, created on first mark.</summary>
     private PaintTileStore EnsurePaintStore(NotePage page)
@@ -5889,9 +5977,14 @@ public sealed class InkSurface : UserControl
         // §58.4: the cache is ONE image of every stroke, so it can stand in for
         // the Strokes steps only where no shape is painted between two layers'
         // strokes; InkCacheStep says where that is, or -1 (per-stroke path).
+        // §58.10 check 1: asked PER PASS, not per region. This method runs once
+        // per invalidated region (a pass can hold ~120), and the multi-layer
+        // answer walks every stroke and shape - so it is memoised on the plan
+        // against (_page, _drawPass): the first region of a pass walks, every
+        // other region is O(1). One layer never walks at all.
         bool cacheEligible = !_replaying && !_movingSel && !_spacing && !Veiling &&
                              _page.Strokes.Count >= InkCacheThreshold && AudioPlayheadPosition == null;
-        int cacheStep = cacheEligible ? plan.InkCacheStep(_page) : -1;
+        int cacheStep = cacheEligible ? plan.InkCacheStep(_page, _drawPass) : -1;
         bool cacheDrawn = false;
 
         PenStroke? activeStroke = null;
@@ -5918,13 +6011,17 @@ public sealed class InkSurface : UserControl
         for (int si = 0; si < steps.Count; si++)
         {
             var step = steps[si];
-            if (step.Kind == DrawStepKind.Paint)
+            if (step.Kind is DrawStepKind.Paint or DrawStepKind.WetPaint)
             {
-                // Raster paint (OILPAINT §1.2) sits BELOW EVERY LAYER, just
-                // above the paper and grid (58.2 item 2). §53 keeps it outside
-                // the layer model, so it has this one height. It leaves the ink
-                // cache below completely untouched.
-                DrawPaint(ds, visMinX, visMinY, visMaxX, visMaxY);
+                // Settled raster paint (OILPAINT §1.2) sits BELOW EVERY LAYER,
+                // just above the paper and grid (58.2 item 2). §53 keeps it
+                // outside the layer model, so it has this one height. It leaves
+                // the ink cache below completely untouched.
+                // §58.10 ruling B: the LIVE gesture's scratch is the WetPaint
+                // step, after every layer's ink, and only while the gesture is
+                // live - DrawPlan.PaintAt decides both, Win2D-free.
+                var what = DrawPlan.PaintAt(step.Kind, OilGestureActive);
+                if (what != PaintSource.None) DrawPaint(ds, visMinX, visMinY, visMaxX, visMaxY, what);
                 continue;
             }
             if (step.Kind == DrawStepKind.Texts) continue;   // XAML, above the canvas (58.2 item 3)
@@ -6530,34 +6627,29 @@ public sealed class InkSurface : UserControl
         // §58.5: the colour UNDER THE EYE is the topmost drawn element by the
         // draw plan. With one layer every stroke's step is above every shape's,
         // so this is the old "strokes first, then shapes, each from the back".
+        // §58.10 ruling A: both walks are LayerPick.Topmost, so a layer that
+        // draws nothing (hidden or 0%) gives no colour, on any page.
         var plan = CurrentDrawPlan(_page);
-        bool multi = plan.LayerCount > 1;
-        PenStroke? topStroke = null;
-        int topStrokeStep = -1;
         var stCand = StrokeCandidates(w.X - 24, w.Y - 24, w.X + 24, w.Y + 24);
-        for (int i = _page.Strokes.Count - 1; i >= 0; i--)
-        {
-            var st = _page.Strokes[i];
-            if (stCand != null && !stCand.Contains(st)) continue;
-            int step = plan.StepOf(DrawStepKind.Strokes, st.LayerKey);
-            if (step < 0 || (topStroke != null && step <= topStrokeStep)) continue;
-            float r = st.Size * 0.5f + slop;
-            var pts = st.Points;
-            bool hit = false;
-            for (int j = 0; j + 1 < pts.Count && !hit; j++)
+        var topStroke = LayerPick.Topmost(plan, _page.Strokes, DrawStepKind.Strokes,
+            st => st.LayerKey,
+            stCand == null ? null : st => stCand.Contains(st),
+            st =>
             {
-                var a = new Vector2(pts[j].X, pts[j].Y);
-                var b = new Vector2(pts[j + 1].X, pts[j + 1].Y);
-                var ab = b - a;
-                float len2 = ab.LengthSquared();
-                float t = len2 < 1e-6f ? 0f : Math.Clamp(Vector2.Dot(w - a, ab) / len2, 0f, 1f);
-                hit = Vector2.DistanceSquared(w, a + ab * t) <= r * r;
-            }
-            if (!hit) continue;
-            topStroke = st;
-            topStrokeStep = step;
-            if (!multi) break;
-        }
+                float r = st.Size * 0.5f + slop;
+                var pts = st.Points;
+                for (int j = 0; j + 1 < pts.Count; j++)
+                {
+                    var a = new Vector2(pts[j].X, pts[j].Y);
+                    var b = new Vector2(pts[j + 1].X, pts[j + 1].Y);
+                    var ab = b - a;
+                    float len2 = ab.LengthSquared();
+                    float t = len2 < 1e-6f ? 0f : Math.Clamp(Vector2.Dot(w - a, ab) / len2, 0f, 1f);
+                    if (Vector2.DistanceSquared(w, a + ab * t) <= r * r) return true;
+                }
+                return false;
+            });
+        int topStrokeStep = topStroke == null ? -1 : plan.StepOf(DrawStepKind.Strokes, topStroke.LayerKey);
 
         // The old shape walk skipped a shape whose colour did not parse and
         // tried the next one down; TopmostShape keeps that by asking for it.
@@ -7509,26 +7601,16 @@ public sealed class InkSurface : UserControl
     // these loops always made, and they still stop at the first hit.
     // =======================================================================
 
-    /// <summary>The topmost drawn shape satisfying <paramref name="hit"/>.</summary>
+    /// <summary>The topmost drawn shape satisfying <paramref name="hit"/>:
+    /// <see cref="LayerPick.Topmost{T}"/>, so a shape on a layer that draws
+    /// nothing is never the answer (§58.10 ruling A). Serves the press grab
+    /// (<see cref="HitShape"/>), <see cref="AxesShapeAt"/>,
+    /// <see cref="EquationShapeAt"/> and the eyedropper.</summary>
     private ShapeElement? TopmostShape(Func<ShapeElement, bool> hit)
     {
         if (_page == null) return null;
-        var plan = CurrentDrawPlan(_page);
-        bool multi = plan.LayerCount > 1;
-        ShapeElement? best = null;
-        int bestStep = -1;
-        for (int i = _page.Shapes.Count - 1; i >= 0; i--)
-        {
-            var s = _page.Shapes[i];
-            int step = plan.StepOf(DrawStepKind.Shapes, s.LayerKey);
-            if (step < 0) continue;                         // not drawn
-            if (best != null && step <= bestStep) continue; // lower index, not higher step: underneath
-            if (!hit(s)) continue;
-            if (!multi) return s;
-            best = s;
-            bestStep = step;
-        }
-        return best;
+        return LayerPick.Topmost(CurrentDrawPlan(_page), _page.Shapes, DrawStepKind.Shapes,
+                                 s => s.LayerKey, null, hit);
     }
 
     /// <summary>§58.5: true when <paramref name="stroke"/> is painted above
@@ -7542,7 +7624,7 @@ public sealed class InkSurface : UserControl
         if (_page == null) return false;
         var plan = CurrentDrawPlan(_page);
         if (plan.LayerCount <= 1) return false;
-        return plan.StepOf(DrawStepKind.Strokes, stroke.LayerKey) >= 0 &&
+        return plan.IsDrawn(stroke.LayerKey) &&
                plan.BucketOf(stroke.LayerKey) > plan.BucketOf(shape.LayerKey);
     }
 
@@ -7552,7 +7634,7 @@ public sealed class InkSurface : UserControl
         if (_page == null) return false;
         var plan = CurrentDrawPlan(_page);
         if (plan.LayerCount <= 1) return false;
-        return plan.StepOf(DrawStepKind.Shapes, shape.LayerKey) >= 0 &&
+        return plan.IsDrawn(shape.LayerKey) &&
                plan.BucketOf(shape.LayerKey) > plan.BucketOf(stroke.LayerKey);
     }
 
@@ -9576,8 +9658,9 @@ public sealed class InkSurface : UserControl
             // RichEditBox that exists is focusable, hit-testable and Tab-
             // reachable, so a collapsed one would still be a way to type into
             // a layer the user cannot see.
+            // §58.10 ruling A: the one fact, PageLayers.IsVisible (hidden OR 0%).
+            if (!PageLayers.IsVisible(_page, t.LayerKey)) continue;
             float lm = LayerMultiplier(t.LayerKey);
-            if (lm <= 0f) continue;
             BuildTextUi(t);
             // The multiplier rides on the CONTAINER's render opacity, which is a
             // property of this frame's visual and not of the element. 18.8's
@@ -10202,8 +10285,11 @@ public sealed class InkSurface : UserControl
         {
             var s = _page.Strokes[k];
             if (cand != null && !cand.Contains(s)) continue;
+            // §58.10 ruling A: the plan's drawn fact, asked first on every page.
+            // Kept as a forward walk (not LayerPick.Topmost) only because a
+            // one-layer page answers with the FIRST hit in list order here.
+            if (!plan.IsDrawn(s.LayerKey)) continue;
             int step = plan.StepOf(DrawStepKind.Strokes, s.LayerKey);
-            if (step < 0) continue;   // not drawn (§49.1)
             if (multi && best != null && !DrawPlan.IsAbove(step, k, bestStep, bestIdx)) continue;
             // cheap bbox reject before the per-point scan (FindStrokeNear has
             // always done this; HitStroke was the one path that didn't)
@@ -10296,9 +10382,13 @@ public sealed class InkSurface : UserControl
         var screen = e.GetPosition(_canvas);
         var pos = ToWorld(new Vector2((float)screen.X, (float)screen.Y));
 
+        // §58.10 ruling A: a table on a layer that draws nothing has no divider
+        // to double-tap - the same drawn fact every pick reads.
+        var tapPlan = CurrentDrawPlan(_page);
         foreach (var shape in _page.Shapes)
         {
-            if (shape.Kind == ShapeKind.Table && HitTableDivider(shape, pos, Math.Max(12f, 8f / ViewZoom), out int col, out int row))
+            if (shape.Kind == ShapeKind.Table && tapPlan.IsDrawn(shape.LayerKey) &&
+                HitTableDivider(shape, pos, Math.Max(12f, 8f / ViewZoom), out int col, out int row))
             {
                 if (col > 0)
                 {
