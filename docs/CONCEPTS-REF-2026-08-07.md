@@ -11091,7 +11091,10 @@ multi-layer page makes one pass over each list per visible layer, as 49.8's
   layer's shapes sit between; -1 means the per-stroke path. Steps below that
   step are empty by definition and skipped; steps above it are already in the
   image. If `TryDrawInkCache` fails, that step and every later one draw per
-  stroke. The cache BUILD walks the same plan's `Strokes` steps, so a hidden
+  stroke. *(Corrected in 58.10, check 1: `InkCacheStep` walks every stroke
+  and shape on a multi-layer page, and it was asked once per invalidated
+  REGION, up to ~120 times a pass. It is now asked once per pass.)* The
+  cache BUILD walks the same plan's `Strokes` steps, so a hidden
   layer is not baked in. `_inkCacheDirty` is still set by `LayersChanged`, and
   the plan cache sees the same change on its own. With one layer,
   `InkCacheStep` is that layer's `Strokes` step, so the cache sits exactly
@@ -11108,6 +11111,9 @@ multi-layer page makes one pass over each list per visible layer, as 49.8's
   draw nothing there, through `DrawStroke`'s `LayerMultiplier`.
 - **Previews drawn after the ink** — the wet stroke, the shape being adjusted,
   selection chrome, rubber bands — are unchanged and still sit on top.
+  *(Corrected in 58.10: this is true of the VECTOR wet stroke only. The live
+  OIL scratch was drawn inside `DrawPaint`, at paint's height, so from this
+  round on it sat below every layer while being painted. Ruling B moved it.)*
 - **Gallery thumbnail (~10455)** now walks `DrawPlan.For(page).Sequence(page)`
   instead of `InOrder`'s buckets, so its text follows all ink as it does on the
   glass. It still draws no oil paint. One layer: the same shapes, strokes,
@@ -11144,6 +11150,15 @@ they enclose; the eraser removes everything it touches; the object-eraser
 preview (`FindStrokeNear`) previews a gesture that removes every stroke it
 touches. `FocusTextAt` picks text boxes, which are above all ink by 58.2 item 3.
 
+*(Corrected in 58.10.)* Two things in that paragraph were wrong. The
+object-eraser preview DOES choose: it tints one stroke, and it took the first
+hit in raw list order with no layer test, so it could tint a stroke underneath
+or one on a hidden layer. It now goes through the plan like the rest of this
+table. And "take everything they enclose" hid a disagreement: the lasso's gate,
+`CanCatch`, asked `!Hidden`, while the click refused anything at 0%. So the
+lasso took a 0% layer's ink that a click refused. Ruling A (58.10) makes both
+ask one fact.
+
 **One exception, kept on purpose:** within ONE layer, a press on a shape still
 grabs the shape, even where that layer's own strokes are drawn over it. That
 is how it behaved before, and 18.5 keeps a layer's internal behaviour exactly.
@@ -11164,7 +11179,8 @@ Section 16 of the harness runs the REAL `DrawPlan` (the harness links
 `LayerModels.cs`). On main 53ba67a the harness says "83 checks held" and prints
 84 PASS lines. The 84th is the isolation check, printed after the summary. The
 brief's "84" counted that line. On this branch: **106 held**, 107 PASS lines,
-0 FAIL, from a fresh `--no-incremental` build.
+0 FAIL, from a fresh `--no-incremental` build. *(58.10 adds sections 17–21:
+139 held, 140 PASS lines.)*
 
 What it checks: two layers each holding a shape and a stroke paint A.shapes,
 A.strokes, B.shapes, B.strokes, so B's shape is above A's stroke. Reordering the
@@ -11219,6 +11235,8 @@ are unobserved:
 - any frame-time measurement. The one-layer cost claim in 58.4 is reasoning
   about loop counts and allocations, not a timing;
 - that the gallery thumbnail of a multi-layer page matches its canvas.
+
+58.10 adds its own list (58.10.9). Nothing there was seen on screen either.
 
 Nothing in the app can yet make a second layer or reorder one (49.8), so every
 multi-layer case above needs a seeded page. The on-screen method is the
@@ -11275,3 +11293,374 @@ is SEEDED into the page JSON, not drawn.
    bars, and repeat step 2 on pages 1 and 2. Page 2 puts B's shape between A's
    strokes and B's strokes, so the ink cache must stand down (58.4), and the
    picture must match the small page.
+8. **Selection parity (58.10 ruling A).** Seed one more page,
+   `Layers [V key 0, Z key 1 at Opacity 0, H key 2 Hidden, F key 3 at
+   Opacity 0.4]`. Each layer holds a stroke, a solid shape and a text box, laid
+   out apart so each can be aimed at alone. Put an axes shape and an equation
+   shape on Z. With the Select tool, scope All layers, padlock open:
+   - click on each of Z's and H's elements; lasso round each; rubber-band a
+     rectangle round each. Expect **no selection** on Z or H, and in each case
+     the same element on V and F selected. F is the control: it is drawn faintly
+     and must be selectable by all three gestures;
+   - hover the object eraser over Z's stroke. Expect **no tint** on it, and a
+     tint over V's stroke;
+   - use the eyedropper over Z's shape. Expect the ground's answer, never the
+     shape's colour;
+   - double-tap Z's axes and equation shapes. Expect **no editor to open**
+     (58.10 check 4);
+   - try to click into Z's text box. Expect nothing to focus;
+   - drag Z's opacity slider from 0% to 10% and repeat the click. Its elements
+     must now be selectable, and its text box must be back.
+
+   **Negative control:** in a build of `126d1ec`, the lasso takes Z's stroke,
+   shape and text while the click refuses them. If this branch and `126d1ec`
+   behave the same, the run cannot see ruling A.
+9. **Wet stroke on top (58.10 ruling B).** This needs real oil ink, and
+   injected mouse drags leave no ink, so it needs a pen in the user's hand. It
+   also has step 4's paint-store precondition. On page 1, paint oil slowly
+   across the opaque blue image bar and **hold the pen down**:
+   - mid-gesture, the wet colour must show over the blue image and over the
+     orange stroke, wherever the brush has been;
+   - at lift, it must settle UNDER both bars and stay visible only where
+     neither bar covers it. This is the accepted visible settle;
+   - start another stroke and, still holding the pen, switch page with the
+     keyboard. Page 2 must show no wet paint. Back on page 1, the stroke is
+     committed and sits under the bars;
+   - start another stroke and press Ctrl+Z mid-stroke. The stroke must
+     disappear entirely and the pen must stop painting until it is lifted and
+     pressed again. Ctrl+Y must bring the stroke back, under the bars.
+   - paint a single long stroke across more than 12 tiles
+     (`OilBrush.ScratchTileFlushLimit`; tiles are 512 px). Record whether its
+     earlier part drops under the ink before lift (58.10.9).
+
+### 58.10 Round 2: two rulings, and what the two checks found — 2026-09-24 (branch `layer-order-canvas`)
+
+Two independent checks of `126d1ec` found six things. The product owner then
+made two rulings. All of it is built and measured headlessly. **Nothing here
+was run on screen, and Quill was not launched** (58.10.9).
+
+This round was written in two sittings, because a session limit cut off the
+first. The first sitting's checkpoints (`59d66bb`, `927b31f`) were treated as
+a draft. The second sitting diffed every source file against `126d1ec` and
+looked for a fault injected mid-mutation-test. It found none. It rebuilt,
+re-ran every harness and re-ran every negative control, and re-derived the
+thumbnail goldens (58.10.5) from `126d1ec`'s own code in a separate scratch
+build. **Kept:** all of the draft's code. **Changed:** a stray `////` that had
+turned `DrawStep`'s doc comment into a plain comment; Undo and Redo now end a
+live oil gesture (58.10.2); check 1 is now counted region by region, not only
+per pass. **Discarded:** nothing.
+
+#### 58.10.1 Ruling A — invisible means unselectable, everywhere
+
+> A layer that draws nothing cannot be selected by any means: click, lasso,
+> rectangle select, the eraser preview, the eyedropper, audio seek, the
+> equation and axes editors. Locked stays a separate fact.
+
+**The defect.** On `126d1ec` the single-answer picks refused a layer whose
+plan step was -1 (`EffectiveOpacity` ≤ 0). But `CanCatch` →
+`PageLayers.CanSelect` → `IsEditable` asked only `!Hidden && !Locked`. So the
+lasso and the rectangle took a 0% layer's ink that a click refused: two ideas
+of "showing", which 49.2 forbids.
+
+**The one fact, in one place.** `PageLayers.IsVisible(Layer)`
+(`LayerModels.cs` ~243) is `EffectiveOpacity(layer) > 0`. That is §49.1's
+number: hidden and 0% are the same answer. It used to be `!Hidden`.
+`IsEditable` is now `IsVisible(l) && !l.Locked`, so `CanSelect` knows the
+opacity fact itself. Locked is still separate: a locked layer is drawn, so the
+eyedropper may sample it and the eraser preview may name it. Only the
+selection gestures refuse it.
+
+**Who reads it.** There are two routes, and both end at `IsVisible`:
+
+1. **Through `CanSelect`** (the selection gate). `LayerPick.Catchable`
+   (`LayerModels.cs` ~846, Win2D-free) is `CanSelect` plus the element's own
+   padlock. `InkSurface.CanCatch` (~3624) is now just a call to it. It is
+   read by:
+   - `HitStrokeForClick` (~2013): click-select, and the press that gives way
+     to a higher layer's stroke in `TryBeginShapeOrSelectionDrag` (~1850);
+   - `SelectWithLasso` (~3815), which serves both the lasso and the rectangle.
+     Its element walk is now `LayerPick.Lasso`, whose gate is `Catchable`.
+     Only the geometry is supplied by `InkSurface`.
+2. **Through the plan.** The `DrawPlan` constructor takes `IsVisible` for
+   each layer. That one answer both leaves the layer out of the steps and
+   sets `DrawPlan.IsDrawn(key)`. `CurrentDrawPlan` rebuilds the plan whenever
+   any layer's `EffectiveOpacity` changes (58.4), so `IsDrawn` follows
+   `IsVisible`. That was read, not executed; the harness checks the two agree
+   only on a fresh plan. It is read by:
+   - `LayerPick.Topmost`, which tests `IsDrawn` FIRST and unconditionally.
+     Its callers are `HitStrokeForClick`, `FindStrokeNear` (the object-eraser
+     preview, ~1986), `SampleColorAt`'s stroke walk (the eyedropper, ~6630),
+     and `TopmostShape` (~7619). `TopmostShape` serves `HitShape` (the press
+     grab and the touch tap), `AxesShapeAt` (~8128), `EquationShapeAt`
+     (~8140) and the eyedropper's shape walk;
+   - `IsDrawn` read directly by `HitStroke` (~10282: tap to seek audio, a
+     forward walk kept because one layer answers with the first hit in list
+     order), `StrokeLayerAbove` and `ShapeLayerAbove` (~7632, ~7642), and
+     the table-divider double-tap in `OnCanvasDoubleTapped` (~10389). The
+     divider test had no layer test at all before.
+
+Text boxes read the same fact a third way. `RebuildTextLayer` builds no box
+for an invisible layer, and `FocusTextAt` walks only the boxes that exist. An
+opacity slider reaching 0% used to change only the box's opacity, leaving an
+invisible box that could still be focused and typed into.
+`LayersChanged(visibilityChanged: false)` now rebuilds the text layer when any
+box's layer has crossed into or out of visibility. Every other slider tick
+still only moves the multiplier.
+
+**The inconsistency the check named.** In `HitStrokeForClick`, the `step < 0`
+refusal sat inside `if (multi)`, unlike its three siblings. On a one-layer
+page at 0%, the click skipped that refusal, and the gate (`!Hidden`) let the
+ink through. So a click could select ink the plan did not draw. The walk is now
+`LayerPick.Topmost`, which tests `IsDrawn` before anything else on every
+page.
+
+**Checks 2 and 4 fall under ruling A.**
+- **Check 2.** `FindStrokeNear` chooses one stroke to tint. It took the first
+  hit in raw list order with no layer test, so it could tint a stroke that was
+  not topmost, or one on a hidden or 0% layer. It is now `LayerPick.Topmost`
+  with the eraser's own geometry. Like the eraser, it asks no lock and no
+  scope.
+- **Check 4.** `AxesShapeAt` and `EquationShapeAt` go through `TopmostShape`.
+  So on a hidden or 0% layer, including a one-layer page at 0%, a double-tap
+  on an axes or equation shape no longer opens its editor (`MainWindow`
+  ~10919, ~10938). Under ruling A this is correct, and it is now recorded
+  here.
+
+**Left as it was, and not covered by the ruling:**
+- **The eraser itself** (`EraseAt`, ~3347) removes strokes and shapes on
+  hidden and 0% layers. It has no layer test, and it never had one. The
+  preview now refuses such a stroke, so the preview can show nothing while
+  the erase underneath removes ink the user cannot see. Erasing is not
+  selecting, and changing what an eraser destroys is a product decision, so
+  this is **open for a ruling**, not fixed.
+- `HitShape` still asks no lock and no scope (58.5).
+
+#### 58.10.2 Ruling B — the wet stroke stays on top while painting
+
+> Paint settles below every layer (58.2, unchanged). During the gesture the
+> user must see what they are painting. A visible settle at lift is accepted.
+
+**The defect.** `DrawPaint` drew the live scratch straight over each settled
+tile at the `Paint` step. Since 58.4 that step is below every layer, so paint
+dragged over an opaque image showed nothing until the lift. Reading the code
+also turned up a second case, not seen on screen: `DrawPaint` returned early
+on `TileCount == 0`. So the FIRST oil stroke on a page, which has no committed
+tile yet, showed no wet paint at all until the lift.
+
+**The plan.** `DrawStepKind.WetPaint` is a new step. There is exactly one,
+after the last `Shapes`/`Strokes` step and before the `Texts` steps. It is
+declared last in the enum, so no existing value moves. What a paint step
+composites is `DrawPlan.PaintAt(kind, wetGestureActive)`, which is
+Win2D-free:
+
+| Step | Gesture live | Gesture ended |
+|---|---|---|
+| `Paint` (step 0, below every layer) | settled tiles only | settled tiles only |
+| `WetPaint` (above all ink) | the scratch only | nothing |
+| any other | nothing | nothing |
+
+No step ever asks for both, so the scratch cannot be drawn twice. `DrawPaint`
+now takes a `PaintSource` and draws exactly what it is handed. `DrawRegion`
+passes `OilGestureActive`, which is `_oil is { Active: true }`. The scratch no
+longer needs a settled tile under it.
+
+**Every way a gesture ends, ends the brush.** The scratch is drawn only while
+the brush is `Active`. So the requirement is that no path leaves the brush
+active after its gesture has gone:
+
+| End | Path | What happens to the scratch |
+|---|---|---|
+| lift | `CommitGesture` → `EndOilStroke` | committed (as before) |
+| pointer cancelled / capture lost | `OnPointerLost` → `CommitGesture` | committed (as before) |
+| any other gesture reset (second pointer, tool switch mid-drag) | `ResetGesture` → `SettleOilGesture(false)` | committed |
+| page switch | `LoadPage` → `SettleOilGesture(true)`, **before** `_page` changes | committed to the OUTGOING page, and the pen gesture ended |
+| undo / redo | `Undo`/`Redo` → `SettleOilGesture(true)` **(added in the second sitting)** | committed as its own action; see below |
+| window close, surface unload | `FlushPaint` (`Closed`, `Unloaded`) → `SettleOilGesture(true)` | committed, then flushed to disk |
+| device loss | `CreateResources` with `NewDevice` | **dropped**: the scratch targets belong to the lost device, so the brush is disposed and the pen gesture reset |
+
+`SettleOilGesture` (~5841) commits exactly as a lift does. If that throws, or
+there is no page, it CANCELS the brush, dropping the scratch. A wet stroke
+left on top of a page it no longer belongs to would be worse than a lost wet
+stroke. With `endPenGesture: true` it also ends the pen gesture and releases
+capture. Otherwise the rest of the pointer stream, with oil no longer active,
+would draw and commit a VECTOR stroke.
+
+**Undo mid-stroke — a choice made here, not ruled.** Ctrl+Z pressed while
+painting first settles the stroke as its own undo action. The undo then takes
+back exactly that stroke, and Ctrl+Y brings it back. Redo mid-stroke also
+settles first. Any new edit empties the redo stack, so a redo mid-stroke
+finds nothing to redo. A VECTOR stroke is not affected by an undo mid-stroke.
+Its wet stroke carries on and commits at lift, as before. The two differ, and
+this is flagged for the product owner.
+
+**Not changed, and worth knowing:** a stroke that spreads past
+`ScratchTileFlushLimit` (12 tiles) commits its scratch mid-gesture
+(`ExtendOilStroke` → `CommitScratch`). That earlier part therefore settles
+below the ink BEFORE the lift, while the rest stays on top. This was read, not
+seen (58.9 step 9).
+
+#### 58.10.3 Check 1 — the ink-cache step, once per pass
+
+`DrawPlan.InkCacheStep(page)` walks every stroke and shape on a multi-layer
+page. `DrawRegion` asked it once per invalidated region, and one
+`OnRegionsInvalidated` can hand over ~120 regions. So a 2500-stroke page with
+five layers walked the whole page ~120 times a pass. Main does no
+per-element work here at all.
+
+The fix is `InkCacheStep(page, pass)`. `InkSurface` bumps `_drawPass` once per
+`OnRegionsInvalidated` (~5616). The plan memoises the answer against
+`(page, pass)`, and holds its two scratch `bool[]` once per plan rather than
+allocating them per call. The first region of a pass walks the page, and every
+later region is O(1). One layer returns its `Strokes` step and never walks.
+`DrawRegion` has no caller outside that handler: `DrawRegionBlurred` runs
+inside it. Nothing can change the page between two regions of one pass,
+because the handler runs on the UI thread from start to finish. An edit lands
+in a later pass, and that pass walks again.
+
+**Counted, not timed.** `DrawPlan.InkCacheElementVisits` counts elements
+walked. The harness runs 120 regions per pass on a page of 2500 strokes and
+20 shapes:
+
+| Page | First region of a pass | Each later region | Whole pass | `126d1ec` (per-region walk) |
+|---|---|---|---|---|
+| 1 layer | 0 | 0 | 0 | 0 (one layer never walked) |
+| 5 layers | 2520 | 0 | 2520 | 2520 per region, 302 400 per pass |
+
+So per region the cost is O(1) again after the first. Per PASS, a multi-layer
+page still pays one walk that main did not. That was accepted as the
+check's own "once per draw pass" option; caching against page content would
+need a content version the page does not have. No frame time was measured. The
+harness cannot see that `DrawRegion` calls the `(page, pass)` overload and
+not the raw one. That was read.
+
+One more step per region: the plan of a one-layer page is now five steps
+(`Paint, Shapes, Strokes, WetPaint, Texts`), not four. 58.4's one-layer cost
+reasoning otherwise stands.
+
+#### 58.10.4 Checks 5 and 6 — the resolver alone, and the empty list
+
+- **Check 5.** The key-to-bucket rule is now `LayerBuckets` (`LayerModels.cs`
+  ~529), a struct holding one `int[]`. `DrawPlan` holds one, and
+  `PageLayers.InOrder` builds one. InOrder no longer builds a whole plan and
+  throws five arrays away. Both call the same code, so they still cannot
+  disagree.
+- **Check 6.** `new DrawPlan(empty)` used to succeed and then throw
+  `IndexOutOfRange` from `StepOf`/`InkCacheStep`. Now the `LayerBuckets`
+  constructor rejects an empty list with `ArgumentException`, and null with
+  `ArgumentNullException`, at construction. Every non-empty list is total.
+  `PageLayers.All` is never empty, so the app cannot reach either case.
+
+#### 58.10.5 Check 3 — the thumbnail stamp carries each element's layer
+
+Since 58.4, moving an element to another layer changes the picture without
+changing any geometry or colour. `ThumbnailCache.Stamp` did not mix
+`LayerKey`, so the gallery kept serving the old PNG. The stamp now lives in
+`Services/ThumbnailStamp.cs`, which is Win2D-free, so `LayerRoundTrip` links
+and RUNS it. `ThumbnailCache.Stamp` calls it.
+
+It mixes every stroke's, shape's and text's `LayerKey`, but **only when the
+page has more than one layer**. With one bucket every key paints in the same
+place (18.7), so a page with no `Layers` array, or with one layer, keeps
+exactly the stamp it had. The harness holds goldens for both. The second
+sitting checked the goldens independently: it compiled `126d1ec`'s
+`ThumbnailCache.Stamp`, extracted verbatim, into a scratch program. That gave
+`b1ec38de41aba562` (implicit) and `12e75f09d7380bf3` (one layer), the same
+values the harness asserts.
+
+A multi-layer page's stamp changes once. That page re-renders its thumbnail
+once, which also retires 58.4's caveat about an old PNG keeping the old text
+stacking.
+
+#### 58.10.6 What `tools/LayerRoundTrip` proves now
+
+Sections 17–21 were added. From a fresh `--no-incremental` build: **139 held,
+140 PASS lines, 0 FAIL.** The harness runs the real `PageLayers`, `DrawPlan`,
+`LayerBuckets`, `LayerPick` and `ThumbnailStamp`:
+
+- **17, ruling A.** A page holds five layers: visible, hidden, 0%, locked,
+  and 40%. Each holds a stroke, a shape and a text. Each pick path runs
+  through the exact shared call the canvas makes, with the geometry replaced
+  by identity: click (`Topmost` + `Catchable`), lasso and rectangle
+  (`LayerPick.Lasso`), eraser preview and eyedropper (`Topmost`, no gate) and
+  press grab. On BOTH the hidden and the 0% layer every path refuses. On the
+  visible and 40% layers every path answers. Locked: the selection gestures
+  refuse, while the eyedropper, preview and grab see it. The eraser preview
+  names the visually topmost stroke whichever way the list runs. A one-layer
+  page at 0% (the `if (multi)` case) refuses on every path.
+- **18, ruling B.** Five arrangements: no `Layers`, one layer, two, five, and
+  five with the top one hidden. In each, while the gesture is live the scratch
+  is composited once, at `WetPaint`, above the last ink step and below text.
+  Settled paint is composited once, at step 0. No step composites both. After
+  the gesture, no step draws the scratch.
+- **19, check 1.** The per-region counts in 58.10.3; the memo's answer equals
+  the raw walk; the next pass after an edit walks afresh.
+- **20, check 3.** The goldens. Moving the stroke, the shape or the text to
+  the other layer changes the stamp, and moving it back restores it. An
+  orphan key on a one-bucket page does not change it.
+- **21, checks 5 and 6.** Empty → `ArgumentException`, null →
+  `ArgumentNullException`. A non-empty list with no base key is total.
+  `InOrder` and the plan agree on a duplicated key and an orphan.
+
+**Negative controls, run in the second sitting.** Each is a mutation that
+compiles: the harness built with 0 errors and 0 warnings after its `bin\x64`
+and `obj` were deleted. The source was restored byte-identical afterwards,
+compared by SHA-256, with its CRLF endings unchanged.
+
+| Mutation | Checks failed |
+|---|---|
+| lasso ignores the shared fact: its own copy of the old `!Hidden && !Locked` gate in `LayerPick.Lasso` | 2 (0% parity; one layer at 0%) |
+| `CanSelect` not taught: `IsEditable` back to `!Hidden && !Locked` | 3 (the fact; 0% parity; one layer at 0%) |
+| `Topmost`'s drawn test moved back inside `if (multi)` | 1 (one layer at 0%) |
+| wet stroke left below: `Paint` composites settled + scratch, `WetPaint` nothing | 3 (once at WetPaint; above the ink; never both) |
+| scratch left on top after the gesture: `WetPaint` always draws | 1 (gone after the gesture) |
+| per-region cost restored: the per-pass memo line removed | 1 (five layers: later region walked 2520) |
+| stamp without `LayerKey` | 2 (stroke move; shape and text move) |
+| restored | 139 held, 0 FAIL |
+
+**What the harness cannot reach.** `InkSurface` is not linked. So the harness
+does not show:
+- that `DrawRegion` passes `OilGestureActive` truthfully;
+- that every gesture end in 58.10.2's table calls `SettleOilGesture`;
+- that `DrawRegion` asks the per-pass overload;
+- that the pick paths pass the geometry they had before;
+- that the text layer rebuilds on a 0% crossing.
+
+All of these were read and compiled, not executed.
+
+#### 58.10.7 Build and harnesses
+
+`dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64
+--no-incremental`: 0 warnings, 0 errors. All ten harnesses in `tools/` were
+built fresh (`bin\x64` deleted, `--no-incremental`) and run from that output.
+Results are in the final commit's message.
+
+#### 58.10.8 The Layers panel
+
+Unchanged. Nothing in these rulings adds a sentence to it.
+
+#### 58.10.9 WHAT IS NOT ESTABLISHED
+
+Quill was not launched. None of the following has been observed:
+
+- that a 0% layer's elements refuse the click, the lasso, the rectangle, the
+  eraser preview, the eyedropper, the double-tap editors and the text caret
+  on the glass, while a 40% layer's answer (58.9 step 8);
+- that the wet oil stroke shows over an opaque image and over ink while it is
+  painted, and settles under them at lift (58.9 step 9). Headlessly, only the
+  plan and the flag that decide this are proved;
+- that nothing wet is left on top after a page switch, an undo, a redo, a
+  window close or a device loss mid-stroke. Device loss cannot be provoked on
+  demand here, and its path was only read;
+- that the first oil stroke on a page with no paint yet now shows wet (the
+  removed `TileCount == 0` early return);
+- whether a long stroke's mid-gesture scratch flush is visible as part of it
+  dropping under the ink before lift;
+- any frame-time effect of the WetPaint step, the per-pass ink-cache walk or
+  the text-layer rebuild on a 0% crossing;
+- that the gallery re-renders a multi-layer page's thumbnail after an element
+  changes layer.
+
+**Open for the product owner:** whether the eraser may remove ink on a
+layer that draws nothing (58.10.1); whether undo mid-oil-stroke should take
+back that stroke (as built) or leave it painting as a vector stroke does
+(58.10.2).
