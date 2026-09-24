@@ -227,16 +227,35 @@ public static class PageLayers
     public static float EffectiveOpacity(NotePage page, int layerKey)
         => EffectiveOpacity(Of(page, layerKey));
 
-    /// <summary>Whether anything on this layer is drawn at all.</summary>
-    public static bool IsVisible(NotePage page, int layerKey) => !Of(page, layerKey).Hidden;
+    /// <summary>
+    /// WHETHER ANYTHING ON THIS LAYER IS DRAWN AT ALL - and therefore whether
+    /// anything on it can be picked, by any means (58.10, ruling A).
+    ///
+    /// <para><b>This is §49.1's one fact, and this overload is the one place it
+    /// is computed.</b> 0 means hidden, so a layer is visible exactly when
+    /// <see cref="EffectiveOpacity(Layer)"/> is above 0: <c>Hidden</c> and an
+    /// opacity of 0% are the same answer. <see cref="DrawPlan"/> leaves a layer
+    /// out on it, <see cref="IsEditable"/> (and so <see cref="CanSelect"/>, and
+    /// so every selection gesture) refuses on it, and <see cref="LayerPick"/>'s
+    /// single-answer picks refuse on it. Until 58.10 this was <c>!Hidden</c>,
+    /// so a 0% layer was "visible" to the lasso and invisible to a click.</para>
+    /// </summary>
+    public static bool IsVisible(Layer layer) => EffectiveOpacity(layer) > 0f;
 
-    /// <summary>SELECTION SCOPING (18.9 seam 3). False when the layer is hidden
-    /// or locked. Composes with the element's own padlock rather than replacing
-    /// it - a caller wants <c>IsEditable(page, e.LayerKey) &amp;&amp; !e.Locked</c>.</summary>
+    /// <summary>The same fact for an element's key (unknown keys resolve to the
+    /// base layer, 18.7).</summary>
+    public static bool IsVisible(NotePage page, int layerKey) => IsVisible(Of(page, layerKey));
+
+    /// <summary>SELECTION SCOPING (18.9 seam 3). False when the layer draws
+    /// nothing (<see cref="IsVisible(Layer)"/>: hidden OR 0%) or is locked.
+    /// Locked is a SEPARATE fact - a locked layer is drawn and cannot be
+    /// selected; it is not "invisible". Composes with the element's own padlock
+    /// rather than replacing it - a caller wants
+    /// <c>IsEditable(page, e.LayerKey) &amp;&amp; !e.Locked</c>.</summary>
     public static bool IsEditable(NotePage page, int layerKey)
     {
         var l = Of(page, layerKey);
-        return !l.Hidden && !l.Locked;
+        return IsVisible(l) && !l.Locked;
     }
 
     /// <summary>"Is this in the active layer?" - asked with the element's key,
@@ -255,8 +274,9 @@ public static class PageLayers
         => scope == LayerScope.AllLayers || InActive(page, layerKey);
 
     /// <summary>Both halves of the selection question at once: in scope for the
-    /// tool, AND on a layer that is neither hidden nor locked. Still composes
-    /// with the element's own padlock, which is the caller's to check.</summary>
+    /// tool, AND on a layer that is drawn (not hidden, not 0%) and not locked.
+    /// Still composes with the element's own padlock, which is the caller's to
+    /// check - <see cref="LayerPick.Catchable"/> is that composition.</summary>
     public static bool CanSelect(NotePage page, int layerKey, LayerScope scope)
         => IsEditable(page, layerKey) && InScope(page, layerKey, scope);
 
@@ -284,8 +304,10 @@ public static class PageLayers
         // impossible but a hand-edited file does not) cannot make content
         // vanish into the second one, and an unknown key falls to the base
         // layer's bucket, or the bottom one when even that is missing (18.7).
-        var plan = new DrawPlan(all);
-        int Bucket(int key) => plan.BucketOf(key);
+        // The resolver alone (one int[]), not a whole DrawPlan: InOrder never
+        // reads the steps (58.10, check 5).
+        var resolver = new LayerBuckets(all);
+        int Bucket(int key) => resolver.Of(key);
 
         var shapes = new List<ShapeElement>[n];
         var strokes = new List<PenStroke>[n];
@@ -466,58 +488,56 @@ public enum DrawStepKind
     /// whatever the layer order (58.2, for now); the plan says so by putting
     /// every Texts step after every ink step.</summary>
     Texts,
+    /// <summary>The LIVE oil gesture's scratch - the wet stroke still under the
+    /// brush (58.10, ruling B). Exactly one, after every Shapes and Strokes
+    /// step, so the user sees what they are painting over an opaque image or
+    /// ink; on lift the scratch is committed into the settled tiles, which draw
+    /// at <see cref="Paint"/>, below every layer (58.2). Whether it draws
+    /// anything is <see cref="DrawPlan.PaintAt"/>'s answer, not the plan's.
+    /// Declared LAST so no existing kind's value moves.</summary>
+    WetPaint,
 }
 
-/// <summary>One step of the paint order. <see cref="Bucket"/> is the layer's
-/// index in <see cref="PageLayers.All"/> - the same index
-/// <see cref="PageLayers.InOrder"/> yields it at - and -1 for
-/// <see cref="DrawStepKind.Paint"/>. <see cref="Multiplier"/> is
-/// <see cref="PageLayers.EffectiveOpacity(Layer)"/> for that layer (1 for
-/// paint), carried for callers that have no surface to ask.</summary>
-public readonly record struct DrawStep(DrawStepKind Kind, int Bucket, float Multiplier);
+/// <summary>What a paint step composites (58.10, ruling B). Settled paint and
+/// the wet scratch are separate sources drawn at separate steps, so a frame can
+/// never draw the scratch twice.</summary>
+[Flags]
+public enum PaintSource
+{
+    None = 0,
+    /// <summary>The page's committed paint tiles.</summary>
+    Settled = 1,
+    /// <summary>The live gesture's scratch tiles.</summary>
+    Wet = 2,
+}
 
 /// <summary>
-/// THE PAINT ORDER ACROSS ELEMENT TYPES (CONCEPTS-REF 58.2 / 58.4) - the one
-/// definition the canvas, the gallery thumbnail and hit-testing iterate.
+/// THE KEY -> BUCKET RESOLVER, and the only implementation of it (18.7 / 58.4).
+/// <see cref="DrawPlan"/> holds one and <see cref="PageLayers.InOrder"/> builds
+/// one, so the canvas and the panel/thumbnail/PSD seam cannot disagree about
+/// where an element paints.
 ///
-/// <para><b>The ruling, in order:</b> oil paint first, just above the paper
-/// and grid and below every layer; then each VISIBLE layer bottom first, its
-/// shapes then its strokes (18.9's tuple order, so within a layer nothing
-/// moves); then every visible layer's text, above all ink. Reordering the
-/// stack therefore reorders shapes and strokes together.</para>
+/// <para>First layer with a matching key wins; an unknown key falls to the base
+/// layer's bucket, or the bottom one when the page has no base layer - visible,
+/// never dropped. One layer: bucket 0 without looking at the key.</para>
 ///
-/// <para><b>Visibility is not decided here.</b> A layer is left out exactly
-/// when <see cref="PageLayers.EffectiveOpacity(Layer)"/> is 0 - hidden, or
-/// dropped to 0% - which is §49.1's one fact, asked the one way. There is no
-/// second idea of "is this layer showing".</para>
-///
-/// <para><b>Buckets resolve the way <see cref="PageLayers.InOrder"/> does,
-/// because InOrder calls <see cref="BucketOf"/>.</b> First layer with a
-/// matching key wins; an unknown key falls to the base layer's bucket, or the
-/// bottom one when the page has no base layer - visible, never dropped
-/// (18.7).</para>
-///
-/// <para><b>Win2D-free and cheap.</b> The plan holds the layer list's keys and
-/// at most 3 x layers + 1 steps; it does not copy the page's element lists,
-/// so a 60 Hz draw loop can build one per frame and filter the lists it
-/// already walks by <see cref="BucketOf"/>. A page with no Layers array or one
-/// layer has ONE bucket, and <see cref="BucketOf"/> answers 0 without looking
-/// at the key.</para>
+/// <para><b>An empty layer list is REJECTED</b> (58.10, check 6).
+/// <see cref="PageLayers.All"/> is never empty, so the app never builds one; a
+/// direct caller that passes one gets an <see cref="ArgumentException"/> here,
+/// at construction, instead of an IndexOutOfRange later from a lookup.</para>
 /// </summary>
-public sealed class DrawPlan
+public readonly struct LayerBuckets
 {
     private readonly int[] _keys;
     private readonly int _fallback;
-    // per bucket: the index in Steps of its Shapes / Strokes / Texts step, or
-    // -1 when the layer is not drawn.
-    private readonly int[] _shapeStep, _strokeStep, _textStep;
-    private readonly DrawStep[] _steps;
 
-    /// <summary>The plan for a page, from <see cref="PageLayers.All"/>.</summary>
-    public static DrawPlan For(NotePage page) => new(PageLayers.All(page));
-
-    public DrawPlan(IReadOnlyList<Layer> layers)
+    public LayerBuckets(IReadOnlyList<Layer> layers)
     {
+        ArgumentNullException.ThrowIfNull(layers);
+        if (layers.Count == 0)
+            throw new ArgumentException(
+                "A page always has at least one layer (PageLayers.All); an empty layer list has no bucket to resolve to.",
+                nameof(layers));
         int n = layers.Count;
         _keys = new int[n];
         _fallback = -1;
@@ -527,34 +547,116 @@ public sealed class DrawPlan
             if (_fallback < 0 && layers[i].Key == PageLayers.BaseKey) _fallback = i;
         }
         if (_fallback < 0) _fallback = 0;
+    }
+
+    /// <summary>How many buckets (layers).</summary>
+    public int Count => _keys.Length;
+
+    /// <summary>Which bucket an element with this key paints in.</summary>
+    public int Of(int layerKey)
+    {
+        if (_keys.Length <= 1) return 0;
+        for (int i = 0; i < _keys.Length; i++) if (_keys[i] == layerKey) return i;
+        return _fallback;
+    }
+}
+
+//// <summary>One step of the paint order. <see cref="Bucket"/> is the layer's
+/// index in <see cref="PageLayers.All"/> - the same index
+/// <see cref="PageLayers.InOrder"/> yields it at - and -1 for
+/// <see cref="DrawStepKind.Paint"/> and <see cref="DrawStepKind.WetPaint"/>.
+/// <see cref="Multiplier"/> is <see cref="PageLayers.EffectiveOpacity(Layer)"/>
+/// for that layer (1 for paint), carried for callers that have no surface to
+/// ask.</summary>
+public readonly record struct DrawStep(DrawStepKind Kind, int Bucket, float Multiplier);
+
+/// <summary>
+/// THE PAINT ORDER ACROSS ELEMENT TYPES (CONCEPTS-REF 58.2 / 58.4 / 58.10) - the
+/// one definition the canvas, the gallery thumbnail and hit-testing iterate.
+///
+/// <para><b>The ruling, in order:</b> settled oil paint first, just above the
+/// paper and grid and below every layer; then each VISIBLE layer bottom first,
+/// its shapes then its strokes (18.9's tuple order, so within a layer nothing
+/// moves); then the live oil gesture's wet scratch, above all ink while the
+/// gesture lasts (58.10 ruling B); then every visible layer's text, above all
+/// ink. Reordering the stack therefore reorders shapes and strokes
+/// together.</para>
+///
+/// <para><b>Visibility is not decided here.</b> A layer is left out exactly
+/// when <see cref="PageLayers.IsVisible(Layer)"/> is false - hidden, or dropped
+/// to 0% - which is §49.1's one fact, asked the one way. There is no second
+/// idea of "is this layer showing"; <see cref="IsDrawn"/> hands the same answer
+/// to the pick paths.</para>
+///
+/// <para><b>Buckets resolve the way <see cref="PageLayers.InOrder"/> does,
+/// because both use <see cref="LayerBuckets"/>.</b> First layer with a
+/// matching key wins; an unknown key falls to the base layer's bucket, or the
+/// bottom one when the page has no base layer - visible, never dropped
+/// (18.7). An empty layer list is rejected at construction.</para>
+///
+/// <para><b>Win2D-free and cheap.</b> The plan holds the layer list's keys and
+/// at most 3 x layers + 2 steps; it does not copy the page's element lists,
+/// so a draw loop filters the lists it already walks by
+/// <see cref="BucketOf"/>. A page with no Layers array or one layer has ONE
+/// bucket, and <see cref="BucketOf"/> answers 0 without looking at the
+/// key.</para>
+/// </summary>
+public sealed class DrawPlan
+{
+    private readonly LayerBuckets _buckets;
+    // per bucket: the index in Steps of its Shapes / Strokes / Texts step, or
+    // -1 when the layer is not drawn; and the drawn fact itself.
+    private readonly int[] _shapeStep, _strokeStep, _textStep;
+    private readonly bool[] _drawn;
+    private readonly DrawStep[] _steps;
+    private readonly int _wetStep;
+
+    /// <summary>The plan for a page, from <see cref="PageLayers.All"/>.</summary>
+    public static DrawPlan For(NotePage page) => new(PageLayers.All(page));
+
+    /// <summary>Throws <see cref="ArgumentException"/> for an empty list
+    /// (<see cref="LayerBuckets"/>); every other list, orphans and duplicate
+    /// keys included, yields a plan.</summary>
+    public DrawPlan(IReadOnlyList<Layer> layers)
+    {
+        _buckets = new LayerBuckets(layers);   // rejects null and empty first
+        int n = layers.Count;
 
         _shapeStep = new int[n];
         _strokeStep = new int[n];
         _textStep = new int[n];
-        var steps = new List<DrawStep>(3 * n + 1);
+        _drawn = new bool[n];
+        _strokesIn = new bool[n];
+        _shapesIn = new bool[n];
+        var steps = new List<DrawStep>(3 * n + 2);
 
-        // 58.2 item 2: paint below every layer, drawn once, before any ink.
+        // 58.2 item 2: settled paint below every layer, drawn once, before any ink.
         steps.Add(new DrawStep(DrawStepKind.Paint, -1, 1f));
 
         // 58.2 item 1: each layer's shapes and strokes together, bottom first.
         for (int i = 0; i < n; i++)
         {
             _shapeStep[i] = _strokeStep[i] = _textStep[i] = -1;
+            _drawn[i] = PageLayers.IsVisible(layers[i]);   // §49.1 / 58.10: the one fact
+            if (!_drawn[i]) continue;                       // draws nothing, picks nothing
             float m = PageLayers.EffectiveOpacity(layers[i]);
-            if (m <= 0f) continue;   // §49.1: 0 means hidden - draw nothing
             _shapeStep[i] = steps.Count;
             steps.Add(new DrawStep(DrawStepKind.Shapes, i, m));
             _strokeStep[i] = steps.Count;
             steps.Add(new DrawStep(DrawStepKind.Strokes, i, m));
         }
 
+        // 58.10 ruling B: the wet scratch above every layer's ink, while the
+        // gesture lasts. After the LAST ink step, whatever the layer order.
+        _wetStep = steps.Count;
+        steps.Add(new DrawStep(DrawStepKind.WetPaint, -1, 1f));
+
         // 58.2 item 3: text above all ink, whatever the layer order.
         for (int i = 0; i < n; i++)
         {
-            float m = PageLayers.EffectiveOpacity(layers[i]);
-            if (m <= 0f) continue;
+            if (!_drawn[i]) continue;
             _textStep[i] = steps.Count;
-            steps.Add(new DrawStep(DrawStepKind.Texts, i, m));
+            steps.Add(new DrawStep(DrawStepKind.Texts, i, PageLayers.EffectiveOpacity(layers[i])));
         }
 
         _steps = steps.ToArray();
@@ -565,16 +667,38 @@ public sealed class DrawPlan
 
     /// <summary>How many layers (buckets) the page has. 1 for a page with no
     /// Layers array.</summary>
-    public int LayerCount => _keys.Length;
+    public int LayerCount => _buckets.Count;
 
-    /// <summary>Which bucket an element with this key paints in. See the class
-    /// remarks for the resolution rule; it is InOrder's.</summary>
-    public int BucketOf(int layerKey)
+    /// <summary>Which bucket an element with this key paints in. See
+    /// <see cref="LayerBuckets"/>; it is InOrder's rule, by the same code.</summary>
+    public int BucketOf(int layerKey) => _buckets.Of(layerKey);
+
+    /// <summary>58.10 ruling A: whether an element with this key is drawn at
+    /// all - <see cref="PageLayers.IsVisible(Layer)"/> for its layer, taken
+    /// when the plan was built. False means it cannot be picked by any
+    /// means.</summary>
+    public bool IsDrawn(int layerKey) => _drawn[_buckets.Of(layerKey)];
+
+    /// <summary>The index in <see cref="Steps"/> of the one
+    /// <see cref="DrawStepKind.WetPaint"/> step.</summary>
+    public int WetPaintStep => _wetStep;
+
+    /// <summary>
+    /// 58.10 RULING B, the flag that decides it: what a paint step composites.
+    /// <see cref="DrawStepKind.Paint"/> draws the SETTLED tiles only - never the
+    /// scratch, so the scratch cannot be drawn twice.
+    /// <see cref="DrawStepKind.WetPaint"/> draws the scratch only while an oil
+    /// gesture is live; once the gesture has ended (lift, pointer lost, page
+    /// switch, device loss, window close - see InkSurface.SettleOilGesture)
+    /// it draws nothing, so the scratch is never left on top. Every other step
+    /// composites no paint.
+    /// </summary>
+    public static PaintSource PaintAt(DrawStepKind kind, bool wetGestureActive) => kind switch
     {
-        if (_keys.Length <= 1) return 0;
-        for (int i = 0; i < _keys.Length; i++) if (_keys[i] == layerKey) return i;
-        return _fallback;
-    }
+        DrawStepKind.Paint => PaintSource.Settled,
+        DrawStepKind.WetPaint => wetGestureActive ? PaintSource.Wet : PaintSource.None,
+        _ => PaintSource.None,
+    };
 
     /// <summary>The index in <see cref="Steps"/> at which an element of this
     /// kind and key is painted, or -1 when its layer is not drawn. HIT-TESTING
@@ -599,37 +723,78 @@ public sealed class DrawPlan
     public static bool IsAbove(int stepA, int indexA, int stepB, int indexB)
         => stepA >= 0 && (stepA > stepB || (stepA == stepB && indexA > indexB));
 
+    // ---- the big-page ink cache's height (#43, 58.4, 58.10 check 1) --------
+
+    // Scratch for the walk, allocated once per plan rather than per call.
+    private readonly bool[] _strokesIn, _shapesIn;
+    // The per-PASS memo: the answer for (page, pass), so a draw pass of ~120
+    // invalidated regions walks the page once, not once per region.
+    private NotePage? _memoPage;
+    private long _memoPass = long.MinValue;
+    private int _memoStep;
+
+    /// <summary>Elements (strokes + shapes) the ink-cache walk has visited over
+    /// this plan's life. A COUNTER, not a clock: it is how the harness proves
+    /// the per-region cost (58.10 check 1) and costs one add per walk.</summary>
+    public long InkCacheElementVisits { get; private set; }
+
     /// <summary>Where a single image holding EVERY stroke (the canvas's big-page
     /// ink cache, #43) may be drawn without changing the picture: the index of
     /// the first Strokes step that has strokes in it, or -1 when no such place
     /// exists because a layer's SHAPES sit between two layers' strokes. With one
     /// layer this is simply that layer's Strokes step, which is where the cache
-    /// has always been drawn relative to shapes.</summary>
+    /// has always been drawn relative to shapes.
+    ///
+    /// <para><b>This overload WALKS THE PAGE</b> (every stroke and shape) on a
+    /// multi-layer page. The draw loop must call
+    /// <see cref="InkCacheStep(NotePage, long)"/>, which walks it once per
+    /// pass.</para></summary>
     public int InkCacheStep(NotePage page)
     {
-        if (_keys.Length <= 1) return _strokeStep[0];
-        var strokesIn = new bool[_keys.Length];
-        var shapesIn = new bool[_keys.Length];
-        foreach (var s in page.Strokes) strokesIn[BucketOf(s.LayerKey)] = true;
-        foreach (var s in page.Shapes) shapesIn[BucketOf(s.LayerKey)] = true;
+        if (_buckets.Count <= 1) return _strokeStep[0];
+        Array.Clear(_strokesIn);
+        Array.Clear(_shapesIn);
+        foreach (var s in page.Strokes) _strokesIn[BucketOf(s.LayerKey)] = true;
+        foreach (var s in page.Shapes) _shapesIn[BucketOf(s.LayerKey)] = true;
+        InkCacheElementVisits += page.Strokes.Count + page.Shapes.Count;
         int first = -1, last = -1;
         for (int i = 0; i < _steps.Length; i++)
-            if (_steps[i].Kind == DrawStepKind.Strokes && strokesIn[_steps[i].Bucket])
+            if (_steps[i].Kind == DrawStepKind.Strokes && _strokesIn[_steps[i].Bucket])
             {
                 if (first < 0) first = i;
                 last = i;
             }
         if (first < 0) return -1;
         for (int i = first + 1; i < last; i++)
-            if (_steps[i].Kind == DrawStepKind.Shapes && shapesIn[_steps[i].Bucket]) return -1;
+            if (_steps[i].Kind == DrawStepKind.Shapes && _shapesIn[_steps[i].Bucket]) return -1;
         return first;
+    }
+
+    /// <summary>
+    /// <see cref="InkCacheStep(NotePage)"/> for one DRAW PASS (58.10 check 1).
+    /// <paramref name="pass"/> identifies the pass - InkSurface bumps it once
+    /// per <c>RegionsInvalidated</c> - and the answer is memoised against
+    /// (page, pass): the first region of a pass walks the page, every later
+    /// region of the same pass is O(1). One layer is O(1) always and walks
+    /// nothing. The page cannot change between two regions of one pass (the
+    /// handler runs on the UI thread start to finish), and any change lands in
+    /// a LATER pass, which gets a fresh walk.
+    /// </summary>
+    public int InkCacheStep(NotePage page, long pass)
+    {
+        if (_buckets.Count <= 1) return _strokeStep[0];
+        if (pass == _memoPass && ReferenceEquals(page, _memoPage)) return _memoStep;
+        _memoStep = InkCacheStep(page);
+        _memoPage = page;
+        _memoPass = pass;
+        return _memoStep;
     }
 
     /// <summary>The plan expanded over a page: every step, and for each element
     /// step every element of that type in that bucket, in list order - exactly
-    /// the walk the canvas makes. Paint yields one entry with a null element.
-    /// Allocates an iterator; for a one-off render (the thumbnail) or a proof,
-    /// not a per-frame loop.</summary>
+    /// the walk the canvas makes. Paint and WetPaint each yield one entry with a
+    /// null element. Allocates an iterator; for a one-off render (the
+    /// thumbnail) or a proof, not a per-frame loop.</summary>
     public IEnumerable<(DrawStep Step, object? Element)> Sequence(NotePage page)
     {
         foreach (var step in _steps)
@@ -637,6 +802,7 @@ public sealed class DrawPlan
             switch (step.Kind)
             {
                 case DrawStepKind.Paint:
+                case DrawStepKind.WetPaint:
                     yield return (step, null);
                     break;
                 case DrawStepKind.Shapes:
@@ -652,6 +818,122 @@ public sealed class DrawPlan
                         if (BucketOf(t.LayerKey) == step.Bucket) yield return (step, t);
                     break;
             }
+        }
+    }
+}
+
+/// <summary>
+/// THE PICK RULES (CONCEPTS-REF 58.5 / 58.10) - Win2D-free, so
+/// <c>tools/LayerRoundTrip</c> runs the same code the canvas does.
+///
+/// <para><b>Ruling A (58.10): a layer that draws nothing cannot be picked by
+/// any means.</b> "Draws nothing" is <see cref="PageLayers.IsVisible(Layer)"/>
+/// and nothing else - §49.1 / 49.2's one fact. Two gates read it:</para>
+/// <list type="bullet">
+/// <item><see cref="Catchable"/> - the SELECTION gestures (click-select, lasso,
+/// rectangle select). Visibility, plus the separate facts a selection also
+/// respects: the layer lock and the All/Active scope
+/// (<see cref="PageLayers.CanSelect"/>) and the element's own padlock.</item>
+/// <item><see cref="DrawPlan.IsDrawn"/> - read unconditionally by
+/// <see cref="Topmost{T}"/>, so every single-answer pick (the press grab, the
+/// eraser preview, the eyedropper, the equation and axes editors) refuses an
+/// undrawn layer whatever else it checks. It is the same fact, taken by the
+/// plan from <see cref="PageLayers.IsVisible(Layer)"/>.</item>
+/// </list>
+/// <para>Locked is NOT folded into visibility: a locked layer is drawn, so the
+/// eyedropper may sample it and the eraser preview may name it.</para>
+/// </summary>
+public static class LayerPick
+{
+    /// <summary>The selection gestures' gate: may this element be caught by a
+    /// click, a lasso or a rectangle right now? The element padlock binds only
+    /// when the padlock control says IGNORE (<paramref name="ignoreLocked"/>);
+    /// the layer half is <see cref="PageLayers.CanSelect"/> - drawn, not
+    /// locked, in scope.</summary>
+    public static bool Catchable(NotePage page, int layerKey, bool elementLocked,
+                                 bool ignoreLocked, LayerScope scope)
+    {
+        if (ignoreLocked && elementLocked) return false;
+        return PageLayers.CanSelect(page, layerKey, scope);
+    }
+
+    /// <summary>
+    /// The topmost element of one kind under a pointer, by the draw plan
+    /// (58.5): of the elements that pass, the one in the highest step wins,
+    /// and within a step the one latest in the list. Walks the list from the
+    /// back, so with one layer it stops at the first hit - the backwards walk
+    /// these picks always made.
+    ///
+    /// <para><b>Ruling A is tested here, first and unconditionally</b>
+    /// (<see cref="DrawPlan.IsDrawn"/>): an element whose layer draws nothing
+    /// is skipped whether the page has one layer or five. 58.4's
+    /// <c>HitStrokeForClick</c> tested it only inside <c>if (multi)</c>, so on
+    /// a one-layer page at 0% a click still found ink the plan did not
+    /// draw.</para>
+    ///
+    /// <para><paramref name="admit"/> is the caller's other gates (the
+    /// selection gate <see cref="Catchable"/>, a spatial-index candidate test,
+    /// a colour that must parse); <paramref name="hit"/> is the geometry.
+    /// Both are asked only for an element that could still win.</para>
+    /// </summary>
+    public static T? Topmost<T>(DrawPlan plan, IReadOnlyList<T> list, DrawStepKind kind,
+                                Func<T, int> keyOf, Func<T, bool>? admit, Func<T, bool> hit)
+        where T : class
+    {
+        bool multi = plan.LayerCount > 1;
+        T? best = null;
+        int bestStep = -1;
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            var e = list[i];
+            int key = keyOf(e);
+            if (!plan.IsDrawn(key)) continue;                 // ruling A: draws nothing, picks nothing
+            int step = plan.StepOf(kind, key);
+            if (best != null && step <= bestStep) continue;   // lower index, not higher step: underneath
+            if (admit != null && !admit(e)) continue;
+            if (!hit(e)) continue;
+            if (!multi) return e;
+            best = e;
+            bestStep = step;
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// THE LASSO AND THE RECTANGLE (one routine: a rectangle is a four-point
+    /// lasso). Takes every element the geometry encloses that the SELECTION
+    /// gate passes - <see cref="Catchable"/>, the same gate a click uses, so the
+    /// two gestures of the one tool cannot disagree about what is selectable
+    /// (16.10 / 17.10), and a 0% layer is refused by both (58.10 ruling A).
+    ///
+    /// <para><paramref name="strokeCand"/> / <paramref name="shapeCand"/> are the
+    /// spatial index's cheap rejections, asked first; null means "no index,
+    /// consider everything". The gate is asked before the geometry.</para>
+    /// </summary>
+    public static void Lasso(NotePage page, bool ignoreLocked, LayerScope scope,
+                             Func<PenStroke, bool>? strokeCand, Func<PenStroke, bool> strokeIn,
+                             Func<ShapeElement, bool>? shapeCand, Func<ShapeElement, bool> shapeIn,
+                             Func<TextElement, bool> textIn,
+                             ICollection<PenStroke> strokesOut, ICollection<ShapeElement> shapesOut,
+                             ICollection<TextElement> textsOut)
+    {
+        foreach (var s in page.Strokes)
+        {
+            if (s.Points.Count == 0) continue;
+            if (strokeCand != null && !strokeCand(s)) continue;
+            if (!Catchable(page, s.LayerKey, s.Locked, ignoreLocked, scope)) continue;
+            if (strokeIn(s)) strokesOut.Add(s);
+        }
+        foreach (var sh in page.Shapes)
+        {
+            if (shapeCand != null && !shapeCand(sh)) continue;
+            if (!Catchable(page, sh.LayerKey, sh.Locked, ignoreLocked, scope)) continue;
+            if (shapeIn(sh)) shapesOut.Add(sh);
+        }
+        foreach (var t in page.Texts)
+        {
+            if (!Catchable(page, t.LayerKey, t.Locked, ignoreLocked, scope)) continue;
+            if (textIn(t)) textsOut.Add(t);
         }
     }
 }
