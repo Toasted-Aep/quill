@@ -32,15 +32,18 @@ public static class TextTrim
     /// of this flush — the box is being released, so the only cost is §50's
     /// one extra paragraph, and nothing the user wrote is lost.</para>
     ///
-    /// <para><b>56.8, TABLES.</b> A table's cell marks and row ends are
-    /// carriage returns in the story's plain text, so the range function cannot
-    /// tell them from paragraph marks and would happily delete an empty cell
-    /// and a row end. Quill writes no table RTF, but MainWindow's two
+    /// <para><b>56.8, TABLES.</b> The range function sees only plain text and
+    /// cannot tell a table's marks from paragraph marks; were a cell mark or a
+    /// row end a bare carriage return, it would delete an empty cell and a row
+    /// end. Quill writes no table RTF, but MainWindow's two
     /// <c>Document.Selection.Paste(0)</c> calls have no sanitiser in front of
-    /// them. Before anything else, the control's own serialisation is put to
-    /// <see cref="TextFlushPolicy.ContainsTableStructure"/> - a refusal test
-    /// over the string, never a parse and never an edit - and a box that shows
-    /// any table structure is not trimmed at all.</para>
+    /// them. So a box with table structure is not trimmed at all, and two
+    /// independent refusals say so: the control's own serialisation is put to
+    /// <see cref="TextFlushPolicy.ContainsTableStructure"/> before anything
+    /// else, and the story's plain text to
+    /// <see cref="TextFlushPolicy.PlainTextShowsTable"/> before any range is
+    /// chosen. Both are tests over a string, never a parse and never an
+    /// edit.</para>
     ///
     /// <para><b>56.8, THE SURVIVOR'S FORMATTING.</b> The mark that has to
     /// survive is the story's last, but the blank line the USER left is the
@@ -56,11 +59,11 @@ public static class TextTrim
         string before;
         try { doc.GetText(TextGetOptions.FormatRtf, out before); }
         catch { return null; }
-        // 56.8: TABLES. A cell mark and a row end are both '\r' in the story's
-        // plain text, so EmptyParagraphMarksToDrop cannot tell them from
-        // paragraph marks - driven with a table-shaped story it answers with
-        // the empty cell AND the row end, and deleting those would destroy the
-        // table rather than drop blank lines. This is a gate and nothing else:
+        // 56.8: TABLES. EmptyParagraphMarksToDrop cannot tell a table's marks
+        // from paragraph marks - driven with a story whose cell mark and row
+        // end are '\r' it answers with the empty cell AND the row end, and
+        // deleting those would destroy the table rather than drop blank lines.
+        // This is a gate and nothing else:
         // a substring test over the string the control has just produced. Any
         // doubt stores the untrimmed edit, which is 50's own behaviour.
         if (TextFlushPolicy.ContainsTableStructure(before)) return null;
@@ -70,6 +73,10 @@ public static class TextTrim
             story.Expand(TextRangeUnit.Story);
             story.GetText(TextGetOptions.None, out string plain);
             if (story.StartPosition != 0 || story.EndPosition - story.StartPosition != plain.Length) return null;
+            // 56.8: the second table refusal, over the very string the range is
+            // taken from - on this engine a row reads U+FFF9 CR ... U+0007 ...
+            // U+FFFB CR. Independent of the RTF gate above; either refuses.
+            if (TextFlushPolicy.PlainTextShowsTable(plain)) return null;
             var (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(plain);
             if (length <= 0) return null;
 
@@ -80,9 +87,9 @@ public static class TextTrim
             // The paragraph that survives at the end must still be the one that
             // was there: its paragraph formatting and its mark's character
             // formatting are captured now and compared after the delete. Which
-            // mark RichEdit keeps when marks are deleted is behaviour of the
-            // control that no harness here can execute, so it is checked, not
-            // assumed.
+            // mark RichEdit keeps when marks are deleted is the engine's
+            // behaviour: tools/TrimEngineProof measured that it keeps the last,
+            // but an engine not measured there is checked here, not assumed.
             int last = plain.Length - 1;
             var finalBefore = doc.GetRange(last, last + 1);
             var paraBefore = finalBefore.ParagraphFormat.GetClone();

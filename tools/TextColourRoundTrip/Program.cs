@@ -1067,33 +1067,47 @@ var tableStories = new (string Name, string Rtf, string Plain)[]
     ("modelled: a cell and a row end as CR", StoredDoc("x", 0).Replace(@"x\par", EngineRow + @"\pard\sl300\slmult1\par"),
      "cell_one\r\r\r\r"),
     ("engine: one row, then the final paragraph", StoredDoc("x", 0).Replace(@"x\par", EngineRow + @"\pard\sl300\slmult1\par"),
-     "￹\rcell_one\u0007\u0007￻\r\r\r"),
+     "\uFFF9\rcell_one\u0007\u0007\uFFFB\r\r\r"),
     ("engine: words, a row, 4 empties", StoredDoc(@"before\par" + "\r\n" + EngineRow + @"\pard\sl300\slmult1", 4),
-     "before\r￹\rcell_one\u0007\u0007￻\r\r\r\r\r\r\r\r"),
+     "before\r\uFFF9\rcell_one\u0007\u0007\uFFFB\r\r\r\r\r\r\r\r"),
     ("engine: two rows, the last empty", StoredDoc("x", 0).Replace(@"x\par", EngineRow + EngineEmptyRow + @"\pard\sl300\slmult1\par"),
-     "￹\rcell_one\u0007\u0007￻\r￹\r\u0007\u0007￻\r\r\r\r"),
+     "\uFFF9\rcell_one\u0007\u0007\uFFFB\r\uFFF9\r\u0007\u0007\uFFFB\r\r\r\r"),
     ("nested table words", StoredDoc(@"inner\nestcell{\*\nesttableprops\trowd\cellx2000\nestrow}", 3), "inner\u0007\r\r\r\r\r"),
     ("a lone \\intbl", StoredDoc(@"\intbl lonely", 3), "lonely\r\r\r\r\r"),
 };
-int tableRefused = 0, tableUnsafe = 0;
+int tableRefused = 0, tableUnsafe = 0, rtfGateMissed = 0, beltMissed = 0, beltExpected = 0;
 var tableDetail = new List<string>();
 foreach (var (tName, tRtf, tPlain) in tableStories)
 {
-    // TextTrim's order: the gate on the RTF, then the range on the plain text.
-    bool refused = TextFlushPolicy.ContainsTableStructure(tRtf);
+    // TextTrim's order: the gate on the RTF, then the belt on the plain text,
+    // then - only if neither refused - the range on the plain text.
+    bool gate = TextFlushPolicy.ContainsTableStructure(tRtf);
+    bool belt = TextFlushPolicy.PlainTextShowsTable(tPlain);
+    bool refused = gate || belt;
     var (ts, tl) = refused ? (tPlain.Length, 0) : TextFlushPolicy.EmptyParagraphMarksToDrop(tPlain);
     if (refused) tableRefused++;
     else if (tl != 0) tableUnsafe++;
-    tableDetail.Add($"{tName}: {(refused ? "refused" : $"range ({ts},{tl})")}");
+    if (!gate) rtfGateMissed++;
+    // The belt can only see what the engine puts in the plain text: the
+    // engine shapes carry U+FFF9/U+FFFB/U+0007, the modelled CR-only shape
+    // and the lone \intbl (whose text the engine does not keep) carry none.
+    bool engineShaped = tPlain.IndexOfAny(new[] { '\uFFF9', '\uFFFB', '\u0007' }) >= 0;
+    if (engineShaped) { beltExpected++; if (!belt) beltMissed++; }
+    tableDetail.Add($"{tName}: gate={gate} belt={belt} {(refused ? "refused" : $"range ({ts},{tl})")}");
 }
 Check("56.8 [6m] A TABLE-SHAPED STORY IS REFUSED OR GETS AN EMPTY RANGE - never a range. The range "
-      + "function alone, in the modelled shape, WOULD take the empty cell and the row end (9,2); the gate, "
-      + "linked from TextFlushPolicy and asked first as TextTrim asks it, refuses all six shapes: the "
-      + "engine's own \\trowd/\\cell/\\row serialisations, a nested table and a lone \\intbl",
+      + "function alone, in the modelled shape, WOULD take the empty cell and the row end (9,2); asked in "
+      + "TextTrim's order, the linked refusals turn away all six shapes: the engine's own "
+      + "\\trowd/\\cell/\\row serialisations, a nested table and a lone \\intbl",
       TextFlushPolicy.EmptyParagraphMarksToDrop("cell_one\r\r\r\r") == (9, 2) &&
       tableUnsafe == 0 && tableRefused == tableStories.Length,
       $"unguarded modelled range {TextFlushPolicy.EmptyParagraphMarksToDrop("cell_one\r\r\r\r")}; "
       + string.Join("; ", tableDetail));
+Check("56.8 [6m] THE RTF GATE ALONE refuses all six table shapes (ContainsTableStructure, linked)",
+      rtfGateMissed == 0, $"{tableStories.Length - rtfGateMissed} of {tableStories.Length} refused by the RTF gate");
+Check("56.8 [6m] THE PLAIN-TEXT BELT ALONE refuses every story in the engine's own table shape "
+      + "(PlainTextShowsTable, linked: U+FFF9, U+FFFB, U+0007)",
+      beltExpected == 4 && beltMissed == 0, $"{beltExpected - beltMissed} of {beltExpected} engine-shaped stories refused by the belt");
 
 string tableStored = StoredDoc(@"lecture notes\par" + "\r\n" + EngineRow + @"\pard\sl300\slmult1", 46);
 string tableLive = RichEditRoundTrip(tableStored);
@@ -1129,8 +1143,10 @@ var wsShapes = new (string Plain, string Expected)[]
     ("text\r\r \r\r\t\r\r\r\r", "text\r\r \r\r\t\r\r"),
     (" \r\r\r\r", " \r\r"),
     ("\t\r\r", "\t\r\r"),
-    ("text\r \r\r\r\r", "text\r \r\r"),
+    ("text\r\u00a0\r\r\r\r", "text\r\u00a0\r\r"),
     ("text\r \r \r\r\r", "text\r \r \r\r"),
+    ("text\r\u00a0\r\r\r", "text\r\u00a0\r\r"),
+    ("text\r\u00a0\r\r \r\r\t\r\r\r", "text\r\u00a0\r\r \r\r\t\r\r"),
 };
 int wsWrong = 0; string? wsFirst = null;
 foreach (var (p, want) in wsShapes)
@@ -1145,6 +1161,17 @@ Check("56.8 [6n] A TRAILING RUN THAT MIXES WHITESPACE-ONLY PARAGRAPHS WITH EMPTY
       + "the marks after the last whitespace paragraph go, down to one",
       wsWrong == 0,
       wsWrong == 0 ? $"{wsShapes.Length} shapes, all as expected" : $"{wsWrong} wrong; first: {wsFirst}");
+
+// The belt must be as quiet as the gate on ordinary text: whitespace, soft
+// breaks, the words themselves, and every plain text the checks above used.
+var beltOrdinary = wsShapes.Select(x => x.Plain)
+    .Concat(new[] { "a\vb\r\r", "cell row intbl trowd\r\r\r", "tab\there\r\r", "\r", "lecture notes" + new string('\r', 49) })
+    .ToList();
+var beltNoise = beltOrdinary.Where(TextFlushPolicy.PlainTextShowsTable).Select(Escape).ToList();
+Check("56.8 [6n] THE PLAIN-TEXT BELT IS SILENT ON ORDINARY TEXT - spaces, tabs, no-break spaces, a soft "
+      + "break, the table words typed as words, a grown note - so it cannot quietly turn the trim off",
+      beltNoise.Count == 0,
+      $"{beltOrdinary.Count} plain texts, belt fired on: {(beltNoise.Count == 0 ? "none" : string.Join(", ", beltNoise))}");
 
 // ===========================================================================
 foreach (var line in log) Console.WriteLine(line);
@@ -1328,7 +1355,9 @@ static int TrailingEmpties(string rtf)
 //   3. MayTrim            - is this write one the trim may ride on?
 //   4. ContainsTableStructure over the live serialisation (56.8) - a table
 //      refuses the trim outright (TextTrim's first step)
-//   5. EmptyParagraphMarksToDrop over the control's plain text, the range
+//   5. PlainTextShowsTable over the control's plain text (56.8) - the second,
+//      independent table refusal
+//   6. EmptyParagraphMarksToDrop over the control's plain text, the range
 //      deleted through the document model, re-serialised, stored.
 static (string Stored, bool Wrote, int Dropped) Flush56(
     string stored, bool reached, bool touched, string? baseline, string live, bool releasing)
@@ -1342,8 +1371,12 @@ static (string Stored, bool Wrote, int Dropped) Flush56(
         !TextFlushPolicy.ContainsTableStructure(live))
     {
         var doc = LiveDoc.Parse(live);
-        var (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(doc.Plain());
-        // InkSurface refuses unless every character in the range is a
+        string plain = doc.Plain();
+        // 56.8: and the second refusal, over the plain text, as TextTrim asks it.
+        var (start, length) = TextFlushPolicy.PlainTextShowsTable(plain)
+            ? (plain.Length, 0)
+            : TextFlushPolicy.EmptyParagraphMarksToDrop(plain);
+        // TextTrim refuses unless every character in the range is a
         // paragraph mark; so does the model.
         if (length > 0 && doc.DeleteMarks(start, length) is { } trimmed)
         {

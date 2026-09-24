@@ -155,16 +155,16 @@ if (rTrim != null) ordinaryOutputs.Add(("8g", rTrim));
 
 // ---- 8h. INTERIOR BLANK LINES, AND WHITESPACE-ONLY PARAGRAPHS IN THE RUN ---
 string wsBody = @"first thought\par" + Nl + @"\par" + Nl + @"\par" + Nl + @"\par" + Nl + @"after the gap\par" + Nl
-              + @" \par" + Nl + @"\par" + Nl + @"\tab";
+              + @" \par" + Nl + @"\par" + Nl + @"\~\par" + Nl + @"\par" + Nl + @"\tab";
 var w = Load(StoredDocWith(wsBody, 5, Plainfinal));
 var (wPlain, _, _) = Story(w);
 Type(w, "after the gap", "!");
 string? wTrim = TextTrim.TrimTrailingEmptyParagraphs(w);
 var (wAfter, _, _) = Story(w);
-const string WsExpected = "first thought\r\r\r\rafter the gap!\r \r\r\t\r\r";
-Check("56.8 [8h] THREE INTERIOR BLANK LINES, THEN A PARAGRAPH OF ONE SPACE, AN EMPTY ONE AND ONE OF A TAB "
-      + "INSIDE WHAT LOOKS LIKE THE TRAILING RUN: all of them survive; only the marks after the tab's "
-      + "paragraph go, down to one",
+const string WsExpected = "first thought\r\r\r\rafter the gap!\r \r\r\u00a0\r\r\t\r\r";
+Check("56.8 [8h] THREE INTERIOR BLANK LINES, THEN PARAGRAPHS OF ONE SPACE, ONE NO-BREAK SPACE AND ONE TAB, "
+      + "EMPTY ONES BETWEEN THEM, INSIDE WHAT LOOKS LIKE THE TRAILING RUN: all of them survive; only the "
+      + "marks after the tab's paragraph go, down to one",
       wTrim != null && wAfter == WsExpected,
       $"{Esc(wPlain)} -> {Esc(wAfter)}");
 if (wTrim != null) ordinaryOutputs.Add(("8h", wTrim));
@@ -224,20 +224,21 @@ foreach (var (name, rtf) in tables)
     string tBefore = Rtf(t);
     var (tPlain, _, _) = Story(t);
     bool gate = TextFlushPolicy.ContainsTableStructure(tBefore);
+    bool belt = TextFlushPolicy.PlainTextShowsTable(tPlain);
     string? tTrim = TextTrim.TrimTrailingEmptyParagraphs(t);
     var (tAfterPlain, _, _) = Story(t);
-    bool ok = gate && tTrim == null && Rtf(t) == tBefore && tAfterPlain == tPlain;
+    bool ok = gate && belt && tTrim == null && Rtf(t) == tBefore && tAfterPlain == tPlain;
     tablesOk &= ok;
     // What the range function would take WITHOUT the gate.
     var (rs, rl) = TextFlushPolicy.EmptyParagraphMarksToDrop(tPlain);
-    int rowEnd = tPlain.LastIndexOf('￻');
+    int rowEnd = tPlain.LastIndexOf('\uFFFB');
     bool clean = rl == 0 || (tPlain.Substring(rs, rl).All(c => c == '\r') && rs > rowEnd + 1);
     rangesClean &= clean;
-    tDetail.Add($"{name}: plain {Esc(tPlain)} gate={gate} trim={(tTrim is null ? "refused" : "WROTE")} unchanged={Rtf(t) == tBefore}; ungated range ({rs},{rl})");
+    tDetail.Add($"{name}: plain {Esc(tPlain)} gate={gate} belt={belt} trim={(tTrim is null ? "refused" : "WROTE")} unchanged={Rtf(t) == tBefore}; ungated range ({rs},{rl})");
 }
 Check("56.8 [8l] A TABLE IS NEVER TRIMMED: for each of three table shapes the engine reads and writes back "
-      + "as a table, the gate fires on the engine's own serialisation, the trim refuses, and the document "
-      + "and its plain text are exactly as they were",
+      + "as a table, BOTH refusals fire - the RTF gate on the engine's own serialisation and the plain-text "
+      + "belt on its story - the trim refuses, and the document and its plain text are exactly as they were",
       tablesOk, string.Join(" | ", tDetail));
 Check("56.8 [8m] WHAT THE GATE IS INSURANCE AGAINST, MEASURED: on this engine a table row is "
       + "U+FFF9 CR ... U+0007 ... U+FFFB CR - cell marks are U+0007, not CR - and for all three shapes the "
@@ -247,10 +248,15 @@ Check("56.8 [8m] WHAT THE GATE IS INSURANCE AGAINST, MEASURED: on this engine a 
 
 // ---- 8n. THE GATE NEVER FIRES ON AN ORDINARY NOTE --------------------------
 var falsePositives = ordinaryOutputs.Where(x => TextFlushPolicy.ContainsTableStructure(x.Rtf)).Select(x => x.Name).ToList();
-Check("56.8 [8n] THE GATE IS SILENT ON EVERY ORDINARY DOCUMENT THE ENGINE WROTE ABOVE - runs, colours, "
-      + "sizes, alignment, indents, a link, tabs - so it cannot quietly switch the trim off everywhere",
-      ordinaryOutputs.Count >= 8 && falsePositives.Count == 0,
-      $"{ordinaryOutputs.Count} engine outputs, gate fired on: {(falsePositives.Count == 0 ? "none" : string.Join(",", falsePositives))}");
+// The belt over the story each of those documents reads as, on the engine.
+var beltPositives = ordinaryOutputs.Where(x => TextFlushPolicy.PlainTextShowsTable(Story(Load(x.Rtf)).Plain))
+                                   .Select(x => x.Name).ToList();
+Check("56.8 [8n] BOTH TABLE REFUSALS ARE SILENT ON EVERY ORDINARY DOCUMENT THE ENGINE WROTE ABOVE - runs, "
+      + "colours, sizes, alignment, indents, a link, tabs, a no-break space - the RTF gate on the engine's "
+      + "serialisation and the belt on its story, so neither can quietly switch the trim off everywhere",
+      ordinaryOutputs.Count >= 8 && falsePositives.Count == 0 && beltPositives.Count == 0,
+      $"{ordinaryOutputs.Count} engine outputs, gate fired on: {(falsePositives.Count == 0 ? "none" : string.Join(",", falsePositives))}; "
+      + $"belt fired on: {(beltPositives.Count == 0 ? "none" : string.Join(",", beltPositives))}");
 
 // ---- NOT CHECKS: shapes reported, not asserted ------------------------------
 foreach (var (name, rtf) in new[]
