@@ -11632,7 +11632,25 @@ All of these were read and compiled, not executed.
 `dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64
 --no-incremental`: 0 warnings, 0 errors. All ten harnesses in `tools/` were
 built fresh (`bin\x64` deleted, `--no-incremental`) and run from that output.
-Results are in the final commit's message.
+Every one exited 0:
+
+| Harness | Result |
+|---|---|
+| LayerRoundTrip | 139 held |
+| CloneRoundTrip | 36 held |
+| ExportRotRoundTrip | 37 held |
+| TextColourRoundTrip | 50 held |
+| TextRotRoundTrip | 24 held |
+| VeilRoundTrip | 29 held |
+| HandleProof | RESULT: PASS |
+| PanelProof | 6 PASS lines, no FAIL |
+| PaperProof | ALL THRESHOLDS MET |
+| SeatProof | 2 PASS lines, no FAIL |
+
+TextColourRoundTrip builds with 120 CS0436 warnings, all from its own
+`Shim.cs`'s `Color`. This branch does not touch that harness. Its four lines
+containing "FAIL" are PASS lines that describe the defects its negative
+controls reproduce.
 
 #### 58.10.8 The Layers panel
 
