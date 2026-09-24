@@ -1049,6 +1049,103 @@ Check("56 - THE RECOLOUR UNDO SNAPSHOT IS TAKEN AFTER THE TRIM: with the flush i
       $"snapshot after a releasing flush: {TrailingEmpties(snapReleasing)} trailing empties; "
       + $"after an ordinary flush: {TrailingEmpties(snapPlain)}");
 
+// ---- 6m. 56.8: A TABLE IS REFUSED, NOT TRIMMED -----------------------------
+// The range function sees only plain text. In the story shape the finding was
+// written against - a cell mark and a row end both '\r' - it answers with the
+// empty cell AND the row end. tools/TrimEngineProof measured the engine
+// itself (cells are U+0007 there, a row is U+FFF9 CR ... U+FFFB CR), but the
+// rule does not lean on that: TextTrim refuses first, on the RTF, whenever
+// table structure is present. These checks drive the LINKED gate and the
+// mirrored order; the engine's own table serialisations below are copied
+// verbatim from what WinUIEdit.dll wrote in TrimEngineProof.
+const string EngineRow = @"\trowd\trgaph108\trleft-108\trpaddl108\trpaddr108\trpaddfl3\trpaddfr3" + "\r\n"
+                       + @"\cellx3000\cellx6000 " + "\r\n" + @"\pard\intbl cell_one\cell\cell\row " + "\r\n";
+const string EngineEmptyRow = @"\trowd\trgaph108\trpaddl108\trpaddr108\trpaddfl3\trpaddfr3" + "\r\n"
+                            + @"\cellx3000\cellx6000 " + "\r\n" + @"\pard\intbl\cell\cell\row " + "\r\n";
+var tableStories = new (string Name, string Rtf, string Plain)[]
+{
+    ("modelled: a cell and a row end as CR", StoredDoc("x", 0).Replace(@"x\par", EngineRow + @"\pard\sl300\slmult1\par"),
+     "cell_one\r\r\r\r"),
+    ("engine: one row, then the final paragraph", StoredDoc("x", 0).Replace(@"x\par", EngineRow + @"\pard\sl300\slmult1\par"),
+     "￹\rcell_one\u0007\u0007￻\r\r\r"),
+    ("engine: words, a row, 4 empties", StoredDoc(@"before\par" + "\r\n" + EngineRow + @"\pard\sl300\slmult1", 4),
+     "before\r￹\rcell_one\u0007\u0007￻\r\r\r\r\r\r\r\r"),
+    ("engine: two rows, the last empty", StoredDoc("x", 0).Replace(@"x\par", EngineRow + EngineEmptyRow + @"\pard\sl300\slmult1\par"),
+     "￹\rcell_one\u0007\u0007￻\r￹\r\u0007\u0007￻\r\r\r\r"),
+    ("nested table words", StoredDoc(@"inner\nestcell{\*\nesttableprops\trowd\cellx2000\nestrow}", 3), "inner\u0007\r\r\r\r\r"),
+    ("a lone \\intbl", StoredDoc(@"\intbl lonely", 3), "lonely\r\r\r\r\r"),
+};
+int tableRefused = 0, tableUnsafe = 0;
+var tableDetail = new List<string>();
+foreach (var (tName, tRtf, tPlain) in tableStories)
+{
+    // TextTrim's order: the gate on the RTF, then the range on the plain text.
+    bool refused = TextFlushPolicy.ContainsTableStructure(tRtf);
+    var (ts, tl) = refused ? (tPlain.Length, 0) : TextFlushPolicy.EmptyParagraphMarksToDrop(tPlain);
+    if (refused) tableRefused++;
+    else if (tl != 0) tableUnsafe++;
+    tableDetail.Add($"{tName}: {(refused ? "refused" : $"range ({ts},{tl})")}");
+}
+Check("56.8 [6m] A TABLE-SHAPED STORY IS REFUSED OR GETS AN EMPTY RANGE - never a range. The range "
+      + "function alone, in the modelled shape, WOULD take the empty cell and the row end (9,2); the gate, "
+      + "linked from TextFlushPolicy and asked first as TextTrim asks it, refuses all six shapes: the "
+      + "engine's own \\trowd/\\cell/\\row serialisations, a nested table and a lone \\intbl",
+      TextFlushPolicy.EmptyParagraphMarksToDrop("cell_one\r\r\r\r") == (9, 2) &&
+      tableUnsafe == 0 && tableRefused == tableStories.Length,
+      $"unguarded modelled range {TextFlushPolicy.EmptyParagraphMarksToDrop("cell_one\r\r\r\r")}; "
+      + string.Join("; ", tableDetail));
+
+string tableStored = StoredDoc(@"lecture notes\par" + "\r\n" + EngineRow + @"\pard\sl300\slmult1", 46);
+string tableLive = RichEditRoundTrip(tableStored);
+string tableEdited = tableLive.Replace("lecture notes", "lecture notes!");
+var r6m = Flush56(tableStored, true, false, tableLive, tableEdited, releasing: true);
+Check("56.8 [6m] ...AND THROUGH THE MIRRORED FLUSH: a grown note holding a table, edited and released, "
+      + "is written exactly as section 50 writes it - the edit stored, nothing dropped - where the same note "
+      + "without the table is trimmed (6b)",
+      r6m.Wrote && r6m.Dropped == 0 && r6m.Stored == tableEdited,
+      $"wrote {r6m.Wrote}, dropped {r6m.Dropped}, stored == the untrimmed edit: {r6m.Stored == tableEdited}");
+
+var ordinary56 = new (string Name, string Rtf)[]
+{
+    ("seed", seed), ("grown56", grown56), ("grown56Live", grown56Live), ("fmt", fmt), ("fmtLive", fmtLive),
+    ("gap", gap), ("emptyBox", emptyBox), ("6b stored", r6b.Stored), ("6c stored", r6c.Stored),
+    ("a link", StoredDoc(@"see {\field{\*\fldinst{HYPERLINK ""https://example.com/rows""}}{\fldrslt{rows}}}", 3)),
+    ("words that are table words", StoredDoc("cell row intbl trowd", 3)),
+};
+var gateNoise = ordinary56.Where(x => TextFlushPolicy.ContainsTableStructure(x.Rtf)).Select(x => x.Name).ToList();
+Check("56.8 [6m] THE GATE IS SILENT ON EVERY ORDINARY FIXTURE in this part - including a link whose URL "
+      + "says \"rows\" and a paragraph that TYPES the words cell, row, intbl and trowd - so it cannot quietly "
+      + "turn the trim off for notes that hold no table",
+      gateNoise.Count == 0,
+      $"{ordinary56.Length} fixtures, gate fired on: {(gateNoise.Count == 0 ? "none" : string.Join(", ", gateNoise))}");
+
+// ---- 6n. 56.8: WHITESPACE IS CONTENT --------------------------------------
+// The run scanner's test is "is this character a paragraph mark", and only
+// '\r' is. A paragraph of one space, a tab or a no-break space is the user's
+// content even at the very end of a note; the run stops there.
+var wsShapes = new (string Plain, string Expected)[]
+{
+    ("text\r \r\r\r", "text\r \r\r"),
+    ("text\r\r \r\r\t\r\r\r\r", "text\r\r \r\r\t\r\r"),
+    (" \r\r\r\r", " \r\r"),
+    ("\t\r\r", "\t\r\r"),
+    ("text\r \r\r\r\r", "text\r \r\r"),
+    ("text\r \r \r\r\r", "text\r \r \r\r"),
+};
+int wsWrong = 0; string? wsFirst = null;
+foreach (var (p, want) in wsShapes)
+{
+    var (ws, wl) = TextFlushPolicy.EmptyParagraphMarksToDrop(p);
+    bool marksOnly = wl == 0 || p.Substring(ws, wl).All(c => c == '\r');
+    string got = wl > 0 && marksOnly ? p.Remove(ws, wl) : p;
+    if (!marksOnly || got != want) { wsWrong++; wsFirst ??= $"{Escape(p)} -> range ({ws},{wl}), {Escape(got)}, expected {Escape(want)}"; }
+}
+Check("56.8 [6n] A TRAILING RUN THAT MIXES WHITESPACE-ONLY PARAGRAPHS WITH EMPTY ONES: the space, tab "
+      + "and no-break-space paragraphs all survive, the range holds nothing but paragraph marks, and only "
+      + "the marks after the last whitespace paragraph go, down to one",
+      wsWrong == 0,
+      wsWrong == 0 ? $"{wsShapes.Length} shapes, all as expected" : $"{wsWrong} wrong; first: {wsFirst}");
+
 // ===========================================================================
 foreach (var line in log) Console.WriteLine(line);
 Console.WriteLine();
@@ -1229,7 +1326,9 @@ static int TrailingEmpties(string rtf)
 //   2. ShouldWriteBack    - on the UNTRIMMED live document: the trim is never
 //                           itself the edit that justifies a write
 //   3. MayTrim            - is this write one the trim may ride on?
-//   4. EmptyParagraphMarksToDrop over the control's plain text, the range
+//   4. ContainsTableStructure over the live serialisation (56.8) - a table
+//      refuses the trim outright (TextTrim's first step)
+//   5. EmptyParagraphMarksToDrop over the control's plain text, the range
 //      deleted through the document model, re-serialised, stored.
 static (string Stored, bool Wrote, int Dropped) Flush56(
     string stored, bool reached, bool touched, string? baseline, string live, bool releasing)
@@ -1237,7 +1336,10 @@ static (string Stored, bool Wrote, int Dropped) Flush56(
     if (!TextFlushPolicy.NeedsTheDocument(stored, reached, touched)) return (stored, false, 0);
     if (!TextFlushPolicy.ShouldWriteBack(stored, reached, touched, baseline, live)) return (stored, false, 0);
     int dropped = 0;
-    if (TextFlushPolicy.MayTrim(stored, reached, touched, baseline, live, releasing))
+    // 56.8: TextTrim refuses a document whose own serialisation shows table
+    // structure BEFORE it looks at any range; so does the mirror.
+    if (TextFlushPolicy.MayTrim(stored, reached, touched, baseline, live, releasing) &&
+        !TextFlushPolicy.ContainsTableStructure(live))
     {
         var doc = LiveDoc.Parse(live);
         var (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(doc.Plain());
