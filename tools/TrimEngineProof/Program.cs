@@ -258,6 +258,93 @@ Check("56.8 [8n] BOTH TABLE REFUSALS ARE SILENT ON EVERY ORDINARY DOCUMENT THE E
       $"{ordinaryOutputs.Count} engine outputs, gate fired on: {(falsePositives.Count == 0 ? "none" : string.Join(",", falsePositives))}; "
       + $"belt fired on: {(beltPositives.Count == 0 ? "none" : string.Join(",", beltPositives))}");
 
+// ---- 8o/8p. ROUND 3: LIST ITEMS ARE THE USER'S -----------------------------
+// Built the way Quill builds a list: FormatBullets_Click sets the selection's
+// ParagraphFormat.ListType. Three EMPTY list items under the words, then the
+// engine grows the note (open-and-save, section 50) and the user edits it.
+foreach (var (tag, marker, label) in new[]
+{
+    ("8o", MarkerType.Bullet, "BULLETS"),
+    ("8p", MarkerType.Arabic, "A NUMBERED LIST"),
+})
+{
+    var ld = Load(StoredDocWith("intro", 5, Plainfinal));
+    var (lp0, _, _) = Story(ld);
+    int firstEmpty = lp0.IndexOf('\r') + 1;
+    var lf = ld.GetRange(firstEmpty, firstEmpty + 3).ParagraphFormat;
+    lf.ListType = marker;
+    if (marker != MarkerType.Bullet) { lf.ListStart = 1; lf.ListStyle = MarkerStyle.Period; }
+    string ls = Rtf(ld);
+    var growth = new List<string>();
+    bool growthPlain = true, detectAgrees = true;
+    int prevMarks = -1;
+    for (int i = 0; i < 3; i++)
+    {
+        var rd = Load(ls);
+        var (rp, _, _) = Story(rd);
+        var byType = ListItems(rd);
+        var byNumber = NumberedParagraphs(rd);
+        int marks = rp.Count(c => c == '\r');
+        growth.Add($"{marks} marks/{byType.Count(x => x)} items");
+        detectAgrees &= byType.SequenceEqual(byNumber) && byType.Count(x => x) == 3;
+        if (prevMarks >= 0) growthPlain &= marks == prevMarks + 1 && !byType[^1] && !byType[^2];
+        prevMarks = marks;
+        ls = Rtf(rd);
+    }
+    var lt = Load(ls);
+    var (ltPlain, _, _) = Story(lt);
+    Type(lt, "intro", "!");
+    string? ltTrim = TextTrim.TrimTrailingEmptyParagraphs(lt);
+    var (ltAfter, _, _) = Story(lt);
+    var ltItems = ListItems(lt);
+    Check($"56.9 [{tag}] {label}: THREE EMPTY LIST ITEMS SURVIVE THE TRIM. The engine's ListType and its numbering "
+          + "text (GetText(IncludeNumbering)) agree on which paragraphs are list items; every open-and-save adds one "
+          + "paragraph and it is never a list item; after an edit the trim drops only that growth, down to one plain "
+          + "empty paragraph, and all three empty items are still list items",
+          detectAgrees && growthPlain && ltTrim != null && ltAfter == "intro!\r\r\r\r\r" &&
+          ltItems.SequenceEqual(new[] { false, true, true, true, false }),
+          $"reopen: {string.Join(" -> ", growth)}; detection agrees: {detectAgrees}; {Esc(ltPlain)} -> {Esc(ltAfter)}, "
+          + $"trim {(ltTrim is null ? "refused" : "wrote")}, items {string.Join("", ltItems.Select(x => x ? "L" : "."))}");
+}
+
+// ---- 8q. AN EMPTY LIST ITEM, THEN PLAIN EMPTY PARAGRAPHS --------------------
+// Two list items with words, Enter at the end of the second (the engine carries
+// the list onto the new, empty item), then four sessions of growth.
+{
+    var detail = new List<string>();
+    bool ok = true;
+    foreach (var marker in new[] { MarkerType.Bullet, MarkerType.Arabic })
+    {
+        var md = Load(StoredDocWith(@"alpha\par" + Nl + "beta", 0, Plainfinal));
+        var (mp, _, _) = Story(md);
+        int betaEnd = mp.IndexOf("beta", StringComparison.Ordinal) + 4;
+        var mf = md.GetRange(0, betaEnd).ParagraphFormat;
+        mf.ListType = marker;
+        if (marker != MarkerType.Bullet) { mf.ListStart = 1; mf.ListStyle = MarkerStyle.Period; }
+        md.GetRange(betaEnd, betaEnd).Text = "\r";
+        string ms = Rtf(md);
+        for (int i = 0; i < 4; i++) ms = Rtf(Load(ms));
+        var mt = Load(ms);
+        var (mBefore, _, _) = Story(mt);
+        var itemsBefore = ListItems(mt);
+        bool agrees = itemsBefore.SequenceEqual(NumberedParagraphs(mt));
+        Type(mt, "alpha", "!");
+        string? mTrim = TextTrim.TrimTrailingEmptyParagraphs(mt);
+        var (mAfter, _, _) = Story(mt);
+        var itemsAfter = ListItems(mt);
+        bool one = agrees && itemsBefore.Take(3).All(x => x) && itemsBefore.Skip(3).All(x => !x) &&
+                   mTrim != null && mAfter == "alpha!\rbeta\r\r\r" &&
+                   itemsAfter.SequenceEqual(new[] { true, true, true, false });
+        ok &= one;
+        detail.Add($"{marker}: {Esc(mBefore)} items {string.Join("", itemsBefore.Select(x => x ? "L" : "."))} "
+                   + $"(numbering agrees: {agrees}) -> {Esc(mAfter)} items {string.Join("", itemsAfter.Select(x => x ? "L" : "."))}, "
+                   + $"trim {(mTrim is null ? "refused" : "wrote")}");
+    }
+    Check("56.9 [8q] AN EMPTY LIST ITEM FOLLOWED BY PLAIN EMPTY PARAGRAPHS, bulleted and numbered: the plain ones "
+          + "go, down to one, and the empty list item stays a list item - so does every item with words",
+          ok, string.Join(" | ", detail));
+}
+
 // ---- NOT CHECKS: shapes reported, not asserted ------------------------------
 foreach (var (name, rtf) in new[]
 {
@@ -313,6 +400,36 @@ static void Type(RichEditTextDocument d, string after, string text)
 }
 
 static int Pars(string rtf) => Regex.Matches(rtf, @"\\par(?![a-z])").Count;
+
+// 56.9: for each paragraph mark in the story, in order, whether the engine
+// reports its paragraph as a list item - the question TextTrim asks.
+static bool[] ListItems(RichEditTextDocument d)
+{
+    var (p, _, _) = Story(d);
+    var items = new List<bool>();
+    for (int i = 0; i < p.Length; i++)
+        if (p[i] == '\r') items.Add(d.GetRange(i, i + 1).ParagraphFormat.ListType != MarkerType.None);
+    return items.ToArray();
+}
+
+// 56.9: the same question answered a second, independent way - from the
+// engine's numbering text, GetText(IncludeNumbering), where a bullet reads
+// U+2981 TAB and a number reads "2." TAB (or "2)" TAB). That text leaves out the
+// story's final mark, so its paragraphs are matched to the marks by index and
+// the final one, if missing, is an empty paragraph with no marker.
+static bool[] NumberedParagraphs(RichEditTextDocument d)
+{
+    var (p, _, _) = Story(d);
+    var st = d.GetRange(0, 0);
+    st.Expand(TextRangeUnit.Story);
+    st.GetText(TextGetOptions.IncludeNumbering, out string num);
+    string[] paras = num.Split('\r');
+    int marks = p.Count(c => c == '\r');
+    var shown = new bool[marks];
+    for (int i = 0; i < marks && i < paras.Length; i++)
+        shown[i] = paras[i].StartsWith("⦁\t", StringComparison.Ordinal) || Regex.IsMatch(paras[i], @"^\d+[.)]\t");
+    return shown;
+}
 
 static string Sha(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 

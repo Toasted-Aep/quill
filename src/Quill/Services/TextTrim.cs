@@ -53,7 +53,16 @@ public static class TextTrim
     /// no extra edit through the control. The copy is verified exactly as the
     /// delete is, with <c>IsEqual</c> and an unchanged plain text; if it does
     /// not take, the document goes back and the edit is stored
-    /// untrimmed.</para></summary>
+    /// untrimmed.</para>
+    ///
+    /// <para><b>56.9, LIST ITEMS.</b> An empty list item shows a bullet or a
+    /// number; the section 50 growth never creates one. So the engine is asked,
+    /// mark by mark, which paragraphs from the range's start onward are list
+    /// items (<c>ParagraphFormat.ListType</c>), and the range is cut to the
+    /// marks after the last of them
+    /// (<see cref="TextFlushPolicy.EmptyParagraphMarksToDrop(string?, IEnumerable{int}?)"/>).
+    /// Plain empty paragraphs after an empty list item may still go; the item
+    /// never does.</para></summary>
     public static string? TrimTrailingEmptyParagraphs(RichEditTextDocument doc)
     {
         string before;
@@ -78,6 +87,17 @@ public static class TextTrim
             // U+FFFB CR. Independent of the RTF gate above; either refuses.
             if (TextFlushPolicy.PlainTextShowsTable(plain)) return null;
             var (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(plain);
+            if (length <= 0) return null;
+            // 56.9: LIST ITEMS ARE THE USER'S. An empty list item shows a bullet
+            // or a number, and the section 50 growth never makes one, so the
+            // run that may go stops at the last list item. The engine is asked
+            // about every mark from the range's start to the story's end; any
+            // answer but None (Undefined included) counts as a list item.
+            var listItemMarks = new List<int>();
+            for (int i = start; i < plain.Length; i++)
+                if (plain[i] == '\r' && doc.GetRange(i, i + 1).ParagraphFormat.ListType != MarkerType.None)
+                    listItemMarks.Add(i);
+            (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(plain, listItemMarks);
             if (length <= 0) return null;
 
             var cut = doc.GetRange(start, start + length);
