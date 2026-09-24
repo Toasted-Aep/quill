@@ -1173,6 +1173,63 @@ Check("56.8 [6n] THE PLAIN-TEXT BELT IS SILENT ON ORDINARY TEXT - spaces, tabs, 
       beltNoise.Count == 0,
       $"{beltOrdinary.Count} plain texts, belt fired on: {(beltNoise.Count == 0 ? "none" : string.Join(", ", beltNoise))}");
 
+// ---- 6o. 56.9: LIST ITEMS STOP THE RUN ------------------------------------
+// TextTrim asks the engine which marks from the range's start onward belong
+// to list items (tools/TrimEngineProof 8o-8q prove that question on the
+// engine) and hands their positions to the linked overload. Here the
+// overload alone: the positions are given, the answer is checked.
+var listShapes = new (string Plain, int[] Lists, string Expected)[]
+{
+    // the engine's measured shape: words, three empty items, growth
+    ("intro" + new string('\r', 8), new[] { 6, 7, 8 }, "intro\r\r\r\r\r"),
+    // an empty item, then plain empties: the plain ones go, down to one
+    ("a\r\r\r\r\r\r", new[] { 2 }, "a\r\r\r"),
+    // items interleaved with plain empties: everything up to the last item stays
+    ("a\r\r\r\r\r\r", new[] { 2, 4 }, "a\r\r\r\r\r"),
+    // the last droppable mark is an item: nothing goes
+    ("a\r\r\r\r", new[] { 3 }, "a\r\r\r\r"),
+    // the story's final mark is an item: nothing goes
+    ("a\r\r\r\r", new[] { 4 }, "a\r\r\r\r"),
+    // only the content's own paragraph is an item: the empties go as before
+    ("a\r\r\r\r", new[] { 1 }, "a\r\r"),
+    // a box of nothing but empty paragraphs whose first is an item
+    ("\r\r\r\r", new[] { 0 }, "\r\r"),
+    // no list anywhere: exactly the one-argument answer
+    ("lecture notes" + new string('\r', 49), Array.Empty<int>(), "lecture notes\r\r"),
+};
+int listWrong = 0; string? listFirst = null;
+foreach (var (p, lists, want) in listShapes)
+{
+    var (ls, ll) = TextFlushPolicy.EmptyParagraphMarksToDrop(p, lists);
+    bool clean = ll == 0 || (p.Substring(ls, ll).All(c => c == '\r') && !lists.Any(m => m >= ls && m < ls + ll));
+    string got = ll > 0 && clean ? p.Remove(ls, ll) : p;
+    if (!clean || got != want) { listWrong++; listFirst ??= $"{Escape(p)} lists [{string.Join(",", lists)}] -> ({ls},{ll}) {Escape(got)}, expected {Escape(want)}"; }
+}
+// And swept: every 6k shape, with each single mark of its trailing run made a
+// list item. The range never holds a list item, never reaches the final mark,
+// never grows past the one-argument range, and always ends where it ends.
+int listSweep = 0, listBad = 0; string? listBadFirst = null;
+foreach (var head in heads56)
+    for (int marks = 0; marks <= 60; marks += 3)
+    {
+        string p = head + new string('\r', marks);
+        var (s1, l1) = TextFlushPolicy.EmptyParagraphMarksToDrop(p);
+        for (int m = Math.Max(0, p.Length - marks); m < p.Length; m++)
+        {
+            listSweep++;
+            var (s2, l2) = TextFlushPolicy.EmptyParagraphMarksToDrop(p, new[] { m });
+            bool ok = l2 == 0 || (s2 > m || m >= s2 + l2) && s2 >= s1 && s2 + l2 == s1 + l1 && s2 + l2 <= p.Length - 1 && s2 > m;
+            if (!ok) { listBad++; listBadFirst ??= $"{Escape(p)} list at {m} -> ({s2},{l2})"; }
+        }
+    }
+bool listNullSame = TextFlushPolicy.EmptyParagraphMarksToDrop("x\r\r\r\r", null) == TextFlushPolicy.EmptyParagraphMarksToDrop("x\r\r\r\r");
+Check("56.9 [6o] LIST ITEMS STOP THE RUN (the linked overload): only the marks after the LAST list item in the "
+      + "trailing run may go, a list item at or past the range's end means nothing goes, and with no list item "
+      + "the answer is the one-argument answer",
+      listWrong == 0 && listBad == 0 && listNullSame,
+      $"{listShapes.Length} shapes{(listWrong == 0 ? " as expected" : $", {listWrong} wrong; first: {listFirst}")}; "
+      + $"{listSweep} swept single-item cases{(listBad == 0 ? " clean" : $", {listBad} bad; first: {listBadFirst}")}; null list = one-argument: {listNullSame}");
+
 // ===========================================================================
 foreach (var line in log) Console.WriteLine(line);
 Console.WriteLine();

@@ -229,6 +229,38 @@ public static class TextFlushPolicy
         return (start, drop);
     }
 
+    /// <summary>CONCEPTS-REF 56.9 (round 3): the same range, stopped at LIST
+    /// ITEMS. <paramref name="listItemMarks"/> are the positions, in the same
+    /// plain text, of paragraph marks whose paragraph the engine reports as a
+    /// list item (<c>ParagraphFormat.ListType</c> is anything but
+    /// <c>None</c>); <c>TextTrim</c> asks the engine for every mark from the
+    /// range's start to the end of the story.
+    ///
+    /// <para><b>Why.</b> An empty list item is not an empty paragraph to the
+    /// user: it shows a bullet or a number. The section 50 growth never makes
+    /// one (measured on the engine: every paragraph an open-and-save appends
+    /// is plain), and the ruling targets the growth, so the conservative
+    /// reading is that the run the trim may drop STOPS AT - does not include -
+    /// any list item. Only the marks after the LAST list item in the trailing
+    /// run can go; that list item is kept as if it were content, and so is
+    /// everything before it.</para>
+    ///
+    /// <para>If the story's final mark is itself a list item nothing is
+    /// dropped: the survivor is that mark, and giving it a plain blank line's
+    /// formatting would take the item away.</para></summary>
+    public static (int Start, int Length) EmptyParagraphMarksToDrop(string? plain, IEnumerable<int>? listItemMarks)
+    {
+        var (start, length) = EmptyParagraphMarksToDrop(plain);
+        if (length <= 0 || listItemMarks is null) return (start, length);
+        int end = start + length;              // exclusive; plain[end] is the survivor
+        int lastList = -1;
+        foreach (int m in listItemMarks)
+            if (m >= start && m > lastList) lastList = m;
+        if (lastList < 0) return (start, length);
+        if (lastList >= end - 1) return (plain!.Length, 0);
+        return (lastList + 1, end - lastList - 1);
+    }
+
     /// <summary>CONCEPTS-REF 56 round 2: whether the control's own
     /// serialisation shows TABLE STRUCTURE - in which case nothing is trimmed
     /// at all.
