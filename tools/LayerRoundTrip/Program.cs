@@ -764,11 +764,14 @@ if (oplogs.Length == 1)
         return seq.Count == oldOrder.Count && seq.Zip(oldOrder).All(z => ReferenceEquals(z.First, z.Second));
     }
     var implicitPlan = DrawPlan.For(op);
-    Check("58.4 - a page with no Layers array has ONE bucket and the plan Paint, "
-          + "Shapes, Strokes, Texts",
+    // 58.10 ruling B added the WetPaint step (the live oil scratch) after the
+    // ink; it draws nothing unless an oil gesture is live (section 18).
+    Check("58.4 / 58.10 - a page with no Layers array has ONE bucket and the plan Paint, "
+          + "Shapes, Strokes, WetPaint, Texts",
           PageLayers.IsImplicit(op) && implicitPlan.LayerCount == 1
           && implicitPlan.Steps.Select(s => s.Kind).SequenceEqual(new[]
-             { DrawStepKind.Paint, DrawStepKind.Shapes, DrawStepKind.Strokes, DrawStepKind.Texts }));
+             { DrawStepKind.Paint, DrawStepKind.Shapes, DrawStepKind.Strokes,
+               DrawStepKind.WetPaint, DrawStepKind.Texts }));
     Check("58.4 - and it paints every element in exactly the old order", SameAsOld(op));
     PageLayers.Materialise(op);
     Check("58.4 - a page with ONE real layer paints them in exactly the old order too",
@@ -776,6 +779,374 @@ if (oplogs.Length == 1)
     Check("58.4 - the one-layer ink cache sits at that layer's Strokes step, where "
           + "it always sat relative to shapes",
           DrawPlan.For(op).InkCacheStep(op) == 2);
+}
+
+// ---------------------------------------------------------------------------
+// 17. 58.10 RULING A - INVISIBLE MEANS UNSELECTABLE, EVERYWHERE.
+// ---------------------------------------------------------------------------
+// One fact - PageLayers.IsVisible, i.e. EffectiveOpacity > 0 - and every pick
+// path reads it. The paths are run through the REAL shared code the canvas
+// calls: LayerPick.Catchable (CanCatch: click, lasso, rectangle),
+// LayerPick.Lasso (SelectWithLasso: lasso AND rectangle), and LayerPick.Topmost
+// (HitStrokeForClick, FindStrokeNear = the eraser preview, SampleColorAt = the
+// eyedropper, TopmostShape = the press grab and the axes/equation editors).
+// Each path is asked, per element, "can you answer with THIS one?" - the
+// geometry is replaced by identity, because the geometry is not what 58.10
+// is about. What the harness cannot reach is InkSurface's geometry and its
+// wiring of these calls; that was read and compiled (58.10).
+{
+    var sp = new NotePage();
+    PageLayers.Materialise(sp);                          // V: key 0, visible
+    var lH = PageLayers.Add(sp, "H"); lH.Hidden = true;  // hidden
+    var lZ = PageLayers.Add(sp, "Z"); lZ.Opacity = 0f;   // 0% - ruling A's case
+    var lL = PageLayers.Add(sp, "L"); lL.Locked = true;  // locked, drawn
+    var lF = PageLayers.Add(sp, "F"); lF.Opacity = 0.4f; // 40%, drawn
+    var keyName = new Dictionary<int, string>
+        { [0] = "V", [lH.Key] = "H", [lZ.Key] = "Z", [lL.Key] = "L", [lF.Key] = "F" };
+    var stOf = new Dictionary<int, PenStroke>();
+    var shOf = new Dictionary<int, ShapeElement>();
+    var txOf = new Dictionary<int, TextElement>();
+    foreach (var k in keyName.Keys)
+    {
+        var st = new PenStroke { LayerKey = k, Color = "#101010" };
+        st.Points.Add(new StrokePoint(10, 10, 0.5f));
+        sp.Strokes.Add(st); stOf[k] = st;
+        var sh = new ShapeElement { LayerKey = k }; sp.Shapes.Add(sh); shOf[k] = sh;
+        var tx = new TextElement { LayerKey = k }; sp.Texts.Add(tx); txOf[k] = tx;
+    }
+    var rp = DrawPlan.For(sp);
+
+    bool Click(PenStroke s) => ReferenceEquals(LayerPick.Topmost(rp, sp.Strokes, DrawStepKind.Strokes,
+        x => x.LayerKey, x => LayerPick.Catchable(sp, x.LayerKey, x.Locked, false, LayerScope.AllLayers),
+        x => ReferenceEquals(x, s)), s);
+    // The eraser preview and the eyedropper's stroke walk make the SAME call
+    // (no lock or scope gate): LayerPick.Topmost with only a candidate test.
+    bool EraserPreview(PenStroke s) => ReferenceEquals(LayerPick.Topmost(rp, sp.Strokes, DrawStepKind.Strokes,
+        x => x.LayerKey, null, x => ReferenceEquals(x, s)), s);
+    bool EyedropperShape(ShapeElement s) => ReferenceEquals(LayerPick.Topmost(rp, sp.Shapes, DrawStepKind.Shapes,
+        x => x.LayerKey, null, x => ReferenceEquals(x, s)), s);
+    (List<PenStroke> St, List<ShapeElement> Sh, List<TextElement> Tx) LassoAll(NotePage p)
+    {
+        var a = new List<PenStroke>(); var b = new List<ShapeElement>(); var c = new List<TextElement>();
+        LayerPick.Lasso(p, false, LayerScope.AllLayers, null, _ => true, null, _ => true, _ => true, a, b, c);
+        return (a, b, c);
+    }
+    var lassoed = LassoAll(sp);
+    bool Lassoed(int k) => lassoed.St.Contains(stOf[k]) || lassoed.Sh.Contains(shOf[k]) || lassoed.Tx.Contains(txOf[k]);
+
+    string Row(int k) => $"{keyName[k]}: visible={PageLayers.IsVisible(sp, k)} drawn={rp.IsDrawn(k)} " +
+        $"canSelect={PageLayers.CanSelect(sp, k, LayerScope.AllLayers)} click={Click(stOf[k])} " +
+        $"lasso={Lassoed(k)} eraserPreview={EraserPreview(stOf[k])} eyedropper={EraserPreview(stOf[k]) || EyedropperShape(shOf[k])} " +
+        $"pressGrab={EyedropperShape(shOf[k])}";
+    string table = string.Join(" | ", keyName.Keys.Select(Row));
+
+    Check("58.10 A - the fact: a layer at 0% is NOT visible, exactly as a hidden one is "
+          + "(until 58.10 IsVisible was !Hidden)",
+          !PageLayers.IsVisible(sp, lH.Key) && !PageLayers.IsVisible(sp, lZ.Key)
+          && PageLayers.IsVisible(sp, 0) && PageLayers.IsVisible(sp, lL.Key) && PageLayers.IsVisible(sp, lF.Key));
+    Check("58.10 A - the plan's drawn fact and PageLayers.IsVisible agree for every layer",
+          keyName.Keys.All(k => rp.IsDrawn(k) == PageLayers.IsVisible(sp, k)
+                                && (rp.StepOf(DrawStepKind.Strokes, k) >= 0) == rp.IsDrawn(k)));
+    Check("58.10 A - CanSelect (and so CanCatch) refuses the 0% layer, not only the hidden one",
+          !PageLayers.CanSelect(sp, lZ.Key, LayerScope.AllLayers) && !PageLayers.IsEditable(sp, lZ.Key)
+          && !PageLayers.CanSelect(sp, lH.Key, LayerScope.AllLayers));
+    foreach (var (k, what) in new[] { (lH.Key, "HIDDEN"), (lZ.Key, "0%") })
+        Check($"58.10 A - PARITY on the {what} layer: click, lasso/rectangle, eraser preview, "
+              + "eyedropper and press grab ALL refuse it",
+              !Click(stOf[k]) && !Lassoed(k) && !EraserPreview(stOf[k]) && !EyedropperShape(shOf[k]),
+              Row(k));
+    Check("58.10 A - and on the visible and 40% layers every path answers",
+          new[] { 0, lF.Key }.All(k => Click(stOf[k]) && lassoed.St.Contains(stOf[k]) && lassoed.Sh.Contains(shOf[k])
+                                       && lassoed.Tx.Contains(txOf[k]) && EraserPreview(stOf[k]) && EyedropperShape(shOf[k])),
+          table);
+    Check("58.10 A - Locked stays a SEPARATE fact: the selection gestures refuse the locked "
+          + "layer, while the eyedropper, eraser preview and press grab still see it (it is drawn)",
+          !Click(stOf[lL.Key]) && !Lassoed(lL.Key) && EraserPreview(stOf[lL.Key]) && EyedropperShape(shOf[lL.Key]),
+          Row(lL.Key));
+
+    // Topmost across layers: F is the top drawn layer.
+    var anyClick = LayerPick.Topmost(rp, sp.Strokes, DrawStepKind.Strokes, x => x.LayerKey,
+        x => LayerPick.Catchable(sp, x.LayerKey, x.Locked, false, LayerScope.AllLayers), _ => true);
+    var anyErase = LayerPick.Topmost(rp, sp.Strokes, DrawStepKind.Strokes, x => x.LayerKey, null, _ => true);
+    Check("58.10 check 2 - with every stroke under the pointer, the eraser preview and the "
+          + "click both name the TOP drawn layer's stroke (F)",
+          ReferenceEquals(anyClick, stOf[lF.Key]) && ReferenceEquals(anyErase, stOf[lF.Key]));
+    lF.Hidden = true;
+    var rpNoF = DrawPlan.For(sp);
+    var eraseNoF = LayerPick.Topmost(rpNoF, sp.Strokes, DrawStepKind.Strokes, x => x.LayerKey, null, _ => true);
+    var clickNoF = LayerPick.Topmost(rpNoF, sp.Strokes, DrawStepKind.Strokes, x => x.LayerKey,
+        x => LayerPick.Catchable(sp, x.LayerKey, x.Locked, false, LayerScope.AllLayers), _ => true);
+    Check("58.10 check 2 - hide F: the preview falls to L (drawn, locked), the click to V "
+          + "(the lock refuses L); neither ever names H or Z",
+          ReferenceEquals(eraseNoF, stOf[lL.Key]) && ReferenceEquals(clickNoF, stOf[0]),
+          $"preview={(eraseNoF == null ? "none" : keyName[eraseNoF.LayerKey])}, click={(clickNoF == null ? "none" : keyName[clickNoF.LayerKey])}");
+    lF.Hidden = false;
+
+    // Reorder so the list is NOT the stack: V's stroke is last in the list but
+    // V goes to the top. The preview used to take the first hit in list order.
+    var order = new NotePage();
+    PageLayers.Materialise(order);
+    var top = PageLayers.Add(order, "top");
+    var lowFirst = new PenStroke { LayerKey = top.Key, Color = "#1" };
+    var highLast = new PenStroke { LayerKey = 0, Color = "#2" };
+    order.Strokes.Add(lowFirst); order.Strokes.Add(highLast);
+    PageLayers.Move(order, top.Key, 0);          // "top" to the bottom: base (key 0) is now above
+    var orderPlan = DrawPlan.For(order);
+    Check("58.10 check 2 - the eraser preview names the VISUALLY topmost stroke, not the "
+          + "first in list order",
+          ReferenceEquals(LayerPick.Topmost(orderPlan, order.Strokes, DrawStepKind.Strokes,
+                                            x => x.LayerKey, null, _ => true), highLast));
+    order.Strokes.Reverse();                     // now the top one is FIRST in the list
+    Check("58.10 check 2 - nor the last in list order: reversed, it still names the same stroke",
+          ReferenceEquals(LayerPick.Topmost(orderPlan, order.Strokes, DrawStepKind.Strokes,
+                                            x => x.LayerKey, null, _ => true), highLast));
+
+    // The inconsistency the check named: HitStrokeForClick tested step < 0 only
+    // inside `if (multi)`. A ONE-layer page whose layer is at 0%:
+    var one = new NotePage();
+    var only = PageLayers.Materialise(one)[0];
+    only.Opacity = 0f;
+    var oneSt = new PenStroke { Color = "#1" }; oneSt.Points.Add(new StrokePoint(1, 1, 0.5f));
+    var oneSh = new ShapeElement();
+    one.Strokes.Add(oneSt); one.Shapes.Add(oneSh); one.Texts.Add(new TextElement());
+    var onePlan = DrawPlan.For(one);
+    var oneLasso = LassoAll(one);
+    Check("58.10 A - ONE layer at 0% (the `if (multi)` case): the click, the lasso, the "
+          + "eraser preview, the eyedropper and the press grab all refuse",
+          onePlan.LayerCount == 1
+          && LayerPick.Topmost(onePlan, one.Strokes, DrawStepKind.Strokes, x => x.LayerKey,
+                 x => LayerPick.Catchable(one, x.LayerKey, x.Locked, false, LayerScope.AllLayers), _ => true) == null
+          && LayerPick.Topmost(onePlan, one.Strokes, DrawStepKind.Strokes, x => x.LayerKey, null, _ => true) == null
+          && LayerPick.Topmost(onePlan, one.Shapes, DrawStepKind.Shapes, x => x.LayerKey, null, _ => true) == null
+          && oneLasso.St.Count == 0 && oneLasso.Sh.Count == 0 && oneLasso.Tx.Count == 0);
+    only.Opacity = 1f;
+    var onePlan1 = DrawPlan.For(one);
+    var oneSt2 = new PenStroke { Color = "#2" }; one.Strokes.Add(oneSt2);
+    Check("58.10 A - and at 100% the one-layer page picks as it always did: the last hit "
+          + "in the list, and the lasso takes everything",
+          ReferenceEquals(LayerPick.Topmost(onePlan1, one.Strokes, DrawStepKind.Strokes, x => x.LayerKey,
+                              null, _ => true), oneSt2)
+          && LassoAll(one).Tx.Count == 1 && LassoAll(one).Sh.Count == 1);
+}
+
+// ---------------------------------------------------------------------------
+// 18. 58.10 RULING B - THE WET STROKE STAYS ON TOP WHILE PAINTING.
+// ---------------------------------------------------------------------------
+// The scratch's height is the plan's WetPaint step, and whether anything is
+// composited at a paint step is DrawPlan.PaintAt - the one flag InkSurface's
+// DrawRegion asks (DrawPaint draws exactly the sources it is handed). What is
+// not reachable here: that InkSurface passes OilGestureActive truthfully, and
+// that every gesture end settles the brush (SettleOilGesture) - read, compiled.
+{
+    NotePage Page(int layers, bool hideTop)
+    {
+        var p = new NotePage();
+        if (layers > 0)
+        {
+            PageLayers.Materialise(p);
+            for (int i = 1; i < layers; i++) PageLayers.Add(p);
+            if (hideTop) PageLayers.All(p)[^1].Hidden = true;
+        }
+        return p;
+    }
+    var cases = new (string Name, NotePage P)[]
+    {
+        ("no Layers array", Page(0, false)), ("one layer", Page(1, false)),
+        ("two layers", Page(2, false)), ("five layers", Page(5, false)), ("five, top hidden", Page(5, true)),
+    };
+    bool onTopEverywhere = true, onceEverywhere = true, settledOnce = true, goneAfter = true, neverBoth = true;
+    var detail = new List<string>();
+    foreach (var (name, p) in cases)
+    {
+        var pl = DrawPlan.For(p);
+        var steps = pl.Steps;
+        int lastInk = -1, firstText = int.MaxValue;
+        for (int i = 0; i < steps.Count; i++)
+        {
+            if (steps[i].Kind is DrawStepKind.Shapes or DrawStepKind.Strokes) lastInk = i;
+            if (steps[i].Kind == DrawStepKind.Texts) firstText = Math.Min(firstText, i);
+        }
+        var wetAt = Enumerable.Range(0, steps.Count)
+            .Where(i => (DrawPlan.PaintAt(steps[i].Kind, true) & PaintSource.Wet) != 0).ToList();
+        var settledAt = Enumerable.Range(0, steps.Count)
+            .Where(i => (DrawPlan.PaintAt(steps[i].Kind, true) & PaintSource.Settled) != 0).ToList();
+        var wetAfterEnd = Enumerable.Range(0, steps.Count)
+            .Where(i => (DrawPlan.PaintAt(steps[i].Kind, false) & PaintSource.Wet) != 0).ToList();
+        onceEverywhere &= wetAt.Count == 1 && wetAt[0] == pl.WetPaintStep
+                          && steps.Count(s => s.Kind == DrawStepKind.WetPaint) == 1;
+        onTopEverywhere &= wetAt.Count == 1 && wetAt[0] > lastInk && wetAt[0] < firstText;
+        settledOnce &= settledAt.Count == 1 && settledAt[0] == 0 && steps[0].Kind == DrawStepKind.Paint
+                       && Enumerable.Range(0, steps.Count).Count(i =>
+                              (DrawPlan.PaintAt(steps[i].Kind, false) & PaintSource.Settled) != 0) == 1;
+        goneAfter &= wetAfterEnd.Count == 0;
+        neverBoth &= steps.All(s => DrawPlan.PaintAt(s.Kind, true) != (PaintSource.Settled | PaintSource.Wet));
+        detail.Add($"{name}: settled@{string.Join(",", settledAt)} wet@{string.Join(",", wetAt)} lastInk@{lastInk}");
+    }
+    string d = string.Join("; ", detail);
+    Check("58.10 B - while the gesture is live the wet scratch is composited ONCE, at the "
+          + "WetPaint step", onceEverywhere, d);
+    Check("58.10 B - and that step is ABOVE every layer's shapes and strokes (and below "
+          + "text, which is XAML over the canvas), in every layer arrangement", onTopEverywhere, d);
+    Check("58.10 B - settled paint is unchanged: composited once, at step 0, below every "
+          + "layer (58.2)", settledOnce, d);
+    Check("58.10 B - no step composites the settled tiles AND the scratch, so the scratch "
+          + "cannot be drawn twice", neverBoth);
+    Check("58.10 B - once the gesture has ended, no step draws the scratch at all - it "
+          + "cannot be left on top", goneAfter);
+}
+
+// ---------------------------------------------------------------------------
+// 19. 58.10 CHECK 1 - InkCacheStep's cost per invalidated REGION.
+// ---------------------------------------------------------------------------
+// DrawRegion runs once per region, ~120 in a pass. The multi-layer answer walks
+// every stroke and shape; 58.4 asked it per region. DrawPlan counts the
+// elements it walks (InkCacheElementVisits), so the cost is COUNTED, not timed.
+{
+    const int Regions = 120, StrokeCount = 2500;
+    NotePage Big(int layers)
+    {
+        var p = new NotePage();
+        if (layers > 1) { PageLayers.Materialise(p); for (int i = 1; i < layers; i++) PageLayers.Add(p); }
+        var keys = PageLayers.All(p).Select(l => l.Key).ToArray();
+        for (int i = 0; i < StrokeCount; i++)
+            p.Strokes.Add(new PenStroke { LayerKey = keys[i % keys.Length], Color = "#1" });
+        for (int i = 0; i < 20; i++) p.Shapes.Add(new ShapeElement { LayerKey = keys[0] });   // bottom only
+        return p;
+    }
+    long PerPass(DrawPlan pl, NotePage p, long pass, out bool sameAnswers)
+    {
+        long before = pl.InkCacheElementVisits;
+        int first = pl.InkCacheStep(p, pass);
+        sameAnswers = true;
+        for (int r = 1; r < Regions; r++) sameAnswers &= pl.InkCacheStep(p, pass) == first;
+        return pl.InkCacheElementVisits - before;
+    }
+
+    var one = Big(1); var onePlan = DrawPlan.For(one);
+    long oneWork = PerPass(onePlan, one, 1, out bool oneSame);
+    var five = Big(5); var fivePlan = DrawPlan.For(five);
+    long fiveWork = PerPass(fivePlan, five, 1, out bool fiveSame);
+    int n5 = five.Strokes.Count + five.Shapes.Count;
+
+    // What 58.4 paid: the walk on EVERY region of the pass.
+    var rawPlan = DrawPlan.For(five);
+    for (int r = 0; r < Regions; r++) rawPlan.InkCacheStep(five);
+    long rawWork = rawPlan.InkCacheElementVisits;
+
+    string cost = $"1 layer: {oneWork} elements walked per {Regions}-region pass = {oneWork / (double)Regions:0.##}/region; "
+                + $"5 layers: {fiveWork} per pass = {fiveWork / (double)Regions:0.##}/region "
+                + $"(58.4's per-region walk: {rawWork} per pass = {rawWork / Regions}/region); page = {n5} elements";
+    Console.WriteLine("COST " + cost);
+    Check("58.10 check 1 - one layer: a whole pass walks NO elements (O(1) per region, as on main)",
+          oneWork == 0 && oneSame, cost);
+    Check("58.10 check 1 - five layers: a whole pass of 120 regions walks the page ONCE, so "
+          + "every region after the first is O(1)",
+          fiveWork == n5 && fiveSame, cost);
+    Check("58.10 check 1 - and 58.4's per-region cost is what that replaces: 120 walks per pass",
+          rawWork == (long)Regions * n5, cost);
+    Check("58.10 check 1 - the memoised answer is the raw answer",
+          fivePlan.InkCacheStep(five, 1) == DrawPlan.For(five).InkCacheStep(five));
+
+    // Freshness: an edit lands in a LATER pass, and that pass walks again.
+    var mid = PageLayers.All(five)[2].Key;
+    five.Shapes.Add(new ShapeElement { LayerKey = mid });   // a shape between layers' strokes
+    int staleOrFresh = fivePlan.InkCacheStep(five, 2);
+    Check("58.10 check 1 - the memo is per pass: the next pass after a shape lands between "
+          + "two layers' strokes walks afresh and answers -1 (per-stroke path)",
+          staleOrFresh == -1 && fivePlan.InkCacheStep(five, 1 + 1) == -1
+          && DrawPlan.For(five).InkCacheStep(five) == -1);
+}
+
+// ---------------------------------------------------------------------------
+// 20. 58.10 CHECK 3 - the thumbnail stamp moves when an element changes layer.
+// ---------------------------------------------------------------------------
+{
+    NotePage StampPage()
+    {
+        var p = new NotePage { Background = "#FAF7F0" };
+        var s = new PenStroke { Color = "#223344", Size = 3 };
+        s.Points.Add(new StrokePoint(10, 20, 0.5f)); s.Points.Add(new StrokePoint(90, 70, 0.5f));
+        p.Strokes.Add(s);
+        p.Shapes.Add(new ShapeElement { X = 5, Y = 6, W = 70, H = 40, Color = "#1B5FC1" });
+        p.Texts.Add(new TextElement { X = 30, Y = 40, Width = 200, Rtf = "{\\rtf1 hi}" });
+        return p;
+    }
+    // Recorded from the stamp BEFORE LayerKey was mixed in (the pure move of
+    // ThumbnailCache.Stamp into ThumbnailStamp.cs), so these prove that a page
+    // with no Layers array, or one layer, keeps the key it always had and no
+    // cached PNG of an existing page is invalidated by 58.10.
+    // (stamp code checked identical to HEAD 126d1ec's ThumbnailCache.Stamp
+    // before these were taken)
+    const string GoldImplicit = "b1ec38de41aba562";
+    const string GoldOneLayer = "12e75f09d7380bf3";
+    var implicitPage = StampPage();
+    string sImplicit = ThumbnailStamp.Of(implicitPage);
+    var onePage = StampPage(); PageLayers.Materialise(onePage);
+    string sOne = ThumbnailStamp.Of(onePage);
+    Console.WriteLine($"STAMP implicit={sImplicit} oneLayer={sOne}");
+    Check("58.10 check 3 - a page with no Layers array keeps its old stamp", sImplicit == GoldImplicit, sImplicit);
+    Check("58.10 check 3 - a page with one layer keeps its old stamp", sOne == GoldOneLayer, sOne);
+    implicitPage.Strokes[0].LayerKey = 7;   // an orphan: same bucket, same picture
+    Check("58.10 check 3 - with one bucket an element's key does not change the picture, "
+          + "and does not change the stamp", ThumbnailStamp.Of(implicitPage) == sImplicit);
+
+    var two = StampPage(); PageLayers.Materialise(two); var upper = PageLayers.Add(two);
+    string sTwo = ThumbnailStamp.Of(two);
+    two.Strokes[0].LayerKey = upper.Key;
+    string sStrokeUp = ThumbnailStamp.Of(two);
+    two.Strokes[0].LayerKey = 0;
+    two.Shapes[0].LayerKey = upper.Key;
+    string sShapeUp = ThumbnailStamp.Of(two);
+    two.Shapes[0].LayerKey = 0;
+    two.Texts[0].LayerKey = upper.Key;
+    string sTextUp = ThumbnailStamp.Of(two);
+    two.Texts[0].LayerKey = 0;
+    Check("58.10 check 3 - two layers: moving the STROKE to the other layer changes the stamp",
+          sStrokeUp != sTwo, $"{sTwo} -> {sStrokeUp}");
+    Check("58.10 check 3 - moving the SHAPE, or the TEXT, changes it too",
+          sShapeUp != sTwo && sTextUp != sTwo && sShapeUp != sStrokeUp);
+    Check("58.10 check 3 - and moving them back restores it (the key is content, not history)",
+          ThumbnailStamp.Of(two) == sTwo);
+}
+
+// ---------------------------------------------------------------------------
+// 21. 58.10 CHECKS 5 AND 6 - the resolver alone, and the empty layer list.
+// ---------------------------------------------------------------------------
+{
+    string Thrown(Action a)
+    {
+        try { a(); return "none"; }
+        catch (Exception ex) { return ex.GetType().Name; }
+    }
+    string empty = Thrown(() => new DrawPlan(Array.Empty<Layer>()));
+    string nul = Thrown(() => new DrawPlan(null!));
+    string bucketsEmpty = Thrown(() => new LayerBuckets(new List<Layer>()));
+    Check("58.10 check 6 - an EMPTY layer list is rejected at construction with "
+          + "ArgumentException, not an IndexOutOfRange later", empty == nameof(ArgumentException), empty);
+    Check("58.10 check 6 - null is ArgumentNullException, and the resolver on its own "
+          + "rejects empty the same way",
+          nul == nameof(ArgumentNullException) && bucketsEmpty == nameof(ArgumentException), $"{nul}, {bucketsEmpty}");
+    var single = new DrawPlan(new[] { new Layer { Key = 5 } });
+    Check("58.10 check 6 - every non-empty list is total: one layer with no base key "
+          + "resolves any key to bucket 0 and draws",
+          single.BucketOf(0) == 0 && single.BucketOf(99) == 0 && single.IsDrawn(123)
+          && single.StepOf(DrawStepKind.Strokes, 42) >= 0 && single.InkCacheStep(new NotePage()) >= 0);
+
+    // Check 5: InOrder resolves through LayerBuckets and the plan through the
+    // same struct, so they cannot disagree - including duplicate keys and an
+    // orphan on a page with no base layer.
+    var odd = new NotePage { Layers = new List<Layer> { new() { Key = 3 }, new() { Key = 4 }, new() { Key = 3 } } };
+    odd.Strokes.Add(new PenStroke { LayerKey = 3, Color = "#1" });
+    odd.Strokes.Add(new PenStroke { LayerKey = 4, Color = "#2" });
+    odd.Strokes.Add(new PenStroke { LayerKey = 77, Color = "#3" });
+    var oddPlan = DrawPlan.For(odd);
+    var oddBuckets = PageLayers.InOrder(odd).ToList();
+    bool oddAgree = Enumerable.Range(0, oddBuckets.Count)
+        .All(b => oddBuckets[b].Strokes.All(s => oddPlan.BucketOf(s.LayerKey) == b));
+    Check("58.10 check 5 - InOrder (resolver only, no plan) and the plan agree on a "
+          + "duplicated key and an orphan with no base layer",
+          oddAgree && oddBuckets[0].Strokes.Count == 2 && oddBuckets[2].Strokes.Count == 0,
+          string.Join(",", oddBuckets.Select(b => b.Strokes.Count)));
 }
 
 // ---------------------------------------------------------------------------

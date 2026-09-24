@@ -39,6 +39,10 @@
          RemoveLayerAction, and it is proved through the REAL UndoRedoManager
          rather than by calling the action's own methods. -->
     <Compile Include="..\..\src\Quill\Services\UndoRedo.cs" Link="UndoRedo.cs" />
+    <!-- 58.10 check 3: the gallery thumbnail's content stamp, split out of
+         ThumbnailCache (which renders through InkSurface and cannot be linked)
+         so the stamp itself is run here, not reasoned about. -->
+    <Compile Include="..\..\src\Quill\Services\ThumbnailStamp.cs" Link="ThumbnailStamp.cs" />
   </ItemGroup>
 
 </Project>
