@@ -197,14 +197,18 @@ public static class TextFlushPolicy
     /// range is the mark of the FIRST trailing empty paragraph - the blank line
     /// the user typed, if one of them is theirs - while the mark that survives
     /// is the story's last. They are different paragraphs, so the survivor's
-    /// formatting is not the first one's; <c>InkSurface</c> copies it across
+    /// formatting is not the first one's; <c>TextTrim</c> copies it across
     /// after the delete (section 56.8).</para>
     ///
-    /// <para><b>What this function cannot see, and the caller must.</b> Plain
-    /// text does not distinguish a paragraph mark from a table's cell mark or
-    /// row end - all three are <c>'\r'</c>. The refusal for tables therefore
-    /// cannot live here; it lives in
-    /// <see cref="ContainsTableStructure"/>, over the RTF.</para>
+    /// <para><b>What this function cannot see, and the caller must.</b> It
+    /// does not know whether a <c>'\r'</c> belongs to a table. On the engine
+    /// Quill ships a row reads U+FFF9 CR ... U+0007 ... U+FFFB CR (cell marks
+    /// are U+0007, measured in tools/TrimEngineProof), but a story in which a
+    /// cell mark or row end is a bare <c>'\r'</c> would be taken for empty
+    /// paragraphs. The refusal for tables therefore does not live here; it
+    /// lives in <see cref="ContainsTableStructure"/> (over the RTF) and
+    /// <see cref="PlainTextShowsTable"/> (over this same plain text), and
+    /// <c>TextTrim</c> asks both before it asks this.</para>
     ///
     /// <para><b>Refusal is the failure mode.</b> Text that does not end in a
     /// paragraph mark is a shape this function does not understand, and it
@@ -230,15 +234,18 @@ public static class TextFlushPolicy
     /// at all.
     ///
     /// <para><b>Why a document Quill itself cannot build still has to be
-    /// refused.</b> In RichEdit a table's CELL marks and its ROW-END marks are
-    /// carriage returns in the story's plain text, exactly like paragraph
-    /// marks, and <see cref="EmptyParagraphMarksToDrop"/> is handed nothing but
-    /// that plain text. Driven with a table-shaped story - <c>cell_one</c>
-    /// followed by four carriage returns: the filled cell's mark, an empty
-    /// cell's mark, the row end and the story's final mark - it answers
+    /// refused.</b> <see cref="EmptyParagraphMarksToDrop"/> is handed nothing
+    /// but the story's plain text. If a table's CELL marks and ROW-END marks
+    /// read there as carriage returns, like paragraph marks - the shape the
+    /// round-2 finding was written against - then a story of <c>cell_one</c>
+    /// followed by four carriage returns (the filled cell's mark, an empty
+    /// cell's mark, the row end and the story's final mark) gets the answer
     /// <c>(9, 2)</c>, which is the empty cell AND the row end. Deleting those
     /// would not drop blank lines, it would destroy the table, which is exactly
-    /// the kind of loss section 56 promises cannot happen. Quill models no RTF
+    /// the kind of loss section 56 promises cannot happen. The engine Quill
+    /// ships was measured to write cells as U+0007 instead (tools/TrimEngineProof,
+    /// section 56.8), which that range never reaches in the shapes measured -
+    /// but an unmeasured shape or engine is refused, not reasoned about. Quill models no RTF
     /// table of its own (no <c>\trowd</c>, <c>\cell</c>, <c>\row</c> or
     /// <c>\intbl</c> anywhere in src/Quill), but <c>MainWindow</c>'s two
     /// <c>Document.Selection.Paste(0)</c> calls have no sanitiser in front of
@@ -249,12 +256,13 @@ public static class TextFlushPolicy
     /// and never stores anything, so section 50.2's objection to a second RTF
     /// parser does not arise: a second parser is a thing that has to stay
     /// CORRECT about every document Windows can write, and this only has to
-    /// stay SUSPICIOUS. Nothing better was available - the whole
-    /// <c>Microsoft.UI.Text</c> namespace of the Windows App SDK 1.8 winmd this
-    /// project builds against carries 584 identifiers and not one of them is
-    /// table-shaped (the nearest is <c>TabLeader</c>), so neither
-    /// <c>ITextRange</c> nor <c>ITextParagraphFormat</c> can be asked whether a
-    /// paragraph sits in a table.</para>
+    /// stay SUSPICIOUS. No per-paragraph answer was available - the
+    /// <c>Microsoft.UI.Text</c> winmd of the Windows App SDK 1.8 this project
+    /// builds against carries no identifier matching table, cell, row or nest
+    /// (the nearest is <c>TabLeader</c>), so neither <c>ITextRange</c> nor
+    /// <c>ITextParagraphFormat</c> can be asked whether a paragraph sits in a
+    /// table. What the range DOES expose, the story's plain text, is the second
+    /// refusal: <see cref="PlainTextShowsTable"/>.</para>
     ///
     /// <para><b>Conservative on purpose: any doubt means do not trim.</b> Plain
     /// ordinal substring matching, so a literal <c>\cell</c> the user TYPED
@@ -281,4 +289,33 @@ public static class TextFlushPolicy
         @"\intbl", @"\trowd", @"\cell", @"\row",
         @"\nestcell", @"\nestrow", @"\nesttableprops",
     };
+
+    /// <summary>CONCEPTS-REF 56.8: the second, independent table refusal -
+    /// whether the story's PLAIN TEXT (<c>ITextRange.GetText(None)</c> over the
+    /// whole story, the same string <see cref="EmptyParagraphMarksToDrop"/> is
+    /// given) carries the characters the RichEdit engine uses for table
+    /// structure.
+    ///
+    /// <para>Measured, not assumed: tools/TrimEngineProof drives
+    /// <c>WinUIEdit.dll</c> - the engine behind every <c>RichEditBox</c> in the
+    /// app - and on it a table row reads U+FFF9, CR, the cells each ended by
+    /// U+0007, then U+FFFB, CR; a nested table reads the same way inside its
+    /// cell. U+FFFA, the third of the interlinear-annotation characters, is in
+    /// the set because it belongs with the other two, not because it was seen.
+    /// U+0007 is BEL, which nobody types into a note.</para>
+    ///
+    /// <para>Why two refusals and not one. <see cref="ContainsTableStructure"/>
+    /// reads the control's serialisation; this reads the story the range is
+    /// actually taken from. Either one alone refuses every table shape measured,
+    /// and each would still refuse if the other were ever wrong about a writer
+    /// or an engine not measured here. Both are gates - neither parses, edits
+    /// or stores anything - and a false positive costs one un-trimmed edit,
+    /// which is section 50's behaviour.</para></summary>
+    public static bool PlainTextShowsTable(string? plain)
+    {
+        if (string.IsNullOrEmpty(plain)) return false;
+        foreach (char c in plain)
+            if (c == '\uFFF9' || c == '\uFFFA' || c == '\uFFFB' || c == '\u0007') return true;
+        return false;
+    }
 }
