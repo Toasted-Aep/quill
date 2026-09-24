@@ -1093,6 +1093,12 @@ public sealed class InkSurface : UserControl
     public void Undo()
     {
         if (_page == null || _replaying) return;
+        // §58.10 ruling B: an undo that arrives mid-oil-stroke (keyboard, dial,
+        // pen bar) ENDS that stroke first - committed as its own action, so the
+        // undo below takes back exactly the stroke being painted and redo can
+        // bring it back - and ends the pen gesture carrying it. Without this the
+        // brush stayed live across the undo, its scratch still drawn on top.
+        SettleOilGesture(endPenGesture: true);
         var act = UndoManager.PeekUndo;
         bool touchesText = act?.TouchesText ?? true;
         FlushTexts();
@@ -1111,6 +1117,10 @@ public sealed class InkSurface : UserControl
     public void Redo()
     {
         if (_page == null || _replaying) return;
+        // §58.10 ruling B: as in Undo - the live oil stroke is settled (a new
+        // edit, so, like any new edit, it leaves nothing to redo) and its
+        // gesture ended before the redo runs.
+        SettleOilGesture(endPenGesture: true);
         var act = UndoManager.PeekRedo;
         bool touchesText = act?.TouchesText ?? true;
         FlushTexts();
