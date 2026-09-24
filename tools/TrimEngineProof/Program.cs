@@ -345,6 +345,46 @@ foreach (var (tag, marker, label) in new[]
           ok, string.Join(" | ", detail));
 }
 
+// ---- 8r. ROUND 3: A LINK WHOSE RESULT RUNS OVER THE TRAILING MARKS ---------
+// Quill's own Add link (MainWindow.FormatLink_Click: sel.Link = "\"url\"")
+// after Ctrl+A. The field's result then holds the trailing paragraph marks, and
+// on this engine deleting them through a range takes the linked words with
+// them. Only the trim's post-delete plain-text check (after must equal the old
+// text with exactly the range removed) sees it. Both selections are tried: the
+// whole story, and the whole story but its final mark.
+{
+    var detail = new List<string>();
+    bool ok = true;
+    foreach (int endAdj in new[] { 0, -1 })
+    {
+        var ln = Load(StoredDocWith("linked words", 4, Plainfinal));   // the grown note, opened
+        var (_, _, lnEnd) = Story(ln);
+        ln.GetRange(0, lnEnd + endAdj).Link = "\"https://example.com\"";   // Ctrl+A, Add link: the edit
+        string lnBefore = Rtf(ln);
+        var (lnPlain, _, _) = Story(ln);
+        var (rs, rl) = TextFlushPolicy.EmptyParagraphMarksToDrop(lnPlain);
+        bool resultSpans = lnBefore.Contains(@"\fldrslt", StringComparison.Ordinal) &&
+                           Pars(lnBefore[lnBefore.IndexOf(@"\fldrslt", StringComparison.Ordinal)..]) > 1;
+        string? lnTrim = TextTrim.TrimTrailingEmptyParagraphs(ln);
+        var (lnAfter, _, _) = Story(ln);
+        string lnAfterRtf = Rtf(ln);
+        bool one = resultSpans && rl > 0 && lnTrim == null &&
+                   lnAfter.Contains("linked words", StringComparison.Ordinal) &&
+                   lnAfterRtf.Contains("linked words", StringComparison.Ordinal) &&
+                   lnAfterRtf.Contains(@"HYPERLINK ""https://example.com""", StringComparison.Ordinal) &&
+                   lnAfter == lnPlain + "\r";
+        ok &= one;
+        detail.Add($"to end{(endAdj == 0 ? "" : endAdj.ToString())}: field result holds \\par: {resultSpans}; range ({rs},{rl}); "
+                   + $"trim {(lnTrim is null ? "refused" : "WROTE " + Esc(lnAfter))}; words kept: {lnAfter.Contains("linked words", StringComparison.Ordinal)}; "
+                   + $"restored = before + one mark: {lnAfter == lnPlain + "\r"}");
+    }
+    Check("56.9 [8r] QUILL'S OWN ADD LINK AFTER CTRL+A - a HYPERLINK field whose result runs over the trailing "
+          + "marks - IS REFUSED: the range is all paragraph marks, but deleting it would turn the linked words into "
+          + "nothing, and the post-delete plain-text check puts the document back; the words and the link survive, "
+          + "and the restore leaves the live box as it was plus section 50's one paragraph",
+          ok, string.Join(" | ", detail));
+}
+
 // ---- NOT CHECKS: shapes reported, not asserted ------------------------------
 foreach (var (name, rtf) in new[]
 {
