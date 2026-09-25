@@ -1036,7 +1036,16 @@ public static class LayerGate
     {
         if (refused.Count == 0) return "";
         if (paste && refused.Count > 1)
-            return "The layers this pastes onto are hidden, so nothing was pasted.";
+        {
+            // Said the way each layer draws nothing, as the single-layer
+            // message does: never "hidden" for a layer whose switch is on.
+            int hidden = 0;
+            foreach (var r in refused) if (r.Hidden) hidden++;
+            string how = hidden == refused.Count ? "are hidden"
+                       : hidden == 0 ? "are at 0% opacity"
+                       : "are hidden or at 0% opacity";
+            return "The layers this pastes onto " + how + ", so nothing was pasted.";
+        }
         var l = refused[0];
         string name = PageLayers.DisplayName(page, l);
         string why = l.Hidden ? "is hidden" : "is at 0% opacity";
