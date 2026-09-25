@@ -1234,15 +1234,26 @@ if (oplogs.Length == 1)
     string mZero = LayerGate.RefusalMessage(cp, new[] { cZ }, paste: false);
     string mPaste = LayerGate.RefusalMessage(cp, new[] { cH }, paste: true);
     string mPaste2 = LayerGate.RefusalMessage(cp, new[] { cH, cZ }, paste: true);
+    var cH2 = new Layer { Key = 90, Name = "A", Hidden = true };
+    var cZ2 = new Layer { Key = 91, Name = "B", Opacity = 0f };
+    string mPasteHH = LayerGate.RefusalMessage(cp, new[] { cH, cH2 }, paste: true);
+    string mPasteZZ = LayerGate.RefusalMessage(cp, new[] { cZ, cZ2 }, paste: true);
+    string mPasteZ = LayerGate.RefusalMessage(cp, new[] { cZ }, paste: true);
     Check("58.11 R1 - the message names the layer and says it is hidden, plainly",
           mHidden == "The active layer (Sketch) is hidden, so nothing was added.", mHidden);
     Check("58.11 R1 - a 0% layer is named as 0% (the panel's switch shows it ON, so 'hidden' "
           + "would contradict the panel)",
           mZero == "The active layer (Notes) is at 0% opacity, so nothing was added.", mZero);
-    Check("58.11 R1 - paste's messages, one layer and several",
+    Check("58.11 R1 - paste's messages, one layer (hidden, 0%) and several (all hidden, all 0%, "
+          + "mixed): each says the way its layers draw nothing",
           mPaste == "The layer this pastes onto (Sketch) is hidden, so nothing was pasted."
-          && mPaste2 == "The layers this pastes onto are hidden, so nothing was pasted.", mPaste + " / " + mPaste2);
-    bool noSymbol = new[] { mHidden, mZero, mPaste, mPaste2, LayerGate.ShowAction, LayerGate.ShownMessage(cp, cH) }
+          && mPasteZ == "The layer this pastes onto (Notes) is at 0% opacity, so nothing was pasted."
+          && mPasteHH == "The layers this pastes onto are hidden, so nothing was pasted."
+          && mPasteZZ == "The layers this pastes onto are at 0% opacity, so nothing was pasted."
+          && mPaste2 == "The layers this pastes onto are hidden or at 0% opacity, so nothing was pasted.",
+          string.Join(" / ", mPaste, mPasteZ, mPasteHH, mPasteZZ, mPaste2));
+    bool noSymbol = new[] { mHidden, mZero, mPaste, mPaste2, mPasteHH, mPasteZZ, mPasteZ,
+                            LayerGate.ShowAction, LayerGate.ShownMessage(cp, cH) }
         .All(m => m.All(ch => ch < 0x2000));         // no emoji, no pictographs, no dingbats
     Check("58.11 R1 - no message and no action label carries a symbol or emoji; the action "
           + "is 'Show it'", noSymbol && LayerGate.ShowAction == "Show it");
