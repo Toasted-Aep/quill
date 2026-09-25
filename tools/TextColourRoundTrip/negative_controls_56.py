@@ -5,8 +5,11 @@ harnesses clean, and turned the checks it names red; and the restored
 sources are byte-identical (sha256) and green again.
 
 Break the REAL shipping code - src/Quill/Services/TextFlushPolicy.cs (the
-decisions) or src/Quill/Services/TextTrim.cs (the trim that runs against the
-live document) - then, for each mutant:
+decisions), src/Quill/Services/TextTrim.cs (the trim that runs against the
+live document, and since 56.9 FlushBox, the per-box flush step) or, for the
+one 56.9 mutant that has to live there, src/Quill/Controls/InkSurface.cs
+(which carries the refused-trim latch between flushes) - then, for each
+mutant:
   1. build src/Quill x64            - must be 0 errors (a mutant that does not
                                       compile in the app is not a control);
   2. build TextColourRoundTrip      - 0 errors, only the 120 pre-existing CS0436;
@@ -18,12 +21,13 @@ live document) - then, for each mutant:
      harness named, and a mutant naming no check must turn TextColourRoundTrip
      red somewhere;
   5. put the original bytes back (sha256 checked) - whatever happens.
-Writes nothing but those two source files."""
+Writes nothing but those three source files."""
 import hashlib, os, re, subprocess, sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 POLICY = os.path.join(ROOT, r"src\Quill\Services\TextFlushPolicy.cs")
 TRIM = os.path.join(ROOT, r"src\Quill\Services\TextTrim.cs")
+INK = os.path.join(ROOT, r"src\Quill\Controls\InkSurface.cs")
 QUILL = os.path.join(ROOT, r"src\Quill\Quill.csproj")
 TCRT_PROJ = os.path.join(ROOT, r"tools\TextColourRoundTrip\TextColourRoundTrip.csproj")
 TCRT_EXE = os.path.join(ROOT, r"tools\TextColourRoundTrip\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\TextColourRoundTrip.exe")
@@ -92,6 +96,28 @@ MUTANTS = [
        "                finalAfter.ParagraphFormat = paraBefore;" + NL +
        "                finalAfter.CharacterFormat = charBefore;")],
      [("TEP", "[8e]"), ("TEP", "[8f]")]),
+    # ---- 56.9 ---------------------------------------------------------------
+    ("L1: TextTrim DROPS LIST ITEMS - the engine is not asked, the range is not cut at the last list item", TRIM,
+     [("            (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(plain, listItemMarks);",
+       "            (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(plain, null);")],
+     [("TEP", "[8o]"), ("TEP", "[8p]"), ("TEP", "[8q]")]),
+    ("L2: the list-aware range IGNORES every list item it is given", POLICY,
+     [("            if (m >= start && m > lastList) lastList = m;",
+       "            if (m >= start && m > lastList && m < 0) lastList = m;")],
+     [("TCRT", "[6o]"), ("TEP", "[8o]"), ("TEP", "[8p]"), ("TEP", "[8q]")]),
+    ("P: the POST-DELETE PLAIN-TEXT CHECK is removed (after == old text less the range)", TRIM,
+     [("            if (after != plain.Remove(start, length) || finalAfter == null ||",
+       "            if (finalAfter == null ||")],
+     [("TEP", "[8r]")]),
+    ("R1: a REFUSED TRIM'S RESTORE IS STORED by the second flush (FlushBox ignores the latch)", TRIM,
+     [("        if (refusedLive != null && string.Equals(refusedLive, rtf, System.StringComparison.Ordinal))" + NL +
+       "            return FlushOutcome.RefusalKept;",
+       "        // mutant R1: the refused-trim latch is not consulted")],
+     [("TEP", "[8s] A REFUSED TRIM NEVER REACHES THE MODEL")]),
+    ("R2: InkSurface does not CARRY the latch from one flush to the next", INK,
+     [("            else _trimRefused[id] = refusedLive;",
+       "            // mutant R2: the latch FlushBox hands back is dropped")],
+     [("TEP", "[8a]")]),
 ]
 
 def build(proj):
@@ -121,7 +147,7 @@ def build_all():
         if label != "TextColourRoundTrip" and w != 0: ok = False
     return ok, lines
 
-originals = {p: open(p, "rb").read() for p in (POLICY, TRIM)}
+originals = {p: open(p, "rb").read() for p in (POLICY, TRIM, INK)}
 shas = {p: hashlib.sha256(b).hexdigest() for p, b in originals.items()}
 for p, b in originals.items(): assert eol_ok(b), f"{p}: line endings are not all CRLF"
 

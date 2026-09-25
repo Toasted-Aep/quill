@@ -47,12 +47,25 @@ int calls = Regex.Matches(inkCode, @"TextTrim\.FlushBox\(ui\.Box\.Document,").Co
 int ownAsks = Regex.Matches(inkCode, @"TextFlushPolicy\.(ShouldWriteBack|MayTrim|NeedsTheDocument)\(|TextTrim\.TrimTrailingEmptyParagraphs\(").Count;
 bool privateCopy = inkCode.Contains("string? TrimTrailingEmptyParagraphs(", StringComparison.Ordinal);
 int boxTrims = Regex.Matches(trimCode, @"= TrimTrailingEmptyParagraphs\(doc\);").Count;
+// The one part of 8s's replay that is InkSurface's and not FlushBox's: carrying
+// the refused-trim latch from one flush to the next, per box, until the
+// rebuild clears it AFTER its own flush. Read from the source - InkSurface
+// cannot be linked - so this is a text check, and says so.
+bool latchRead = inkCode.Contains("_trimRefused.TryGetValue(id, out string? refusedLive);", StringComparison.Ordinal)
+                 && inkCode.Contains("ref refusedLive, out string? live, out string? toStore);", StringComparison.Ordinal);
+bool latchKept = inkCode.Contains("else _trimRefused[id] = refusedLive;", StringComparison.Ordinal);
+int rebuildAt = inkCode.IndexOf("public void RebuildTextLayer()", StringComparison.Ordinal);
+int rebuildFlush = rebuildAt < 0 ? -1 : inkCode.IndexOf("FlushTexts(releasing: true);", rebuildAt, StringComparison.Ordinal);
+int rebuildClear = rebuildAt < 0 ? -1 : inkCode.IndexOf("_trimRefused.Clear();", rebuildAt, StringComparison.Ordinal);
+bool clearAfterFlush = rebuildFlush > rebuildAt && rebuildClear > rebuildFlush;
 Check("56.9 [8a] InkSurface.FlushTexts calls the linked TextTrim.FlushBox(ui.Box.Document, ...) once, asks none "
       + "of its questions itself and keeps no private copy of the trim, and FlushBox is what calls "
-      + "TrimTrailingEmptyParagraphs - so what runs below is what the app runs",
-      calls == 1 && ownAsks == 0 && !privateCopy && boxTrims == 1,
+      + "TrimTrailingEmptyParagraphs - so what runs below is what the app runs. And (read from the source) it hands "
+      + "FlushBox each box's refused-trim latch, keeps what comes back, and RebuildTextLayer clears the latches only "
+      + "after its own flush",
+      calls == 1 && ownAsks == 0 && !privateCopy && boxTrims == 1 && latchRead && latchKept && clearAfterFlush,
       $"{calls} FlushBox call(s); policy/trim asked directly in InkSurface: {ownAsks}; private copy present: {privateCopy}; "
-      + $"FlushBox trims: {boxTrims}");
+      + $"FlushBox trims: {boxTrims}; latch handed in: {latchRead}, kept: {latchKept}, cleared after the rebuild's flush: {clearAfterFlush}");
 
 // ---- 8b. THE ENGINE IS THE APP'S ENGINE ------------------------------------
 string ownDll = Path.Combine(AppContext.BaseDirectory, "WinUIEdit.dll");
