@@ -11123,6 +11123,12 @@ executed:**
   release that trims it, because the trailing blank lines were part of its
   auto-height. Not seen.
 
+- **Linkify (added in §56.9.4).** A box holding a URL whose words are its
+  own address is re-linked by `LinkifyBox` on every blur, because the engine
+  reads that link back as no link after a reopen. So a focus and a blur count
+  as an edit, and the box is written and trimmed. Pre-existing, linkify's,
+  filed as TODO 8.14.
+
 **By the ruling, and worth knowing:** the trim does not care who typed the
 trailing blank lines. A user who deliberately ends a note with several
 blank lines keeps only one of them the next time that note is edited and
@@ -11483,7 +11489,7 @@ reads `2.` TAB. The two agreed on every paragraph in 8o, 8p and 8q.
 |---|---|
 | 8o | Bullets: `"intro"` + three empty items + growth, edited, trims to `"intro!\r\r\r\r\r"`. The three items are still list items (`.LLL.`), and one plain empty paragraph survives. |
 | 8p | The same with a numbered list (`MarkerType.Arabic`, period style). |
-| 8q | Two items with words, Enter at the end of the second (the engine carries the list onto the new, empty item), four sessions of growth, bulleted and numbered. The six plain empties go down to one; the empty item stays a list item (`LLL.`). |
+| 8q | Two items with words, Enter at the end of the second (the engine carries the list onto the new, empty item), four sessions of growth, bulleted and numbered. The seven plain empties after the item go down to one; the empty item stays a list item (`LLL.`). |
 | 6o | The linked overload over eight hand-written shapes. It also sweeps 3,780 cases, each 6k shape with each single trailing mark made a list item, against the exact expected answer. The draft only asked that a non-empty range miss the item, so an overload that answered "nothing" for every list would have passed. |
 
 **Where lists come from.** Quill's own format bar makes bullets only
@@ -11635,3 +11641,106 @@ direct call.
   §56.8.1, §56.8.3 and §56.8.8.
 - **Discarded:** the claim, in 8r and in the round-3 brief, that the
   whole-story link is refused by the post-delete check.
+
+#### 56.9.6 Builds, every harness, and the negative controls
+
+This was run after the last source change. Each project's `bin` and `obj`
+were deleted first, and each was built with `--no-incremental`.
+
+- `dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64`:
+  **0 warnings, 0 errors**.
+- **TextColourRoundTrip: 74/74, exit 0.** 120 warnings, all the pre-existing
+  `CS0436`.
+- **TrimEngineProof: 20/20, exit 0**, 0 warnings, against `WinUIEdit.dll`
+  `758f8a13fb4b9ee2…`, which is byte-identical to Quill's own build output
+  (8b).
+- CloneRoundTrip 37/37, ExportRotRoundTrip 37/37, LayerRoundTrip 84/84,
+  TextRotRoundTrip 25/25 and VeilRoundTrip 29/29 exit 0. HandleProof,
+  PanelProof, PaperProof and SeatProof exit 0 with their verdict lines. All
+  build with 0 warnings and 0 errors. PaperProof rewrote `docs/paper-proof`;
+  git shows no change.
+- `canvas_infinite_check.py` (13/13) and `click_select_check.py` (35/35)
+  pass. `bottom_bar_check.py`, `measurement_menu_check.py`,
+  `text_quick_actions_check.py` and `selection_present_check.py` exit 1.
+  Their output is identical, apart from paths, to a `git archive` of
+  `bc5f3e0`, so the failures predate this round (§56.5, §56.8.6).
+- **`negative_controls_56.py`: `ALL CONTROLS RED, RESTORED GREEN`, exit 0**,
+  over 17 mutants. Every mutant built `src/Quill` with 0 warnings and 0
+  errors. The script now also restores `InkSurface.cs` by sha256, for R2.
+  The new mutants:
+
+| mutant | file | named, all red | everything that went red |
+|---|---|---|---|
+| **L1: `TextTrim` does not ask the engine about list items** | trim | 8o, 8p, 8q | the same three; TextColourRoundTrip stays 74/74 |
+| **L2: the list-aware range ignores every list item** | policy | 6o, 8o, 8p, 8q | the same four |
+| **P: the post-delete plain-text check removed** | trim | 8r | 8r only; TextColourRoundTrip stays 74/74 |
+| **R1: `FlushBox` ignores the refused-trim latch** | trim | 8s (the model) | 8s only |
+| **R2: `InkSurface` drops the latch `FlushBox` hands back** | InkSurface | 8a | 8a only |
+
+The earlier mutants still go red as §56.8.5 lists, with some new checks
+added to their spread:
+- C1 now also turns 6o, 8o–8q and 8r red;
+- C2 turns 6o red;
+- F2 turns 8o–8q red;
+- F1 turns 8r and both 8s checks red, because with the copy skipped, the
+  whole-story link is no longer refused and is trimmed;
+- D turns 8s red.
+
+The first run of the script, before 8r named its refusal, ended `NEGATIVE
+CONTROLS DID NOT ALL HOLD`, on P alone (§56.9.2).
+
+#### 56.9.7 Assumptions, taken while the product owner was unavailable
+
+1. **An empty list item is the user's, not growth.** So the trim's run stops
+   at the last list item. This was taken as the conservative reading of
+   "trim on next edit only", because the §50 growth was measured never to
+   create one.
+2. **Plain empty paragraphs after the last list item may still go, down to
+   one.** The brief allowed it, and it is the same rule as any other
+   trailing run.
+3. **`ListType` `Undefined` counts as a list item.** Any doubt keeps the
+   paragraph.
+4. **A final mark that is itself a list item stops the trim entirely,** even
+   if plain empties sit before it. They are not "trailing" past a list item.
+5. **The whole-story link is right to be refused,** even though its raw
+   delete is harmless. The refusal costs one untrimmed edit, which is §50's
+   behaviour, and the copy check that refuses it is §56.8's.
+6. **The latch compares whole serialisations, ordinally.** A refused trim's
+   restore is only "the same document" if it is byte for byte what the
+   restore left. Anything else, a keystroke included, is an edit.
+7. **Adding `TrimRefusal`** (an overload, with the app still calling the
+   one-argument form) was taken to be within "add an engine check". It
+   changes no behaviour; it lets a check say *which* refusal fired.
+8. **Linkify was recorded and not fixed,** as instructed. The engine
+   measurement of it was added as an INFO line only.
+
+#### 56.9.8 WHAT IS NOT ESTABLISHED
+
+- **Nothing was seen on screen.** Quill was not launched, no library was
+  read or written, and a real `RichEditBox` never held a list, a link or a
+  refused trim in this round.
+- **`InkSurface`'s latch plumbing is read, not run.** 8a checks the text,
+  and R2 proves that check can fail. `FlushTexts` itself cannot be linked.
+  That `RecolourSelection` is the only path that flushes a live box twice
+  in one release comes from reading. The latch does not depend on it: it is
+  per box and applies to any later flush.
+- **Round 2's `Flush56` mirror in TextColourRoundTrip does not model the
+  latch.** The flush order with the latch is proven only in TrimEngineProof,
+  by linking `FlushBox`.
+- **Numbered lists arrive by paste or by the control's own shortcuts, and
+  neither was exercised.** 8p builds one by setting `ListType` directly, as
+  `FormatBullets_Click` does for bullets. `Undefined` was never observed.
+- **Mixed list states in one trailing run** (for example a list item
+  between two runs of plain empties) are covered by 6o's shapes and sweep
+  over the linked function, not by an engine document.
+- **An exception after the delete** inside `TrimTrailingEmptyParagraphs`
+  returns `null` without restoring the live box. This predates this round
+  and is only reasoned about. `FlushBox` then stores the untrimmed edit and
+  latches whatever the live box holds, so the model keeps the edit.
+- **Linkify's re-link on every blur** (§56.9.4, TODO 8.14) makes a box that
+  was only focused and left count as edited whenever it holds a URL whose
+  words are its own address. Such a box is written, and trimmed at the next
+  release. This is measured on the engine, not seen on screen, and not
+  fixed.
+- Everything §56.7 and §56.8.8 list as not verified still stands, except
+  the restore, which 8r and 8s now run.
