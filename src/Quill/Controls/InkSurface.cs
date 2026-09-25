@@ -503,6 +503,9 @@ public sealed class InkSurface : UserControl
                 // with it) and the pen gesture ended, so nothing wet is left to
                 // draw on top and the rest of the stroke does not turn into
                 // vector ink. The next oil stroke builds a fresh brush.
+                // (§58.11: this is GestureEnd.DeviceLoss, whose outcome in
+                // GestureRules.OilOutcome is OilEnd.Drop - handled here, not in
+                // EndOilGesture, because the brush must be disposed outright.)
                 if (_oil != null)
                 {
                     bool wasLive = _oil.Active;
@@ -857,7 +860,7 @@ public sealed class InkSurface : UserControl
         // _page is still that page - before OpenPaintForPage below flushes and
         // drops its store. Without this the brush stayed live with the old
         // page's scratch and the WetPaint step would draw it over the new page.
-        SettleOilGesture(endPenGesture: true);
+        EndOilGesture(GestureEnd.PageSwitch);
         StopReplay();
         CancelPendingText();
         _page = page;
@@ -970,6 +973,12 @@ public sealed class InkSurface : UserControl
         // here, on the way in, so exactly one of the two is ever live and no
         // downstream test has to know about both.
         if (tool == ToolType.Select) tool = ToolType.Mouse;
+        // §58.11: a tool switch that arrives while an oil stroke is still under
+        // the pen ENDS that stroke - committed as a lift would commit it - and
+        // the pen gesture carrying it. Before this the brush stayed live across
+        // the switch, its scratch drawn above all ink, and the pen's remaining
+        // moves kept painting oil under whatever tool was now chosen.
+        EndOilGesture(GestureEnd.ToolSwitch);
         Tool = tool;
         // 11.4 item 29: the ruler IS a tool now, so the straightedge follows the
         // selection instead of a separate switch on the top bar. Selecting any
@@ -1093,12 +1102,17 @@ public sealed class InkSurface : UserControl
     public void Undo()
     {
         if (_page == null || _replaying) return;
-        // §58.10 ruling B: an undo that arrives mid-oil-stroke (keyboard, dial,
-        // pen bar) ENDS that stroke first - committed as its own action, so the
-        // undo below takes back exactly the stroke being painted and redo can
-        // bring it back - and ends the pen gesture carrying it. Without this the
-        // brush stayed live across the undo, its scratch still drawn on top.
-        SettleOilGesture(endPenGesture: true);
+        // §58.11 ruling R4: Ctrl+Z (or the undo button, the dial, the History
+        // panel - every undo reaches here) pressed while a stroke is still under
+        // the pen CANCELS THAT STROKE, for every pen, and runs no history:
+        // nothing is pushed, nothing popped. Round 2 (58.10.2) committed an oil
+        // stroke and then undid it, and let a vector stroke draw on through the
+        // undo; both are replaced by this.
+        if (GestureRules.OnHistoryKey(StrokeInProgress) == HistoryKeyOutcome.CancelStroke)
+        {
+            CancelStrokeInProgress(GestureEnd.Undo);
+            return;
+        }
         var act = UndoManager.PeekUndo;
         bool touchesText = act?.TouchesText ?? true;
         FlushTexts();
@@ -1117,10 +1131,16 @@ public sealed class InkSurface : UserControl
     public void Redo()
     {
         if (_page == null || _replaying) return;
-        // §58.10 ruling B: as in Undo - the live oil stroke is settled (a new
-        // edit, so, like any new edit, it leaves nothing to redo) and its
-        // gesture ended before the redo runs.
-        SettleOilGesture(endPenGesture: true);
+        // §58.11: Redo mid-stroke is NOT covered by ruling R4. It is made to do
+        // what Undo does - cancel the stroke under the pen, touch no history,
+        // and so keep the redo stack intact - which is an ASSUMPTION the owner
+        // can overturn (58.11.4). Round 2 committed the stroke first, and that
+        // new edit emptied the redo stack, so the redo found nothing to redo.
+        if (GestureRules.OnHistoryKey(StrokeInProgress) == HistoryKeyOutcome.CancelStroke)
+        {
+            CancelStrokeInProgress(GestureEnd.Redo);
+            return;
+        }
         var act = UndoManager.PeekRedo;
         bool touchesText = act?.TouchesText ?? true;
         FlushTexts();
@@ -1131,6 +1151,72 @@ public sealed class InkSurface : UserControl
         if (touchesText) RebuildTextLayer();
         if (act != null) FlashAction(act);
         _canvas.Invalidate();
+        ContentChanged?.Invoke();
+    }
+
+    /// <summary>§58.11 R4: is a pen or brush stroke under the pen right now?
+    /// The decision is <see cref="GestureRules.StrokeInProgress"/>
+    /// (Win2D-free, run by tools/LayerRoundTrip); this only hands it the
+    /// surface's state.</summary>
+    private bool StrokeInProgress => GestureRules.StrokeInProgress(
+        pointerDown: _activePointer != null,
+        penGesture: _gestureTool == ToolType.Pen,
+        hasWet: _wet != null,
+        shapeAdjust: _shapeAdjust && _adjustShape != null,
+        oilActive: OilGestureActive);
+
+    /// <summary>
+    /// §58.11 R4: CANCELS the stroke under the pen. Nothing is committed and
+    /// no history is touched, with one exception that restores rather than
+    /// changes it (below).
+    ///
+    /// <list type="bullet">
+    /// <item>OIL: the brush is DISCARDED (<see cref="OilBrush.Discard"/>): the
+    /// wet scratch is dropped, and any part of the stroke a mid-gesture flush
+    /// (ScratchTileFlushLimit) already composited into the tiles is put back
+    /// to its pre-gesture bytes - no PaintTilesAction is pushed.</item>
+    /// <item>VECTOR (every other pen, the ruler, a hold-snapped shape): the wet
+    /// points or the shape being adjusted were never pushed; they are
+    /// dropped.</item>
+    /// <item>THE PEN-REPAIR BRIDGE: a stroke that RESUMED the previous one
+    /// (pen-down within 200 ms where it ended) took that stroke's own entry off
+    /// the undo stack at pen-down. Cancelling puts the same entry and the same
+    /// stroke back, redo stack untouched (<see cref="UndoRedoManager.PutBack"/>),
+    /// so the history is exactly what it was before the press.</item>
+    /// </list>
+    /// Then the pen gesture ends and capture is released: the pen draws nothing
+    /// more until it is lifted and pressed again.
+    /// </summary>
+    private void CancelStrokeInProgress(GestureEnd why)
+    {
+        RestoreResumedStroke();
+        EndOilGesture(why);   // OilOutcome(Undo/Redo) is Discard; ends the pen gesture too
+        if (_gestureTool == ToolType.Pen)
+        {
+            ResetGesture();
+            try { _canvas.ReleasePointerCaptures(); } catch { }
+        }
+        _settleShape = null;   // a snapped shape that never landed has nothing to pulse
+        _canvas.Invalidate();
+    }
+
+    // §58.11 R4: the stroke the pen-repair bridge resumed at pen-down, and the
+    // undo entry it took off the stack to do so; cleared by ResetGesture, which
+    // every gesture end runs, so they only ever describe the LIVE gesture.
+    private PenStroke? _resumedStroke;
+    private IPageAction? _resumedAction;
+
+    private void RestoreResumedStroke()
+    {
+        var rs = _resumedStroke;
+        var ra = _resumedAction;
+        _resumedStroke = null;
+        _resumedAction = null;
+        if (rs == null || _page == null || _page.Strokes.Contains(rs)) return;
+        if (ra != null) UndoManager.PutBack(ra, _page);
+        else _page.Strokes.Add(rs);
+        _gridDirty = true;
+        _inkCacheDirty = true;
         ContentChanged?.Invoke();
     }
 
@@ -1375,9 +1461,9 @@ public sealed class InkSurface : UserControl
         // middle-mouse drag pans
         if (isMouse && props.IsMiddleButtonPressed)
         {
+            TakeOverGesture(e.Pointer.PointerId, GestureEnd.TakeoverPan);   // §58.11, first
             _mousePanning = true;
             _mousePanLast = screen;
-            _activePointer = e.Pointer.PointerId;
             _canvas.CapturePointer(e.Pointer);
             e.Handled = true;
             return;
@@ -1387,11 +1473,11 @@ public sealed class InkSurface : UserControl
         // drag moves it — mirroring the pen's barrel button.
         if (isMouse && props.IsRightButtonPressed)
         {
+            TakeOverGesture(e.Pointer.PointerId, GestureEnd.TakeoverOther);   // §58.11, first
             _barrelGesture = true;   // reuse the barrel tap-vs-drag machinery
             _barrelMoved = false;
             _barrelStartScreen = screen;
             ArmSkipNextRightTap();
-            _activePointer = e.Pointer.PointerId;
             _gestureTool = ToolType.Mouse;
             _canvas.CapturePointer(e.Pointer);
             bool overSel =
@@ -1421,10 +1507,10 @@ public sealed class InkSurface : UserControl
         {
             // Begin a barrel gesture: tapped (no drag) -> context menu on
             // release; dragged -> lasso selection.
+            TakeOverGesture(e.Pointer.PointerId, GestureEnd.TakeoverOther);   // §58.11, first
             _barrelGesture = true;
             _barrelMoved = false;
             _barrelStartScreen = screen;
-            _activePointer = e.Pointer.PointerId;
             _gestureTool = ToolType.Mouse;
             _canvas.CapturePointer(e.Pointer);
             // Barrel press ON the current selection keeps it: a tap opens the
@@ -1513,7 +1599,7 @@ public sealed class InkSurface : UserControl
                     (TryBeginSelectionScale(pos, 14f / ViewZoom) ||
                      _selBounds.Contains(new Point(pos.X, pos.Y))))
                 {
-                    _activePointer = e.Pointer.PointerId;
+                    TakeOverGesture(e.Pointer.PointerId, GestureEnd.TakeoverOther);   // §58.11
                     _gestureTool = ToolType.Mouse;
                     _canvas.CapturePointer(e.Pointer);
                     if (!_scalingSel) BeginSelectionMove(pos);
@@ -1527,7 +1613,7 @@ public sealed class InkSurface : UserControl
                     bool onBody = OnShapeBody(_activeShape, pos, tol);
                     if (handle != null || onBody)
                     {
-                        _activePointer = e.Pointer.PointerId;
+                        TakeOverGesture(e.Pointer.PointerId, GestureEnd.TakeoverOther);   // §58.11
                         _gestureTool = ToolType.Mouse;
                         _canvas.CapturePointer(e.Pointer);
                         if (handle != null)
@@ -1560,12 +1646,18 @@ public sealed class InkSurface : UserControl
         if (tool == ToolType.Text)
         {
             // Don't create a box yet — just blink a caret where text will go.
-            SetPendingText(pos);
+            // §58.11 R1: the Text tool is an intent to write, so a tap on a
+            // page whose active layer draws nothing is refused HERE, with the
+            // message, rather than at the first keystroke: no caret appears.
+            if (CanCreateOnActiveLayer()) SetPendingText(pos);
             e.Handled = true;
             return;
         }
 
-        _activePointer = e.Pointer.PointerId;
+        // §58.11: a press that reaches here STARTS A GESTURE, so it takes the
+        // live one over. A pan, an erase or anything else, each ends a live oil
+        // brush first (GestureRules.OilOutcome: committed, as a lift would).
+        TakeOverGesture(e.Pointer.PointerId, GestureRules.TakeoverFor(tool));
         _gestureTool = tool;
         _canvas.CapturePointer(e.Pointer);
 
@@ -1624,6 +1716,18 @@ public sealed class InkSurface : UserControl
                     if (hitHandled) break;
                     _activeShape = null;
                 }
+                // §58.11 R1: a VECTOR stroke lands on the active layer, so the
+                // press asks the one fact before anything is drawn. A layer
+                // that draws nothing refuses: no wet ink, nothing committed, one
+                // message with a one-tap Show action. Oil paint lands on no
+                // layer (58.2) and is not refused (GestureRules.PenPressLandsOnLayer).
+                if (GestureRules.PenPressLandsOnLayer(Pen, RulerMode) && !CanCreateOnActiveLayer())
+                {
+                    ResetGesture();
+                    try { _canvas.ReleasePointerCaptures(); } catch { }
+                    e.Handled = true;
+                    return;
+                }
                 // Pen repair (#2-batch2): a faulty pen that momentarily loses
                 // contact ends the stroke and instantly starts a new one. If a
                 // pen-down lands right where a stroke just finished, pick that
@@ -1634,7 +1738,12 @@ public sealed class InkSurface : UserControl
                     _page.Strokes.Count > 0 && ReferenceEquals(_page.Strokes[^1], _lastCommitted))
                 {
                     var resume = _lastCommitted;
-                    UndoManager.TryDiscardTop(a => a is AddStrokeAction asa && ReferenceEquals(asa.Stroke, resume));
+                    var top = UndoManager.PeekUndo;
+                    bool discarded = UndoManager.TryDiscardTop(a => a is AddStrokeAction asa && ReferenceEquals(asa.Stroke, resume));
+                    // §58.11 R4: remembered, so an undo that cancels this
+                    // resumed stroke can put the previous one back as it was.
+                    _resumedStroke = resume;
+                    _resumedAction = discarded ? top : null;
                     RemoveStroke(resume);
                     _wet = new List<StrokePoint>(resume.Points) { new(pos.X, pos.Y, props.Pressure) };
                     _lastCommitted = null;
@@ -1728,7 +1837,9 @@ public sealed class InkSurface : UserControl
     // Move = drag images/shapes only.
     private void HandleMousePress(PointerRoutedEventArgs e, Vector2 pos, Vector2 screen)
     {
-        _activePointer = e.Pointer.PointerId;
+        // §58.11: Grab mode pans; every other mode selects, grabs or drags.
+        TakeOverGesture(e.Pointer.PointerId,
+            MouseMode == MouseMode.Grab ? GestureEnd.TakeoverPan : GestureEnd.TakeoverOther);
         _canvas.CapturePointer(e.Pointer);
         float tol = 10f / ViewZoom;
 
@@ -2430,6 +2541,11 @@ public sealed class InkSurface : UserControl
     {
         if (_mousePanning)
         {
+            // §58.11: a pan that TOOK OVER an oil stroke ended its brush at the
+            // press (TakeOverGesture). This early return skips ResetGesture,
+            // which is why that could not be left to the release; the call here
+            // is the second line, and a no-op whenever the first one ran.
+            EndOilGesture(GestureEnd.Reset);
             _mousePanning = false;
             _activePointer = null;
             return;
@@ -2451,7 +2567,9 @@ public sealed class InkSurface : UserControl
                     bool big = sh.Kind == ShapeKind.Line
                         ? Math.Abs(sh.W) + Math.Abs(sh.H) > 10
                         : sh.W > 8 && sh.H > 8;
-                    if (big)
+                    // §58.11 R1, asked again at the lift: the press asked it,
+                    // but the layer can have been hidden mid-stroke.
+                    if (big && CanCreateOnActiveLayer())
                     {
                         sh.LayerKey = ActiveLayerKey;   // 18.9 seam 5
                         PushAction(new AddShapeAction(sh), _page);
@@ -2466,6 +2584,9 @@ public sealed class InkSurface : UserControl
                     EndOilStroke();
                     break;
                 }
+                // §58.11 R1, asked again at the lift (see the shape branch). A
+                // refused RESUMED stroke gives the previous one back as it was.
+                if (!CanCreateOnActiveLayer()) { RestoreResumedStroke(); break; }
                 var pts = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : FinalizeStroke(_wet ?? new List<StrokePoint>());
                 if (pts.Count >= 1)
                 {
@@ -2790,8 +2911,10 @@ public sealed class InkSurface : UserControl
         // §58.10 ruling B: every gesture that ends ends its oil brush too. On
         // the normal lift CommitGesture has already ended it, so this is a
         // no-op there; it catches a reset that arrives with the brush live.
-        // endPenGesture false: this IS the gesture ending.
-        SettleOilGesture(endPenGesture: false);
+        // GestureEnd.Reset does not end the pen gesture: this IS it ending.
+        EndOilGesture(GestureEnd.Reset);
+        _resumedStroke = null;   // §58.11 R4: only ever the LIVE gesture's
+        _resumedAction = null;
         _activePointer = null;
         _gestureTool = null;
         _wet = null;
@@ -3355,6 +3478,14 @@ public sealed class InkSurface : UserControl
         float qx1 = Math.Max(from.X, to.X) + qp, qy1 = Math.Max(from.Y, to.Y) + qp;
         var shCand = ShapeCandidates(qx0, qy0, qx1, qy1);
         var stCand = StrokeCandidates(qx0, qy0, qx1, qy1);
+        // §58.11 ruling R3: THE ERASER ERASES ONLY VISIBLE INK. Every element
+        // loop below - shapes in both modes, strokes in Object mode, strokes in
+        // Point mode under every style (hard, soft, slice, nudge) - skips an
+        // element whose layer draws nothing, through LayerPick.Erasable: the
+        // plan's IsDrawn, the very fact the eraser PREVIEW (FindStrokeNear,
+        // via LayerPick.Topmost) already refuses on. So the preview and the
+        // erase agree. Paint is not layered (58.2) and is rubbed as before.
+        var plan = CurrentDrawPlan(_page);
         // shapes are erased whole in either mode — but images are never erased
         // (move/delete them with the selection tools instead)
         for (int i = _page.Shapes.Count - 1; i >= 0; i--)
@@ -3362,6 +3493,7 @@ public sealed class InkSurface : UserControl
             var sh = _page.Shapes[i];
             if (shCand != null && !shCand.Contains(sh)) continue;
             if (sh.Kind == ShapeKind.Image) continue;
+            if (!LayerPick.Erasable(plan, sh.LayerKey)) continue;
             float tolS = sh.Size + 8f;
             if (DistToShapeOutline(sh, from) <= tolS || DistToShapeOutline(sh, to) <= tolS)
             {
@@ -3376,6 +3508,7 @@ public sealed class InkSurface : UserControl
             {
                 var s = _page.Strokes[i];
                 if (stCand != null && !stCand.Contains(s)) continue;
+                if (!LayerPick.Erasable(plan, s.LayerKey)) continue;   // §58.11 R3
                 float tol = s.Size + 6f;
                 bool hit = s.Points.Any(p =>
                     GeometryUtil.DistToSegment(new Vector2(p.X, p.Y), from, to) <= tol);
@@ -3398,6 +3531,7 @@ public sealed class InkSurface : UserControl
             {
                 var s = _page.Strokes[i];
                 if (stCand != null && !stCand.Contains(s)) continue;
+                if (!LayerPick.Erasable(plan, s.LayerKey)) continue;   // §58.11 R3, every style
 
                 bool any = false;
                 foreach (var p in s.Points)
@@ -3673,6 +3807,10 @@ public sealed class InkSurface : UserControl
     public void LayersChanged(bool visibilityChanged = true)
     {
         _inkCacheDirty = true;
+        // §58.11 ruling R2 - first, and on BOTH paths (the switch and the
+        // slider): a selection may not hold anything on a layer that no longer
+        // draws. This is the one call every visibility change makes.
+        DropInvisibleSelection();
         if (visibilityChanged) RebuildTextLayer();
         else if (_page != null)
         {
@@ -3700,6 +3838,80 @@ public sealed class InkSurface : UserControl
     /// <c>ActiveLayer</c> naming a layer somebody deleted comes back as the base
     /// layer rather than stamping new ink with a key that names nothing.</para></summary>
     public int ActiveLayerKey => _page == null ? PageLayers.BaseKey : PageLayers.Active(_page).Key;
+
+    /// <summary>
+    /// §58.11 ruling R2: HIDING A LAYER, OR SETTING IT TO 0%, DROPS THE
+    /// SELECTION OF ANYTHING ON IT - and only that. Filters the selected
+    /// strokes, shapes and text boxes and the active shape through
+    /// <see cref="LayerGate.StaysSelected"/> (the one fact, IsVisible), so
+    /// the handles, move, scale, delete, copy and copy-as-image - which all act
+    /// on these lists - have nothing invisible left to act on. Anything still
+    /// on a drawn layer stays selected. Called from <see cref="LayersChanged"/>.
+    /// </summary>
+    private void DropInvisibleSelection()
+    {
+        if (_page == null) return;
+        int dropped = LayerGate.DropInvisible(_page, _selected, s => s.LayerKey, _selectedSet)
+                    + LayerGate.DropInvisible(_page, _selShapes, s => s.LayerKey, _selShapeSet)
+                    + LayerGate.DropInvisible(_page, _selTexts, t => t.LayerKey);
+        foreach (var t in _textMoveOrig.Keys.ToList())
+            if (!LayerGate.StaysSelected(_page, t.LayerKey)) _textMoveOrig.Remove(t);
+        if (_activeShape != null && !LayerGate.StaysSelected(_page, _activeShape.LayerKey))
+        {
+            _activeShape = null;
+            dropped++;
+        }
+        if (dropped == 0) return;
+        RecomputeSelectionBounds();   // publishes the smaller selection to the chrome
+        _canvas.Invalidate();
+    }
+
+    /// <summary>§58.11 R1: raised when a creation path refuses because the
+    /// layer it would land on draws nothing. The page, the message (verbatim,
+    /// <see cref="LayerGate.RefusalMessage"/>) and the keys of the layers the
+    /// one-tap action should show. MainWindow puts it on the status line with
+    /// <see cref="LayerGate.ShowAction"/>.</summary>
+    public event Action<NotePage, string, int[]>? CreationRefused;
+
+    /// <summary>
+    /// §58.11 ruling R1: THE CREATION GATE. Every path that creates content on
+    /// the active layer calls this FIRST and creates nothing when it answers
+    /// false. A false answer has already raised <see cref="CreationRefused"/>
+    /// (one message). The decision is <see cref="LayerGate.RefusesNewContent"/>
+    /// - the one fact, IsVisible - so an implicit one-layer page never
+    /// refuses.
+    /// </summary>
+    public bool CanCreateOnActiveLayer()
+    {
+        if (_page == null) return true;
+        var refused = LayerGate.RefusesNewContent(_page);
+        if (refused == null) return true;
+        CreationRefused?.Invoke(_page, LayerGate.RefusalMessage(_page, new[] { refused }, paste: false),
+                                new[] { refused.Key });
+        return false;
+    }
+
+    /// <summary>
+    /// §58.11 R1's one-tap action: shows each named layer on
+    /// <paramref name="page"/> (unhide; lift 0% to 100%, <see cref="LayerGate.Show"/>)
+    /// and runs the same tail as the Layers panel's switch. Acts only on the
+    /// page the refusal was raised on, and only if it is still the open page:
+    /// keys are page-scoped (18), so a stale tap after a page switch must not
+    /// unhide a layer on some other page. Returns the message to show, or null
+    /// when nothing changed.
+    /// </summary>
+    public string? ShowLayers(NotePage page, IReadOnlyList<int> keys)
+    {
+        if (_page == null || !ReferenceEquals(page, _page) || page.Layers is not { Count: > 0 } ls) return null;
+        Layer? first = null;
+        foreach (var k in keys)
+            foreach (var l in ls)
+                if (l.Key == k && LayerGate.Show(l)) first ??= l;
+        if (first == null) return null;
+        LayersChanged();
+        ContentChanged?.Invoke();   // saves, and rebuilds an open Layers panel
+        return LayerGate.ShownMessage(page, first);
+    }
 
     /// <summary>Chooses the layer new ink lands on.
     ///
@@ -5459,11 +5671,27 @@ public sealed class InkSurface : UserControl
     }
 
     /// <summary>Pastes the canvas clipboard so its top-left lands at <paramref name="world"/>.</summary>
-    public void PasteCanvasAt(Vector2 world)
+    public bool PasteCanvasAt(Vector2 world)
     {
-        if (_page == null) return;
+        if (_page == null) return false;
         bool any = _clipStrokes is { Count: > 0 } || _clipShapes is { Count: > 0 } || _clipTexts is { Count: > 0 };
-        if (!any) return;
+        if (!any) return false;
+
+        // §58.11 R1 for PASTE: a pasted element keeps the key it was copied
+        // with (18.10), so paste does not use the active layer - it lands on
+        // the layers those keys name HERE. If any of them draws nothing, paste
+        // creates nothing (the pasted elements would be invisible, and selected
+        // - which R2 forbids) and says which layer, with the one-tap Show.
+        var keys = (_clipStrokes ?? new()).Select(s => s.LayerKey)
+            .Concat((_clipShapes ?? new()).Select(s => s.LayerKey))
+            .Concat((_clipTexts ?? new()).Select(t => t.LayerKey));
+        var refused = LayerGate.RefusesContentOn(_page, keys);
+        if (refused.Count > 0)
+        {
+            CreationRefused?.Invoke(_page, LayerGate.RefusalMessage(_page, refused, paste: true),
+                                    refused.Select(l => l.Key).ToArray());
+            return false;
+        }
 
         double minX = double.MaxValue, minY = double.MaxValue;
         if (_clipStrokes != null)
@@ -5498,20 +5726,23 @@ public sealed class InkSurface : UserControl
         RecomputeSelectionBounds();
         _canvas.Invalidate();
         ContentChanged?.Invoke();
+        return true;
     }
 
     /// <summary>Pastes the canvas clipboard near the centre of the visible page
     /// (used by the Ctrl+V keyboard shortcut, which has no click point).</summary>
-    public void PasteCanvasAtViewCenter()
+    public bool PasteCanvasAtViewCenter()
     {
         var c = ToWorld(new Vector2((float)ActualWidth / 2 - 40, (float)ActualHeight / 2 - 40));
-        PasteCanvasAt(c);
+        return PasteCanvasAt(c);
     }
 
-    /// <summary>Inserts an image with its top-left at the given world point.</summary>
-    public void InsertImageAt(string path, double pixelW, double pixelH, Vector2 topLeftWorld)
+    /// <summary>Inserts an image with its top-left at the given world point.
+    /// False when §58.11 R1 refused it (the active layer draws nothing).</summary>
+    public bool InsertImageAt(string path, double pixelW, double pixelH, Vector2 topLeftWorld)
     {
-        if (_page == null) return;
+        if (_page == null) return false;
+        if (!CanCreateOnActiveLayer()) return false;   // §58.11 R1
         CancelPendingText();
         double scale = Math.Min(1.0, 520.0 / Math.Max(1, Math.Max(pixelW, pixelH)));
         double w = Math.Max(48, pixelW * scale), h = Math.Max(48, pixelH * scale);
@@ -5525,6 +5756,7 @@ public sealed class InkSurface : UserControl
         _activeShape = s;
         _canvas.Invalidate();
         ContentChanged?.Invoke();
+        return true;
     }
 
     // =======================================================================
@@ -5819,35 +6051,85 @@ public sealed class InkSurface : UserControl
     }
 
     /// <summary>
-    /// §58.10 ruling B: ENDS a live oil gesture that is ending some other way
-    /// than a lift - a page switch, the surface unloading, the window closing,
-    /// a gesture reset. The wet scratch draws ABOVE the ink only while
+    /// §58.10 ruling B, made total in §58.11: ENDS a live oil gesture, for
+    /// whichever reason <paramref name="why"/> names - every way a gesture can
+    /// end has a <see cref="GestureEnd"/>, and every one of them reaches here.
+    /// The wet scratch draws ABOVE the ink only while
     /// <see cref="OilGestureActive"/>, so a gesture that ended without its
-    /// brush ending would leave the scratch on top (and, before 58.10, stranded
-    /// at paint height until the next stroke committed it).
+    /// brush ending would leave the scratch on top, and the next VECTOR stroke
+    /// would be painted as oil (ExtendOilStroke runs whenever the brush is
+    /// live).
     ///
-    /// <para>Commits, exactly as a lift does (<see cref="EndOilStroke"/>: the
-    /// scratch goes into the settled tiles, one undo action), so no painted
-    /// work is dropped. If that cannot run - no page, or it throws - the brush
-    /// is CANCELLED, dropping the scratch, because a scratch on top of a page
-    /// it no longer belongs to is worse than a lost wet stroke. Either way the
-    /// brush is inactive and holds no scratch afterwards.</para>
-    ///
-    /// <para>Also ends the pen gesture that carried it: otherwise the rest of
-    /// the pointer stream, with oil no longer active, would draw and commit a
-    /// VECTOR stroke (the pen path only suppresses its vector preview while
-    /// <see cref="OilGestureActive"/>).</para>
+    /// <para><b>Exactly once:</b> the first call ends the brush and every later
+    /// call for the same gesture returns at the <see cref="OilGestureActive"/>
+    /// test. What happens to the scratch is <see cref="GestureRules.OilOutcome"/>
+    /// (Win2D-free, run by tools/LayerRoundTrip):</para>
+    /// <list type="bullet">
+    /// <item><see cref="OilEnd.Commit"/> - exactly as a lift
+    /// (<see cref="EndOilStroke"/>: into the settled tiles, one undo action).
+    /// If that throws, or there is no page, the brush is cancelled, dropping
+    /// the scratch: a scratch left on top of a page it does not belong to is
+    /// worse than a lost wet stroke.</item>
+    /// <item><see cref="OilEnd.Discard"/> - R4's undo/redo mid-stroke:
+    /// <see cref="OilBrush.Discard"/>, nothing committed, nothing pushed, a
+    /// mid-gesture flush taken back.</item>
+    /// <item><see cref="OilEnd.Drop"/> - device loss, handled at its own site
+    /// (CreateResources), which disposes the brush outright.</item>
+    /// </list>
+    /// <para>Then, when <see cref="GestureRules.EndsPenGesture"/> says so, the
+    /// pen gesture that carried it ends too, and capture is released:
+    /// otherwise the rest of the pointer stream, with oil no longer live,
+    /// would draw and commit a VECTOR stroke.</para>
     /// </summary>
-    private void SettleOilGesture(bool endPenGesture)
+    private void EndOilGesture(GestureEnd why)
     {
         if (!OilGestureActive) return;
-        try { if (_page != null) EndOilStroke(); } catch { }
+        switch (GestureRules.OilOutcome(why))
+        {
+            case OilEnd.KeepPainting:
+                return;
+            case OilEnd.Commit:
+                try { if (_page != null) EndOilStroke(); } catch { }
+                break;
+            case OilEnd.Discard:
+                try { if (_page != null) _oil!.Discard(_canvas, _page); } catch { }
+                _canvas.Invalidate();   // the scratch, and any restored tile, repaint
+                break;
+            case OilEnd.Drop:
+                break;
+        }
         if (_oil is { Active: true }) _oil.Cancel();
-        if (endPenGesture && _gestureTool == ToolType.Pen)
+        if (GestureRules.EndsPenGesture(why) && _gestureTool == ToolType.Pen)
         {
             ResetGesture();
             try { _canvas.ReleasePointerCaptures(); } catch { }
         }
+    }
+
+    /// <summary>
+    /// §58.11: a press that STARTS A GESTURE takes the live one over. Called at
+    /// every site that used to assign <c>_activePointer</c> on a press, BEFORE
+    /// any of the new gesture's state is set: a live oil brush is ended first
+    /// (<see cref="EndOilGesture"/> with the takeover's kind - committed, and
+    /// the pen's gesture ended), then the new pointer owns the gesture.
+    ///
+    /// <para>Before this a second pointer - a middle-mouse pan, a Grab-mode
+    /// mouse press, the Pan tool, an eraser - overwrote <c>_activePointer</c>
+    /// and left the brush live: the pen's moves and lift were then ignored,
+    /// the pan's release returned before ResetGesture, and the stale scratch
+    /// stayed on top of all ink and turned the next vector stroke into oil.
+    /// An eraser that took over rubbed the settled tiles UNDER the scratch,
+    /// which its own release then committed back over the rubbed area.</para>
+    ///
+    /// <para>A press that starts nothing (the eyedropper, the text caret, the
+    /// comment pin, a touch that only pans the view through the manipulation
+    /// path, a table "+" button, the ruler bubble) does not come here, so a
+    /// palm or a sample taken mid-stroke leaves the brush painting.</para>
+    /// </summary>
+    private void TakeOverGesture(uint pointerId, GestureEnd how)
+    {
+        EndOilGesture(how);
+        _activePointer = pointerId;
     }
 
     private void OpenPaintForPage(NotePage page)
@@ -5884,7 +6166,7 @@ public sealed class InkSurface : UserControl
     /// left in scratch.</summary>
     public void FlushPaint()
     {
-        SettleOilGesture(endPenGesture: true);
+        EndOilGesture(GestureEnd.Close);
         _paint?.FlushBlocking();
     }
 
@@ -7077,11 +7359,17 @@ public sealed class InkSurface : UserControl
     // =======================================================================
     private void HoldTick(object? sender, object e)
     {
-        if (!ShapeRecognition) return;
-        if (_gestureTool != ToolType.Pen || _shapeAdjust || RulerMode || _wet == null || _page == null) return;
+        // §58.11: the decision is GestureRules.HoldMaySnap (Win2D-free, run by
+        // tools/LayerRoundTrip). It IGNORES an oil gesture entirely: an oil
+        // stroke is never snapped into a vector shape. Before this, holding
+        // still mid-oil-stroke turned _wet into a shape while the brush stayed
+        // live, and the lift then committed BOTH the shape and the painted
+        // raster (paint v2 design finding O2).
+        if (!GestureRules.HoldMaySnap(ShapeRecognition, _gestureTool == ToolType.Pen, _shapeAdjust,
+                                      RulerMode, _wet != null && _page != null, OilGestureActive)) return;
         if (Environment.TickCount64 - _lastMoveMs < 620) return;
 
-        var rec = RecognizeShape(_wet);
+        var rec = RecognizeShape(_wet!);   // HoldMaySnap required hasWet
         if (rec == null)
         {
             _lastMoveMs = Environment.TickCount64; // don't retry every tick
@@ -8066,9 +8354,12 @@ public sealed class InkSurface : UserControl
         _canvas.Invalidate();
     }
 
-    public void InsertImage(string path, double pixelW, double pixelH, string? equationLatex = null)
+    /// <summary>False when §58.11 R1 refused it (the active layer draws
+    /// nothing); a pending caret is then left where it was.</summary>
+    public bool InsertImage(string path, double pixelW, double pixelH, string? equationLatex = null)
     {
-        if (_page == null) return;
+        if (_page == null) return false;
+        if (!CanCreateOnActiveLayer()) return false;   // §58.11 R1: images and equations
         double scale = Math.Min(1.0, 520.0 / Math.Max(1, Math.Max(pixelW, pixelH)));
         double w = Math.Max(48, pixelW * scale), h = Math.Max(48, pixelH * scale);
         // With a blinking caret: the image's TOP-LEFT sits on the caret.
@@ -8098,6 +8389,7 @@ public sealed class InkSurface : UserControl
         _activeShape = s;
         _canvas.Invalidate();
         ContentChanged?.Invoke();
+        return true;
     }
 
     /// <summary>[[Note Name]] links found in the text box under the world point,
@@ -8238,9 +8530,12 @@ public sealed class InkSurface : UserControl
         return false;
     }
 
-    public void InsertShape(ShapeKind kind, bool equalDims)
+    /// <summary>False when §58.11 R1 refused it (the active layer draws
+    /// nothing).</summary>
+    public bool InsertShape(ShapeKind kind, bool equalDims)
     {
-        if (_page == null) return;
+        if (_page == null) return false;
+        if (!CanCreateOnActiveLayer()) return false;   // §58.11 R1: every shape kind, axes included
         var c = ToWorld(new Vector2((float)ActualWidth / 2, (float)ActualHeight / 2));
         double w = 240, h = 160;
         switch (kind)
@@ -8285,6 +8580,7 @@ public sealed class InkSurface : UserControl
         _activeShape = s;
         _canvas.Invalidate();
         ContentChanged?.Invoke();
+        return true;
     }
 
     // =======================================================================
@@ -8337,6 +8633,11 @@ public sealed class InkSurface : UserControl
     private RichEditBox? SpawnTextBox(Vector2 worldPos, string? initial)
     {
         if (_page == null) return null;
+        // §58.11 R1: typing after a caret (OnCharacterReceived) and
+        // MaterializePendingText (dictation, paste into a caret) both come
+        // here. Until now a visible, focused, typeable box appeared on a layer
+        // that draws nothing. Refused: no box, no action, one message.
+        if (!CanCreateOnActiveLayer()) return null;
         FlushTexts(); // save other boxes' live edits before adding a new one
         // 25.5: a new box is created in the remembered text colour. Null leaves
         // it following the page's ink, which is what every box did before 25.
@@ -8616,23 +8917,30 @@ public sealed class InkSurface : UserControl
     public IReadOnlyList<PenStroke> SelectedStrokes => _selected;
     public Rect SelectionBoundsWorld => _selBounds;
 
-    /// <summary>Adds a text box with pre-built RTF (undoable).</summary>
-    public void AddTextElement(double x, double y, double width, string rtf)
+    /// <summary>Adds a text box with pre-built RTF (undoable). False when
+    /// §58.11 R1 refused it (the active layer draws nothing): dictation, the
+    /// handwriting and maths converters, the equation-as-text fallback, the AI
+    /// chat's and the calculator's "insert onto the page".</summary>
+    public bool AddTextElement(double x, double y, double width, string rtf)
     {
-        if (_page == null) return;
+        if (_page == null) return false;
+        if (!CanCreateOnActiveLayer()) return false;   // §58.11 R1
         FlushTexts();
         var t = new TextElement { X = x, Y = y, Width = Math.Max(60, width), Rtf = rtf,
                                  LayerKey = ActiveLayerKey };   // 18.9 seam 5
         PushAction(new AddTextAction(t), _page);
         BuildTextUi(t);
         ContentChanged?.Invoke();
+        return true;
     }
 
     /// <summary>Inserts an empty rows×cols table centred in the view: ONE table
-    /// shape plus a linked text bubble per cell, as a single undo step (#40).</summary>
-    public void InsertTable(int rows, int cols, double cellW, double cellH)
+    /// shape plus a linked text bubble per cell, as a single undo step (#40).
+    /// False when §58.11 R1 refused it.</summary>
+    public bool InsertTable(int rows, int cols, double cellW, double cellH)
     {
-        if (_page == null) return;
+        if (_page == null) return false;
+        if (!CanCreateOnActiveLayer()) return false;   // §58.11 R1: the table and its cells
         rows = Math.Clamp(rows, 1, 20);
         cols = Math.Clamp(cols, 1, 12);
         FlushTexts();
@@ -8667,6 +8975,7 @@ public sealed class InkSurface : UserControl
         RebuildTextLayer();
         _canvas.Invalidate();
         ContentChanged?.Invoke();
+        return true;
     }
 
     public ShapeElement? ActiveShape => _activeShape;
