@@ -64,6 +64,13 @@ namespace Quill.Services;
 /// tidy them would be the same unasked-for write this rule exists to
 /// stop.</para>
 ///
+/// <para><b>§56 added the pruning, on edit only.</b> The product owner ruled
+/// "trim on next edit only": <see cref="MayTrim"/> and
+/// <see cref="EmptyParagraphMarksToDrop"/> let a box the user actually edited
+/// drop its trailing empty paragraphs past the first when it is released. A
+/// note nobody edits is still never written; the paragraph above remains true
+/// of every such note.</para>
+///
 /// <para>Kept as plain static functions over strings, with no reference to
 /// <c>RichEditBox</c> or to WinUI at all, so <c>tools/TextColourRoundTrip</c>
 /// can link the shipping decision instead of restating it. None of the ten
@@ -111,5 +118,236 @@ public static class TextFlushPolicy
         // than to silence. Losing an edit is worse than writing a paragraph.
         if (documentWhenReached is null) return true;
         return !string.Equals(documentWhenReached, live, System.StringComparison.Ordinal);
+    }
+
+    // =======================================================================
+    // CONCEPTS-REF 56: TRIM ON NEXT EDIT ONLY
+    // =======================================================================
+
+    /// <summary>CONCEPTS-REF 56: whether this write-back is one the trailing
+    /// empty paragraphs may be dropped on.
+    ///
+    /// <para><b>The ruling.</b> The product owner's words were "trim on next edit
+    /// only": when the user actually edits a box, the trailing empty paragraphs
+    /// past the first are dropped as it saves; a note nobody edits is never
+    /// rewritten, so there is no migration of the library. §50 stopped the growth
+    /// and deliberately pruned nothing; this is the pruning, and it is confined
+    /// to the one moment a box is being written for a reason the user
+    /// gave.</para>
+    ///
+    /// <para>True only when ALL of these hold:</para>
+    /// <list type="number">
+    /// <item><description><b>The box is being released</b> — its live control is
+    /// about to be torn down (a text-layer rebuild, a page switch, the window
+    /// closing). The trim edits the live document, and doing that to a box that
+    /// outlives the flush would put a deletion on the control's own undo stack
+    /// (one Ctrl+Z inside the box would bring the paragraphs back) and would
+    /// take blank lines out from under a caret that may be sitting on them.
+    /// A released box has no caret to move and no undo history anyone can
+    /// reach again, so the trim waits for that moment instead of restoring
+    /// either.</description></item>
+    /// <item><description><b>An edit is established</b> — Quill touched the box
+    /// on the user's behalf (25.5's recolour), or the box was reached WITH a
+    /// recorded baseline and the live document differs from it. A box that was
+    /// only focused is not an edit (§50.4's 5d) and is not trimmed; a reach
+    /// whose baseline could not be captured is written back by
+    /// <see cref="ShouldWriteBack"/> as a fallback, but nothing established that
+    /// it was edited, so it is not trimmed either. A box with nothing stored
+    /// is trimmed only if one of the two edit facts also holds.</description></item>
+    /// </list>
+    /// <para>Deliberately NOT a second copy of <see cref="ShouldWriteBack"/>'s
+    /// order: it asks a narrower question, and every case it answers true is a
+    /// case <see cref="ShouldWriteBack"/> also answers true.</para></summary>
+    public static bool MayTrim(
+        string? stored, bool reached, bool touched, string? documentWhenReached, string live, bool releasing)
+    {
+        if (!releasing) return false;
+        if (touched) return true;
+        if (!reached || documentWhenReached is null) return false;
+        return !string.Equals(documentWhenReached, live, System.StringComparison.Ordinal);
+    }
+
+    /// <summary>CONCEPTS-REF 56: which paragraph marks at the end of a document
+    /// are the empty paragraphs to drop, given the document's plain text as the
+    /// control reports it (<c>ITextRange.GetText(TextGetOptions.None)</c> over
+    /// the whole story, where a paragraph mark is <c>'\r'</c>).
+    ///
+    /// <para>Returns a character range <c>(Start, Length)</c> in that string;
+    /// <c>Length == 0</c> means drop nothing. The caller deletes exactly that
+    /// range through the control's own document (<c>ITextRange</c>), so the
+    /// bytes stored afterwards are still the control's own serialisation — no
+    /// RTF is edited as a string anywhere, which is §50.2's objection to a
+    /// normaliser met rather than argued with.</para>
+    ///
+    /// <para><b>What is kept, exactly.</b> The trailing run of <c>'\r'</c> is
+    /// the only thing ever touched; the first character that is not a paragraph
+    /// mark — a letter, a space, a line break (<c>'\v'</c>), an embedded object
+    /// — ends the run, so every interior blank line survives. Of the run:</para>
+    /// <list type="bullet">
+    /// <item><description>When the box has content, the content's own paragraph
+    /// mark (the first <c>'\r'</c> of the run) and the story's final mark (the
+    /// last character) are kept: the content, then ONE empty paragraph — "past
+    /// the first", as ruled. Everything between is dropped.</description></item>
+    /// <item><description>When the box is nothing but empty paragraphs, only the
+    /// final mark is kept: one empty paragraph, which is what an empty box is.
+    /// The final mark is never inside the range, so the result is always a
+    /// valid document.</description></item></list>
+    ///
+    /// <para><b>What <c>Start</c> also means.</b> The first character of the
+    /// range is the mark of the FIRST trailing empty paragraph - the blank line
+    /// the user typed, if one of them is theirs - while the mark that survives
+    /// is the story's last. They are different paragraphs, so the survivor's
+    /// formatting is not the first one's; <c>TextTrim</c> copies it across
+    /// after the delete (section 56.8).</para>
+    ///
+    /// <para><b>What this function cannot see, and the caller must.</b> It
+    /// does not know whether a <c>'\r'</c> belongs to a table. On the engine
+    /// Quill ships a row reads U+FFF9 CR ... U+0007 ... U+FFFB CR (cell marks
+    /// are U+0007, measured in tools/TrimEngineProof), but a story in which a
+    /// cell mark or row end is a bare <c>'\r'</c> would be taken for empty
+    /// paragraphs. The refusal for tables therefore does not live here; it
+    /// lives in <see cref="ContainsTableStructure"/> (over the RTF) and
+    /// <see cref="PlainTextShowsTable"/> (over this same plain text), and
+    /// <c>TextTrim</c> asks both before it asks this.</para>
+    ///
+    /// <para><b>Refusal is the failure mode.</b> Text that does not end in a
+    /// paragraph mark is a shape this function does not understand, and it
+    /// answers "drop nothing". If the control's string ever left out the
+    /// story's final mark, the last <c>'\r'</c> seen here would be an empty
+    /// paragraph and the one after it would survive too: one paragraph kept too
+    /// many, never the content's mark taken.</para></summary>
+    public static (int Start, int Length) EmptyParagraphMarksToDrop(string? plain)
+    {
+        if (string.IsNullOrEmpty(plain) || plain[^1] != '\r') return (plain?.Length ?? 0, 0);
+        int run = 0;
+        while (run < plain.Length && plain[plain.Length - 1 - run] == '\r') run++;
+        bool hasContent = run < plain.Length;
+        int keep = hasContent ? 2 : 1;
+        int drop = run - keep;
+        if (drop <= 0) return (plain.Length, 0);
+        int start = plain.Length - 1 - drop;   // the final mark, at Length-1, stays
+        return (start, drop);
+    }
+
+    /// <summary>CONCEPTS-REF 56.9 (round 3): the same range, stopped at LIST
+    /// ITEMS. <paramref name="listItemMarks"/> are the positions, in the same
+    /// plain text, of paragraph marks whose paragraph the engine reports as a
+    /// list item (<c>ParagraphFormat.ListType</c> is anything but
+    /// <c>None</c>); <c>TextTrim</c> asks the engine for every mark from the
+    /// range's start to the end of the story.
+    ///
+    /// <para><b>Why.</b> An empty list item is not an empty paragraph to the
+    /// user: it shows a bullet or a number. The section 50 growth never makes
+    /// one (measured on the engine: every paragraph an open-and-save appends
+    /// is plain), and the ruling targets the growth, so the conservative
+    /// reading is that the run the trim may drop STOPS AT - does not include -
+    /// any list item. Only the marks after the LAST list item in the trailing
+    /// run can go; that list item is kept as if it were content, and so is
+    /// everything before it.</para>
+    ///
+    /// <para>If the story's final mark is itself a list item nothing is
+    /// dropped: the survivor is that mark, and giving it a plain blank line's
+    /// formatting would take the item away.</para></summary>
+    public static (int Start, int Length) EmptyParagraphMarksToDrop(string? plain, IEnumerable<int>? listItemMarks)
+    {
+        var (start, length) = EmptyParagraphMarksToDrop(plain);
+        if (length <= 0 || listItemMarks is null) return (start, length);
+        int end = start + length;              // exclusive; plain[end] is the survivor
+        int lastList = -1;
+        foreach (int m in listItemMarks)
+            if (m >= start && m > lastList) lastList = m;
+        if (lastList < 0) return (start, length);
+        if (lastList >= end - 1) return (plain!.Length, 0);
+        return (lastList + 1, end - lastList - 1);
+    }
+
+    /// <summary>CONCEPTS-REF 56 round 2: whether the control's own
+    /// serialisation shows TABLE STRUCTURE - in which case nothing is trimmed
+    /// at all.
+    ///
+    /// <para><b>Why a document Quill itself cannot build still has to be
+    /// refused.</b> <see cref="EmptyParagraphMarksToDrop"/> is handed nothing
+    /// but the story's plain text. If a table's CELL marks and ROW-END marks
+    /// read there as carriage returns, like paragraph marks - the shape the
+    /// round-2 finding was written against - then a story of <c>cell_one</c>
+    /// followed by four carriage returns (the filled cell's mark, an empty
+    /// cell's mark, the row end and the story's final mark) gets the answer
+    /// <c>(9, 2)</c>, which is the empty cell AND the row end. Deleting those
+    /// would not drop blank lines, it would destroy the table, which is exactly
+    /// the kind of loss section 56 promises cannot happen. The engine Quill
+    /// ships was measured to write cells as U+0007 instead (tools/TrimEngineProof,
+    /// section 56.8), which that range never reaches in the shapes measured -
+    /// but an unmeasured shape or engine is refused, not reasoned about. Quill models no RTF
+    /// table of its own (no <c>\trowd</c>, <c>\cell</c>, <c>\row</c> or
+    /// <c>\intbl</c> anywhere in src/Quill), but <c>MainWindow</c>'s two
+    /// <c>Document.Selection.Paste(0)</c> calls have no sanitiser in front of
+    /// them, so a table pasted from Word or a browser is reachable.</para>
+    ///
+    /// <para><b>A GATE, not a parser.</b> This is a refusal test over the
+    /// string the control itself just produced. It never parses, never edits
+    /// and never stores anything, so section 50.2's objection to a second RTF
+    /// parser does not arise: a second parser is a thing that has to stay
+    /// CORRECT about every document Windows can write, and this only has to
+    /// stay SUSPICIOUS. No per-paragraph answer was available - the
+    /// <c>Microsoft.UI.Text</c> winmd of the Windows App SDK 1.8 this project
+    /// builds against carries no identifier matching table, cell, row or nest
+    /// (the nearest is <c>TabLeader</c>), so neither <c>ITextRange</c> nor
+    /// <c>ITextParagraphFormat</c> can be asked whether a paragraph sits in a
+    /// table. What the range DOES expose, the story's plain text, is the second
+    /// refusal: <see cref="PlainTextShowsTable"/>.</para>
+    ///
+    /// <para><b>Conservative on purpose: any doubt means do not trim.</b> Plain
+    /// ordinal substring matching, so a literal <c>\cell</c> the user TYPED
+    /// (RTF writes it <c>\\cell</c>, which contains it) trips the gate too. A
+    /// false positive costs one un-trimmed edit - section 50's behaviour, which
+    /// is the fallback this whole design already stands on - and a false
+    /// negative would cost a table. <c>\itap</c> is deliberately NOT in the
+    /// list: <c>\itap0</c> is a declaration of NOT being in a table and a
+    /// writer may emit it unconditionally, which would silently disable the
+    /// trim everywhere instead of only over tables.</para></summary>
+    public static bool ContainsTableStructure(string? rtf)
+    {
+        if (string.IsNullOrEmpty(rtf)) return false;
+        foreach (string word in TableWords)
+            if (rtf.Contains(word, System.StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    /// <summary>The control words only table structure produces. <c>\cell</c>
+    /// also catches <c>\cellx</c>, a cell boundary; the three <c>\nest</c>
+    /// words are nested tables, which carry their own vocabulary.</summary>
+    private static readonly string[] TableWords =
+    {
+        @"\intbl", @"\trowd", @"\cell", @"\row",
+        @"\nestcell", @"\nestrow", @"\nesttableprops",
+    };
+
+    /// <summary>CONCEPTS-REF 56.8: the second, independent table refusal -
+    /// whether the story's PLAIN TEXT (<c>ITextRange.GetText(None)</c> over the
+    /// whole story, the same string <see cref="EmptyParagraphMarksToDrop"/> is
+    /// given) carries the characters the RichEdit engine uses for table
+    /// structure.
+    ///
+    /// <para>Measured, not assumed: tools/TrimEngineProof drives
+    /// <c>WinUIEdit.dll</c> - the engine behind every <c>RichEditBox</c> in the
+    /// app - and on it a table row reads U+FFF9, CR, the cells each ended by
+    /// U+0007, then U+FFFB, CR; a nested table reads the same way inside its
+    /// cell. U+FFFA, the third of the interlinear-annotation characters, is in
+    /// the set because it belongs with the other two, not because it was seen.
+    /// U+0007 is BEL, which nobody types into a note.</para>
+    ///
+    /// <para>Why two refusals and not one. <see cref="ContainsTableStructure"/>
+    /// reads the control's serialisation; this reads the story the range is
+    /// actually taken from. Either one alone refuses every table shape measured,
+    /// and each would still refuse if the other were ever wrong about a writer
+    /// or an engine not measured here. Both are gates - neither parses, edits
+    /// or stores anything - and a false positive costs one un-trimmed edit,
+    /// which is section 50's behaviour.</para></summary>
+    public static bool PlainTextShowsTable(string? plain)
+    {
+        if (string.IsNullOrEmpty(plain)) return false;
+        foreach (char c in plain)
+            if (c == '\uFFF9' || c == '\uFFFA' || c == '\uFFFB' || c == '\u0007') return true;
+        return false;
     }
 }
