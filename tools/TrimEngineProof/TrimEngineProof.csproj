@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- CONCEPTS-REF 56.8: the trim, run against the RichEdit engine Quill ships.
+
+       tools/TextColourRoundTrip links TextFlushPolicy (the DECISIONS) and
+       models the live document. This project links the other half:
+       src/Quill/Services/TextTrim.cs, the code that deletes through the live
+       document, compiled exactly as the app compiles it, and drives it
+       through Microsoft.UI.Text against WinUIEdit.dll - the engine behind
+       every RichEditBox in the app, from the same Windows App SDK package
+       version Quill.csproj pins.
+
+       NO SCREEN. The engine is reached through a MESSAGE-ONLY window
+       (parent HWND_MESSAGE), which is never shown, cannot be focused and
+       receives no input; Quill.exe is not launched. What this cannot see is
+       everything XAML adds on top of the engine: the RichEditBox template,
+       Quill's own default formatting, focus, the caret, the clipboard.
+
+       Same pattern as its siblings: <Compile Include> of the shipping files,
+       nothing re-typed. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Quill.Tools</RootNamespace>
+    <AssemblyName>TrimEngineProof</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The version Quill.csproj pins, so WinUIEdit.dll is the same binary;
+         the run prints both hashes and fails if they differ. -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260529003" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\..\src\Quill\Services\TextFlushPolicy.cs" Link="TextFlushPolicy.cs" />
+    <Compile Include="..\..\src\Quill\Services\TextTrim.cs" Link="TextTrim.cs" />
+  </ItemGroup>
+
+</Project>
