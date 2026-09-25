@@ -1206,8 +1206,12 @@ foreach (var (p, lists, want) in listShapes)
     if (!clean || got != want) { listWrong++; listFirst ??= $"{Escape(p)} lists [{string.Join(",", lists)}] -> ({ls},{ll}) {Escape(got)}, expected {Escape(want)}"; }
 }
 // And swept: every 6k shape, with each single mark of its trailing run made a
-// list item. The range never holds a list item, never reaches the final mark,
-// never grows past the one-argument range, and always ends where it ends.
+// list item, against the exact answer. A list item before the one-argument
+// range changes nothing; one on the range's last mark or on the survivor
+// means nothing goes; one inside the range cuts it to the marks after the
+// item, ending where the one-argument range ends. (56.9: the round-3 draft
+// only asked that a non-empty range miss the item, so a mutant answering
+// "nothing" for every list would have passed the sweep.)
 int listSweep = 0, listBad = 0; string? listBadFirst = null;
 foreach (var head in heads56)
     for (int marks = 0; marks <= 60; marks += 3)
@@ -1218,8 +1222,11 @@ foreach (var head in heads56)
         {
             listSweep++;
             var (s2, l2) = TextFlushPolicy.EmptyParagraphMarksToDrop(p, new[] { m });
-            bool ok = l2 == 0 || (s2 > m || m >= s2 + l2) && s2 >= s1 && s2 + l2 == s1 + l1 && s2 + l2 <= p.Length - 1 && s2 > m;
-            if (!ok) { listBad++; listBadFirst ??= $"{Escape(p)} list at {m} -> ({s2},{l2})"; }
+            var want = l1 == 0 || m < s1 ? (s1, l1)
+                     : m >= s1 + l1 - 1 ? (p.Length, 0)
+                     : (m + 1, s1 + l1 - m - 1);
+            bool ok = (s2, l2) == want;
+            if (!ok) { listBad++; listBadFirst ??= $"{Escape(p)} list at {m} -> ({s2},{l2}), expected {want}"; }
         }
     }
 bool listNullSame = TextFlushPolicy.EmptyParagraphMarksToDrop("x\r\r\r\r", null) == TextFlushPolicy.EmptyParagraphMarksToDrop("x\r\r\r\r");
