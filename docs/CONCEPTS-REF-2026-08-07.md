@@ -11306,8 +11306,10 @@ is SEEDED into the page JSON, not drawn.
      tint over V's stroke;
    - use the eyedropper over Z's shape. Expect the ground's answer, never the
      shape's colour;
-   - double-tap Z's axes and equation shapes. Expect **no editor to open**
-     (58.10 check 4);
+   - right-click Z's axes and equation shapes. Expect the canvas context
+     menu to offer **no "Axis labels…" and no "Edit equation…"** (58.10
+     check 4). *(Corrected in 58.11: this step said "double-tap", but those
+     two editors are reached only through that menu.)*;
    - try to click into Z's text box. Expect nothing to focus;
    - drag Z's opacity slider from 0% to 10% and repeat the click. Its elements
      must now be selectable, and its text box must be back.
@@ -11329,9 +11331,72 @@ is SEEDED into the page JSON, not drawn.
    - start another stroke and press Ctrl+Z mid-stroke. The stroke must
      disappear entirely and the pen must stop painting until it is lifted and
      pressed again. Ctrl+Y must bring the stroke back, under the bars.
+     *(Corrected in 58.11: ruling R4 replaced round 2's undo. The stroke is
+     now cancelled, never committed, so Ctrl+Y must NOT bring it back; step
+     13 is the run for it.)*
    - paint a single long stroke across more than 12 tiles
      (`OilBrush.ScratchTileFlushLimit`; tiles are 512 px). Record whether its
      earlier part drops under the ink before lift (58.10.9).
+10. **R1: a hidden or 0% active layer refuses new content (58.11).** Seed a
+    page `Layers [V key 0, H key 1 Hidden, Z key 2 at Opacity 0]`, with the
+    Layers panel open. Make H active. Then, one at a time: draw a vector pen
+    stroke; draw with the ruler; tap with the Text tool; click empty canvas
+    in Auto mode and type a letter; insert a shape from the shape menu and
+    one from the Objects library; insert an image; insert a table; insert an
+    equation; convert a lassoed handwriting stroke on V to text; paste
+    copied V ink (it must LAND - paste keeps V's key); cut ink from H before
+    hiding it and paste it (it must be refused, naming H). Expect, for each
+    refused one, nothing created, no caret, and the status line showing
+    `The active layer (H) is hidden, so nothing was added.` once, with
+    `Show it` beside it. Repeat with Z active: the message must say
+    `is at 0% opacity`. Tap `Show it` on each: the layer must show, the
+    panel's switch must be ON and its slider at 100 for Z (H keeps its own
+    opacity), and the status line must read `H is showing again.`. **Oil:**
+    with H active, paint a free oil stroke; it must NOT be refused, and it
+    must show (paint is on no layer). **Control:** with V active every
+    gesture above creates as it always did. **Also check** that with no
+    message up, a press at the canvas's bottom-left corner still reaches the
+    canvas (the status line's panel must not eat it).
+11. **R2: hiding a layer drops its selection.** On the same seed with every
+    layer shown, rubber-band a selection over a stroke, a shape and a text on
+    each of V, H and Z, and make an H shape the active shape. Switch H off
+    in the panel: its three elements and the active shape must leave the
+    selection, the handles must redraw round V's and Z's alone, and Delete,
+    Ctrl+C then Ctrl+V, copy-as-image and a drag must act on V's and Z's
+    only. Drag Z's slider to 0: Z's must leave too. Switch H back on: nothing
+    is re-selected. **Control:** locking V's layer does not drop V's
+    already-selected elements.
+12. **R3: the eraser erases only visible ink.** On a page with V, H hidden,
+    Z at 0% and F at 40%, each holding a stroke and a shape across one line,
+    drag the eraser along that line in each mode (Point, Object) and each
+    Point style (hard, soft, slice, nudge). Expect V's and F's ink erased
+    and nothing on H or Z touched (show them afterwards to see). Hover the
+    object eraser over each: a tint over V and F only - the preview and the
+    erase agree.
+13. **R4: undo mid-stroke.** With the Undo history showing N entries: start
+    a vector stroke and, still holding the pen, press Ctrl+Z. The stroke
+    must vanish, the pen must draw nothing until lifted, and History must
+    still show N entries with the same top. Repeat with the ruler, with a
+    shape snapped by holding the pen still, and with oil. Repeat with the
+    dial's undo and the pen bar's undo. Then press Ctrl+Y mid-stroke: the
+    stroke must be cancelled the same way and an entry that was waiting to
+    be redone must still be redoable afterwards (the redo ASSUMPTION). With
+    oil, paint one long stroke across more than 12 tiles and press Ctrl+Z
+    before lifting: the whole stroke, including the part that settled under
+    the ink before the undo, must be gone (step 4's paint-store precondition
+    applies). **Pen repair:** draw a stroke, lift and press again within
+    200 ms at its end, press Ctrl+Z: the first stroke must be exactly as it
+    was, and one more Ctrl+Z must take it back.
+14. **The oil brush ends on every takeover (58.11.7).** Start an oil stroke
+    and, holding the pen still on the glass: press the middle mouse button
+    and drag (pan); in another stroke, with the mouse in Grab mode, press
+    and drag; in another, press with the pen's eraser end or a second
+    pointer with the Eraser tool; in another, switch tool with the keyboard;
+    in another, hold the pen still for a second with shape recognition on.
+    After each, expect no wet paint drawn above the ink, the stroke settled
+    under the ink (the hold must not have made a shape), and the NEXT
+    fineliner stroke drawn as vector ink in the fineliner's colour, not as
+    oil. For the eraser, the rubbed area must stay rubbed.
 
 ### 58.10 Round 2: two rulings, and what the two checks found — 2026-09-24 (branch `layer-order-canvas`)
 
@@ -11424,7 +11489,11 @@ page.
   So on a hidden or 0% layer, including a one-layer page at 0%, a double-tap
   on an axes or equation shape no longer opens its editor (`MainWindow`
   ~10919, ~10938). Under ruling A this is correct, and it is now recorded
-  here.
+  here. *(Corrected in 58.11: not a double-tap. `AxesShapeAt` and
+  `EquationShapeAt` serve the canvas CONTEXT MENU (`ShowCanvasContextMenu`,
+  `MainWindow` ~10951): on such a shape the menu no longer offers "Edit
+  equation…" (~10984) or "Axis labels…" (~11003). The canvas double-tap,
+  `OnCanvasDoubleTapped`, reaches only table dividers.)*
 
 **Left as it was, and not covered by the ruling:**
 - **The eraser itself** (`EraseAt`, ~3347) removes strokes and shapes on
@@ -11432,7 +11501,8 @@ page.
   preview now refuses such a stroke, so the preview can show nothing while
   the erase underneath removes ink the user cannot see. Erasing is not
   selecting, and changing what an eraser destroys is a product decision, so
-  this is **open for a ruling**, not fixed.
+  this is **open for a ruling**, not fixed. *(Ruled in 58.11, R3: the eraser
+  now erases only visible ink, and its preview agrees.)*
 - `HitShape` still asks no lock and no scope (58.5).
 
 #### 58.10.2 Ruling B — the wet stroke stays on top while painting
@@ -11478,6 +11548,19 @@ active after its gesture has gone:
 | window close, surface unload | `FlushPaint` (`Closed`, `Unloaded`) → `SettleOilGesture(true)` | committed, then flushed to disk |
 | device loss | `CreateResources` with `NewDevice` | **dropped**: the scratch targets belong to the lost device, so the brush is disposed and the pen gesture reset |
 
+*(Corrected in 58.11. The heading above was false, and so was the table's
+third row. "Any other gesture reset (second pointer, tool switch mid-drag)"
+was not what the code did. `SetTool` never touched the live gesture. A second
+pointer that took over did not end the brush: a PAN takeover (middle button,
+the mouse in Grab mode, the Pan tool) overwrote `_activePointer`, and its
+release returned from `CommitGesture` before `ResetGesture`, so the brush
+stayed live, its scratch drawn above all ink, and the next VECTOR stroke was
+painted as oil. Any other takeover ended the brush only when the second
+gesture ended, so a second-pointer eraser rubbed the settled tiles under the
+scratch and its release then committed the scratch back over them. Holding
+the pen still also snapped an oil stroke into a vector shape. 58.11.7 is the
+table as it is now, and every row of it ends the brush.)*
+
 `SettleOilGesture` (~5841) commits exactly as a lift does. If that throws, or
 there is no page, it CANCELS the brush, dropping the scratch. A wet stroke
 left on top of a page it no longer belongs to would be worse than a lost wet
@@ -11491,7 +11574,9 @@ back exactly that stroke, and Ctrl+Y brings it back. Redo mid-stroke also
 settles first. Any new edit empties the redo stack, so a redo mid-stroke
 finds nothing to redo. A VECTOR stroke is not affected by an undo mid-stroke.
 Its wet stroke carries on and commits at lift, as before. The two differ, and
-this is flagged for the product owner.
+this is flagged for the product owner. *(Superseded in 58.11 by ruling R4:
+undo mid-stroke now cancels the stroke, for every pen, and touches no
+history. 58.11.6.)*
 
 **Not changed, and worth knowing:** a stroke that spreads past
 `ScratchTileFlushLimit` (12 tiles) commits its scratch mid-gesture
@@ -11620,7 +11705,8 @@ compared by SHA-256, with its CRLF endings unchanged.
 **What the harness cannot reach.** `InkSurface` is not linked. So the harness
 does not show:
 - that `DrawRegion` passes `OilGestureActive` truthfully;
-- that every gesture end in 58.10.2's table calls `SettleOilGesture`;
+- that every gesture end in 58.10.2's table calls `SettleOilGesture`
+  *(58.11: now `EndOilGesture`; the table was also incomplete, 58.11.7)*;
 - that `DrawRegion` asks the per-pass overload;
 - that the pick paths pass the geometry they had before;
 - that the text layer rebuilds on a 0% crossing.
@@ -11681,4 +11767,419 @@ Quill was not launched. None of the following has been observed:
 **Open for the product owner:** whether the eraser may remove ink on a
 layer that draws nothing (58.10.1); whether undo mid-oil-stroke should take
 back that stroke (as built) or leave it painting as a vector stroke does
-(58.10.2).
+(58.10.2). *(Both ruled in 58.11: R3, and R4.)*
+
+### 58.11 Round 3: four rulings, and what round 2's checks found — 2026-09-25 (branch `layer-order-canvas`)
+
+The product owner made four rulings, R1–R4, handed to this round on
+2026-09-25. Two checks of round 2 also found things to close (58.11.8). All of
+it is built and measured headlessly. **Nothing here was run on screen, and
+Quill was not launched** (58.11.12).
+
+This round was written in two sittings, because a session limit cut off the
+first before it had made a single checkpoint. The orchestrator committed what
+it had left as `823c15d`, marked UNVERIFIED. The second sitting treated that
+as a draft: it diffed every source file the draft touched (nine) against
+`d3d5549` and looked for a fault injected mid-mutation-test. **It found none**,
+and the draft built 0 warnings, 0 errors as found. The draft had no harness
+checks and no documentation; both are the second sitting's.
+**Kept:** all of the draft's code. **Changed:** every oil end now goes through
+`EndOilGesture` (the lift, the lost pointer and the device loss had their own
+paths); "ended exactly once" and the Grab-mode pan route became pure functions
+(`GestureRules.EndOil`, `GestureRules.MouseModeTakeover`) so the harness runs
+them; a refused hold-snapped shape now gives a resumed stroke back; dictation
+asks the creation gate once, so a refusal shows one message instead of two.
+**Discarded:** nothing.
+
+#### 58.11.1 The rulings
+
+> **R1.** A hidden or 0% active layer refuses new content, with a short
+> message and a one-tap action that shows the layer.
+>
+> **R2.** Hiding a layer, or setting it to 0%, drops the selection of anything
+> on it - and only that.
+>
+> **R3.** The eraser erases only visible ink, in every style and mode, and its
+> preview and the erase agree.
+>
+> **R4.** Ctrl+Z while a stroke is in progress cancels that stroke, for every
+> pen, and leaves history alone.
+
+"Visible" is one fact, as it has been since 58.10: `PageLayers.IsVisible`
+(`EffectiveOpacity > 0`). `CanSelect` is `IsVisible && !Locked`, and
+`DrawPlan.IsDrawn` mirrors `IsVisible`. R1 and R2 ask `IsVisible` through
+`LayerGate` (`LayerModels.cs` ~967); R3 asks `IsDrawn` through
+`LayerPick.Erasable` (~952), which is what the eraser preview already read.
+No new idea of "showing" was written.
+
+#### 58.11.2 R1 — every creation path, and what it does now
+
+`InkSurface.CanCreateOnActiveLayer` (~3890) is the gate. It asks
+`LayerGate.RefusesNewContent` (the active layer when `IsVisible` is false, else
+null) and, on a refusal, raises `CreationRefused` with the message and the
+layer's key, then answers false. A page with no `Layers` array has an implicit
+base layer that is always visible, so an existing page never refuses.
+
+| Path | Where it is asked | What it does now on a hidden or 0% active layer |
+|---|---|---|
+| Pen press, a VECTOR stroke: every pen but oil, and any pen with the ruler | `OnPointerPressed`, pen case (~1720), before the pen-repair bridge | refused at the press: no wet ink, capture released, one message |
+| Pen lift, the vector stroke | `CommitGesture` (~2595) | asked again, because the layer can be hidden mid-stroke; refused, nothing committed; a stroke the bridge resumed is given back as it was |
+| A shape the hold snapped (shape recognition) | `CommitGesture`, shape branch | asked again at the lift; refused, no `AddShapeAction`; a resumed stroke is given back |
+| A free OIL stroke | not asked | not refused: paint lands on no layer (58.2, §53), so a hidden active layer does not hide it. **A decision made here, not ruled; the owner can overturn it** |
+| Text tool tap | `OnPointerPressed` (~1648) | refused at the tap: no caret appears |
+| Mouse click on empty canvas in Auto mode (drops a caret) | not asked at the click | the caret still appears, because that click is also how the mouse deselects; the first keystroke is refused (next row) and the caret is removed |
+| Typing after a caret | `OnCharacterReceived` → `SpawnTextBox` (~8644) | refused; no box |
+| `MaterializePendingText` (dictation into a caret, text paste into a caret) | `SpawnTextBox` | refused; nothing typed or pasted |
+| Dictation with no box to type into | `MainWindow` dictation handler (~307) | asked once before either creation call; refused, one message |
+| `AddTextElement` (~8935): handwriting to text or maths, the equation-as-text fallback, "Insert onto page" (AI answer, ~10546), the calculator's insert (~11874) | first line | refused. Handwriting conversion asks before the recogniser runs (~4762) and again before it deletes the handwriting (~4779), so ink is never deleted and then refused |
+| `InsertShape` (~8546): the shape menu (`InsertShape_Click`, `MainWindow` ~7300) and the Objects library (`ObjectsWindow` ~359, through `ChromeBars`' `InsertShape`, `MainWindow` ~868) | first line | refused; neither caller then shows its "drag it to move" instruction over the refusal |
+| `InsertImage` (~8370) and `InsertImageAt` (~5748): the image picker (`ChromeBars` ~1310), image paste (`MainWindow` ~12254), a new equation's image | first line, and the picker and paste ask before a file is written into the library's assets | refused; a pending caret is left where it was |
+| `InsertTable` (~8951) | `InsertTable_Click` (~9473) asks before the dialog opens, and the surface again | refused |
+| New equation | `InsertOrEditEquationAsync` (~9581) before the editor opens | refused. Editing an existing equation creates nothing and is not asked |
+| Canvas paste (Ctrl+V, the context menu's Paste) | `PasteCanvasAt` (~5680) | a pasted element keeps the key it was copied with (18.10), so paste does not use the active layer. It is refused if any of those keys resolves to a layer that draws nothing, and the message names that layer; "Show it" shows every layer named |
+| Duplicate (selection, and the box being typed in) | not asked | a copy keeps its source's key. Under R2 nothing on an invisible layer can be selected, and a box being typed in exists only on a visible layer, so a copy cannot land on an invisible one |
+| Table rows, columns, merge and split | not asked | these edit an existing table, which is selected and so visible; its cells take the table's key |
+| PDF import | not asked | makes new pages; nothing lands on the open page's active layer |
+| Comment pins | not asked | comments are not layered (18.6) |
+
+Every stamp of `ActiveLayerKey` in the code (`grep`) is behind one of the gated
+rows above: the stroke (~2626), the snapped shape (~2575), `InsertImageAt`,
+`InsertImage`, `InsertShape`, `SpawnTextBox`, `AddTextElement` and
+`InsertTable`.
+
+#### 58.11.3 The message and its action, verbatim
+
+The app's existing status line (`MainWindow.ShowStatus`) now takes one
+optional action, drawn as a small link button beside the message
+(`StatusAction`, `MainWindow.xaml`). A message with an action stays up 6 s
+instead of 3, so there is time to reach it. Any later message replaces both.
+The words were matched to the neighbouring messages ("Clipboard has no image
+to paste.", "Lasso-select some handwriting first.", and the Layers panel's own
+"Layer 2 is hidden — its ink is off the page and cannot be selected."). They
+contain no symbol and no emoji; the harness checks every character.
+
+| When | Status line |
+|---|---|
+| active layer hidden | `The active layer (NAME) is hidden, so nothing was added.` |
+| active layer at 0% | `The active layer (NAME) is at 0% opacity, so nothing was added.` |
+| paste onto one hidden layer | `The layer this pastes onto (NAME) is hidden, so nothing was pasted.` |
+| paste onto one 0% layer | `The layer this pastes onto (NAME) is at 0% opacity, so nothing was pasted.` |
+| paste onto several, all hidden | `The layers this pastes onto are hidden, so nothing was pasted.` |
+| paste onto several, all at 0% | `The layers this pastes onto are at 0% opacity, so nothing was pasted.` |
+| paste onto several, some of each | `The layers this pastes onto are hidden or at 0% opacity, so nothing was pasted.` |
+| the action's label | `Show it` |
+| after the action | `NAME is showing again.` (the Layers panel's switch says the same words) |
+
+NAME is `PageLayers.DisplayName`: the layer's own name, or "Layer N".
+
+**"Show it"** runs `LayerGate.Show`: unhide, and lift an opacity that draws
+nothing (0%, below 0, not a number) to 100%. A hidden layer keeps its own
+opacity when it is unhidden. Then it runs the Layers panel switch's tail
+(`LayersChanged`, and `ContentChanged`, which saves and rebuilds an open
+Layers panel). It acts only on the page the refusal was raised on, and only
+while that page is still open, because keys are page-scoped (18).
+
+**Deviation from the ruling's wording, flagged:** the ruling says the message
+says the active layer is hidden. For a 0% layer it says "is at 0% opacity"
+instead, because the Layers panel's switch shows a 0% layer as switched ON
+(58.11.9) and "hidden" would contradict it. The owner can overturn this.
+
+#### 58.11.4 R2 — the selection on an invisible layer is dropped
+
+`InkSurface.DropInvisibleSelection` (~3857) runs first in `LayersChanged`
+(~3813), on both of its paths: the Hidden switch (`ChromeBars` ~1455) and the
+opacity slider (~1492). `LayersChanged` also runs after "Show it" and after
+every structural layer action (`ApplyLayerAction`, which already cleared the
+whole selection). It filters `_selected` (and `_selectedSet`), `_selShapes`
+(and `_selShapeSet`) and `_selTexts` through `LayerGate.DropInvisible`, drops
+`_activeShape` and any `_textMoveOrig` entry whose layer draws nothing, and
+republishes the smaller selection's bounds. An element on a layer that still
+draws stays selected. So does a locked or out-of-scope element that was
+already selected: that is not this ruling's business.
+
+The handles, move, scale, delete, copy and copy-as-image all act on those
+lists and on `_activeShape`, so after the drop they have nothing invisible to
+act on. That was read, not executed. A text box on an invisible layer is torn
+down by `RebuildTextLayer` (58.10.1), which also clears `ActiveTextBox` and
+`LastTextBox`.
+
+**Undo and redo of a visibility change:** neither the switch nor the slider
+is undoable in this build. Both write the layer directly and push no action,
+so there is no undo of either to cover. Every `Undo`/`Redo` already clears the
+whole selection and the active shape.
+
+#### 58.11.5 R3 — the eraser erases only visible ink
+
+`EraseAt` (~3476) builds the cached plan once per step and every element loop
+skips an element for which `LayerPick.Erasable(plan, key)` is false:
+
+- shapes, in both modes (images were already never erased);
+- strokes in Object mode;
+- strokes in Point mode, **before** the style is chosen, so Hard, Soft, Slice
+  and Nudge are all covered by the one test.
+
+`Erasable` is `plan.IsDrawn`. The object-eraser preview (`FindStrokeNear`)
+goes through `LayerPick.Topmost`, which tests `IsDrawn` first. So the preview
+can name a stroke exactly when the erase would remove it (checked, 58.11.10).
+Oil paint is not on a layer (58.2) and is still rubbed as before, whatever
+the active layer's visibility. The eraser still asks no lock and no scope, as
+it never has.
+
+#### 58.11.6 R4 — undo mid-stroke cancels the stroke and touches no history
+
+`Undo` (~1098) and `Redo` (~1127) first ask `GestureRules.StrokeInProgress`:
+an oil brush is live, or a pointer is down whose gesture is the PEN's and
+holds wet ink or a hold-snapped shape. A selection drag reached with the pen
+re-routes its gesture to Mouse and is not a stroke. If a stroke is in
+progress, `OnHistoryKey` answers `CancelStroke` and `CancelStrokeInProgress`
+(~1186) runs instead of the history. Nothing is pushed and nothing is popped.
+
+Every undo reaches `InkSurface.Undo`: Ctrl+Z (`UndoAccel_Invoked` ~7405), the
+top bar's button (~7333), the pen bar's satellites, the dial and its sectors
+(`ToolWheel`), the History panel, and the canvas context menu's "Undo"
+(~10851). Ctrl+Z while a text box has the caret still goes to the box, as
+before.
+
+What the cancel does, by pen:
+
+- **Every vector pen, the ruler, a hold-snapped shape.** The wet points, or
+  the shape being adjusted, were never pushed; they are dropped. The pen
+  gesture ends and capture is released, so the pen draws nothing more until
+  it is lifted and pressed again.
+- **The pen-repair bridge.** A stroke that resumed the previous one (pen-down
+  within 200 ms where it ended) took that stroke's own entry off the undo
+  stack at pen-down. The cancel puts back the same entry and the same stroke
+  (`UndoRedoManager.PutBack`, `UndoRedo.cs` ~1597), without clearing the redo
+  stack, so the history is exactly what it was before the press.
+- **Oil.** `EndOilGesture(GestureEnd.Undo)` answers `OilEnd.Discard`, which
+  runs `OilBrush.Discard` (`OilBrush.cs` ~177). The wet scratch is dropped
+  and no tile is committed.
+
+**The part a long stroke flushed mid-gesture.** A stroke that spreads past
+`ScratchTileFlushLimit` (12 tiles) composites its earlier part into the
+settled tiles while it is still being painted (`ExtendOilStroke` →
+`CommitScratch`). Before touching each tile, that flush records the tile's
+pre-gesture bytes. `Discard` puts those bytes back through the very code an
+undo of a paint stroke runs (`PaintTilesAction`'s `Undo`), without ever
+pushing that action. A tile the flush allocated is removed again; an existing
+one gets its old colour and height back; the store is nudged to save. **So the
+flushed part is taken back.** That was read and compiled. OilBrush is Win2D,
+so the harness cannot run it, and nothing was seen on screen. One case stays
+as it was: on a **device loss** mid-stroke the brush is dropped, and a part
+flushed before the loss stays in the tiles with no undo entry. That is
+unchanged from round 2.
+
+**Redo mid-stroke — an ASSUMPTION the owner can overturn.** The ruling does
+not cover it. Redo pressed mid-stroke does what undo does: it cancels the
+stroke, touches no history, and so keeps the redo stack intact. Round 2 had
+committed the oil stroke first, and that new edit emptied the redo stack.
+
+**Not covered:** an undo pressed while the ERASER is mid-drag is not a pen or
+brush stroke, and runs the history as before.
+
+#### 58.11.7 Every way a gesture ends, ends the oil brush exactly once
+
+This replaces 58.10.2's table (corrected there). Every end site calls
+`EndOilGesture` with a `GestureEnd`. What that does is
+`GestureRules.EndOil(brushLive, why)`: `Nothing` when the brush is not live,
+otherwise `OilOutcome(why)`. After any real outcome the brush is no longer
+live, so the brush is ended by the first site a gesture reaches and by no
+later one. No `GestureEnd` answers `KeepPainting`.
+
+| End | Site | Brush | Pen gesture |
+|---|---|---|---|
+| lift | `OnPointerReleased` → `CommitGesture(Lift)` → `EndOilGesture` | committed | is ending anyway |
+| pointer cancelled / capture lost | `OnPointerLost` → `CommitGesture(PointerLost)` | committed | is ending anyway |
+| any other reset | `ResetGesture` → `EndOilGesture(Reset)` (a no-op after any end above) | committed | is ending anyway |
+| second pointer takes over to PAN | `TakeOverGesture(TakeoverPan)` at the PRESS: a middle-button press (~1460), a mouse press in Grab mode (`HandleMousePress` ~1834), a press with the Pan tool (~1656). The pan's release still returns early from `CommitGesture`, which now calls `EndOilGesture(Reset)`, a no-op | committed | ended, capture released |
+| second pointer takes over to ERASE | `TakeOverGesture(TakeoverErase)` at the eraser's press (~1656), BEFORE its first `EraseAt`, so it rubs settled tiles with no scratch above them and has nothing to commit back over them | committed | ended |
+| second pointer takes over for anything else | `TakeOverGesture(TakeoverOther)`: a right-button press (~1472), a barrel press (~1506), a touch grab of the selection or the active shape (~1598, ~1612), a mouse press in Auto, Select or Move mode, and a press with any other tool (~1656) | committed | ended |
+| tool switch | `SetTool` (~977) | committed | ended |
+| page switch | `LoadPage` (~859), before `_page` changes | committed to the outgoing page | ended |
+| undo | `Undo` → `CancelStrokeInProgress(Undo)` | **discarded** (58.11.6) | ended |
+| redo | `Redo` → `CancelStrokeInProgress(Redo)` | **discarded** (assumption) | ended |
+| window close, surface unload | `FlushPaint` (~6178) | committed, then flushed | ended |
+| device loss | `CreateResources` with `NewDevice` (~512) → `EndOilGesture(DeviceLoss)`, then the brush is disposed | **dropped** | ended |
+
+**Presses that do not take over,** so the brush keeps painting: a
+comment-mode press, the table "+" buttons, the ruler's bubble, the eyedropper
+and the mixer (they answer on the press and start no gesture), a Text tool
+tap, and a touch that only pans through the manipulation path. A second
+pointer that lands in one of these while a stroke is painted leaves the
+stroke alone.
+
+**The hold on an oil stroke.** `HoldTick` (~7371) asks
+`GestureRules.HoldMaySnap` first, and it answers false whenever the oil brush
+is live. So an oil stroke is never snapped into a vector shape. Holding still
+mid-oil-stroke no longer makes the lift commit both a vector shape and the
+raster, and the brush can no longer stay live after a snap (paint v2 design
+finding O2). Shape recognition is on by default (~337); the vector pens snap
+as before.
+
+#### 58.11.8 Round 2's check findings, closed
+
+- **The click could not catch a CanSelect regression.** `LayerPick.Topmost`
+  tests `plan.IsDrawn` before the `Catchable` admit, so section 17's click
+  checks stayed green when `CanSelect` alone regressed. Section 22 asks
+  `Catchable` directly, and runs the click with the plan held at "all drawn"
+  while the layers are hidden and taken to 0% afterwards, so only the click's
+  own gate can refuse. Its negative control is in 58.11.10.
+- **58.10.1 misnamed the gesture.** `AxesShapeAt` and `EquationShapeAt` serve
+  the canvas context menu, not a double-tap. Corrected in 58.10.1 and 58.9
+  step 8.
+- **The Layers panel's switch and a 0% layer.** Decided in 58.11.9; not
+  changed.
+- **[major] A pan takeover left the oil brush live.** Closed: 58.11.7's pan
+  row. Checked with a negative control.
+- **[minor] 58.10.2's "any other gesture reset" row was not what the code
+  did.** Corrected in 58.10.2; `SetTool` and every takeover now end the brush
+  (58.11.7).
+- **[minor] and [major] Holding still during an oil stroke.** Closed: the
+  hold ignores an oil gesture entirely (58.11.7). Checked with a negative
+  control.
+
+#### 58.11.9 The Layers panel: the switch reads `Hidden`, and stays that way
+
+A layer at 0% shows its switch ON. **This is kept, on purpose.** The panel has
+two controls for two stored fields: the switch writes `Hidden` and the slider
+writes `Opacity`. Each control shows the field it writes. If the switch showed
+the one fact instead, a 0% layer would show OFF, and switching it ON would
+have to invent an opacity or do nothing visible. The slider sitting at 0 is
+what says that layer draws nothing. The refusal message names the 0% case in
+the same terms (58.11.3), so the message and the panel do not contradict each
+other. Nothing in the panel changed this round.
+
+#### 58.11.10 What `tools/LayerRoundTrip` proves now
+
+The harness now also links `GestureRules.cs`. Sections 22–28 were added, 53
+checks. From a fresh `--no-incremental` build: **192 held, 193 PASS lines (the
+193rd is the isolation line), 0 FAIL.** Everything runs against the real
+`LayerGate`, `LayerPick`, `GestureRules` and `UndoRedoManager`:
+
+- **22, CanSelect through the click.** `Catchable` refuses the hidden and the
+  0% layer asked directly; with the plan held at "all drawn", the click still
+  refuses both; the visible layer's stroke is still clicked (the control).
+- **23, R1.** Hidden, 0% and not-a-number active layers refuse and name
+  themselves; visible and 40% layers take content; refused exactly when
+  `IsVisible` is false, on every layer; an implicit page never refuses. The
+  seven messages above, verbatim, with no symbol in any of them. `Show` unhides
+  and keeps a hidden layer's own opacity, lifts 0% and not-a-number to 100%,
+  and leaves a visible 40% layer alone. Paste lands while the ACTIVE layer is
+  hidden if its own keys are visible; it refuses otherwise, naming each layer
+  once, bottom first. Which pen presses are gated: every vector pen, and any
+  pen with the ruler, yes; a free oil stroke, no.
+- **24, R2.** With every layer drawn nothing is dropped. Hiding one layer and
+  taking another to 0% drops exactly their six elements, keeps the rest in
+  order and updates the mirror sets. A locked layer's selection stays.
+  Showing a layer again re-selects nothing.
+- **25, R3.** A pass over five layers erases the visible, locked and 40%
+  layers' strokes and shapes and nothing on the hidden or 0% layer. The
+  preview and the erase agree on every stroke. A one-layer page at 0% erases
+  nothing.
+- **26, R4.** The 32-row table of `StrokeInProgress`; undo cancels a vector
+  stroke, a snapped shape and a live oil brush; with no stroke under the pen,
+  undo runs. Undo and redo DISCARD the oil scratch. The bridge: through the
+  real `UndoRedoManager`, `TryDiscardTop` then `PutBack` leaves the same
+  entry on top, the stroke on the page and the redo stack intact, and a redo
+  afterwards still works.
+- **27, the end table.** All twelve `GestureEnd` values end a live brush, each
+  with the outcome in 58.11.7. The pen gesture is ended by all but lift,
+  pointer lost and reset. A brush that is not live has nothing to end. All
+  three pan routes are `TakeoverPan`. The sequences `InkSurface` runs (a pan
+  press then its release; an eraser press, lift, reset; a tool switch then
+  the reset; undo; lift; device loss) each end the brush exactly once, and so
+  does every end followed by any number of further end sites.
+- **28, the hold.** With the oil brush live the hold never snaps, in all 32
+  combinations of the other inputs. The vector control does snap, and the
+  vector rules are as before.
+
+**Negative controls, run in this sitting.** Each is a mutation that compiles:
+the harness was rebuilt after its `bin\x64` and `obj` were deleted, with 0
+errors and 0 warnings, and run from that output. The source was restored
+byte-identical afterwards, compared by SHA-256, with its CRLF endings
+unchanged.
+
+| Mutation | Checks failed |
+|---|---|
+| R1: the gate asks `!Hidden` (a 0% active layer takes content) | 2 (0% refuses; gate and fact agree) |
+| R1: the gate never refuses | 3 |
+| R2: `StaysSelected` always true | 4 |
+| R3: `Erasable` always true (the eraser before 58.11) | 4 |
+| R4: only oil counts as in progress (round 2: a vector pen draws on through the undo) | 3 |
+| R4: undo always runs history | 2 |
+| R4: undo mid-oil-stroke commits (round 2) | 3 |
+| R4: `PutBack` clears the redo stack | 2 |
+| a pan takeover keeps the brush painting (before 58.11) | 3 |
+| the hold may snap an oil stroke (`!oilActive` removed) | 1 |
+| not exactly once: every end site ends the brush again | 8 |
+| `CanSelect` alone: `IsEditable` back to `!Hidden && !Locked` | 5 (the three from 58.10.6, and both new click checks in section 22) |
+| restored | 192 held, 0 FAIL |
+
+**What the harness cannot reach.** `InkSurface`, `MainWindow` and `OilBrush`
+are not linked. So the harness does not show:
+- that every creation path in 58.11.2 calls the gate before it creates;
+- that `LayersChanged` drops the selection, and that the handles, move, scale,
+  delete, copy and copy-as-image then act on nothing invisible;
+- that each loop in `EraseAt` asks `Erasable`;
+- that `Undo`/`Redo` hand `StrokeInProgress` the true state, and what
+  `OilBrush.Discard` does to the tiles;
+- that each site in 58.11.7 calls `EndOilGesture` with the kind the table
+  says, and that `HoldTick` asks `HoldMaySnap` first;
+- the status line's action button.
+
+All of these were read and compiled, not executed.
+
+#### 58.11.11 Build and harnesses
+
+`dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64
+--no-incremental`: 0 warnings, 0 errors. All ten harnesses in `tools/` were
+built fresh (`bin\x64` and `obj` deleted, `--no-incremental`) and run from
+that output. Every one exited 0:
+
+| Harness | Result |
+|---|---|
+| LayerRoundTrip | 192 held |
+| CloneRoundTrip | 36 held |
+| ExportRotRoundTrip | 37 held |
+| TextColourRoundTrip | 50 held (120 CS0436 warnings from its own `Shim.cs`, as in 58.10.7) |
+| TextRotRoundTrip | 24 held |
+| VeilRoundTrip | 29 held |
+| HandleProof | RESULT: PASS |
+| PanelProof | 6 PASS lines, no FAIL |
+| PaperProof | ALL THRESHOLDS MET |
+| SeatProof | 2 PASS lines, no FAIL |
+
+#### 58.11.12 WHAT IS NOT ESTABLISHED
+
+Quill was not launched. None of the following has been observed:
+
+- that a pen stroke, a Text tool tap, typing, dictation, a shape, an image, a
+  table, an equation and a paste on a hidden or 0% active layer each create
+  nothing and show the message above, once, with "Show it" (58.9 step 10);
+- that "Show it" appears beside the message, can be reached in the 6 s it
+  stays up, shows the layer, and that an open Layers panel then shows the
+  switch ON and the slider at 100 (step 10);
+- that the status line's text is still click-through with the button
+  collapsed, i.e. that the change to a `StackPanel` did not start eating
+  presses at the canvas's bottom-left;
+- that hiding a layer, or dragging its slider to 0, drops exactly its
+  elements from a mixed selection, and that the handles redraw around what is
+  left (step 11);
+- that the eraser leaves hidden and 0% ink alone in every mode and style, and
+  that its preview agrees (step 12);
+- that Ctrl+Z mid-stroke cancels a vector stroke, a ruler stroke, a snapped
+  shape and an oil stroke, that the pen then draws nothing until it is lifted,
+  and that the undo stack is unchanged (step 13);
+- that a long oil stroke's mid-gesture flush is taken back by an undo
+  (step 13);
+- that a pan, an eraser, a tool switch or the hold taking over mid-oil-stroke
+  leaves nothing wet on top and the next vector stroke vector (step 14);
+- what a device loss mid-stroke looks like: it cannot be provoked on demand
+  here.
+
+**Open for the product owner:**
+- a free oil stroke is not refused on a hidden or 0% active layer (paint is
+  on no layer) (58.11.2);
+- the message for a 0% layer says "at 0% opacity", not "hidden" (58.11.3);
+- redo mid-stroke cancels the stroke and keeps the redo stack (58.11.6);
+- the Layers panel's switch still reads `Hidden` alone (58.11.9).
