@@ -36,13 +36,23 @@ var ordinaryOutputs = new List<(string Name, string Rtf)>();
 
 // ---- 8a. THE APP CALLS THIS FILE, AND HAS NO OTHER COPY --------------------
 string root = FindRoot();
+// 56.9: FlushTexts now hands its whole per-box step - section 50's two
+// questions, the refused-trim latch, MayTrim and the trim - to the linked
+// TextTrim.FlushBox, so this asks that InkSurface calls FlushBox once and asks
+// none of those questions itself, and that FlushBox is what calls the trim.
 string inkSurface = File.ReadAllText(Path.Combine(root, @"src\Quill\Controls\InkSurface.cs"));
-int calls = Regex.Matches(inkSurface, @"TextTrim\.TrimTrailingEmptyParagraphs\(ui\.Box\.Document\)").Count;
-bool privateCopy = inkSurface.Contains("string? TrimTrailingEmptyParagraphs(", StringComparison.Ordinal);
-Check("56.8 [8a] InkSurface.FlushTexts calls the linked TextTrim.TrimTrailingEmptyParagraphs(ui.Box.Document), "
-      + "once, and keeps no private copy of the trim - so what runs below is what the app runs",
-      calls == 1 && !privateCopy,
-      $"{calls} call(s); private copy present: {privateCopy}");
+string inkCode = Regex.Replace(inkSurface, @"//[^\r\n]*", "");
+string trimCode = Regex.Replace(File.ReadAllText(Path.Combine(root, @"src\Quill\Services\TextTrim.cs")), @"//[^\r\n]*", "");
+int calls = Regex.Matches(inkCode, @"TextTrim\.FlushBox\(ui\.Box\.Document,").Count;
+int ownAsks = Regex.Matches(inkCode, @"TextFlushPolicy\.(ShouldWriteBack|MayTrim|NeedsTheDocument)\(|TextTrim\.TrimTrailingEmptyParagraphs\(").Count;
+bool privateCopy = inkCode.Contains("string? TrimTrailingEmptyParagraphs(", StringComparison.Ordinal);
+int boxTrims = Regex.Matches(trimCode, @"= TrimTrailingEmptyParagraphs\(doc\);").Count;
+Check("56.9 [8a] InkSurface.FlushTexts calls the linked TextTrim.FlushBox(ui.Box.Document, ...) once, asks none "
+      + "of its questions itself and keeps no private copy of the trim, and FlushBox is what calls "
+      + "TrimTrailingEmptyParagraphs - so what runs below is what the app runs",
+      calls == 1 && ownAsks == 0 && !privateCopy && boxTrims == 1,
+      $"{calls} FlushBox call(s); policy/trim asked directly in InkSurface: {ownAsks}; private copy present: {privateCopy}; "
+      + $"FlushBox trims: {boxTrims}");
 
 // ---- 8b. THE ENGINE IS THE APP'S ENGINE ------------------------------------
 string ownDll = Path.Combine(AppContext.BaseDirectory, "WinUIEdit.dll");
@@ -385,6 +395,86 @@ foreach (var (tag, marker, label) in new[]
           ok, string.Join(" | ", detail));
 }
 
+// ---- 8s. ROUND 3: A REFUSED TRIM DOES NOT REACH DISK THROUGH THE SECOND FLUSH
+// InkSurface.RecolourSelection flushes the same live boxes TWICE, both
+// releasing: its own FlushTexts(releasing: true) in front of the undo snapshot,
+// then RebuildTextLayer's, before the reach latches are cleared. Replayed here
+// through the linked TextTrim.FlushBox - the per-box step FlushTexts runs -
+// with the refused-trim latch carried between the two exactly as InkSurface's
+// _trimRefused carries it. The edit is 8r's (Add link after Ctrl+A), whose
+// trim the post-delete check refuses and whose restore leaves the live box one
+// paragraph longer. Two ways a box gets there: reached with a baseline (the
+// user focused it), and touched with none (25.5's recolour).
+{
+    var detail = new List<string>();
+    bool ok = true, contrastOk = true;
+    foreach (bool viaTouch in new[] { false, true })
+    {
+        // One replay. latch=false passes the second flush a cleared latch - the
+        // order WITHOUT 56.9 - to measure what the latch is there to stop.
+        (TextTrim.FlushOutcome O1, TextTrim.FlushOutcome O2, string Edit, string Model, string Snapshot, string? Latch,
+         string EditPlain, string LivePlain, RichEditTextDocument Doc) Replay(bool latch)
+        {
+            string stored = StoredDocWith("linked words", 4, Plainfinal);
+            var d = Load(stored);                                   // BuildTextUi
+            string? baseline = viaTouch ? null : Rtf(d);            // GotFocus: the reach baseline
+            var (_, _, end) = Story(d);
+            d.GetRange(0, end).Link = "\"https://example.com\"";   // Ctrl+A, Add link
+            string edit = Rtf(d);
+            var (editPlain, _, _) = Story(d);
+            string? refused = null;
+            string model = stored;
+            // RecolourSelection: FlushTexts(releasing: true)
+            var o1 = TextTrim.FlushBox(d, model, !viaTouch, viaTouch, baseline, true, ref refused, out _, out string? s1);
+            if (s1 != null) model = s1;
+            string snapshot = model;                                // RecolourTextsAction captures model.Rtf
+            string? latchAfterFirst = refused;
+            if (!latch) refused = null;
+            // RebuildTextLayer: FlushTexts(releasing: true), latches not yet cleared
+            var o2 = TextTrim.FlushBox(d, model, !viaTouch, viaTouch, baseline, true, ref refused, out _, out string? s2);
+            if (s2 != null) model = s2;
+            var (livePlain, _, _) = Story(d);
+            return (o1, o2, edit, model, snapshot, latchAfterFirst, editPlain, livePlain, d);
+        }
+
+        var with = Replay(latch: true);
+        bool one = with.O1 == TextTrim.FlushOutcome.Written && with.Latch != null &&
+                   with.O2 == TextTrim.FlushOutcome.RefusalKept &&
+                   with.Model == with.Edit && with.Snapshot == with.Edit &&
+                   with.LivePlain == with.EditPlain + "\r" &&
+                   Story(Load(with.Model)).Plain == with.EditPlain + "\r";   // what the rebuild shows: the edit, reopened once
+        // ...and the latch hides no edit: the user types into the same live box,
+        // and the next flush writes it and clears the latch.
+        string? latchNow = with.Latch;
+        Type(with.Doc, "linked words", "!");
+        var o3 = TextTrim.FlushBox(with.Doc, with.Model, !viaTouch, viaTouch, viaTouch ? null : "(baseline)", false,
+                                   ref latchNow, out _, out string? s3);
+        bool typedWritten = o3 == TextTrim.FlushOutcome.Written && s3 != null &&
+                            s3.Contains("linked words!", StringComparison.Ordinal) && latchNow == null;
+        one &= typedWritten;
+        ok &= one;
+
+        var without = Replay(latch: false);
+        bool contrast = without.O2 == TextTrim.FlushOutcome.Written && without.Model != without.Edit &&
+                        Pars(without.Model) == Pars(without.Edit) + 1;
+        contrastOk &= contrast;
+        detail.Add($"{(viaTouch ? "touched" : "reached")}: flush 1 {with.O1} (latch {(with.Latch is null ? "not set" : "set")}), "
+                   + $"flush 2 {with.O2}; model = the untrimmed edit: {with.Model == with.Edit}, snapshot too: {with.Snapshot == with.Edit}; "
+                   + $"live after restore {Esc(with.LivePlain)}; typed after: {o3}, latch cleared: {latchNow == null}; "
+                   + $"WITHOUT the latch flush 2 is {without.O2} and stores \\par {Pars(without.Edit)} -> {Pars(without.Model)}");
+    }
+    Check("56.9 [8s] A REFUSED TRIM NEVER REACHES THE MODEL THROUGH RECOLOURSELECTION'S SECOND FLUSH: replayed "
+          + "through the linked TextTrim.FlushBox in InkSurface's order (its releasing flush, the undo snapshot, "
+          + "RebuildTextLayer's releasing flush before the latches clear), for a reached box and a touched one, "
+          + "the model after both flushes is byte for byte the untrimmed edit the first flush stored, the second "
+          + "flush reports RefusalKept, and a keystroke afterwards is still written and clears the latch",
+          ok, string.Join(" | ", detail));
+    Check("56.9 [8s] ...AND WHAT THE LATCH STOPS, MEASURED: with the latch cleared between the two flushes, the "
+          + "second flush trims again, is refused again, and stores the restored document - one \\par more "
+          + "than the edit - over it",
+          contrastOk, contrastOk ? "both replays store the restore's extra paragraph without the latch" : "the contrast did not reproduce");
+}
+
 // ---- NOT CHECKS: shapes reported, not asserted ------------------------------
 foreach (var (name, rtf) in new[]
 {
@@ -467,7 +557,7 @@ static bool[] NumberedParagraphs(RichEditTextDocument d)
     int marks = p.Count(c => c == '\r');
     var shown = new bool[marks];
     for (int i = 0; i < marks && i < paras.Length; i++)
-        shown[i] = paras[i].StartsWith("⦁\t", StringComparison.Ordinal) || Regex.IsMatch(paras[i], @"^\d+[.)]\t");
+        shown[i] = paras[i].StartsWith("\u2981\t", StringComparison.Ordinal) || Regex.IsMatch(paras[i], @"^\d+[.)]\t");
     return shown;
 }
 
