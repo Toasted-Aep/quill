@@ -524,6 +524,34 @@ foreach (var (name, rtf) in new[]
     info.Add($"INFO {name}: plain {Esc(tp)}; engine writes table words: {TextFlushPolicy.ContainsTableStructure(tb)}; trim {(tt is null ? "refused" : "wrote")}");
 }
 
+// ---- NOT A CHECK: 56.9 finding 4, recorded, not fixed ----------------------
+// InkSurface.LinkifyBox, on every LostFocus, puts a link on each bare URL whose
+// range has no Link. Asked here: after the engine's own save and reopen, does a
+// link whose words ARE its target still read as a link? If not, the next blur
+// re-links it, and a mere focus and blur changes the document - which section
+// 50 then writes and section 56 then trims. Pre-existing, linkify's, not the
+// trim's.
+foreach (var (name, words, target) in new[]
+{
+    ("words = target", "https://example.com", "https://example.com"),
+    ("friendly words", "example", "https://example.com"),
+})
+{
+    var ld0 = Load(StoredDocWith("see " + words + " here", 2, Plainfinal));
+    var (lp, _, _) = Story(ld0);
+    int at = lp.IndexOf(words, StringComparison.Ordinal);
+    ld0.GetRange(at, at + words.Length).Link = "\"" + target + "\"";   // LinkifyBox's own call
+    var reopened = Load(Rtf(ld0));
+    var (rp, _, _) = Story(reopened);
+    int at2 = rp.LastIndexOf(words, StringComparison.Ordinal);
+    string linkAfter = at2 < 0 ? "(words gone)" : reopened.GetRange(at2, at2 + words.Length).Link;
+    string beforeBlur = Rtf(reopened);
+    bool relinks = at2 >= 0 && string.IsNullOrEmpty(linkAfter);
+    if (relinks) reopened.GetRange(at2, at2 + words.Length).Link = "\"" + target + "\"";
+    info.Add($"INFO LinkifyBox after a reopen, {name}: range.Link reads {(string.IsNullOrEmpty(linkAfter) ? "EMPTY" : "\"" + linkAfter + "\"")}; "
+             + $"a blur would re-link: {relinks}; document changed by that blur: {Rtf(reopened) != beforeBlur}");
+}
+
 // ===========================================================================
 foreach (var line in log) Console.WriteLine(line);
 Console.WriteLine();
