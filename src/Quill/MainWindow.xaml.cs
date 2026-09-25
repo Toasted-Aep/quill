@@ -300,6 +300,11 @@ public sealed partial class MainWindow : Window
             // focused box; a tapped-but-empty Text caret becomes the target
             // instead of a bubble in the middle of the screen (#5-batch4)
             var box = Surface.ActiveTextBox ?? Surface.LastTextBox;
+            // §58.11 R1: with no box to type into, this segment would CREATE
+            // one on the active layer (the caret's, or a fresh one at the view
+            // centre). Asked once here, so a refusal shows one message rather
+            // than one from each of the two creation calls below.
+            if (box == null && !Surface.CanCreateOnActiveLayer()) return;
             if (box == null && Surface.HasPendingText) box = Surface.MaterializePendingText();
             if (box != null)
             {

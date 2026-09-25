@@ -503,21 +503,17 @@ public sealed class InkSurface : UserControl
                 // with it) and the pen gesture ended, so nothing wet is left to
                 // draw on top and the rest of the stroke does not turn into
                 // vector ink. The next oil stroke builds a fresh brush.
-                // (§58.11: this is GestureEnd.DeviceLoss, whose outcome in
-                // GestureRules.OilOutcome is OilEnd.Drop - handled here, not in
-                // EndOilGesture, because the brush must be disposed outright.)
+                // §58.11: through EndOilGesture(GestureEnd.DeviceLoss), like
+                // every other end: OilOutcome is OilEnd.Drop (nothing committed,
+                // nothing restored), and EndsPenGesture ends the pen gesture.
+                // Then the dead brush is disposed outright.
                 if (_oil != null)
                 {
-                    bool wasLive = _oil.Active;
+                    try { EndOilGesture(GestureEnd.DeviceLoss); } catch { }
                     var dead = _oil;
                     _oil = null;
                     _oilStore = null;
                     try { dead.Dispose(); } catch { }
-                    if (wasLive && _gestureTool == ToolType.Pen)
-                    {
-                        ResetGesture();
-                        try { _canvas.ReleasePointerCaptures(); } catch { }
-                    }
                 }
             }
             if (reason != Microsoft.Graphics.Canvas.UI.CanvasCreateResourcesReason.FirstTime)
@@ -1838,8 +1834,7 @@ public sealed class InkSurface : UserControl
     private void HandleMousePress(PointerRoutedEventArgs e, Vector2 pos, Vector2 screen)
     {
         // §58.11: Grab mode pans; every other mode selects, grabs or drags.
-        TakeOverGesture(e.Pointer.PointerId,
-            MouseMode == MouseMode.Grab ? GestureEnd.TakeoverPan : GestureEnd.TakeoverOther);
+        TakeOverGesture(e.Pointer.PointerId, GestureRules.MouseModeTakeover(MouseMode));
         _canvas.CapturePointer(e.Pointer);
         float tol = 10f / ViewZoom;
 
@@ -2447,7 +2442,7 @@ public sealed class InkSurface : UserControl
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
     {
         if (_activePointer == null || e.Pointer.PointerId != _activePointer) return;
-        CommitGesture();
+        CommitGesture(GestureEnd.Lift);
         _canvas.ReleasePointerCaptures();
         e.Handled = true;
     }
@@ -2455,7 +2450,7 @@ public sealed class InkSurface : UserControl
     private void OnPointerLost(object sender, PointerRoutedEventArgs e)
     {
         if (_activePointer == null || e.Pointer.PointerId != _activePointer) return;
-        CommitGesture();
+        CommitGesture(GestureEnd.PointerLost);
     }
 
     private bool _skipNextRightTap;
@@ -2537,7 +2532,10 @@ public sealed class InkSurface : UserControl
             (float)(ActualWidth / 2 - x * ViewZoom),
             (float)(ActualHeight / 2 - y * ViewZoom)), ViewZoom);
 
-    private void CommitGesture()
+    /// <param name="end">§58.11: which of the two gesture ends this is - the
+    /// pen lifting, or the pointer lost - handed to <see cref="EndOilGesture"/>
+    /// by the oil branch. Both commit the brush (GestureRules.OilOutcome).</param>
+    private void CommitGesture(GestureEnd end)
     {
         if (_mousePanning)
         {
@@ -2568,20 +2566,28 @@ public sealed class InkSurface : UserControl
                         ? Math.Abs(sh.W) + Math.Abs(sh.H) > 10
                         : sh.W > 8 && sh.H > 8;
                     // §58.11 R1, asked again at the lift: the press asked it,
-                    // but the layer can have been hidden mid-stroke.
-                    if (big && CanCreateOnActiveLayer())
+                    // but the layer can have been hidden mid-stroke. A refused
+                    // snap of a RESUMED stroke gives the previous one back.
+                    if (big)
                     {
-                        sh.LayerKey = ActiveLayerKey;   // 18.9 seam 5
-                        PushAction(new AddShapeAction(sh), _page);
-                        changed = true;
+                        if (CanCreateOnActiveLayer())
+                        {
+                            sh.LayerKey = ActiveLayerKey;   // 18.9 seam 5
+                            PushAction(new AddShapeAction(sh), _page);
+                            changed = true;
+                        }
+                        else RestoreResumedStroke();
                     }
                     break;
                 }
                 // Oil committed its dabs into the tile store; there is no vector
                 // stroke to add and nothing for the ink cache to rebuild.
+                // §58.11: through EndOilGesture like every other end, so the
+                // brush ends in ONE place (Commit, exactly as EndOilStroke did
+                // here before).
                 if (OilGestureActive)
                 {
-                    EndOilStroke();
+                    EndOilGesture(end);
                     break;
                 }
                 // §58.11 R1, asked again at the lift (see the shape branch). A
@@ -6073,8 +6079,9 @@ public sealed class InkSurface : UserControl
     /// <item><see cref="OilEnd.Discard"/> - R4's undo/redo mid-stroke:
     /// <see cref="OilBrush.Discard"/>, nothing committed, nothing pushed, a
     /// mid-gesture flush taken back.</item>
-    /// <item><see cref="OilEnd.Drop"/> - device loss, handled at its own site
-    /// (CreateResources), which disposes the brush outright.</item>
+    /// <item><see cref="OilEnd.Drop"/> - device loss: the brush is only
+    /// cancelled here, and its caller (CreateResources) then disposes it
+    /// outright.</item>
     /// </list>
     /// <para>Then, when <see cref="GestureRules.EndsPenGesture"/> says so, the
     /// pen gesture that carried it ends too, and capture is released:
@@ -6083,9 +6090,11 @@ public sealed class InkSurface : UserControl
     /// </summary>
     private void EndOilGesture(GestureEnd why)
     {
-        if (!OilGestureActive) return;
-        switch (GestureRules.OilOutcome(why))
+        // GestureRules.EndOil answers Nothing when the brush is not live: every
+        // call after the first for one gesture returns here.
+        switch (GestureRules.EndOil(OilGestureActive, why))
         {
+            case OilEnd.Nothing:
             case OilEnd.KeepPainting:
                 return;
             case OilEnd.Commit:
@@ -6096,9 +6105,11 @@ public sealed class InkSurface : UserControl
                 _canvas.Invalidate();   // the scratch, and any restored tile, repaint
                 break;
             case OilEnd.Drop:
+                // The device is gone: the scratch can be neither committed nor
+                // restored. The caller (CreateResources) disposes the brush.
                 break;
         }
-        if (_oil is { Active: true }) _oil.Cancel();
+        if (_oil is { Active: true }) { try { _oil.Cancel(); } catch { } }
         if (GestureRules.EndsPenGesture(why) && _gestureTool == ToolType.Pen)
         {
             ResetGesture();

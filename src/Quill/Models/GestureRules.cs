@@ -11,14 +11,14 @@ namespace Quill.Models;
 // ===========================================================================
 
 /// <summary>Every way a pen gesture that carries the OIL brush can end
-/// (58.10.2's table, made total in 58.11). Each member is a site in
-/// InkSurface that calls <c>EndOilGesture</c> with it.</summary>
+/// (58.10.2's table, made total in 58.11). Each member is passed to
+/// InkSurface's <c>EndOilGesture</c> by the site its summary names.</summary>
 public enum GestureEnd
 {
-    /// <summary>The pen lifts: CommitGesture from PointerReleased.</summary>
+    /// <summary>The pen lifts: PointerReleased calls CommitGesture(Lift).</summary>
     Lift,
-    /// <summary>The pointer is cancelled or loses capture: CommitGesture from
-    /// PointerCaptureLost / PointerCanceled.</summary>
+    /// <summary>The pointer is cancelled or loses capture: PointerCaptureLost /
+    /// PointerCanceled call CommitGesture(PointerLost).</summary>
     PointerLost,
     /// <summary>ResetGesture reached with the brush still live - a reset that
     /// is none of the named ends below.</summary>
@@ -64,6 +64,12 @@ public enum OilEnd
     /// <summary>The device is gone with the scratch on it: nothing can be
     /// committed or restored, so the brush is only disposed.</summary>
     Drop,
+    /// <summary>The brush is not live, so there is nothing to end. What every
+    /// call after the first answers for one gesture: this is what makes a
+    /// gesture's brush end EXACTLY ONCE however many end sites it passes
+    /// (a pan takeover, then the pan's release; a tool switch, then the
+    /// reset it causes).</summary>
+    Nothing,
 }
 
 /// <summary>What an Undo or Redo request does.</summary>
@@ -111,6 +117,17 @@ public static class GestureRules
     public static bool EndsPenGesture(GestureEnd why)
         => why is not (GestureEnd.Lift or GestureEnd.PointerLost or GestureEnd.Reset);
 
+    /// <summary>
+    /// What one call to InkSurface's <c>EndOilGesture</c> does: nothing when
+    /// the brush is not live (<see cref="OilEnd.Nothing"/>), otherwise
+    /// <see cref="OilOutcome"/>. After any answer other than
+    /// <see cref="OilEnd.Nothing"/> and <see cref="OilEnd.KeepPainting"/> the
+    /// brush is no longer live, so the next call for the same gesture answers
+    /// Nothing: ended exactly once.
+    /// </summary>
+    public static OilEnd EndOil(bool brushActive, GestureEnd why)
+        => brushActive ? OilOutcome(why) : OilEnd.Nothing;
+
     /// <summary>Which takeover a press is, by the tool it routes to.</summary>
     public static GestureEnd TakeoverFor(ToolType tool) => tool switch
     {
@@ -118,6 +135,13 @@ public static class GestureRules
         ToolType.Eraser => GestureEnd.TakeoverErase,
         _ => GestureEnd.TakeoverOther,
     };
+
+    /// <summary>Which takeover a MOUSE press routed by the mouse mode is
+    /// (HandleMousePress: the Pen tool pressed with a mouse). Grab pans; every
+    /// other mode selects, grabs or drags. A middle-button press is always
+    /// <see cref="GestureEnd.TakeoverPan"/> and needs no function.</summary>
+    public static GestureEnd MouseModeTakeover(MouseMode mode)
+        => mode == MouseMode.Grab ? GestureEnd.TakeoverPan : GestureEnd.TakeoverOther;
 
     /// <summary>
     /// R4: is a pen or brush STROKE in progress - the thing an undo pressed now
