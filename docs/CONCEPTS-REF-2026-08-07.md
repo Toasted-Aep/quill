@@ -10888,7 +10888,9 @@ RTF string is edited anywhere. It works in four steps.
      final mark, which is a valid empty box. The first character that is not
      a paragraph mark ends the run: a letter, a soft break (`'\v'`) or an
      object. So interior blank lines are never in the range. If the text
-     does not end in `'\r'`, the answer is "drop nothing".
+     does not end in `'\r'`, the answer is "drop nothing". Since §56.9 the
+     range also stops at the last list item, which the engine is asked
+     about mark by mark.
 2. **The deletion goes through the control.**
    `TextTrim.TrimTrailingEmptyParagraphs` (a private method of `InkSurface`
    until §56.8 moved it, unchanged, to `Services/TextTrim.cs` so a harness
@@ -11106,6 +11108,12 @@ executed:**
   post-check adds §50's one paragraph to the live box. The model stores the
   pre-trim serialisation, so nothing the user wrote is lost. The restore has
   never been exercised.
+  **Corrected in §56.9.3:** the model held the pre-trim serialisation only
+  until the next flush of the same live box. `RecolourSelection`'s second
+  releasing flush (the one inside `RebuildTextLayer`) then stored the
+  restored document with its extra paragraph. `TextTrim.FlushBox` now
+  latches a refused trim per box and does not store over it. 8r and 8s run
+  the restore on the engine.
 - **The `Closed` handler.** That the document is still editable there is
   assumed. If it is not, the trim refuses and the untrimmed edit is saved.
 - **Re-entrancy.** The `TextChanged` handlers that the delete fires were
@@ -11160,6 +11168,11 @@ What it measured that §56.7 had only reasoned about:
   stored. As §56.7 predicted, the restore itself adds §50's one paragraph to
   the live box (C1 shows `"\r"×6` becoming `"\r"×7`), which is being
   released anyway.
+  **Corrected in §56.9.3:** "released anyway" did not hold for every
+  release. `RecolourSelection` flushes the same live boxes a second time,
+  releasing, before the latches clear, and that second flush stored the
+  restored document, extra paragraph included. A refused trim is now
+  latched per box so the second flush stores nothing (8s).
 
 It cannot see anything XAML adds on top of the engine: the `RichEditBox`
 template, the default formatting Quill gives a box, focus, the caret, or the
@@ -11248,6 +11261,14 @@ marks (second to last-but-one), and the final mark's own formatting, which
 is overwritten by the first empty paragraph's. By construction those are
 paragraphs the §50 growth appended. A user who formatted a *later* blank
 line differently from the first loses that formatting.
+
+**Corrected in §56.9.1:** "by construction" was wrong. Nothing in the range
+function knows who made a paragraph; the dropped marks are simply the
+trailing empty ones, and a user's own trailing blank lines are among them
+(which §56.7 already said, "by the ruling"). Round 2 would also have dropped
+trailing **empty list items**, which show a bullet or a number. Since round 3
+the run stops at the last list item; plain blank lines the user typed past
+the first are still dropped, with their formatting.
 
 #### 56.8.4 Finding 4 (minor): where the trim runs — the count
 
@@ -11415,7 +11436,8 @@ unchanged), `InkSurface.cs` only hands the trim to `TextTrim`, and
 - **The restore's result was not asserted byte for byte.** C1 and F2 show
   the trim refuses and returns `null` on the engine. That the live box then
   holds the pre-trim document plus §50's one paragraph was seen in C1's
-  output, not checked.
+  output, not checked. **Superseded by §56.9:** 8r asserts it on the plain
+  text, and 8s asserts that the model is byte for byte the untrimmed edit.
 - Everything §56.7 lists as not verified on screen still stands:
   Quill was not launched, no library was read or written, and what the user
   sees when a box comes back shorter has not been seen.
