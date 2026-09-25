@@ -12097,7 +12097,9 @@ checks. From a fresh `--no-incremental` build: **192 held, 193 PASS lines (the
 the harness was rebuilt after its `bin\x64` and `obj` were deleted, with 0
 errors and 0 warnings, and run from that output. The source was restored
 byte-identical afterwards, compared by SHA-256, with its CRLF endings
-unchanged.
+unchanged. All twelve were run twice: once before, and once after, the last
+change to a file the harness links (the several-layer paste message). The
+counts were the same both times.
 
 | Mutation | Checks failed |
 |---|---|
@@ -12132,9 +12134,10 @@ All of these were read and compiled, not executed.
 #### 58.11.11 Build and harnesses
 
 `dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64
---no-incremental`: 0 warnings, 0 errors. All ten harnesses in `tools/` were
-built fresh (`bin\x64` and `obj` deleted, `--no-incremental`) and run from
-that output. Every one exited 0:
+--no-incremental`: 0 warnings, 0 errors, on the final tree. All ten
+harnesses in `tools/` were then built fresh (`bin\x64` and `obj` deleted,
+`--no-incremental`) and run from that output, after the negative controls, so
+no mutated build was left behind. Every one exited 0:
 
 | Harness | Result |
 |---|---|
