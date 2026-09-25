@@ -13,6 +13,90 @@ namespace Quill.Services;
 /// <c>InkSurface</c>, which no harness can link.</para></summary>
 public static class TextTrim
 {
+    /// <summary>What <see cref="FlushBox"/> decided for one box.</summary>
+    public enum FlushOutcome
+    {
+        /// <summary>Nothing has been near the box; its document was not read.</summary>
+        NotRead,
+        /// <summary>Read, and section 50 refused the write: not edited.</summary>
+        NotWritten,
+        /// <summary>56.9: the live document is exactly what a refused trim's
+        /// restore left behind earlier in this release, so the model, which
+        /// already holds the untrimmed edit, is left alone.</summary>
+        RefusalKept,
+        /// <summary>Written, untrimmed.</summary>
+        Written,
+        /// <summary>Written, trimmed.</summary>
+        Trimmed,
+    }
+
+    /// <summary>CONCEPTS-REF 56.9: ONE BOX'S PART OF <c>InkSurface.FlushTexts</c>,
+    /// in the order it runs - moved here, like the trim in 56.8, so that
+    /// tools/TrimEngineProof can compile it and replay the flush order against
+    /// the engine instead of restating it.
+    ///
+    /// <list type="number">
+    /// <item><description><see cref="TextFlushPolicy.NeedsTheDocument"/> - a box
+    /// nothing has been near is not even read.</description></item>
+    /// <item><description><see cref="TextFlushPolicy.ShouldWriteBack"/>, on the
+    /// UNTRIMMED document, so the trim is never the difference that makes a
+    /// box look edited.</description></item>
+    /// <item><description><b>The refused-trim latch (56.9).</b> A refused trim
+    /// whose post-check fired has put the document back with
+    /// <c>SetText(FormatRtf)</c>, and section 50's non-idempotence means that
+    /// restore leaves the live box one empty paragraph longer than the edit
+    /// this same flush stored. <c>InkSurface.RecolourSelection</c> flushes the
+    /// same live boxes twice, both releasing (its own flush, then
+    /// <c>RebuildTextLayer</c>'s, before the reach latches are cleared), and
+    /// so does a page switch that reloads the same page; the second flush
+    /// would see a document that differs from the baseline and store the
+    /// restored one. So the live serialisation left by a refusal is
+    /// remembered in <paramref name="refusedLive"/>, and while the live
+    /// document is still exactly that, nothing is written: the model already
+    /// holds the untrimmed edit. Any other document - the user typed
+    /// something - clears the latch and is written as usual.</description></item>
+    /// <item><description><see cref="TextFlushPolicy.MayTrim"/>, then
+    /// <see cref="TrimTrailingEmptyParagraphs"/>.</description></item>
+    /// </list>
+    ///
+    /// <para><paramref name="live"/> is the serialisation read (null when the
+    /// document was not read); <paramref name="toStore"/> is what the caller
+    /// stores in the model, or null to leave the model as it is.</para></summary>
+    public static FlushOutcome FlushBox(
+        RichEditTextDocument doc, string? stored, bool reached, bool touched, string? baseline, bool releasing,
+        ref string? refusedLive, out string? live, out string? toStore)
+    {
+        live = null;
+        toStore = null;
+        if (!TextFlushPolicy.NeedsTheDocument(stored, reached, touched)) return FlushOutcome.NotRead;
+        doc.GetText(TextGetOptions.FormatRtf, out string rtf);
+        live = rtf;
+        if (!TextFlushPolicy.ShouldWriteBack(stored, reached, touched, baseline, rtf)) return FlushOutcome.NotWritten;
+        // 56.9: the restore's extra paragraph is not an edit.
+        if (refusedLive != null && string.Equals(refusedLive, rtf, System.StringComparison.Ordinal))
+            return FlushOutcome.RefusalKept;
+        refusedLive = null;
+        if (TextFlushPolicy.MayTrim(stored, reached, touched, baseline, rtf, releasing))
+        {
+            string? trimmed = TrimTrailingEmptyParagraphs(doc);
+            if (trimmed != null)
+            {
+                toStore = trimmed;
+                return FlushOutcome.Trimmed;
+            }
+            // Refused, or nothing to drop. If the live document is no longer
+            // the one just read, a post-check put it back, and what the restore
+            // left is remembered so a second flush in this release cannot store
+            // it over the untrimmed edit stored below.
+            string now;
+            try { doc.GetText(TextGetOptions.FormatRtf, out now); }
+            catch { now = rtf; }
+            if (!string.Equals(now, rtf, System.StringComparison.Ordinal)) refusedLive = now;
+        }
+        toStore = rtf;
+        return FlushOutcome.Written;
+    }
+
     /// <summary>§56: deletes a released box's trailing empty paragraphs past
     /// the first THROUGH ITS OWN DOCUMENT MODEL and returns the control's own
     /// serialisation of the result, or null when nothing was dropped.

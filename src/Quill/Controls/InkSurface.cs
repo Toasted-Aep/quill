@@ -994,6 +994,14 @@ public sealed class InkSurface : UserControl
     /// that. Always written back, comparison or no comparison.</summary>
     private readonly HashSet<Guid> _textTouched = new();
 
+    /// <summary>56.9: per box, the live serialisation a REFUSED trim's restore
+    /// left behind in this release (see <c>TextTrim.FlushBox</c>). While the
+    /// live document is exactly that, a second flush before the box is torn
+    /// down - <c>RecolourSelection</c> flushes twice - stores nothing, so the
+    /// restore's extra paragraph never reaches the model. Cleared with the
+    /// reach latches, by every path that clears them.</summary>
+    private readonly Dictionary<Guid, string> _trimRefused = new();
+
     /// <summary>§50: the box has been reached, so record what its document looked
     /// like at that moment. Once per build — a second focus must not move the
     /// baseline forward over an edit made during the first.</summary>
@@ -1056,37 +1064,31 @@ public sealed class InkSurface : UserControl
             if (model == null) continue;
             bool reached = _textReached.ContainsKey(id);
             bool touched = _textTouched.Contains(id);
-            if (!TextFlushPolicy.NeedsTheDocument(model.Rtf, reached, touched)) continue;
-            ui.Box.Document.GetText(TextGetOptions.FormatRtf, out string rtf);
+            _textReached.TryGetValue(id, out string? baseline);
+            _trimRefused.TryGetValue(id, out string? refusedLive);
+            // §50 and §56, in order: NeedsTheDocument, ShouldWriteBack on the
+            // UNTRIMMED document (so the trim can never be the difference that
+            // makes a box look edited), 56.9's refused-trim latch, MayTrim, the
+            // trim. 56.9: the whole per-box step lives in Services/TextTrim.cs
+            // so that tools/TrimEngineProof can compile it and replay this
+            // flush order against the RichEdit engine this box is built on.
+            var outcome = TextTrim.FlushBox(ui.Box.Document, model.Rtf, reached, touched, baseline, releasing,
+                                            ref refusedLive, out string? live, out string? toStore);
+            if (refusedLive is null) _trimRefused.Remove(id);
+            else _trimRefused[id] = refusedLive;
             // §46.2: this is where a flattened document is written OVER the
             // model, so the probe records what is about to be saved.
-            if (GeometryProbe.On)
-                GeometryProbe.Write("[3.3]", $"flush id={id} -> {ProbeCtbl(rtf)}");
-            _textReached.TryGetValue(id, out string? baseline);
-            if (!TextFlushPolicy.ShouldWriteBack(model.Rtf, reached, touched, baseline, rtf))
+            if (GeometryProbe.On && live != null)
             {
-                if (GeometryProbe.On)
+                GeometryProbe.Write("[3.3]", $"flush id={id} -> {ProbeCtbl(live)}");
+                if (outcome == TextTrim.FlushOutcome.NotWritten)
                     GeometryProbe.Write("[8.7]", $"flush id={id} SKIPPED reached={reached} touched={touched}");
-                continue;
+                else if (outcome == TextTrim.FlushOutcome.RefusalKept)
+                    GeometryProbe.Write("[8.7]", $"flush id={id} KEPT the untrimmed edit over a refused trim's restore");
+                else if (outcome == TextTrim.FlushOutcome.Trimmed && toStore != null)
+                    GeometryProbe.Write("[8.7]", $"flush id={id} TRIMMED {live.Length} -> {toStore.Length}");
             }
-            // §56: TRIM ON NEXT EDIT ONLY. Asked AFTER ShouldWriteBack, on the
-            // untrimmed document, so the trim can never be the difference that
-            // makes a box look edited - a box that was only focused is refused
-            // above and never reaches this line.
-            if (TextFlushPolicy.MayTrim(model.Rtf, reached, touched, baseline, rtf, releasing))
-            {
-                // 56.8: the trim lives in Services/TextTrim.cs so that
-                // tools/TrimEngineProof can compile it and run it against
-                // the RichEdit engine this box is built on.
-                string? trimmed = TextTrim.TrimTrailingEmptyParagraphs(ui.Box.Document);
-                if (trimmed != null)
-                {
-                    if (GeometryProbe.On)
-                        GeometryProbe.Write("[8.7]", $"flush id={id} TRIMMED {rtf.Length} -> {trimmed.Length}");
-                    rtf = trimmed;
-                }
-            }
-            model.Rtf = rtf;
+            if (toStore != null) model.Rtf = toStore;
         }
     }
 
@@ -4238,6 +4240,11 @@ public sealed class InkSurface : UserControl
         // snapshot: if the rebuild's own flush did the trimming, the snapshot
         // would hold the untrimmed document and one Ctrl+Z of this recolour
         // would bring every dropped paragraph back.
+        // 56.9: RebuildTextLayer flushes these same boxes a SECOND time, before
+        // the latches clear. If the trim here is refused by a post-check, its
+        // restore leaves the live box one paragraph longer; _trimRefused keeps
+        // that second flush from storing the restored document over the
+        // untrimmed edit stored here (TextTrim.FlushBox).
         if (texts.Count > 0) FlushTexts(releasing: true);
 
         var parts = new List<IPageAction>();
@@ -9436,6 +9443,7 @@ public sealed class InkSurface : UserControl
         // document against an old one.
         _textReached.Clear();
         _textTouched.Clear();
+        _trimRefused.Clear();   // 56.9: the release is over
         ActiveTextBox = null;
         LastTextBox = null;
         if (_page == null) return;
@@ -9489,6 +9497,7 @@ public sealed class InkSurface : UserControl
         // not only from RebuildTextLayer, so the reset belongs here as well.
         _textReached.Remove(t.Id);
         _textTouched.Remove(t.Id);
+        _trimRefused.Remove(t.Id);
 
         var container = new Grid();
         container.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -9931,6 +9940,7 @@ public sealed class InkSurface : UserControl
                 _textUi.Remove(t.Id);
                 _textReached.Remove(t.Id);   // §50: the box is gone with its baseline
                 _textTouched.Remove(t.Id);
+                _trimRefused.Remove(t.Id);
                 ContentChanged?.Invoke();
             }
         };
