@@ -106,8 +106,12 @@ MUTANTS = [
        "            if (m >= start && m > lastList && m < 0) lastList = m;")],
      [("TCRT", "[6o]"), ("TEP", "[8o]"), ("TEP", "[8p]"), ("TEP", "[8q]")]),
     ("P: the POST-DELETE PLAIN-TEXT CHECK is removed (after == old text less the range)", TRIM,
-     [("            if (after != plain.Remove(start, length) || finalAfter == null ||",
-       "            if (finalAfter == null ||")],
+     [("            if (after != plain.Remove(start, length))" + NL +
+       "            {" + NL +
+       "                try { doc.SetText(TextSetOptions.FormatRtf, before); } catch { }" + NL +
+       "                return null;" + NL +
+       "            }" + NL,
+       "            // mutant P: the post-delete plain-text check is not asked" + NL)],
      [("TEP", "[8r]")]),
     ("R1: a REFUSED TRIM'S RESTORE IS STORED by the second flush (FlushBox ignores the latch)", TRIM,
      [("        if (refusedLive != null && string.Equals(refusedLive, rtf, System.StringComparison.Ordinal))" + NL +

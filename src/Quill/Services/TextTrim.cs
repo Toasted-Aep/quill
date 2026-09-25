@@ -147,11 +147,51 @@ public static class TextTrim
     /// (<see cref="TextFlushPolicy.EmptyParagraphMarksToDrop(string?, IEnumerable{int}?)"/>).
     /// Plain empty paragraphs after an empty list item may still go; the item
     /// never does.</para></summary>
-    public static string? TrimTrailingEmptyParagraphs(RichEditTextDocument doc)
+    public static string? TrimTrailingEmptyParagraphs(RichEditTextDocument doc) =>
+        TrimTrailingEmptyParagraphs(doc, out _);
+
+    /// <summary>Which of <see cref="TrimTrailingEmptyParagraphs(RichEditTextDocument, out TrimRefusal)"/>'s
+    /// refusals answered, or <see cref="TrimRefusal.None"/> when it trimmed.</summary>
+    public enum TrimRefusal
     {
+        /// <summary>Trimmed.</summary>
+        None,
+        /// <summary>The document could not be read.</summary>
+        Unreadable,
+        /// <summary>Either table refusal (56.8).</summary>
+        Table,
+        /// <summary>The story's span is not its plain text's length.</summary>
+        Span,
+        /// <summary>Nothing to drop, or only list items to drop (56.9).</summary>
+        NothingToDrop,
+        /// <summary>The doomed range was not all paragraph marks when re-read.</summary>
+        NotAllMarks,
+        /// <summary>After the delete the story was not the old text less the range;
+        /// the document was put back.</summary>
+        PostDeleteText,
+        /// <summary>After the delete the survivor's formatting was not what it had
+        /// been; the document was put back.</summary>
+        SurvivorChanged,
+        /// <summary>The first empty paragraph's formatting did not take on the
+        /// survivor (56.8); the document was put back.</summary>
+        CopyNotTaken,
+        /// <summary>The engine threw.</summary>
+        Threw,
+    }
+
+    /// <summary>56.9: the same trim, also saying WHICH refusal answered - so
+    /// tools/TrimEngineProof can prove that a given shape is turned away by the
+    /// check it is meant to be turned away by, and not by a later one that
+    /// happens to catch it too. The behaviour is the one-argument form's; the
+    /// value is set as each stage is entered, so a <c>return null</c> reports
+    /// the stage it returned from.</summary>
+    public static string? TrimTrailingEmptyParagraphs(RichEditTextDocument doc, out TrimRefusal refusal)
+    {
+        refusal = TrimRefusal.Unreadable;
         string before;
         try { doc.GetText(TextGetOptions.FormatRtf, out before); }
         catch { return null; }
+        refusal = TrimRefusal.Table;
         // 56.8: TABLES. EmptyParagraphMarksToDrop cannot tell a table's marks
         // from paragraph marks - driven with a story whose cell mark and row
         // end are '\r' it answers with the empty cell AND the row end, and
@@ -165,11 +205,14 @@ public static class TextTrim
             var story = doc.GetRange(0, 0);
             story.Expand(TextRangeUnit.Story);
             story.GetText(TextGetOptions.None, out string plain);
+            refusal = TrimRefusal.Span;
             if (story.StartPosition != 0 || story.EndPosition - story.StartPosition != plain.Length) return null;
+            refusal = TrimRefusal.Table;
             // 56.8: the second table refusal, over the very string the range is
             // taken from - on this engine a row reads U+FFF9 CR ... U+0007 ...
             // U+FFFB CR. Independent of the RTF gate above; either refuses.
             if (TextFlushPolicy.PlainTextShowsTable(plain)) return null;
+            refusal = TrimRefusal.NothingToDrop;
             var (start, length) = TextFlushPolicy.EmptyParagraphMarksToDrop(plain);
             if (length <= 0) return null;
             // 56.9: LIST ITEMS ARE THE USER'S. An empty list item shows a bullet
@@ -186,6 +229,7 @@ public static class TextTrim
 
             var cut = doc.GetRange(start, start + length);
             cut.GetText(TextGetOptions.None, out string doomed);
+            refusal = TrimRefusal.NotAllMarks;
             if (doomed != new string('\r', length)) return null;
 
             // The paragraph that survives at the end must still be the one that
@@ -214,7 +258,18 @@ public static class TextTrim
             check.GetText(TextGetOptions.None, out string after);
             int lastAfter = after.Length - 1;
             var finalAfter = lastAfter >= 0 ? doc.GetRange(lastAfter, lastAfter + 1) : null;
-            if (after != plain.Remove(start, length) || finalAfter == null ||
+            // 56.9: the post-delete PLAIN-TEXT check stands on its own, so
+            // TrimRefusal can say it was this one that answered. On the engine
+            // it is what turns away Add link after Ctrl+A (TrimEngineProof 8r),
+            // where the delete would take the linked words with the marks.
+            refusal = TrimRefusal.PostDeleteText;
+            if (after != plain.Remove(start, length))
+            {
+                try { doc.SetText(TextSetOptions.FormatRtf, before); } catch { }
+                return null;
+            }
+            refusal = TrimRefusal.SurvivorChanged;
+            if (finalAfter == null ||
                 !finalAfter.ParagraphFormat.IsEqual(paraBefore) ||
                 !finalAfter.CharacterFormat.IsEqual(charBefore))
             {
@@ -233,6 +288,7 @@ public static class TextTrim
             if (!finalAfter.ParagraphFormat.IsEqual(paraFirst) ||
                 !finalAfter.CharacterFormat.IsEqual(charFirst))
             {
+                refusal = TrimRefusal.CopyNotTaken;
                 finalAfter.ParagraphFormat = paraFirst;
                 finalAfter.CharacterFormat = charFirst;
                 var recheck = doc.GetRange(0, 0);
@@ -250,10 +306,12 @@ public static class TextTrim
                 }
             }
             doc.GetText(TextGetOptions.FormatRtf, out string trimmed);
+            refusal = TrimRefusal.None;
             return trimmed;
         }
         catch
         {
+            refusal = TrimRefusal.Threw;
             return null;
         }
     }
