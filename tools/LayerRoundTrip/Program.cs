@@ -1162,6 +1162,406 @@ if (oplogs.Length == 1)
 }
 
 // ---------------------------------------------------------------------------
+// 22. 58.11 - THE CLICK'S OWN GATE CARRIES THE FACT (a round-2 check finding).
+// ---------------------------------------------------------------------------
+// LayerPick.Topmost refuses an undrawn layer through plan.IsDrawn BEFORE it
+// asks the admit gate (Catchable -> CanSelect), so a regression in CanSelect
+// alone left every click check in section 17 green. Here the plan is held
+// still - built while every layer was drawn - and the layers are hidden or
+// taken to 0% afterwards, so only the click's own admit gate can refuse.
+{
+    var gp = new NotePage();
+    PageLayers.Materialise(gp);
+    var gH = PageLayers.Add(gp, "H");
+    var gZ = PageLayers.Add(gp, "Z");
+    var gV = PageLayers.Add(gp, "V");
+    PenStroke St(int k) { var s = new PenStroke { LayerKey = k, Color = "#1" }; s.Points.Add(new StrokePoint(1, 1, 0.5f)); gp.Strokes.Add(s); return s; }
+    var sH = St(gH.Key); var sZ = St(gZ.Key); var sV = St(gV.Key);
+    var drawnPlan = DrawPlan.For(gp);                 // every layer drawn
+    gH.Hidden = true;
+    gZ.Opacity = 0f;
+    bool ClickVia(DrawPlan pl, PenStroke s) => ReferenceEquals(LayerPick.Topmost(pl, gp.Strokes, DrawStepKind.Strokes,
+        x => x.LayerKey, x => LayerPick.Catchable(gp, x.LayerKey, x.Locked, false, LayerScope.AllLayers),
+        x => ReferenceEquals(x, s)), s);
+    Check("58.11 CanSelect via the click - Catchable itself refuses the hidden AND the 0% layer "
+          + "(asked directly, no plan)",
+          !LayerPick.Catchable(gp, gH.Key, false, false, LayerScope.AllLayers)
+          && !LayerPick.Catchable(gp, gZ.Key, false, false, LayerScope.AllLayers)
+          && LayerPick.Catchable(gp, gV.Key, false, false, LayerScope.AllLayers));
+    Check("58.11 CanSelect via the click - with the plan held at 'all drawn', the CLICK still "
+          + "refuses the hidden and the 0% layer's stroke: the gate alone carries the fact",
+          !ClickVia(drawnPlan, sH) && !ClickVia(drawnPlan, sZ),
+          $"hidden click={ClickVia(drawnPlan, sH)}, 0% click={ClickVia(drawnPlan, sZ)}");
+    Check("58.11 CanSelect via the click - control: the same held plan still clicks the visible "
+          + "layer's stroke", ClickVia(drawnPlan, sV));
+}
+
+// ---------------------------------------------------------------------------
+// 23. 58.11 RULING R1 - A HIDDEN OR 0% ACTIVE LAYER REFUSES NEW CONTENT.
+// ---------------------------------------------------------------------------
+// The gate every creation path asks (InkSurface.CanCreateOnActiveLayer is a
+// call to LayerGate.RefusesNewContent plus the event that raises the message),
+// the message verbatim, the one-tap Show, and paste's own rule. What is not
+// reachable here: that each creation path calls the gate before it creates -
+// that was read and compiled (58.11.2 lists every path).
+{
+    var cp = new NotePage();
+    PageLayers.Materialise(cp);                        // key 0, "Layer 1", visible
+    var cH = PageLayers.Add(cp, "Sketch"); cH.Hidden = true;
+    var cZ = PageLayers.Add(cp, "Notes"); cZ.Opacity = 0f;
+    var cF = PageLayers.Add(cp, "Faint"); cF.Opacity = 0.4f;
+    var cN = PageLayers.Add(cp, "Odd"); cN.Opacity = float.NaN;
+    Layer? RefusesWith(int active) { PageLayers.SetActive(cp, active); return LayerGate.RefusesNewContent(cp); }
+    Check("58.11 R1 - the hidden active layer refuses, and names itself",
+          ReferenceEquals(RefusesWith(cH.Key), cH));
+    Check("58.11 R1 - the 0% active layer refuses exactly as the hidden one does (one fact, "
+          + "IsVisible), and so does an opacity that is not a number",
+          ReferenceEquals(RefusesWith(cZ.Key), cZ) && ReferenceEquals(RefusesWith(cN.Key), cN));
+    Check("58.11 R1 - a visible active layer, and a faint (40%) one, take new content",
+          RefusesWith(0) == null && RefusesWith(cF.Key) == null);
+    Check("58.11 R1 - the gate and the fact agree on every layer: refused exactly when "
+          + "PageLayers.IsVisible is false",
+          PageLayers.All(cp).All(l => (RefusesWith(l.Key) != null) == !PageLayers.IsVisible(l)));
+    var implicitPage = new NotePage();
+    implicitPage.ActiveLayer = 42;                     // names nothing: resolves to the base
+    Check("58.11 R1 - a page with no Layers array never refuses (its implicit base layer is "
+          + "always visible), whatever ActiveLayer says",
+          LayerGate.RefusesNewContent(implicitPage) == null && new NotePage().Layers == null
+          && LayerGate.RefusesNewContent(new NotePage()) == null);
+
+    // The message, verbatim - these are the exact strings the status line shows.
+    string mHidden = LayerGate.RefusalMessage(cp, new[] { cH }, paste: false);
+    string mZero = LayerGate.RefusalMessage(cp, new[] { cZ }, paste: false);
+    string mPaste = LayerGate.RefusalMessage(cp, new[] { cH }, paste: true);
+    string mPaste2 = LayerGate.RefusalMessage(cp, new[] { cH, cZ }, paste: true);
+    Check("58.11 R1 - the message names the layer and says it is hidden, plainly",
+          mHidden == "The active layer (Sketch) is hidden, so nothing was added.", mHidden);
+    Check("58.11 R1 - a 0% layer is named as 0% (the panel's switch shows it ON, so 'hidden' "
+          + "would contradict the panel)",
+          mZero == "The active layer (Notes) is at 0% opacity, so nothing was added.", mZero);
+    Check("58.11 R1 - paste's messages, one layer and several",
+          mPaste == "The layer this pastes onto (Sketch) is hidden, so nothing was pasted."
+          && mPaste2 == "The layers this pastes onto are hidden, so nothing was pasted.", mPaste + " / " + mPaste2);
+    bool noSymbol = new[] { mHidden, mZero, mPaste, mPaste2, LayerGate.ShowAction, LayerGate.ShownMessage(cp, cH) }
+        .All(m => m.All(ch => ch < 0x2000));         // no emoji, no pictographs, no dingbats
+    Check("58.11 R1 - no message and no action label carries a symbol or emoji; the action "
+          + "is 'Show it'", noSymbol && LayerGate.ShowAction == "Show it");
+
+    // The one-tap action.
+    var sH = new Layer { Key = 7, Hidden = true, Opacity = 0.6f };
+    var sZ = new Layer { Key = 8, Opacity = 0f };
+    var sN = new Layer { Key = 9, Opacity = float.NaN };
+    var sB = new Layer { Key = 10, Hidden = true, Opacity = 0f };
+    var sF = new Layer { Key = 11, Opacity = 0.4f };
+    bool chH = LayerGate.Show(sH), chZ = LayerGate.Show(sZ), chN = LayerGate.Show(sN),
+         chB = LayerGate.Show(sB), chF = LayerGate.Show(sF);
+    Check("58.11 R1 - Show unhides a hidden layer and KEEPS its own opacity (60%)",
+          chH && !sH.Hidden && sH.Opacity == 0.6f && PageLayers.IsVisible(sH));
+    Check("58.11 R1 - Show lifts 0% (and not-a-number) to 100%, and a layer both hidden and 0% "
+          + "gets both",
+          chZ && sZ.Opacity == 1f && chN && sN.Opacity == 1f && chB && !sB.Hidden && sB.Opacity == 1f
+          && PageLayers.IsVisible(sZ) && PageLayers.IsVisible(sN) && PageLayers.IsVisible(sB));
+    Check("58.11 R1 - Show leaves a visible 40% layer alone and says nothing changed",
+          !chF && sF.Opacity == 0.4f && !sF.Hidden);
+    Check("58.11 R1 - after Show, the gate lets content in",
+          LayerGate.Show(cH) && RefusesWith(cH.Key) == null);
+    cH.Hidden = true;
+
+    // Paste keeps each element's own key (18.10): it refuses on the layers
+    // those keys resolve to, not on the active one.
+    PageLayers.SetActive(cp, cH.Key);                  // active is hidden...
+    var pasteOk = LayerGate.RefusesContentOn(cp, new[] { 0, cF.Key });
+    var pasteBad = LayerGate.RefusesContentOn(cp, new[] { cZ.Key, 0, cH.Key, cZ.Key, 999 });
+    Check("58.11 R1 paste - elements from visible layers paste even while the ACTIVE layer is "
+          + "hidden (paste does not use the active layer)", pasteOk.Count == 0);
+    Check("58.11 R1 paste - elements from hidden and 0% layers are refused, each layer named "
+          + "once, bottom first; an unknown key resolves to the (visible) base layer",
+          pasteBad.Count == 2 && ReferenceEquals(pasteBad[0], cH) && ReferenceEquals(pasteBad[1], cZ),
+          string.Join(",", pasteBad.Select(l => l.Name)));
+
+    // Which pen presses land on the layer. Oil paint lands on no layer (58.2).
+    var vectorPens = Enum.GetValues<PenType>().Where(p => p != PenType.Oil).ToList();
+    Check("58.11 R1 pen - every vector pen's press lands on the active layer (so is gated), "
+          + "and so does any pen with the ruler, oil included",
+          vectorPens.All(p => GestureRules.PenPressLandsOnLayer(p, false))
+          && Enum.GetValues<PenType>().All(p => GestureRules.PenPressLandsOnLayer(p, true)));
+    Check("58.11 R1 pen - a free oil stroke lands on NO layer (paint is below every layer) and "
+          + "is not gated", !GestureRules.PenPressLandsOnLayer(PenType.Oil, false));
+}
+
+// ---------------------------------------------------------------------------
+// 24. 58.11 RULING R2 - HIDING A LAYER, OR 0%, DROPS THE SELECTION ON IT.
+// ---------------------------------------------------------------------------
+// LayerGate.DropInvisible is the filter InkSurface.DropInvisibleSelection runs
+// over _selected (+_selectedSet), _selShapes (+_selShapeSet) and _selTexts;
+// StaysSelected is what it asks of the active shape. That LayersChanged calls
+// it on every visibility change was read and compiled.
+{
+    var rp2 = new NotePage();
+    PageLayers.Materialise(rp2);
+    var rH = PageLayers.Add(rp2, "H");
+    var rZ = PageLayers.Add(rp2, "Z");
+    var rL = PageLayers.Add(rp2, "L"); rL.Locked = true;
+    var rF = PageLayers.Add(rp2, "F"); rF.Opacity = 0.4f;
+    var keys = new[] { 0, rH.Key, rZ.Key, rL.Key, rF.Key };
+    var strokes = keys.Select(k => new PenStroke { LayerKey = k, Color = "#1" }).ToList();
+    var shapes = keys.Select(k => new ShapeElement { LayerKey = k }).ToList();
+    var texts = keys.Select(k => new TextElement { LayerKey = k }).ToList();
+    var selSt = strokes.ToList(); var selStSet = new HashSet<PenStroke>(strokes);
+    var selSh = shapes.ToList(); var selShSet = new HashSet<ShapeElement>(shapes);
+    var selTx = texts.ToList();
+    int none = LayerGate.DropInvisible(rp2, selSt, s => s.LayerKey, selStSet)
+             + LayerGate.DropInvisible(rp2, selSh, s => s.LayerKey, selShSet)
+             + LayerGate.DropInvisible(rp2, selTx, t => t.LayerKey);
+    Check("58.11 R2 - with every layer drawn nothing is dropped (a locked layer's selection is "
+          + "not this ruling's business)", none == 0 && selSt.Count == 5 && selSh.Count == 5 && selTx.Count == 5);
+
+    rH.Hidden = true;                                  // the Hidden switch
+    rZ.Opacity = 0f;                                   // the opacity slider to 0
+    int dropped = LayerGate.DropInvisible(rp2, selSt, s => s.LayerKey, selStSet)
+                + LayerGate.DropInvisible(rp2, selSh, s => s.LayerKey, selShSet)
+                + LayerGate.DropInvisible(rp2, selTx, t => t.LayerKey);
+    int[] Keys<T>(List<T> l, Func<T, int> k) => l.Select(k).ToArray();
+    int[] expect = { 0, rL.Key, rF.Key };
+    Check("58.11 R2 - hiding one layer and taking another to 0% drops exactly their strokes, "
+          + "shapes and texts: 6 dropped, the rest kept in order",
+          dropped == 6 && Keys(selSt, s => s.LayerKey).SequenceEqual(expect)
+          && Keys(selSh, s => s.LayerKey).SequenceEqual(expect) && Keys(selTx, t => t.LayerKey).SequenceEqual(expect),
+          $"dropped={dropped}, strokes={string.Join(",", Keys(selSt, s => s.LayerKey))}");
+    Check("58.11 R2 - the mirror sets lose the same elements (hit tests read the sets)",
+          selStSet.SetEquals(selSt) && selShSet.SetEquals(selSh));
+    Check("58.11 R2 - the active shape on the hidden layer, and on the 0% one, may not stay; "
+          + "on the locked and 40% layers it may",
+          !LayerGate.StaysSelected(rp2, rH.Key) && !LayerGate.StaysSelected(rp2, rZ.Key)
+          && LayerGate.StaysSelected(rp2, rL.Key) && LayerGate.StaysSelected(rp2, rF.Key)
+          && LayerGate.StaysSelected(rp2, 0));
+    Check("58.11 R2 - StaysSelected IS the one fact on every layer",
+          keys.All(k => LayerGate.StaysSelected(rp2, k) == PageLayers.IsVisible(rp2, k)));
+    rZ.Opacity = 0.1f;                                 // back above 0: nothing reappears on its own
+    int again = LayerGate.DropInvisible(rp2, selSt, s => s.LayerKey, selStSet);
+    Check("58.11 R2 - showing the layer again does not re-select anything (dropped is dropped)",
+          again == 0 && selSt.Count == 3);
+}
+
+// ---------------------------------------------------------------------------
+// 25. 58.11 RULING R3 - THE ERASER ERASES ONLY VISIBLE INK.
+// ---------------------------------------------------------------------------
+// LayerPick.Erasable is the test every element loop in InkSurface.EraseAt asks
+// (shapes in both modes, strokes in Object mode, strokes in Point mode before
+// the style is chosen - so hard, soft, slice and nudge alike). The preview is
+// LayerPick.Topmost with no gate. The erase and the preview must agree.
+{
+    var ep = new NotePage();
+    PageLayers.Materialise(ep);
+    var eH = PageLayers.Add(ep, "H"); eH.Hidden = true;
+    var eZ = PageLayers.Add(ep, "Z"); eZ.Opacity = 0f;
+    var eL = PageLayers.Add(ep, "L"); eL.Locked = true;
+    var eF = PageLayers.Add(ep, "F"); eF.Opacity = 0.4f;
+    var eKeys = new[] { 0, eH.Key, eZ.Key, eL.Key, eF.Key };
+    foreach (var k in eKeys)
+    {
+        var s = new PenStroke { LayerKey = k, Color = "#1" }; s.Points.Add(new StrokePoint(5, 5, 0.5f));
+        ep.Strokes.Add(s);
+        ep.Shapes.Add(new ShapeElement { LayerKey = k });
+    }
+    var eplan = DrawPlan.For(ep);
+    // The erase, modelled as EraseAt's element walk with its geometry replaced
+    // by "touches everything": what survives Erasable is what the pass removes.
+    var erased = ep.Strokes.Where(s => LayerPick.Erasable(eplan, s.LayerKey)).Select(s => s.LayerKey).ToList();
+    var erasedShapes = ep.Shapes.Where(s => LayerPick.Erasable(eplan, s.LayerKey)).Select(s => s.LayerKey).ToList();
+    Check("58.11 R3 - a pass over every layer erases the visible, locked and 40% layers' strokes "
+          + "and shapes, and NOTHING on the hidden or 0% layer",
+          erased.SequenceEqual(new[] { 0, eL.Key, eF.Key }) && erasedShapes.SequenceEqual(new[] { 0, eL.Key, eF.Key }),
+          $"strokes erased on keys {string.Join(",", erased)}");
+    bool agree = ep.Strokes.All(s =>
+        LayerPick.Erasable(eplan, s.LayerKey) ==
+        ReferenceEquals(LayerPick.Topmost(eplan, ep.Strokes, DrawStepKind.Strokes, x => x.LayerKey, null,
+                                          x => ReferenceEquals(x, s)), s));
+    Check("58.11 R3 - the preview and the erase AGREE on every stroke: the preview can name a "
+          + "stroke exactly when the erase would remove it", agree);
+    Check("58.11 R3 - Erasable is the plan's drawn fact, which is IsVisible, on every layer",
+          eKeys.All(k => LayerPick.Erasable(eplan, k) == eplan.IsDrawn(k) && eplan.IsDrawn(k) == PageLayers.IsVisible(ep, k)));
+    var eOne = new NotePage();
+    PageLayers.Materialise(eOne)[0].Opacity = 0f;
+    Check("58.11 R3 - a ONE-layer page at 0% erases nothing; at 100% everything",
+          !LayerPick.Erasable(DrawPlan.For(eOne), 0)
+          && LayerPick.Erasable(DrawPlan.For(new NotePage()), 0));
+}
+
+// ---------------------------------------------------------------------------
+// 26. 58.11 RULING R4 - CTRL+Z MID-STROKE CANCELS THE STROKE, TOUCHES NO HISTORY.
+// ---------------------------------------------------------------------------
+// GestureRules.StrokeInProgress and OnHistoryKey are what InkSurface.Undo and
+// Redo ask first; OilOutcome(Undo/Redo) is what the oil brush does. The
+// pen-repair bridge's put-back runs through the REAL UndoRedoManager. What is
+// not reachable: OilBrush.Discard (Win2D) and the wiring - read and compiled.
+{
+    // Every combination of the five inputs.
+    var r4Rows = new List<(bool down, bool pen, bool wet, bool adj, bool oil)>();
+    foreach (var a in new[] { false, true }) foreach (var b in new[] { false, true })
+    foreach (var c in new[] { false, true }) foreach (var d in new[] { false, true })
+    foreach (var e in new[] { false, true }) r4Rows.Add((a, b, c, d, e));
+    Check("58.11 R4 - a VECTOR stroke under the pen (pointer down, pen gesture, wet ink) is in "
+          + "progress, so undo CANCELS it and runs no history",
+          GestureRules.OnHistoryKey(GestureRules.StrokeInProgress(true, true, true, false, false)) == HistoryKeyOutcome.CancelStroke);
+    Check("58.11 R4 - so is a hold-snapped shape being adjusted, and a live OIL brush",
+          GestureRules.StrokeInProgress(true, true, false, true, false)
+          && GestureRules.StrokeInProgress(false, false, false, false, true)
+          && GestureRules.OnHistoryKey(true) == HistoryKeyOutcome.CancelStroke);
+    Check("58.11 R4 - with no stroke under the pen undo runs as always: nothing down; a "
+          + "selection drag reached with the pen (gesture re-routed to Mouse); a press with no ink",
+          GestureRules.OnHistoryKey(GestureRules.StrokeInProgress(false, false, false, false, false)) == HistoryKeyOutcome.RunHistory
+          && !GestureRules.StrokeInProgress(true, false, true, false, false)
+          && !GestureRules.StrokeInProgress(true, true, false, false, false));
+    Check("58.11 R4 - the whole table: in progress exactly when oil is live, or a pen gesture is "
+          + "down holding wet ink or a snapped shape (32 rows)",
+          r4Rows.All(w => GestureRules.StrokeInProgress(w.down, w.pen, w.wet, w.adj, w.oil)
+                        == (w.oil || (w.down && w.pen && (w.wet || w.adj)))));
+    Check("58.11 R4 - undo AND redo mid-oil-stroke DISCARD the scratch (not commit it, which was "
+          + "round 2), and end the pen gesture",
+          GestureRules.OilOutcome(GestureEnd.Undo) == OilEnd.Discard && GestureRules.OilOutcome(GestureEnd.Redo) == OilEnd.Discard
+          && GestureRules.EndsPenGesture(GestureEnd.Undo) && GestureRules.EndsPenGesture(GestureEnd.Redo));
+
+    // History left alone: the pen-repair bridge took the previous stroke's
+    // entry off the top at pen-down (TryDiscardTop); cancelling puts it back.
+    var hp = new NotePage();
+    var mgr = new UndoRedoManager();
+    var s1 = new PenStroke { Color = "#1" };
+    var s2 = new PenStroke { Color = "#2" };
+    var sX = new PenStroke { Color = "#3" };
+    mgr.Push(new AddStrokeAction(s1), hp);
+    mgr.Push(new AddStrokeAction(sX), hp);
+    mgr.Undo(hp);                                      // redo stack: [sX]
+    // (a new stroke committed now would clear it; the bridge only follows a
+    // commit, so the realistic redo is empty - this proves PutBack keeps it.)
+    var before = mgr.History.ToList();
+    var top = mgr.PeekUndo;
+    bool took = mgr.TryDiscardTop(a => a is AddStrokeAction asa && ReferenceEquals(asa.Stroke, s1));
+    hp.Strokes.Remove(s1);                             // RemoveStroke(resume)
+    mgr.PutBack(top!, hp);                             // RestoreResumedStroke on the cancel
+    Check("58.11 R4 bridge - cancelling a RESUMED stroke puts the previous stroke's own undo "
+          + "entry back: the same entry, the stroke on the page, the redo stack intact",
+          took && ReferenceEquals(mgr.PeekUndo, top) && mgr.History.SequenceEqual(before)
+          && hp.Strokes.Count == 1 && ReferenceEquals(hp.Strokes[0], s1) && mgr.CanRedo
+          && mgr.PeekRedo is AddStrokeAction redoTop && ReferenceEquals(redoTop.Stroke, sX),
+          $"history {string.Join("/", mgr.History)}; redo {(mgr.CanRedo ? "kept" : "EMPTIED")}");
+    mgr.Redo(hp);
+    Check("58.11 R4 bridge - and a redo afterwards still brings back what it would have",
+          hp.Strokes.Contains(sX) && !mgr.CanRedo);
+}
+
+// ---------------------------------------------------------------------------
+// 27. 58.11 - EVERY GESTURE END ENDS THE OIL BRUSH, EXACTLY ONCE.
+// ---------------------------------------------------------------------------
+// The round-2 check's [major]: a second pointer taking over to PAN left the
+// brush live - its scratch on top of all ink, and the next VECTOR stroke
+// painted as oil. The sequences below are the calls InkSurface makes, in
+// order, read from the source (58.11.5); what each call does is the real
+// GestureRules.EndOil. What is not reachable: that InkSurface makes those
+// calls - read and compiled.
+{
+    var every = Enum.GetValues<GestureEnd>();
+    Check("58.11 end table - every GestureEnd ends a live brush: none answers KeepPainting "
+          + $"({every.Length} rows)",
+          every.All(w => GestureRules.OilOutcome(w) is OilEnd.Commit or OilEnd.Discard or OilEnd.Drop),
+          string.Join(" ", every.Select(w => $"{w}={GestureRules.OilOutcome(w)}")));
+    Check("58.11 end table - and each answers what 58.11.5's table says: Undo/Redo discard, "
+          + "device loss drops, the other nine commit",
+          every.All(w => GestureRules.OilOutcome(w) == (w switch
+          {
+              GestureEnd.Undo or GestureEnd.Redo => OilEnd.Discard,
+              GestureEnd.DeviceLoss => OilEnd.Drop,
+              _ => OilEnd.Commit,
+          })) && every.Length == 12);
+    Check("58.11 end table - the pen gesture that carried the brush is ended by every end "
+          + "except the three that ARE that gesture ending (lift, pointer lost, reset)",
+          every.All(w => GestureRules.EndsPenGesture(w)
+                         == !(w is GestureEnd.Lift or GestureEnd.PointerLost or GestureEnd.Reset)));
+    Check("58.11 end table - a brush that is not live has nothing to end, whatever the reason",
+          every.All(w => GestureRules.EndOil(false, w) == OilEnd.Nothing));
+
+    // THE PAN TAKEOVER, by each of its three routes.
+    Check("58.11 pan takeover - all three routes are TakeoverPan: a middle-button press (a "
+          + "literal at its site), the mouse in Grab mode, the Pan tool",
+          GestureRules.MouseModeTakeover(MouseMode.Grab) == GestureEnd.TakeoverPan
+          && GestureRules.TakeoverFor(ToolType.Pan) == GestureEnd.TakeoverPan);
+    Check("58.11 takeovers - an eraser press is TakeoverErase, every other tool and mouse mode "
+          + "TakeoverOther",
+          GestureRules.TakeoverFor(ToolType.Eraser) == GestureEnd.TakeoverErase
+          && Enum.GetValues<ToolType>().Where(t => t is not (ToolType.Pan or ToolType.Eraser))
+                 .All(t => GestureRules.TakeoverFor(t) == GestureEnd.TakeoverOther)
+          && Enum.GetValues<MouseMode>().Where(m => m != MouseMode.Grab)
+                 .All(m => GestureRules.MouseModeTakeover(m) == GestureEnd.TakeoverOther));
+
+    // Replays one gesture's sequence of end sites against a brush.
+    (int commits, int discards, int drops, bool liveAfter, bool penEnded) Run(params GestureEnd[] sites)
+    {
+        bool live = true; int c = 0, d = 0, x = 0; bool pen = false;
+        foreach (var w in sites)
+        {
+            var o = GestureRules.EndOil(live, w);
+            if (o is OilEnd.Nothing or OilEnd.KeepPainting) continue;
+            if (o == OilEnd.Commit) c++; else if (o == OilEnd.Discard) d++; else if (o == OilEnd.Drop) x++;
+            live = false;
+            pen |= GestureRules.EndsPenGesture(w);
+        }
+        return (c, d, x, live, pen);
+    }
+    string Show((int c, int d, int x, bool live, bool pen) r) => $"commits={r.c} discards={r.d} drops={r.x} live={r.live} penEnded={r.pen}";
+    // Middle-button / Grab / Pan tool: TakeOverGesture at the press, then the
+    // pan's release takes CommitGesture's _mousePanning early return, which
+    // calls EndOilGesture(Reset); then the pen's own lift is ignored (pointer
+    // id mismatch) - no site.
+    var pan = Run(GestureEnd.TakeoverPan, GestureEnd.Reset);
+    Check("58.11 pan takeover - the press COMMITS the brush once, ends the pen gesture, and the "
+          + "pan's release finds nothing left to end: no brush live afterwards",
+          pan.commits == 1 && pan.discards == 0 && !pan.liveAfter && pan.penEnded, Show(pan));
+    var erase = Run(GestureEnd.TakeoverErase, GestureEnd.Lift, GestureEnd.Reset);
+    Check("58.11 erase takeover - committed at the eraser's PRESS, before its first EraseAt, so "
+          + "its release has no scratch to commit back over the rubbed area",
+          erase.commits == 1 && !erase.liveAfter && erase.penEnded, Show(erase));
+    var tool = Run(GestureEnd.ToolSwitch, GestureEnd.Reset);
+    Check("58.11 tool switch - SetTool commits once and ends the pen gesture (its ResetGesture "
+          + "is the second, empty, end)", tool.commits == 1 && !tool.liveAfter && tool.penEnded, Show(tool));
+    var undo = Run(GestureEnd.Undo, GestureEnd.Reset);
+    Check("58.11 undo - one discard, no commit (nothing reaches the undo stack)",
+          undo.discards == 1 && undo.commits == 0 && !undo.liveAfter && undo.penEnded, Show(undo));
+    var lift = Run(GestureEnd.Lift, GestureEnd.Reset);
+    Check("58.11 lift - one commit, and the pen gesture is not ended twice (the lift IS it ending)",
+          lift.commits == 1 && !lift.liveAfter && !lift.penEnded, Show(lift));
+    var dev = Run(GestureEnd.DeviceLoss, GestureEnd.Reset);
+    Check("58.11 device loss - dropped once, nothing committed", dev.drops == 1 && dev.commits == 0 && !dev.liveAfter, Show(dev));
+    bool allOnce = every.All(w => { var r = Run(w, w, GestureEnd.Reset, GestureEnd.Lift); return r.commits + r.discards + r.drops == 1 && !r.liveAfter; });
+    Check("58.11 exactly once - for every end, however many end sites follow it, the brush is "
+          + "ended by exactly one of them", allOnce);
+}
+
+// ---------------------------------------------------------------------------
+// 28. 58.11 - SHAPE RECOGNITION'S HOLD IGNORES AN OIL GESTURE ENTIRELY.
+// ---------------------------------------------------------------------------
+// InkSurface.HoldTick asks GestureRules.HoldMaySnap first. The round-2 check:
+// holding still mid-oil-stroke turned the wet points into a vector shape
+// while the brush stayed live, and the lift committed BOTH the shape and the
+// raster; design finding O2 - the next gesture with any pen was drawn as oil.
+{
+    var combos = new List<bool[]>();
+    for (int m = 0; m < 32; m++) combos.Add(Enumerable.Range(0, 5).Select(b => (m & (1 << b)) != 0).ToArray());
+    Check("58.11 hold - with the oil brush live the hold NEVER snaps, whatever the other five "
+          + "inputs (32 rows)",
+          combos.All(c => !GestureRules.HoldMaySnap(c[0], c[1], c[2], c[3], c[4], oilActive: true)));
+    Check("58.11 hold - control: a vector stroke with recognition on, pen gesture, no shape yet, "
+          + "no ruler and wet ink DOES snap",
+          GestureRules.HoldMaySnap(true, true, false, false, true, oilActive: false));
+    Check("58.11 hold - and the vector rules are as before: recognition off, a ruler, a shape "
+          + "already snapped, no wet ink or a non-pen gesture each stop it",
+          !GestureRules.HoldMaySnap(false, true, false, false, true, false)
+          && !GestureRules.HoldMaySnap(true, true, false, true, true, false)
+          && !GestureRules.HoldMaySnap(true, true, true, false, true, false)
+          && !GestureRules.HoldMaySnap(true, true, false, false, false, false)
+          && !GestureRules.HoldMaySnap(true, false, false, false, true, false));
+}
+
+// ---------------------------------------------------------------------------
 Report();
 return failures > 0 ? 1 : 0;
 
