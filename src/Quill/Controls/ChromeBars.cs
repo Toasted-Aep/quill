@@ -303,8 +303,8 @@ public sealed class ChromeBars
 
         /// <summary>Place a shape on the page — the Objects library's only way of
         /// putting something down, and the SAME call the shape menu makes
-        /// (V3 L).</summary>
-        public required Action<ShapeKind, bool> InsertShape { get; init; }
+        /// (V3 L). False when §58.11 R1 refused it.</summary>
+        public required Func<ShapeKind, bool, bool> InsertShape { get; init; }
 
         /// <summary>Import: the existing "PDF as section" path.</summary>
         public required Action ImportPdf { get; init; }
@@ -1304,6 +1304,10 @@ public sealed class ChromeBars
             var file = await _h.PickOpen(new[] { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".pdf" });
             if (file == null) return;
             if (file.Path.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)) { _h.ImportPdf(); return; }
+            // §58.11 R1: the image lands on the active layer. Refused before it
+            // is copied into the library's assets; the surface raises the
+            // message (MainWindow puts it on the status line with "Show it").
+            if (!_h.Surface().CanCreateOnActiveLayer()) return;
 
             // Copy into the library's own assets folder first, exactly as the
             // clipboard path does, so the page never points at a file the user
@@ -1316,7 +1320,7 @@ public sealed class ChromeBars
 
             using var stream = await file.OpenAsync(FileAccessMode.Read);
             var decoder = await BitmapDecoder.CreateAsync(stream);
-            _h.Surface().InsertImage(path, decoder.PixelWidth, decoder.PixelHeight);
+            if (!_h.Surface().InsertImage(path, decoder.PixelWidth, decoder.PixelHeight)) return;   // §58.11 R1
             _h.PageOps().Status("Image placed — drag it to move, drag a corner to resize.");
         }
         catch (Exception ex)

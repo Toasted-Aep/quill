@@ -936,4 +936,151 @@ public static class LayerPick
             if (textIn(t)) textsOut.Add(t);
         }
     }
+
+    /// <summary>
+    /// 58.11 RULING R3: THE ERASER ERASES ONLY VISIBLE INK. May the eraser
+    /// remove (or cut, fade, nudge) an element with this key? Exactly
+    /// <see cref="DrawPlan.IsDrawn"/> - the fact the eraser PREVIEW already
+    /// reads through <see cref="Topmost{T}"/> - so the preview and the erase
+    /// cannot disagree: a stroke the preview refuses to tint is a stroke the
+    /// erase leaves alone, in every eraser mode and style, and for shapes.
+    ///
+    /// <para>No lock and no scope, as before: the eraser has never asked
+    /// either, and the ruling is about visibility only. Oil paint is not an
+    /// element and not on a layer (58.2), so it is not asked here.</para>
+    /// </summary>
+    public static bool Erasable(DrawPlan plan, int layerKey) => plan.IsDrawn(layerKey);
+}
+
+/// <summary>
+/// 58.11 RULINGS R1 AND R2 - what may be CREATED on a layer, and what may STAY
+/// SELECTED on one. Win2D-free, so <c>tools/LayerRoundTrip</c> runs the code
+/// InkSurface asks.
+///
+/// <para><b>Both ask the one fact</b>, <see cref="PageLayers.IsVisible(Layer)"/>
+/// (§49.1: hidden and 0% are the same answer). There is no second idea of
+/// "showing" here: a layer that draws nothing takes no new content (R1) and
+/// keeps nothing selected (R2), for exactly the reason it cannot be picked
+/// (58.10 ruling A) - the user would be acting on something they cannot
+/// see.</para>
+/// </summary>
+public static class LayerGate
+{
+    /// <summary>The one-tap action's label, beside the refusal message.</summary>
+    public const string ShowAction = "Show it";
+
+    /// <summary>
+    /// R1: the layer that REFUSES new content, or null when new content may go
+    /// on the active layer. Asked by every path that creates content on the
+    /// active layer (a vector stroke, a snapped shape, an inserted shape, image,
+    /// equation or table, a text box) BEFORE it creates anything.
+    ///
+    /// <para>A page with no Layers array has an implicit base layer, which is
+    /// always visible, so an existing page never refuses.</para>
+    /// </summary>
+    public static Layer? RefusesNewContent(NotePage page)
+    {
+        var active = PageLayers.Active(page);
+        return PageLayers.IsVisible(active) ? null : active;
+    }
+
+    /// <summary>
+    /// R1 for PASTE, which does not use the active layer: a pasted element keeps
+    /// the key it was copied with (ElementClone, 18.10). The distinct layers
+    /// those keys resolve to on THIS page (18.7: an unknown key resolves to the
+    /// base layer) that draw nothing, bottom first; empty when the paste may
+    /// land.
+    /// </summary>
+    public static List<Layer> RefusesContentOn(NotePage page, IEnumerable<int> layerKeys)
+    {
+        var refused = new List<Layer>();
+        foreach (var k in layerKeys)
+        {
+            var l = PageLayers.Of(page, k);
+            if (PageLayers.IsVisible(l)) continue;
+            bool seen = false;
+            foreach (var r in refused) if (r.Key == l.Key) { seen = true; break; }
+            if (!seen) refused.Add(l);
+        }
+        var all = PageLayers.All(page);
+        refused.Sort((a, b) => IndexIn(all, a.Key).CompareTo(IndexIn(all, b.Key)));
+        return refused;
+    }
+
+    /// <summary>
+    /// R1's one-tap action: SHOW the layer - unhide it, and lift an opacity
+    /// that draws nothing (0%, below 0, or not a number) to 100%. A layer at
+    /// any opacity above 0 keeps it. Afterwards <see cref="PageLayers.IsVisible(Layer)"/>
+    /// is true. Returns whether anything changed.
+    ///
+    /// <para>Writes the LAYER, never an element (18.8 / 49.3). The caller
+    /// must hand it a layer from a materialised list, as every write to a layer
+    /// must be (ChromeBars.LayerToEdit).</para>
+    /// </summary>
+    public static bool Show(Layer layer)
+    {
+        bool changed = false;
+        if (layer.Hidden) { layer.Hidden = false; changed = true; }
+        if (!(layer.Opacity > 0f)) { layer.Opacity = 1f; changed = true; }
+        return changed;
+    }
+
+    /// <summary>
+    /// R1's message, VERBATIM what the status line shows. Plain words, no
+    /// symbol, in the register of the Layers panel's own "X is hidden - ..."
+    /// line. Names the layer, and says which of the two ways it draws nothing
+    /// (the panel's switch shows a 0% layer as switched ON, 58.11.6, so
+    /// "hidden" alone would contradict the panel).
+    /// </summary>
+    public static string RefusalMessage(NotePage page, IReadOnlyList<Layer> refused, bool paste)
+    {
+        if (refused.Count == 0) return "";
+        if (paste && refused.Count > 1)
+            return "The layers this pastes onto are hidden, so nothing was pasted.";
+        var l = refused[0];
+        string name = PageLayers.DisplayName(page, l);
+        string why = l.Hidden ? "is hidden" : "is at 0% opacity";
+        return paste
+            ? "The layer this pastes onto (" + name + ") " + why + ", so nothing was pasted."
+            : "The active layer (" + name + ") " + why + ", so nothing was added.";
+    }
+
+    /// <summary>What the status line says after the one-tap action. The same
+    /// words the Layers panel's switch already says when a layer is shown.</summary>
+    public static string ShownMessage(NotePage page, Layer layer)
+        => PageLayers.DisplayName(page, layer) + " is showing again.";
+
+    /// <summary>
+    /// R2: may an element with this key STAY selected? Exactly
+    /// <see cref="PageLayers.IsVisible(NotePage, int)"/>. Asked after every
+    /// visibility change (the Hidden switch, the opacity slider, R1's Show
+    /// action, a layer action), and only an element whose layer now draws
+    /// nothing is dropped - a locked or out-of-scope element that is already
+    /// selected is NOT this ruling's business and stays.
+    /// </summary>
+    public static bool StaysSelected(NotePage page, int layerKey) => PageLayers.IsVisible(page, layerKey);
+
+    /// <summary>R2 over one selection list (and the set that mirrors it, if the
+    /// caller keeps one): removes every element that may not stay selected, in
+    /// place, keeping the others in order. Returns how many were dropped.</summary>
+    public static int DropInvisible<T>(NotePage page, List<T> selection, Func<T, int> keyOf,
+                                       ICollection<T>? mirror = null)
+    {
+        int dropped = 0;
+        for (int i = selection.Count - 1; i >= 0; i--)
+        {
+            var e = selection[i];
+            if (StaysSelected(page, keyOf(e))) continue;
+            selection.RemoveAt(i);
+            mirror?.Remove(e);
+            dropped++;
+        }
+        return dropped;
+    }
+
+    private static int IndexIn(IReadOnlyList<Layer> all, int key)
+    {
+        for (int i = 0; i < all.Count; i++) if (all[i].Key == key) return i;
+        return int.MaxValue;
+    }
 }

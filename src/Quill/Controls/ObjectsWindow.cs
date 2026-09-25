@@ -47,8 +47,9 @@ public sealed class ObjectsWindow
         public required Func<Library> Library { get; init; }
         public required Action Save { get; init; }
         /// <summary>Insert a shape on the page, exactly as the shape menu does —
-        /// same call, so the two can never place different geometry.</summary>
-        public required Action<ShapeKind, bool> InsertShape { get; init; }
+        /// same call, so the two can never place different geometry. False when
+        /// §58.11 R1 refused it (the active layer draws nothing).</summary>
+        public required Func<ShapeKind, bool, bool> InsertShape { get; init; }
         public required Action<string> Status { get; init; }
         /// <summary>CONCEPTS-REF 11.20 item 16 - the pen that is in the user's
         /// hand right now. The preview tiles are drawn WITH IT, so a tile shows
@@ -354,8 +355,9 @@ public sealed class ObjectsWindow
         // scrolling the row dropped a shape on the page (§10.5 item 24).
         StripScroll.Tap(stack, () =>
         {
-            _h.InsertShape(o.Kind, o.Regular);
-            _h.Status($"{o.Name} placed — drag it to move, drag a corner to resize.");
+            // §58.11 R1: a refused shape has its own message up; do not cover it.
+            if (_h.InsertShape(o.Kind, o.Regular))
+                _h.Status($"{o.Name} placed — drag it to move, drag a corner to resize.");
         });
         return stack;
     }
