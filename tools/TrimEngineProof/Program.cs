@@ -370,41 +370,60 @@ foreach (var (tag, marker, label) in new[]
 
 // ---- 8r. ROUND 3: A LINK WHOSE RESULT RUNS OVER THE TRAILING MARKS ---------
 // Quill's own Add link (MainWindow.FormatLink_Click: sel.Link = "\"url\"")
-// after Ctrl+A. The field's result then holds the trailing paragraph marks, and
-// on this engine deleting them through a range takes the linked words with
-// them. Only the trim's post-delete plain-text check (after must equal the old
-// text with exactly the range removed) sees it. Both selections are tried: the
-// whole story, and the whole story but its final mark.
+// after Ctrl+A. The field's result then holds the trailing paragraph marks.
+// Two selections, and they are NOT the same case (measured, round 3):
+//   - the whole story but its final mark: the field ends exactly where the
+//     range ends, and a raw delete of the range takes the linked words with the
+//     marks - the story is left as one bare mark. The post-delete plain-text
+//     check (after == old text less the range) is what refuses it, and
+//     TrimRefusal says so;
+//   - the whole story: a raw delete is harmless, but the first trailing empty
+//     paragraph's character format is a LINK's, which the engine will not put
+//     on the survivor, so the survivor copy's verification (56.8) refuses it.
+// Removing the post-check leaves the second case refused by the copy check,
+// which is why 8r names the refusal instead of only asking for null.
 {
     var detail = new List<string>();
     bool ok = true;
-    foreach (int endAdj in new[] { 0, -1 })
+    foreach (var (endAdj, expected) in new[] { (-1, TextTrim.TrimRefusal.PostDeleteText), (0, TextTrim.TrimRefusal.CopyNotTaken) })
     {
-        var ln = Load(StoredDocWith("linked words", 4, Plainfinal));   // the grown note, opened
-        var (_, _, lnEnd) = Story(ln);
-        ln.GetRange(0, lnEnd + endAdj).Link = "\"https://example.com\"";   // Ctrl+A, Add link: the edit
+        RichEditTextDocument Linked()
+        {
+            var d = Load(StoredDocWith("linked words", 4, Plainfinal));   // the grown note, opened
+            var (_, _, end) = Story(d);
+            d.GetRange(0, end + endAdj).Link = "\"https://example.com\"";   // Ctrl+A, Add link: the edit
+            return d;
+        }
+        var ln = Linked();
         string lnBefore = Rtf(ln);
         var (lnPlain, _, _) = Story(ln);
         var (rs, rl) = TextFlushPolicy.EmptyParagraphMarksToDrop(lnPlain);
         bool resultSpans = lnBefore.Contains(@"\fldrslt", StringComparison.Ordinal) &&
                            Pars(lnBefore[lnBefore.IndexOf(@"\fldrslt", StringComparison.Ordinal)..]) > 1;
-        string? lnTrim = TextTrim.TrimTrailingEmptyParagraphs(ln);
+        // What the check stands between: the same range deleted raw, on a twin.
+        var raw = Linked();
+        raw.GetRange(rs, rs + rl).Text = string.Empty;
+        var (rawAfter, _, _) = Story(raw);
+        bool rawLosesWords = !rawAfter.Contains("linked words", StringComparison.Ordinal);
+        string? lnTrim = TextTrim.TrimTrailingEmptyParagraphs(ln, out var why);
         var (lnAfter, _, _) = Story(ln);
         string lnAfterRtf = Rtf(ln);
-        bool one = resultSpans && rl > 0 && lnTrim == null &&
+        bool one = resultSpans && rl > 0 && lnTrim == null && why == expected &&
+                   rawLosesWords == (endAdj == -1) &&
                    lnAfter.Contains("linked words", StringComparison.Ordinal) &&
                    lnAfterRtf.Contains("linked words", StringComparison.Ordinal) &&
                    lnAfterRtf.Contains(@"HYPERLINK ""https://example.com""", StringComparison.Ordinal) &&
                    lnAfter == lnPlain + "\r";
         ok &= one;
         detail.Add($"to end{(endAdj == 0 ? "" : endAdj.ToString())}: field result holds \\par: {resultSpans}; range ({rs},{rl}); "
-                   + $"trim {(lnTrim is null ? "refused" : "WROTE " + Esc(lnAfter))}; words kept: {lnAfter.Contains("linked words", StringComparison.Ordinal)}; "
-                   + $"restored = before + one mark: {lnAfter == lnPlain + "\r"}");
+                   + $"raw delete leaves {Esc(rawAfter)}; trim {(lnTrim is null ? "refused by " + why : "WROTE " + Esc(lnAfter))} (expected {expected}); "
+                   + $"words kept: {lnAfter.Contains("linked words", StringComparison.Ordinal)}; restored = before + one mark: {lnAfter == lnPlain + "\r"}");
     }
     Check("56.9 [8r] QUILL'S OWN ADD LINK AFTER CTRL+A - a HYPERLINK field whose result runs over the trailing "
-          + "marks - IS REFUSED: the range is all paragraph marks, but deleting it would turn the linked words into "
-          + "nothing, and the post-delete plain-text check puts the document back; the words and the link survive, "
-          + "and the restore leaves the live box as it was plus section 50's one paragraph",
+          + "marks - IS REFUSED, BY THE RIGHT CHECK: selected to the story's last mark but one, a raw delete of the "
+          + "range turns the linked words into nothing and the POST-DELETE PLAIN-TEXT check refuses it; selected to "
+          + "the end, the delete is harmless and the survivor copy's verification refuses it. Either way the words "
+          + "and the link survive, and the restore leaves the live box as it was plus section 50's one paragraph",
           ok, string.Join(" | ", detail));
 }
 
@@ -414,14 +433,15 @@ foreach (var (tag, marker, label) in new[]
 // then RebuildTextLayer's, before the reach latches are cleared. Replayed here
 // through the linked TextTrim.FlushBox - the per-box step FlushTexts runs -
 // with the refused-trim latch carried between the two exactly as InkSurface's
-// _trimRefused carries it. The edit is 8r's (Add link after Ctrl+A), whose
-// trim the post-delete check refuses and whose restore leaves the live box one
-// paragraph longer. Two ways a box gets there: reached with a baseline (the
-// user focused it), and touched with none (25.5's recolour).
+// _trimRefused carries it. The edits are 8r's two (Add link after Ctrl+A, to
+// the last mark but one and to the end), refused by the post-delete check and
+// by the survivor copy's check respectively; either restore leaves the live
+// box one paragraph longer. Two ways a box gets there: reached with a baseline
+// (the user focused it), and touched with none (25.5's recolour).
 {
     var detail = new List<string>();
     bool ok = true, contrastOk = true;
-    foreach (bool viaTouch in new[] { false, true })
+    foreach (var (viaTouch, endAdj) in new[] { (false, -1), (true, -1), (false, 0), (true, 0) })
     {
         // One replay. latch=false passes the second flush a cleared latch - the
         // order WITHOUT 56.9 - to measure what the latch is there to stop.
@@ -432,7 +452,7 @@ foreach (var (tag, marker, label) in new[]
             var d = Load(stored);                                   // BuildTextUi
             string? baseline = viaTouch ? null : Rtf(d);            // GotFocus: the reach baseline
             var (_, _, end) = Story(d);
-            d.GetRange(0, end).Link = "\"https://example.com\"";   // Ctrl+A, Add link
+            d.GetRange(0, end + endAdj).Link = "\"https://example.com\"";   // Ctrl+A, Add link
             string edit = Rtf(d);
             var (editPlain, _, _) = Story(d);
             string? refused = null;
@@ -471,7 +491,7 @@ foreach (var (tag, marker, label) in new[]
         bool contrast = without.O2 == TextTrim.FlushOutcome.Written && without.Model != without.Edit &&
                         Pars(without.Model) == Pars(without.Edit) + 1;
         contrastOk &= contrast;
-        detail.Add($"{(viaTouch ? "touched" : "reached")}: flush 1 {with.O1} (latch {(with.Latch is null ? "not set" : "set")}), "
+        detail.Add($"{(viaTouch ? "touched" : "reached")}, link to end{(endAdj == 0 ? "" : endAdj.ToString())}: flush 1 {with.O1} (latch {(with.Latch is null ? "not set" : "set")}), "
                    + $"flush 2 {with.O2}; model = the untrimmed edit: {with.Model == with.Edit}, snapshot too: {with.Snapshot == with.Edit}; "
                    + $"live after restore {Esc(with.LivePlain)}; typed after: {o3}, latch cleared: {latchNow == null}; "
                    + $"WITHOUT the latch flush 2 is {without.O2} and stores \\par {Pars(without.Edit)} -> {Pars(without.Model)}");
@@ -485,7 +505,7 @@ foreach (var (tag, marker, label) in new[]
     Check("56.9 [8s] ...AND WHAT THE LATCH STOPS, MEASURED: with the latch cleared between the two flushes, the "
           + "second flush trims again, is refused again, and stores the restored document - one \\par more "
           + "than the edit - over it",
-          contrastOk, contrastOk ? "both replays store the restore's extra paragraph without the latch" : "the contrast did not reproduce");
+          contrastOk, contrastOk ? "all four replays store the restore's extra paragraph without the latch" : "the contrast did not reproduce");
 }
 
 // ---- NOT CHECKS: shapes reported, not asserted ------------------------------
