@@ -17,74 +17,10 @@ public static class ThumbnailCache
     private static readonly Dictionary<string, byte[]> Mem = new();
     private static readonly object Gate = new();
 
-    private static ulong MixNum(ulong h, long v)
-    {
-        for (int i = 0; i < 8; i++) { h ^= (byte)(v >> (i * 8)); h *= 1099511628211UL; }
-        return h;
-    }
-
-    // Deliberately NOT string.GetHashCode(): that is randomised per process, so
-    // a disk key built from it would miss on every launch.
-    private static ulong MixStr(ulong h, string? s)
-    {
-        if (s == null) return MixNum(h, -1);
-        foreach (char c in s) { h ^= c; h *= 1099511628211UL; }
-        return h;
-    }
-
-    /// <summary>Cheap stamp over everything that changes the picture.
-    ///
-    /// <para><b>§49.6: the layer list is part of "the picture".</b> Hiding a
-    /// layer changes what the page looks like without touching one stroke, so a
-    /// stamp that did not mix the layers left the key identical, and the gallery
-    /// served the STALE PNG of a page whose ink had gone. That is §49's ink-cache
-    /// hazard one cache further out, and <c>InkSurface.LayersChanged</c> does not
-    /// reach this one - the key has to carry the fact instead.</para>
-    ///
-    /// <para>Mixed ONLY when the page actually carries a layer list. A page that
-    /// has never been near a layers UI keeps the stamp it has always had, so this
-    /// invalidates nothing that exists - the same migration promise the model
-    /// itself is built on.</para></summary>
-    public static string Stamp(NotePage page)
-    {
-        ulong h = 14695981039346656037UL;
-        h = MixStr(h, page.Background);
-        if (page.Layers is { Count: > 0 } layers)
-            foreach (var l in layers)
-            {
-                h = MixNum(h, l.Key);
-                h = MixNum(h, l.Hidden ? 1 : 0);
-                h = MixNum(h, (long)Math.Round(l.Opacity * 1000f));
-            }
-        h = MixNum(h, page.Strokes.Count);
-        h = MixNum(h, page.Shapes.Count);
-        h = MixNum(h, page.Texts.Count);
-        foreach (var s in page.Strokes)
-        {
-            h = MixNum(h, s.Points.Count);
-            h = MixNum(h, (long)(s.Size * 16));
-            h = MixStr(h, s.Color);
-            if (s.Points.Count == 0) continue;
-            var a = s.Points[0];
-            var b = s.Points[^1];
-            h = MixNum(h, (long)(a.X * 8)); h = MixNum(h, (long)(a.Y * 8));
-            h = MixNum(h, (long)(b.X * 8)); h = MixNum(h, (long)(b.Y * 8));
-        }
-        foreach (var sh in page.Shapes)
-        {
-            h = MixNum(h, (int)sh.Kind);
-            h = MixNum(h, (long)(sh.X * 8)); h = MixNum(h, (long)(sh.Y * 8));
-            h = MixNum(h, (long)(sh.W * 8)); h = MixNum(h, (long)(sh.H * 8));
-            h = MixStr(h, sh.Color);
-        }
-        foreach (var t in page.Texts)
-        {
-            h = MixNum(h, (long)(t.X * 8)); h = MixNum(h, (long)(t.Y * 8));
-            h = MixNum(h, (long)(t.Width * 8));
-            h = MixStr(h, t.Rtf);
-        }
-        return h.ToString("x16");
-    }
+    /// <summary>The content stamp in the cache key: <see cref="ThumbnailStamp.Of"/>,
+    /// which lives in its own Win2D-free file so tools/LayerRoundTrip can run it
+    /// (58.10, check 3). Everything that changes the picture is mixed there.</summary>
+    public static string Stamp(NotePage page) => ThumbnailStamp.Of(page);
 
     /// <summary>
     /// Returns PNG bytes for the page, or null when there is nothing worth

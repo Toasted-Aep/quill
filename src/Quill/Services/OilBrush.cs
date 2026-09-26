@@ -159,6 +159,37 @@ public sealed class OilBrush : IDisposable
         DisposeScratch();
     }
 
+    /// <summary>
+    /// CONCEPTS-REF 58.11, ruling R4: DISCARD the gesture - an undo pressed
+    /// mid-stroke. Nothing is committed and nothing reaches the undo stack.
+    ///
+    /// <para>The wet scratch is dropped. A stroke that spread past
+    /// <see cref="ScratchTileFlushLimit"/> has already COMPOSITED its earlier
+    /// part into the settled tiles (<see cref="CommitScratch"/>, mid-gesture),
+    /// and every tile that flush touched had its pre-gesture bytes recorded in
+    /// <c>_undoBefore</c> first. Those bytes are put back here through the
+    /// very code an undo of a paint stroke runs (<see cref="PaintTilesAction"/>'s
+    /// Undo), without that action ever being pushed: a tile the flush
+    /// allocated is removed again, an existing one gets its old colour and
+    /// height back, and the store is nudged to save. So the flushed part IS
+    /// taken back. Returns true when there was such a part.</para>
+    /// </summary>
+    public bool Discard(ICanvasResourceCreator rc, NotePage page)
+    {
+        if (!_active) return false;
+        bool restored = false;
+        if (_undoBefore.Count > 0)
+        {
+            var caps = new List<PaintTileCapture>(_undoBefore.Count);
+            foreach (var ((tx, ty), before) in _undoBefore)
+                caps.Add(new PaintTileCapture(tx, ty, before.Existed, before.ColourZ, before.HeightZ, null, null));
+            new PaintTilesAction(_store, rc, caps, null, "Discard wet stroke").Undo(page);
+            restored = true;
+        }
+        Cancel();
+        return restored;
+    }
+
     // =======================================================================
     // Dabs
     // =======================================================================

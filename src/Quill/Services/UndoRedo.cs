@@ -1585,6 +1585,22 @@ public class UndoRedoManager
         return false;
     }
 
+    /// <summary>
+    /// The inverse of <see cref="TryDiscardTop"/>: puts an action that was
+    /// discarded from the top back where it was, re-applying it to the page,
+    /// WITHOUT clearing the redo stack - so the history is exactly what it was
+    /// before the discard. CONCEPTS-REF 58.11 (R4): the pen-repair bridge takes
+    /// the previous stroke's entry off the stack at pen-down to resume that
+    /// stroke; an undo that cancels the resumed stroke mid-gesture must leave
+    /// history alone, so it puts that same entry back.
+    /// </summary>
+    public void PutBack(IPageAction action, NotePage page)
+    {
+        action.Do(page);
+        _undo.Push(action);
+        Changed?.Invoke();
+    }
+
     public IReadOnlyList<string> History => _undo.Select(a => a.Description).ToList();
 
     /// <summary>Running total of the paint blobs held in the undo stack, for the

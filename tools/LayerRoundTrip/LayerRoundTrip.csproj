@@ -39,6 +39,14 @@
          RemoveLayerAction, and it is proved through the REAL UndoRedoManager
          rather than by calling the action's own methods. -->
     <Compile Include="..\..\src\Quill\Services\UndoRedo.cs" Link="UndoRedo.cs" />
+    <!-- 58.10 check 3: the gallery thumbnail's content stamp, split out of
+         ThumbnailCache (which renders through InkSurface and cannot be linked)
+         so the stamp itself is run here, not reasoned about. -->
+    <Compile Include="..\..\src\Quill\Services\ThumbnailStamp.cs" Link="ThumbnailStamp.cs" />
+    <!-- 58.11: the live pen gesture's decisions (the gesture-end table, the
+         mid-stroke undo, the hold on oil), pulled out of InkSurface so they
+         are run here rather than reasoned about. -->
+    <Compile Include="..\..\src\Quill\Models\GestureRules.cs" Link="GestureRules.cs" />
   </ItemGroup>
 
 </Project>
