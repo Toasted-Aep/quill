@@ -866,7 +866,9 @@ public sealed partial class MainWindow : Window
             PerspectiveVps = () => Math.Max(0, PerspectiveCombo.SelectedIndex),
             SetPerspective = v => PerspectiveCombo.SelectedIndex = v,
             AiMenu = () => BtnAi.Flyout,
-            InsertShape = (kind, regular) => { SelectTool("Select"); return Surface.InsertShape(kind, regular); },
+            // §58.12: Select only once the shape is placed; a refused insert keeps the tool.
+            InsertShape = (kind, regular) => LayerGate.CreateThen(() => Surface.InsertShape(kind, regular),
+                                                                  () => SelectTool("Select")),
             CommentMode = () => Surface.CommentMode,
             SetCommentMode = v => { ToolComment.IsChecked = v; ToggleComment_Click(this, new RoutedEventArgs()); },
             ReduceMotion = () => _reduceMotion,
@@ -7301,27 +7303,32 @@ public sealed partial class MainWindow : Window
     private void InsertShape_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuFlyoutItem item || item.Tag is not string tag) return;
-        SelectTool("Select");
-        bool placed = false;
-        switch (tag)
+        (ShapeKind kind, bool equal)? spec = tag switch
         {
-            case "Line": placed = Surface.InsertShape(ShapeKind.Line, false); break;
-            case "Arrow": placed = Surface.InsertShape(ShapeKind.Arrow, false); break;
-            case "Rect": placed = Surface.InsertShape(ShapeKind.Rect, false); break;
-            case "Square": placed = Surface.InsertShape(ShapeKind.Rect, true); break;
-            case "Ellipse": placed = Surface.InsertShape(ShapeKind.Ellipse, false); break;
-            case "Circle": placed = Surface.InsertShape(ShapeKind.Ellipse, true); break;
-            case "Triangle": placed = Surface.InsertShape(ShapeKind.Triangle, false); break;
-            case "RightTriangle": placed = Surface.InsertShape(ShapeKind.RightTriangle, false); break;
-            case "Diamond": placed = Surface.InsertShape(ShapeKind.Diamond, false); break;
-            case "Parallelogram": placed = Surface.InsertShape(ShapeKind.Parallelogram, false); break;
-            case "Trapezoid": placed = Surface.InsertShape(ShapeKind.Trapezoid, false); break;
-            case "Pentagon": placed = Surface.InsertShape(ShapeKind.Pentagon, false); break;
-            case "Hexagon": placed = Surface.InsertShape(ShapeKind.Hexagon, false); break;
-            case "Star": placed = Surface.InsertShape(ShapeKind.Star, false); break;
-            case "AxesXY": placed = Surface.InsertShape(ShapeKind.AxesXY, false); break;
-            case "AxesXYZ": placed = Surface.InsertShape(ShapeKind.AxesXYZ, false); break;
-        }
+            "Line" => (ShapeKind.Line, false),
+            "Arrow" => (ShapeKind.Arrow, false),
+            "Rect" => (ShapeKind.Rect, false),
+            "Square" => (ShapeKind.Rect, true),
+            "Ellipse" => (ShapeKind.Ellipse, false),
+            "Circle" => (ShapeKind.Ellipse, true),
+            "Triangle" => (ShapeKind.Triangle, false),
+            "RightTriangle" => (ShapeKind.RightTriangle, false),
+            "Diamond" => (ShapeKind.Diamond, false),
+            "Parallelogram" => (ShapeKind.Parallelogram, false),
+            "Trapezoid" => (ShapeKind.Trapezoid, false),
+            "Pentagon" => (ShapeKind.Pentagon, false),
+            "Hexagon" => (ShapeKind.Hexagon, false),
+            "Star" => (ShapeKind.Star, false),
+            "AxesXY" => (ShapeKind.AxesXY, false),
+            "AxesXYZ" => (ShapeKind.AxesXYZ, false),
+            _ => null,
+        };
+        if (spec is not { } sp) return;
+        // §58.12: the tool switches to Select only when the shape was actually
+        // placed (LayerGate.CreateThen). Round 3 switched it first, so a
+        // refused insert (§58.11 R1) still took the user's pen away.
+        bool placed = LayerGate.CreateThen(() => Surface.InsertShape(sp.kind, sp.equal),
+                                           () => SelectTool("Select"));
         // §58.11 R1: a refused insert has already put its message up; do not
         // cover it with instructions for a shape that is not there.
         if (!placed) return;

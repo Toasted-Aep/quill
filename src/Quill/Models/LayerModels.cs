@@ -1096,6 +1096,20 @@ public static class LayerGate
         return shown.Count + " layers are showing again.";
     }
 
+    /// <summary>
+    /// 58.12: runs <paramref name="create"/>, and runs <paramref name="after"/>
+    /// ONLY when it created something. The shape menu and the Objects library
+    /// switch the user's tool to Select for a placed shape; round 3 switched it
+    /// BEFORE asking, so an insert that R1 refused still took the user's pen
+    /// away. Returns what <paramref name="create"/> answered.
+    /// </summary>
+    public static bool CreateThen(Func<bool> create, Action after)
+    {
+        if (!create()) return false;
+        after();
+        return true;
+    }
+
     /// <summary>"A", "A and B", "A, B and C": each layer's display name, in
     /// the order given.</summary>
     public static string NameList(NotePage page, IReadOnlyList<Layer> layers)
