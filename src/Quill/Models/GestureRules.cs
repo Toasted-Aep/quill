@@ -39,8 +39,10 @@ public enum GestureEnd
     PageSwitch,
     /// <summary>Undo pressed mid-stroke (58.11 ruling R4).</summary>
     Undo,
-    /// <summary>Redo pressed mid-stroke (R4 extended; an ASSUMPTION the owner
-    /// can overturn, 58.11.4).</summary>
+    /// <summary>Redo pressed mid-stroke WITH something to redo (R4 extended;
+    /// an ASSUMPTION the owner can overturn, 58.11.6). With nothing to redo
+    /// the key does nothing and the brush is not ended (58.12,
+    /// <see cref="GestureRules.OnRedoKey"/>).</summary>
     Redo,
     /// <summary>The window closes or the surface unloads (FlushPaint).</summary>
     Close,
@@ -79,6 +81,11 @@ public enum HistoryKeyOutcome
     RunHistory,
     /// <summary>R4: cancel the stroke under the pen and leave history alone.</summary>
     CancelStroke,
+    /// <summary>58.12: do NOTHING - the stroke under the pen carries on and
+    /// history is untouched. What Redo answers mid-stroke when there is
+    /// nothing to redo: there is nothing for the key to do, so it must not
+    /// throw the live stroke away.</summary>
+    Ignore,
 }
 
 public static class GestureRules
@@ -159,6 +166,25 @@ public static class GestureRules
     /// popped, the redo stack kept. Otherwise it runs, as always.</summary>
     public static HistoryKeyOutcome OnHistoryKey(bool strokeInProgress)
         => strokeInProgress ? HistoryKeyOutcome.CancelStroke : HistoryKeyOutcome.RunHistory;
+
+    /// <summary>
+    /// What REDO does (58.12). The owner ruled on undo only (R4); redo is not
+    /// covered, so both redo answers mid-stroke are decisions made here.
+    /// <list type="bullet">
+    /// <item>No stroke in progress: run, as always.</item>
+    /// <item>A stroke in progress and NOTHING TO REDO: <see cref="HistoryKeyOutcome.Ignore"/>
+    /// - the key does nothing and the stroke continues. Round 3 cancelled the
+    /// stroke here too, throwing the live ink away for a key that had nothing
+    /// to do.</item>
+    /// <item>A stroke in progress and something to redo: cancel the stroke and
+    /// keep the redo stack, as undo does. An ASSUMPTION the owner can overturn
+    /// (58.11.6, 58.12).</item>
+    /// </list>
+    /// </summary>
+    public static HistoryKeyOutcome OnRedoKey(bool strokeInProgress, bool canRedo)
+        => !strokeInProgress ? HistoryKeyOutcome.RunHistory
+         : canRedo ? HistoryKeyOutcome.CancelStroke
+         : HistoryKeyOutcome.Ignore;
 
     /// <summary>
     /// SHAPE RECOGNITION's hold: may holding the pen still turn the wet stroke

@@ -1127,15 +1127,20 @@ public sealed class InkSurface : UserControl
     public void Redo()
     {
         if (_page == null || _replaying) return;
-        // §58.11: Redo mid-stroke is NOT covered by ruling R4. It is made to do
-        // what Undo does - cancel the stroke under the pen, touch no history,
-        // and so keep the redo stack intact - which is an ASSUMPTION the owner
-        // can overturn (58.11.4). Round 2 committed the stroke first, and that
-        // new edit emptied the redo stack, so the redo found nothing to redo.
-        if (GestureRules.OnHistoryKey(StrokeInProgress) == HistoryKeyOutcome.CancelStroke)
+        // §58.12: Redo mid-stroke is NOT covered by ruling R4, which is about
+        // undo. With NOTHING to redo the key does nothing at all and the stroke
+        // carries on (round 3 threw the live stroke away here). With something
+        // to redo it does what Undo does - cancels the stroke under the pen and
+        // touches no history, so the redo stack is kept - which is an
+        // ASSUMPTION the owner can overturn (58.11.6). Round 2 committed the
+        // stroke first, and that new edit emptied the redo stack.
+        switch (GestureRules.OnRedoKey(StrokeInProgress, UndoManager.CanRedo))
         {
-            CancelStrokeInProgress(GestureEnd.Redo);
-            return;
+            case HistoryKeyOutcome.Ignore:
+                return;
+            case HistoryKeyOutcome.CancelStroke:
+                CancelStrokeInProgress(GestureEnd.Redo);
+                return;
         }
         var act = UndoManager.PeekRedo;
         bool touchesText = act?.TouchesText ?? true;
