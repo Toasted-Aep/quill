@@ -11356,7 +11356,13 @@ is SEEDED into the page JSON, not drawn.
     must show (paint is on no layer). **Control:** with V active every
     gesture above creates as it always did. **Also check** that with no
     message up, a press at the canvas's bottom-left corner still reaches the
-    canvas (the status line's panel must not eat it).
+    canvas (the status line's panel must not eat it). *(Added in 58.12: a
+    refused shape, from the menu and from the Objects library, must leave
+    the tool where it was. The refused paste of H's ink must read
+    `A layer this pastes onto (H) is hidden, so nothing was pasted.`. Copy
+    ink from two layers, hide both, and paste: the message must name both,
+    the action must read `Show them`, and afterwards the line must name both
+    layers as showing again. Strings: 58.12.3.)*
 11. **R2: hiding a layer drops its selection.** On the same seed with every
     layer shown, rubber-band a selection over a stroke, a shape and a text on
     each of V, H and Z, and make an H shape the active shape. Switch H off
@@ -11380,7 +11386,10 @@ is SEEDED into the page JSON, not drawn.
     shape snapped by holding the pen still, and with oil. Repeat with the
     dial's undo and the pen bar's undo. Then press Ctrl+Y mid-stroke: the
     stroke must be cancelled the same way and an entry that was waiting to
-    be redone must still be redoable afterwards (the redo ASSUMPTION). With
+    be redone must still be redoable afterwards (the redo ASSUMPTION).
+    *(Added in 58.12: then, with NOTHING waiting to be redone, press Ctrl+Y
+    mid-stroke: nothing must happen, and the stroke must go on drawing and
+    commit on the lift.)* With
     oil, paint one long stroke across more than 12 tiles and press Ctrl+Z
     before lifting: the whole stroke, including the part that settled under
     the ink before the undo, must be gone (step 4's paint-store precondition
