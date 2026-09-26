@@ -1097,6 +1097,23 @@ public static class LayerGate
     }
 
     /// <summary>
+    /// 58.12: the one-tap action over EVERY key a refusal named: <see cref="Show"/>
+    /// on each layer of <paramref name="layers"/> whose key is in
+    /// <paramref name="keys"/>, in the order of <paramref name="keys"/>, each
+    /// at most once. Returns the layers it actually changed - what
+    /// <see cref="ShownMessage(NotePage, IReadOnlyList{Layer})"/> then names. A
+    /// layer the user showed some other way in the meantime is not named.
+    /// </summary>
+    public static List<Layer> ShowAll(IReadOnlyList<Layer> layers, IReadOnlyList<int> keys)
+    {
+        var shown = new List<Layer>();
+        foreach (var k in keys)
+            foreach (var l in layers)
+                if (l.Key == k && !shown.Contains(l) && Show(l)) shown.Add(l);
+        return shown;
+    }
+
+    /// <summary>
     /// 58.12: runs <paramref name="create"/>, and runs <paramref name="after"/>
     /// ONLY when it created something. The shape menu and the Objects library
     /// switch the user's tool to Select for a placed shape; round 3 switched it
