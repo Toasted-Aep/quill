@@ -966,8 +966,22 @@ public static class LayerPick
 /// </summary>
 public static class LayerGate
 {
-    /// <summary>The one-tap action's label, beside the refusal message.</summary>
+    /// <summary>The one-tap action's label, beside the refusal message, when
+    /// it shows ONE layer.</summary>
     public const string ShowAction = "Show it";
+
+    /// <summary>58.12: the label when the action shows SEVERAL layers - after
+    /// a plural message, "Show it" would name a thing that is not there.</summary>
+    public const string ShowActionPlural = "Show them";
+
+    /// <summary>58.12: the action's label for a refusal that names
+    /// <paramref name="layers"/> layers.</summary>
+    public static string ShowActionFor(int layers) => layers > 1 ? ShowActionPlural : ShowAction;
+
+    /// <summary>58.12: how many layers a message names one by one. Beyond
+    /// this the message says how many instead, so a long list of layer names
+    /// cannot push the rest of the sentence off the status line.</summary>
+    public const int MaxNamedLayers = 3;
 
     /// <summary>
     /// R1: the layer that REFUSES new content, or null when new content may go
@@ -1029,8 +1043,15 @@ public static class LayerGate
     /// R1's message, VERBATIM what the status line shows. Plain words, no
     /// symbol, in the register of the Layers panel's own "X is hidden - ..."
     /// line. Names the layer, and says which of the two ways it draws nothing
-    /// (the panel's switch shows a 0% layer as switched ON, 58.11.6, so
+    /// (the panel's switch shows a 0% layer as switched ON, 58.11.9, so
     /// "hidden" alone would contradict the panel).
+    ///
+    /// <para>58.12, PASTE. A paste can carry elements from several layers, and
+    /// only some of them may draw nothing, so the paste messages never say or
+    /// imply that a refused layer is the paste's ONLY destination ("A layer
+    /// this pastes onto", "Layers this pastes onto"). They name every refused
+    /// layer, up to <see cref="MaxNamedLayers"/>, and beyond that say how
+    /// many.</para>
     /// </summary>
     public static string RefusalMessage(NotePage page, IReadOnlyList<Layer> refused, bool paste)
     {
@@ -1044,20 +1065,46 @@ public static class LayerGate
             string how = hidden == refused.Count ? "are hidden"
                        : hidden == 0 ? "are at 0% opacity"
                        : "are hidden or at 0% opacity";
-            return "The layers this pastes onto " + how + ", so nothing was pasted.";
+            string which = refused.Count <= MaxNamedLayers
+                ? "Layers this pastes onto (" + NameList(page, refused) + ")"
+                : refused.Count + " layers this pastes onto";
+            return which + " " + how + ", so nothing was pasted.";
         }
         var l = refused[0];
         string name = PageLayers.DisplayName(page, l);
         string why = l.Hidden ? "is hidden" : "is at 0% opacity";
         return paste
-            ? "The layer this pastes onto (" + name + ") " + why + ", so nothing was pasted."
+            ? "A layer this pastes onto (" + name + ") " + why + ", so nothing was pasted."
             : "The active layer (" + name + ") " + why + ", so nothing was added.";
     }
 
     /// <summary>What the status line says after the one-tap action. The same
     /// words the Layers panel's switch already says when a layer is shown.</summary>
     public static string ShownMessage(NotePage page, Layer layer)
-        => PageLayers.DisplayName(page, layer) + " is showing again.";
+        => ShownMessage(page, new[] { layer });
+
+    /// <summary>58.12: what the status line says after the one-tap action
+    /// showed <paramref name="shown"/> - EVERY layer it showed, not the first
+    /// (round 3 named only the first). One layer reads exactly as the Layers
+    /// panel's switch does; up to <see cref="MaxNamedLayers"/> are named;
+    /// beyond that, how many.</summary>
+    public static string ShownMessage(NotePage page, IReadOnlyList<Layer> shown)
+    {
+        if (shown.Count == 0) return "";
+        if (shown.Count == 1) return PageLayers.DisplayName(page, shown[0]) + " is showing again.";
+        if (shown.Count <= MaxNamedLayers) return NameList(page, shown) + " are showing again.";
+        return shown.Count + " layers are showing again.";
+    }
+
+    /// <summary>"A", "A and B", "A, B and C": each layer's display name, in
+    /// the order given.</summary>
+    public static string NameList(NotePage page, IReadOnlyList<Layer> layers)
+    {
+        var names = new List<string>(layers.Count);
+        foreach (var l in layers) names.Add(PageLayers.DisplayName(page, l));
+        if (names.Count <= 1) return names.Count == 1 ? names[0] : "";
+        return string.Join(", ", names.GetRange(0, names.Count - 1)) + " and " + names[^1];
+    }
 
     /// <summary>
     /// R2: may an element with this key STAY selected? Exactly

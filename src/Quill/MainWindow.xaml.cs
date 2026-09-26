@@ -273,9 +273,10 @@ public sealed partial class MainWindow : Window
         Surface.RulerDialRequested += ShowRulerAngleEntry;
         Surface.StrokeTapped += stroke => SeekAudioToStroke(stroke);
         // §58.11 R1: a creation refused because its layer draws nothing says so
-        // on the status line, with a one-tap action that shows the layer.
+        // on the status line, with a one-tap action that shows the layer
+        // ("Show them" when the message names several, §58.12).
         Surface.CreationRefused += (page, message, keys) =>
-            ShowStatus(message, LayerGate.ShowAction, () =>
+            ShowStatus(message, LayerGate.ShowActionFor(keys.Length), () =>
             {
                 var shown = Surface.ShowLayers(page, keys);
                 if (shown != null) ShowStatus(shown);
