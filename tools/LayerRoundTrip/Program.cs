@@ -1618,7 +1618,7 @@ if (oplogs.Length == 1)
         "PushAction(new AddShapeAction(s), _page);");
     // W2
     Pin("W2 - the pen PRESS asks the R1 gate for a vector stroke, and a refusal ends the gesture "
-        + "before the pen-repair bridge or any wet inkSrc",
+        + "before the pen-repair bridge or any wet ink",
         inkSrc, "private void OnPointerPressed(object sender, PointerRoutedEventArgs e)",
         "if (GestureRules.PenPressLandsOnLayer(Pen, RulerMode) && !CanCreateOnActiveLayer()) "
         + "{ ResetGesture(); try { _canvas.ReleasePointerCaptures(); } catch { } e.Handled = true; return; }",
