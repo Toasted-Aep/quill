@@ -12142,6 +12142,11 @@ are not linked. So the harness does not show:
 - the status line's action button.
 
 All of these were read and compiled, not executed.
+*(58.12: round 3's two checks showed what that cost. Eight compiling mutants
+that switched these rulings off at their call sites all passed. Section 29
+now pins each call site to the shipping source text, and each of the eight
+mutants turns a named pin red; 58.12.1. The pins read text: they still do
+not execute any of it.)*
 
 #### 58.11.11 Build and harnesses
 
@@ -12200,3 +12205,277 @@ Quill was not launched. None of the following has been observed:
   *(58.12: now only when there is something to redo; with nothing to redo it
   does nothing)*;
 - the Layers panel's switch still reads `Hidden` alone (58.11.9).
+
+### 58.12 Round 4: the wiring pinned, and what round 3's two checks found — 2026-09-26 (branch `layer-order-canvas`)
+
+Round 3 (`ce45347`) held under both of its independent checks. They found
+four things to fix (58.12.1 to 58.12.4) and five to record (58.12.5). All of
+it was built and measured headlessly. **Quill was not launched, and nothing
+here was seen on screen** (58.12.8).
+
+#### 58.12.1 The wiring was unguarded; it is now pinned to the source text
+
+The checks ran eight mutants that switch the rulings off at their CALL
+SITES. Each compiled, and every one passed `tools/LayerRoundTrip`, because
+the harness cannot link `InkSurface`, `MainWindow` or `OilBrush` (58.11.10).
+
+Section 29 of the harness now reads the shipping source, the way
+`tools/SeatProof` section 0 does. Each pin works like this:
+
+- every comment is removed (outside string and char literals), so a gate
+  that has been commented out no longer matches;
+- every whitespace character is squashed out, so indentation, line breaks
+  and CRLF or LF endings do not matter;
+- the member is found by its signature, which must occur exactly once, and
+  the search is confined to that member's own braces (or, for an
+  expression-bodied member, to its semicolon);
+- the gate must be there with its exact condition and body, and after or
+  before the named neighbours that make it a gate.
+
+| Mutant (as the checks named it) | Mutation run here | Check that turns red |
+|---|---|---|
+| W1 InsertShape gate removed | the `if (!CanCreateOnActiveLayer()) return false;` line deleted | `58.12 pin W1 - InsertShape asks the R1 gate before it stamps the layer and pushes the shape` |
+| W1c (added) the same gate commented out | `// if (!CanCreateOnActiveLayer()) ...` | the same W1 pin |
+| W2 pen-press gate off | `if (false && GestureRules.PenPressLandsOnLayer(...) && !CanCreateOnActiveLayer())` | `58.12 pin W2 - the pen PRESS asks the R1 gate ...` |
+| W3 pen-lift gate off | the vector branch's `if (!CanCreateOnActiveLayer()) { RestoreResumedStroke(); break; }` deleted | `58.12 pin W3 - the pen LIFT asks the R1 gate again before a vector stroke is committed` |
+| W4 DropInvisibleSelection call removed | the call deleted from `LayersChanged` | `58.12 pin W4 - LayersChanged runs DropInvisibleSelection FIRST ...` |
+| W5 Point-mode Erasable test removed | the Point-mode loop's `Erasable` line deleted | `58.12 pin W5 - EraseAt, POINT mode: ...` |
+| W6 Undo cancel branch off | `OnHistoryKey(StrokeInProgress)` became `OnHistoryKey(false)` | `58.12 pin W6 - Undo cancels a stroke in progress BEFORE it touches history` |
+| W7 OilBrush.Discard restore off | `if (_undoBefore.Count > 0)` became `< 0` | `58.12 pin W7 - OilBrush.Discard restores every flushed tile ...` |
+| W8 PasteCanvasAt refusal off | `if (refused.Count > 0)` became `< 0` | `58.12 pin W8 - PasteCanvasAt refuses on every pasted element's layer ...` |
+| W0 (added) the gate itself never refuses | in `CanCreateOnActiveLayer`, `var refused = (Layer?)null;` | `58.12 pin R1 - CanCreateOnActiveLayer asks LayerGate.RefusesNewContent ...` |
+
+Each mutant was applied to exactly one anchor (asserted to occur once), then
+`src/Quill` was built (exit 0, 0 warnings, 0 errors for every one). The
+harness was then built fresh (its `bin\x64` and `obj` deleted,
+`--no-incremental`) and run from that output. In every case exactly the
+named check failed and the harness exited 1. The source was then restored
+byte-identical, checked by SHA-256 and the CRLF count. The runner is
+`mutants.py` in this job's scratch folder. It is not in the repository.
+
+Beyond the eight, section 29 also pins these, with 22 pins in all:
+- the hold-snapped shape's gate at the lift;
+- `DropInvisibleSelection`'s own three filters and its active-shape test;
+- the Object-mode and shape loops of `EraseAt`;
+- the `StrokeInProgress` property's arguments;
+- `CancelStrokeInProgress`;
+- `EndOilGesture`'s `Discard` case;
+- the paste's key list;
+- the wiring of items 2 to 4 below.
+
+**Every pin is TEXT-ONLY.** A pin catches a gate that is deleted, commented
+out, reordered, or reworded in its condition or its body. It does not catch
+a subtle logic change anywhere else. Examples it misses:
+- `_wet` or `_activePointer` being set wrong before `StrokeInProgress`
+  reads them;
+- `CanRedo` being wrong;
+- `PaintTilesAction.Undo` not restoring what its name says;
+- a new creation path that never calls the gate.
+
+It runs none of the code it pins. W7 is the plainest case. The pin proves
+that `Discard` still calls `PaintTilesAction(...).Undo(page)` under
+`_undoBefore.Count > 0`. What that does to the tiles is Win2D, and it is
+still read, not run.
+
+#### 58.12.2 Redo mid-stroke with nothing to redo does nothing
+
+Round 3 cancelled the stroke on any redo pressed mid-stroke. With nothing to
+redo, that threw the live vector stroke (or oil scratch) away for a key that
+had nothing to do. `GestureRules.OnRedoKey(strokeInProgress, canRedo)`
+decides it now, and `InkSurface.Redo` asks it first, with
+`UndoManager.CanRedo`:
+
+| Stroke in progress | Something to redo | Redo does |
+|---|---|---|
+| no | either | runs, as always |
+| yes | **no** | **nothing** (`HistoryKeyOutcome.Ignore`): the stroke continues, the brush stays live, no history is touched |
+| yes | yes | cancels the stroke and keeps the redo stack (round 3's behaviour) |
+
+**The third row is still an ASSUMPTION, and the owner may overturn it.** The
+owner ruled only on Ctrl+Z (R4). Undo is unchanged: mid-stroke it cancels
+the stroke whatever the stacks hold.
+
+#### 58.12.3 Every paste-refusal message is true
+
+The checks found three faults:
+- after a paste was refused on several layers and "Show it" ran, the status
+  line named only the first layer shown;
+- the action was labelled "Show it" after a plural message;
+- the single-layer message "The layer this pastes onto (NAME) is hidden"
+  implied NAME was the paste's only destination, even when other pasted
+  elements went to visible layers.
+
+The shipped strings are listed below, verbatim. NAME is
+`PageLayers.DisplayName`. A list is "A", "A and B", or "A, B and C", with
+refused layers in bottom-first order. Up to `LayerGate.MaxNamedLayers` (3)
+layers are named; beyond that the message gives the count.
+
+| When | Status line |
+|---|---|
+| active layer hidden (unchanged) | `The active layer (NAME) is hidden, so nothing was added.` |
+| active layer at 0% (unchanged) | `The active layer (NAME) is at 0% opacity, so nothing was added.` |
+| paste, one refused layer, hidden | `A layer this pastes onto (NAME) is hidden, so nothing was pasted.` |
+| paste, one refused layer, 0% | `A layer this pastes onto (NAME) is at 0% opacity, so nothing was pasted.` |
+| paste, 2 or 3 refused, all hidden | `Layers this pastes onto (A and B) are hidden, so nothing was pasted.` |
+| paste, 2 or 3 refused, all 0% | `Layers this pastes onto (A and B) are at 0% opacity, so nothing was pasted.` |
+| paste, 2 or 3 refused, some of each | `Layers this pastes onto (A, B and C) are hidden or at 0% opacity, so nothing was pasted.` |
+| paste, 4 or more refused | `N layers this pastes onto are hidden, so nothing was pasted.` (or `are at 0% opacity`, or `are hidden or at 0% opacity`) |
+| the action, one layer named | `Show it` |
+| the action, several layers named | `Show them` |
+| after the action, one layer shown | `NAME is showing again.` (the Layers panel switch's own words, unchanged) |
+| after the action, 2 or 3 shown | `A and B are showing again.` / `A, B and C are showing again.` |
+| after the action, 4 or more shown | `N layers are showing again.` |
+
+"A layer this pastes onto" and "Layers this pastes onto" are true whether
+or not the paste also has visible destinations, so neither claims to be the
+only one. The register is kept: the same sentence shape, "so nothing was
+pasted", no symbol and no emoji (checked character by character).
+
+The after-action message names the layers the action actually CHANGED. That
+list is `LayerGate.ShowAll`, pulled out of `InkSurface.ShowLayers` so the
+harness runs it. A layer the user had already shown another way is not
+named. A key repeated in the list is shown once.
+
+#### 58.12.4 A refused shape insert keeps the user's tool
+
+`MainWindow.InsertShape_Click` and the Objects library's `InsertShape`
+lambda (`AttachChrome`) called `SelectTool("Select")` before
+`InsertShape`. A refused insert therefore still took the pen away. Both now
+go through `LayerGate.CreateThen(create, after)`, which runs the tool switch
+only when the insert answered true, and runs it after the insert. After a
+placed shape, the end state is the same as before:
+- the tool is Select, folded to Mouse;
+- `SetTool(Mouse)` does not clear `_activeShape`;
+- the caller's "drag it to move" status line is the last one shown.
+
+The shape menu's tag-to-kind `switch` became one `switch` expression, so
+that `CreateThen` is called in one place.
+
+#### 58.12.5 RECORDED, not fixed
+
+- **The object-eraser preview and the erase disagree by GEOMETRY.** Round 3
+  made them agree on WHICH LAYERS (58.11.5); they still do not agree on
+  what counts as near. The preview (`FindStrokeNear`, from the hover at
+  ~6558) tints the ONE topmost stroke that has a point within
+  `EraserRadius + s.Size`. The Object-mode erase removes EVERY stroke that
+  has a vertex within `s.Size + 6` of the drag segment, and every shape
+  whose outline is within `sh.Size + 8`. So:
+  - the preview can name a stroke the erase does not reach, or the reverse;
+  - several strokes can go where one was tinted;
+  - a shape is erased with no preview at all.
+  58.11.10's "the preview and the erase agree" is true for the layer test
+  only.
+- **The gesture bindings Settings offers are dispatched by nothing.**
+  Settings lists Two-, Three- and Four-finger tap with the commands None,
+  Undo, Redo, Toggle grid, Toggle eraser, Fit to page and Show tool palette
+  (`SettingsWindow.cs` ~3027, ~3034). It stores them as
+  `Library.GestureBindings` ("TwoFingerTap=Undo"). No code outside Settings
+  reads that list. Settings' own caption says multi-finger taps are not
+  received yet. So there is no gesture entry to R4's undo: the list in
+  58.11.6 of what reaches `InkSurface.Undo` is complete without one. Filed
+  as `docs/TODO.md` 8.18. The highest row on `main` is 8.17; this branch's
+  TODO.md stops at 8.14, and 8.15 to 8.17 live on `main`.
+- **Ctrl+Z while a text box keeps focus goes to the box, not to the
+  stroke.** `UndoAccel_Invoked` (`MainWindow` ~7413) returns unhandled when
+  `ActiveTextBox` has focus, so a stroke under the pen at that moment is
+  not cancelled by the keyboard. The top bar's button, the dial and the
+  History panel still reach `InkSurface.Undo` and cancel it.
+- **A right-button takeover mid VECTOR stroke is not cancelled.**
+  `TakeOverGesture` (~6143) calls `EndOilGesture` and then takes
+  `_activePointer`. `EndOilGesture` returns at once when no oil brush is
+  live, so a vector stroke's `_wet` and resumed-stroke state are not
+  cleared by the takeover. The same holds for every `TakeoverOther` and
+  `TakeoverErase` site in 58.11.7. What the new gesture's code then does
+  with the leftover wet points was not traced.
+- **The pen-repair `PutBack` ordering caveat.** `PutBack` pushes the
+  resumed stroke's entry onto whatever is on top NOW. If anything else is
+  pushed between the pen-down (`TryDiscardTop`) and the cancel, the entry
+  goes back ABOVE that newer entry, not below it. The newer push has also
+  already cleared the redo stack. So "the history is exactly what it was
+  before the press" (58.11.6) holds only when nothing else was pushed
+  mid-stroke. Examples of such a push: dictation text, or a keyboard paste
+  while the pen is down. A second case: when the bridge found some other
+  action on top (`TryDiscardTop` false), `RestoreResumedStroke` re-adds the
+  stroke to the page with no undo entry.
+
+#### 58.12.6 What `tools/LayerRoundTrip` proves now
+
+Sections 29 to 32 were added, 38 checks, and section 23's paste strings were
+updated to 58.12.3. From a fresh `--no-incremental` build: **230 held, 231
+PASS lines (the 231st is the isolation line), 0 FAIL.**
+
+- **29, the pins** (22): 58.12.1.
+- **30, redo** (5): all four rows of `OnRedoKey`. Undo is unchanged. Through
+  the real `UndoRedoManager`, a live stroke is left alone after a push
+  (nothing to redo) and cancelled after an undo (one redo).
+- **31, paste copy** (8): one refused layer among visible destinations
+  reads "A layer ..."; three refused layers are named bottom first; four
+  give a count; the label is "Show it" for one and "Show them" for several.
+  `ShowAll` over three layers shows and names all three; a layer already
+  shown is not named, and a repeated key is shown once; four shown gives a
+  count; no symbol appears anywhere.
+- **32, insert** (3): through `CreateThen`, a refused insert never runs the
+  switch; a placed one runs it once, after the insert; with the real R1
+  gate on a hidden active layer, the tool is not switched.
+
+**Negative controls for items 2 to 4.** Each compiled in `src/Quill` (0
+warnings, 0 errors) and in the fresh harness build. Each was run, and each
+was restored byte-identical (SHA-256).
+
+| Mutation | Checks failed |
+|---|---|
+| N2a `OnRedoKey` cancels with nothing to redo (round 3) | 2 (the Ignore row; the real-manager check) |
+| N2b `Redo` hands `OnRedoKey` `true` for "can redo" (wiring) | 1 (pin item 2) |
+| N3a the single-layer paste message back to "The layer this pastes onto" | 2 (section 23's strings; 31's "not the only destination") |
+| N3b `ShownMessage` names only the first layer (round 3) | 3 |
+| N3c `ShowActionFor` always "Show it" | 1 |
+| N3d `MainWindow` labels every refusal `LayerGate.ShowAction` (wiring) | 1 (pin item 3) |
+| N4a `CreateThen` runs the switch before asking (round 3's order) | 3 |
+| N4b `InsertShape_Click` calls `SelectTool("Select")` before `CreateThen` (wiring) | 1 (the "exactly one SelectTool call" pin) |
+| N4c the Objects lambda back to round 3's (wiring) | 1 (pin item 4, Objects) |
+| restored | 230 held, 0 FAIL |
+
+W0 to W4 were run before a one-word fix to a pin's LABEL ("wet inkSrc" was
+changed to "wet ink"). W5 to W8, W1c and N2a to N4c were run after it. No
+linked or pinned source changed after any of these runs; only this document
+changed.
+
+#### 58.12.7 Build and harnesses
+
+`dotnet build src/Quill/Quill.csproj -c Debug -p:Platform=x64
+--no-incremental`: 0 warnings, 0 errors, on the final code. All ten
+harnesses were then built fresh (`bin\x64` and `obj` deleted,
+`--no-incremental`) and run from that output, after every negative control.
+Every one exited 0:
+
+| Harness | Result |
+|---|---|
+| LayerRoundTrip | 230 held |
+| CloneRoundTrip | 36 held |
+| ExportRotRoundTrip | 37 held |
+| TextColourRoundTrip | 50 held (120 CS0436 warnings from its own `Shim.cs`, as in 58.10.7; the four "FAILS" in its output are inside PASS lines describing its own reproduced defects) |
+| TextRotRoundTrip | 24 held |
+| VeilRoundTrip | 29 held |
+| HandleProof | RESULT: PASS |
+| PanelProof | 6 PASS lines, no FAIL |
+| PaperProof | ALL THRESHOLDS MET |
+| SeatProof | 2 PASS lines, no FAIL |
+
+#### 58.12.8 WHAT IS NOT ESTABLISHED
+
+Quill was not launched. Everything in 58.11.12 is still unobserved. None of
+the following has been seen either:
+- that Ctrl+Y mid-stroke with nothing to redo leaves the stroke drawing, and
+  that with something to redo it cancels the stroke (58.9 step 13 should now
+  cover both);
+- that "Show them" appears after a plural paste refusal, fits on the status
+  line beside a message naming three layers, and that the line after it
+  names every layer shown;
+- that a refused shape insert from the shape menu and from the Objects
+  library leaves the tool where it was, and that a placed one still ends
+  on Select with the shape's handles up.
+
+**Open for the product owner:**
+- redo mid-stroke WITH something to redo cancels the stroke and keeps the
+  redo stack (58.12.2);
+- everything still open in 58.11.12.
