@@ -1244,19 +1244,23 @@ if (oplogs.Length == 1)
     Check("58.11 R1 - a 0% layer is named as 0% (the panel's switch shows it ON, so 'hidden' "
           + "would contradict the panel)",
           mZero == "The active layer (Notes) is at 0% opacity, so nothing was added.", mZero);
+    // 58.12 reworded paste: "A layer this pastes onto" / "Layers this pastes
+    // onto (names)", never implying the refused layer is the only destination.
     Check("58.11 R1 - paste's messages, one layer (hidden, 0%) and several (all hidden, all 0%, "
-          + "mixed): each says the way its layers draw nothing",
-          mPaste == "The layer this pastes onto (Sketch) is hidden, so nothing was pasted."
-          && mPasteZ == "The layer this pastes onto (Notes) is at 0% opacity, so nothing was pasted."
-          && mPasteHH == "The layers this pastes onto are hidden, so nothing was pasted."
-          && mPasteZZ == "The layers this pastes onto are at 0% opacity, so nothing was pasted."
-          && mPaste2 == "The layers this pastes onto are hidden or at 0% opacity, so nothing was pasted.",
+          + "mixed): each says the way its layers draw nothing, and names every layer (58.12)",
+          mPaste == "A layer this pastes onto (Sketch) is hidden, so nothing was pasted."
+          && mPasteZ == "A layer this pastes onto (Notes) is at 0% opacity, so nothing was pasted."
+          && mPasteHH == "Layers this pastes onto (Sketch and A) are hidden, so nothing was pasted."
+          && mPasteZZ == "Layers this pastes onto (Notes and B) are at 0% opacity, so nothing was pasted."
+          && mPaste2 == "Layers this pastes onto (Sketch and Notes) are hidden or at 0% opacity, so nothing was pasted.",
           string.Join(" / ", mPaste, mPasteZ, mPasteHH, mPasteZZ, mPaste2));
     bool noSymbol = new[] { mHidden, mZero, mPaste, mPaste2, mPasteHH, mPasteZZ, mPasteZ,
-                            LayerGate.ShowAction, LayerGate.ShownMessage(cp, cH) }
+                            LayerGate.ShowAction, LayerGate.ShowActionPlural, LayerGate.ShownMessage(cp, cH),
+                            LayerGate.ShownMessage(cp, new[] { cH, cZ }) }
         .All(m => m.All(ch => ch < 0x2000));         // no emoji, no pictographs, no dingbats
     Check("58.11 R1 - no message and no action label carries a symbol or emoji; the action "
-          + "is 'Show it'", noSymbol && LayerGate.ShowAction == "Show it");
+          + "is 'Show it' for one layer", noSymbol && LayerGate.ShowAction == "Show it"
+          && LayerGate.ShowActionFor(1) == "Show it");
 
     // The one-tap action.
     var sH = new Layer { Key = 7, Hidden = true, Opacity = 0.6f };
@@ -1573,6 +1577,271 @@ if (oplogs.Length == 1)
 }
 
 // ---------------------------------------------------------------------------
+// 29. 58.12 - THE WIRING, PINNED TO THE SHIPPING SOURCE TEXT.
+// ---------------------------------------------------------------------------
+// Round 3's two checks ran eight mutants that switched the rulings off at
+// their CALL SITES (W1-W8) and every one passed: InkSurface, MainWindow and
+// OilBrush cannot be linked here, so nothing looked at them. These pins read
+// the shipping source (the pattern tools/SeatProof section 0 set), with every
+// comment removed and every whitespace character squashed out, and assert
+// that each gate call is present INSIDE ITS OWN METHOD (the signature must
+// occur exactly once, and the search is confined to that method's braces),
+// with the exact condition and body, in the order that makes it a gate.
+//
+// THEY ARE TEXT-ONLY. A pin catches a deleted, commented-out, reordered or
+// reworded gate. It does NOT catch a subtle logic change somewhere else - a
+// field the pinned call reads being set wrong, a Win2D call doing something
+// other than what its name says - and it runs none of the code it pins.
+{
+    string srcRoot = Path.Combine(RepoRoot(), "src", "Quill");
+    string inkSrc = Code(File.ReadAllText(Path.Combine(srcRoot, "Controls", "InkSurface.cs")));
+    string main = Code(File.ReadAllText(Path.Combine(srcRoot, "MainWindow.xaml.cs")));
+    string oilSrc = Code(File.ReadAllText(Path.Combine(srcRoot, "Services", "OilBrush.cs")));
+    void Pin(string label, string code, string method, params string[] inOrder)
+    {
+        var (ok, why) = PinIn(code, method, inOrder);
+        Check("58.12 pin " + label, ok, why);
+    }
+
+    // The gate itself: every creation site below asks it.
+    Pin("R1 - CanCreateOnActiveLayer asks LayerGate.RefusesNewContent, raises the message, answers false",
+        inkSrc, "public bool CanCreateOnActiveLayer()",
+        "var refused = LayerGate.RefusesNewContent(_page);",
+        "if (refused == null) return true;",
+        "CreationRefused?.Invoke(_page, LayerGate.RefusalMessage(_page, new[] { refused }, paste: false), new[] { refused.Key });",
+        "return false;");
+    // W1
+    Pin("W1 - InsertShape asks the R1 gate before it stamps the layer and pushes the shape",
+        inkSrc, "public bool InsertShape(ShapeKind kind, bool equalDims)",
+        "if (!CanCreateOnActiveLayer()) return false;",
+        "LayerKey = ActiveLayerKey,",
+        "PushAction(new AddShapeAction(s), _page);");
+    // W2
+    Pin("W2 - the pen PRESS asks the R1 gate for a vector stroke, and a refusal ends the gesture "
+        + "before the pen-repair bridge or any wet inkSrc",
+        inkSrc, "private void OnPointerPressed(object sender, PointerRoutedEventArgs e)",
+        "if (GestureRules.PenPressLandsOnLayer(Pen, RulerMode) && !CanCreateOnActiveLayer()) "
+        + "{ ResetGesture(); try { _canvas.ReleasePointerCaptures(); } catch { } e.Handled = true; return; }",
+        "if (PenRepairBridge && !RulerMode",
+        "_wet = new List<StrokePoint> { new(pos.X, pos.Y, props.Pressure) };");
+    // W3
+    Pin("W3 - the pen LIFT asks the R1 gate again before a vector stroke is committed",
+        inkSrc, "private void CommitGesture(GestureEnd end)",
+        "if (OilGestureActive) { EndOilGesture(end); break; }",
+        "if (!CanCreateOnActiveLayer()) { RestoreResumedStroke(); break; }",
+        "var pts = RulerMode ? BuildRulerPoints(_wetStart, _wetEnd) : FinalizeStroke(_wet ?? new List<StrokePoint>());");
+    Pin("W3 - the pen LIFT asks the R1 gate before a hold-snapped shape is pushed",
+        inkSrc, "private void CommitGesture(GestureEnd end)",
+        "if (big) { if (CanCreateOnActiveLayer()) { sh.LayerKey = ActiveLayerKey; "
+        + "PushAction(new AddShapeAction(sh), _page); changed = true; } else RestoreResumedStroke(); }");
+    // W4
+    Pin("W4 - LayersChanged runs DropInvisibleSelection FIRST, on both the switch and the slider path",
+        inkSrc, "public void LayersChanged(bool visibilityChanged = true)",
+        "{ _inkCacheDirty = true; DropInvisibleSelection(); if (visibilityChanged) RebuildTextLayer();");
+    Pin("W4 - DropInvisibleSelection filters strokes, shapes, texts and the active shape through LayerGate",
+        inkSrc, "private void DropInvisibleSelection()",
+        "LayerGate.DropInvisible(_page, _selected, s => s.LayerKey, _selectedSet)",
+        "LayerGate.DropInvisible(_page, _selShapes, s => s.LayerKey, _selShapeSet)",
+        "LayerGate.DropInvisible(_page, _selTexts, t => t.LayerKey);",
+        "if (_activeShape != null && !LayerGate.StaysSelected(_page, _activeShape.LayerKey))");
+    // W5 (and the other two eraser loops)
+    Pin("W5 - EraseAt, POINT mode: every stroke asks Erasable before any style is chosen",
+        inkSrc, "private void EraseAt(Vector2 from, Vector2 to)",
+        "var plan = CurrentDrawPlan(_page);",
+        "float r = EraserRadius;",
+        "if (stCand != null && !stCand.Contains(s)) continue; if (!LayerPick.Erasable(plan, s.LayerKey)) continue; bool any = false;",
+        "_gestureEraserStyle switch");
+    Pin("W5 - EraseAt, OBJECT mode: every stroke asks Erasable before its hit test",
+        inkSrc, "private void EraseAt(Vector2 from, Vector2 to)",
+        "var plan = CurrentDrawPlan(_page);",
+        "if (_gestureEraserMode == EraserMode.Object)",
+        "if (stCand != null && !stCand.Contains(s)) continue; if (!LayerPick.Erasable(plan, s.LayerKey)) continue; float tol = s.Size + 6f;");
+    Pin("W5 - EraseAt, SHAPES: every shape asks Erasable before its hit test",
+        inkSrc, "private void EraseAt(Vector2 from, Vector2 to)",
+        "var plan = CurrentDrawPlan(_page);",
+        "if (sh.Kind == ShapeKind.Image) continue; if (!LayerPick.Erasable(plan, sh.LayerKey)) continue; float tolS = sh.Size + 8f;");
+    // W6
+    Pin("W6 - Undo cancels a stroke in progress BEFORE it touches history",
+        inkSrc, "public void Undo()",
+        "if (GestureRules.OnHistoryKey(StrokeInProgress) == HistoryKeyOutcome.CancelStroke) "
+        + "{ CancelStrokeInProgress(GestureEnd.Undo); return; }",
+        "UndoManager.Undo(_page);");
+    Pin("W6 - StrokeInProgress hands GestureRules the surface's own state",
+        inkSrc, "private bool StrokeInProgress =>",
+        "GestureRules.StrokeInProgress( pointerDown: _activePointer != null, penGesture: _gestureTool == ToolType.Pen, "
+        + "hasWet: _wet != null, shapeAdjust: _shapeAdjust && _adjustShape != null, oilActive: OilGestureActive);");
+    Pin("W6 - CancelStrokeInProgress puts a resumed stroke back, ends the brush, ends the pen gesture",
+        inkSrc, "private void CancelStrokeInProgress(GestureEnd why)",
+        "RestoreResumedStroke();", "EndOilGesture(why);",
+        "if (_gestureTool == ToolType.Pen) { ResetGesture(); try { _canvas.ReleasePointerCaptures(); } catch { } }");
+    // W7
+    Pin("W7 - OilBrush.Discard restores every flushed tile through PaintTilesAction.Undo, then cancels",
+        oilSrc, "public bool Discard(ICanvasResourceCreator rc, NotePage page)",
+        "if (!_active) return false;",
+        "if (_undoBefore.Count > 0) {",
+        "foreach (var ((tx, ty), before) in _undoBefore) caps.Add(new PaintTileCapture(tx, ty, before.Existed, before.ColourZ, before.HeightZ, null, null));",
+        "new PaintTilesAction(_store, rc, caps, null, \"Discard wet stroke\").Undo(page);",
+        "restored = true; }",
+        "Cancel();");
+    Pin("W7 - EndOilGesture's Discard outcome calls OilBrush.Discard",
+        inkSrc, "private void EndOilGesture(GestureEnd why)",
+        "switch (GestureRules.EndOil(OilGestureActive, why))",
+        "case OilEnd.Discard: try { if (_page != null) _oil!.Discard(_canvas, _page); } catch { }");
+    // W8
+    Pin("W8 - PasteCanvasAt refuses on every pasted element's layer before it places anything",
+        inkSrc, "public bool PasteCanvasAt(Vector2 world)",
+        "var keys = (_clipStrokes ?? new()).Select(s => s.LayerKey) .Concat((_clipShapes ?? new()).Select(s => s.LayerKey)) "
+        + ".Concat((_clipTexts ?? new()).Select(t => t.LayerKey));",
+        "var refused = LayerGate.RefusesContentOn(_page, keys); if (refused.Count > 0) "
+        + "{ CreationRefused?.Invoke(_page, LayerGate.RefusalMessage(_page, refused, paste: true), "
+        + "refused.Select(l => l.Key).ToArray()); return false; }",
+        "double minX = double.MaxValue");
+
+    // Items 2-4 of round 4: their wiring, pinned the same way.
+    Pin("item 2 - Redo asks OnRedoKey with the redo stack's state: Ignore returns, CancelStroke cancels, "
+        + "both before history",
+        inkSrc, "public void Redo()",
+        "switch (GestureRules.OnRedoKey(StrokeInProgress, UndoManager.CanRedo)) "
+        + "{ case HistoryKeyOutcome.Ignore: return; case HistoryKeyOutcome.CancelStroke: CancelStrokeInProgress(GestureEnd.Redo); return; }",
+        "UndoManager.Redo(_page);");
+    Pin("item 3 - the refusal's action label is ShowActionFor(the number of layers named)",
+        main, "public MainWindow()",
+        "Surface.CreationRefused += (page, message, keys) => ShowStatus(message, LayerGate.ShowActionFor(keys.Length), () =>",
+        "var shown = Surface.ShowLayers(page, keys); if (shown != null) ShowStatus(shown);");
+    Pin("item 3 - ShowLayers shows every named layer and names every one it showed",
+        inkSrc, "public string? ShowLayers(NotePage page, IReadOnlyList<int> keys)",
+        "var shown = LayerGate.ShowAll(ls, keys);",
+        "return LayerGate.ShownMessage(page, shown);");
+    Pin("item 4 - the shape menu switches to Select only through CreateThen, after the insert",
+        main, "private void InsertShape_Click(object sender, RoutedEventArgs e)",
+        "bool placed = LayerGate.CreateThen(() => Surface.InsertShape(sp.kind, sp.equal), () => SelectTool(\"Select\"));",
+        "if (!placed) return;");
+    Pin("item 4 - the Objects library's InsertShape switches to Select only through CreateThen",
+        main, "private void AttachChrome()",
+        "InsertShape = (kind, regular) => LayerGate.CreateThen(() => Surface.InsertShape(kind, regular), () => SelectTool(\"Select\")),");
+    int SelectCalls(string method)
+    {
+        string body = MethodText(main, Squash(method)) ?? "";
+        int n = 0, i = 0;
+        while ((i = body.IndexOf("SelectTool(", i, StringComparison.Ordinal)) >= 0) { n++; i++; }
+        return n;
+    }
+    Check("58.12 pin item 4 - InsertShape_Click calls SelectTool exactly once (the one inside CreateThen), "
+          + "so nothing switches the tool before the insert is asked",
+          SelectCalls("private void InsertShape_Click(object sender, RoutedEventArgs e)") == 1);
+}
+
+// ---------------------------------------------------------------------------
+// 30. 58.12 ITEM 2 - REDO MID-STROKE WITH NOTHING TO REDO DOES NOTHING.
+// ---------------------------------------------------------------------------
+// GestureRules.OnRedoKey is what InkSurface.Redo asks first (pinned in 29).
+{
+    Check("58.12 redo - a stroke in progress and NOTHING to redo: the key does nothing (Ignore), "
+          + "so the stroke continues",
+          GestureRules.OnRedoKey(strokeInProgress: true, canRedo: false) == HistoryKeyOutcome.Ignore);
+    Check("58.12 redo - a stroke in progress and something to redo: cancel the stroke, keep the "
+          + "redo stack (round 3's assumption, kept)",
+          GestureRules.OnRedoKey(strokeInProgress: true, canRedo: true) == HistoryKeyOutcome.CancelStroke);
+    Check("58.12 redo - no stroke in progress: redo runs, whether or not there is anything to redo",
+          GestureRules.OnRedoKey(false, true) == HistoryKeyOutcome.RunHistory
+          && GestureRules.OnRedoKey(false, false) == HistoryKeyOutcome.RunHistory);
+    Check("58.12 redo - undo is unchanged: mid-stroke it cancels whatever the stacks hold (R4)",
+          GestureRules.OnHistoryKey(true) == HistoryKeyOutcome.CancelStroke
+          && GestureRules.OnHistoryKey(false) == HistoryKeyOutcome.RunHistory);
+    // Through the real UndoRedoManager's CanRedo, as InkSurface.Redo hands it.
+    var rp = new NotePage();
+    var rm = new UndoRedoManager();
+    rm.Push(new AddStrokeAction(new PenStroke { Color = "#1" }), rp);
+    bool live = GestureRules.StrokeInProgress(true, true, true, false, false);
+    var emptyRedo = GestureRules.OnRedoKey(live, rm.CanRedo);
+    rm.Undo(rp);
+    var fullRedo = GestureRules.OnRedoKey(live, rm.CanRedo);
+    Check("58.12 redo - with the real manager: after a push (empty redo stack) a live vector stroke "
+          + "is left alone; after an undo (one redo) it is cancelled",
+          emptyRedo == HistoryKeyOutcome.Ignore && fullRedo == HistoryKeyOutcome.CancelStroke,
+          $"empty={emptyRedo}, full={fullRedo}");
+}
+
+// ---------------------------------------------------------------------------
+// 31. 58.12 ITEM 3 - EVERY PASTE-REFUSAL MESSAGE IS TRUE.
+// ---------------------------------------------------------------------------
+{
+    var qp = new NotePage();
+    PageLayers.Materialise(qp);                        // key 0, "Layer 1", visible
+    var q1 = PageLayers.Add(qp, "Ink"); q1.Hidden = true;
+    var q2 = PageLayers.Add(qp, "Wash"); q2.Opacity = 0f;
+    var q3 = PageLayers.Add(qp, "Grid"); q3.Hidden = true;
+    var q4 = PageLayers.Add(qp, "Notes"); q4.Hidden = true;
+    var qV = PageLayers.Add(qp, "Seen");
+    // One refused layer among visible destinations: the message must not claim
+    // it is the only one.
+    var oneOfMany = LayerGate.RefusesContentOn(qp, new[] { 0, qV.Key, q1.Key });
+    string mOne = LayerGate.RefusalMessage(qp, oneOfMany, paste: true);
+    Check("58.12 paste - one refused layer among visible ones: named, and the message does not say "
+          + "it is the paste's only destination",
+          oneOfMany.Count == 1 && mOne == "A layer this pastes onto (Ink) is hidden, so nothing was pasted."
+          && !mOne.StartsWith("The layer", StringComparison.Ordinal), mOne);
+    var three = LayerGate.RefusesContentOn(qp, new[] { q3.Key, q1.Key, q2.Key, 0 });
+    string mThree = LayerGate.RefusalMessage(qp, three, paste: true);
+    Check("58.12 paste - three refused layers: every one named, bottom first",
+          mThree == "Layers this pastes onto (Ink, Wash and Grid) are hidden or at 0% opacity, so nothing was pasted.",
+          mThree);
+    var four = LayerGate.RefusesContentOn(qp, new[] { q4.Key, q3.Key, q2.Key, q1.Key });
+    string mFour = LayerGate.RefusalMessage(qp, four, paste: true);
+    Check("58.12 paste - more than three: says how many instead of a list",
+          mFour == "4 layers this pastes onto are hidden or at 0% opacity, so nothing was pasted.", mFour);
+    Check("58.12 paste - the action is 'Show it' for one layer and 'Show them' for several",
+          LayerGate.ShowActionFor(oneOfMany.Count) == "Show it" && LayerGate.ShowActionFor(three.Count) == "Show them"
+          && LayerGate.ShowActionFor(four.Count) == "Show them");
+    // The action over several layers names EVERY layer it showed.
+    var shown2 = LayerGate.ShowAll(PageLayers.All(qp), three.Select(l => l.Key).ToList());
+    string after3 = LayerGate.ShownMessage(qp, shown2);
+    Check("58.12 paste - Show them over three layers shows all three and names all three",
+          shown2.Count == 3 && three.All(PageLayers.IsVisible)
+          && after3 == "Ink, Wash and Grid are showing again.", after3);
+    q1.Hidden = true; q3.Hidden = true;               // hide two again; Wash stays shown
+    var shownPart = LayerGate.ShowAll(PageLayers.All(qp), new[] { q1.Key, q2.Key, q3.Key, q1.Key });
+    string afterPart = LayerGate.ShownMessage(qp, shownPart);
+    Check("58.12 paste - a layer already showing again is not named, and a repeated key is shown once",
+          shownPart.Count == 2 && afterPart == "Ink and Grid are showing again.", afterPart);
+    q1.Hidden = q2.Hidden = q3.Hidden = q4.Hidden = true;
+    var shown4 = LayerGate.ShowAll(PageLayers.All(qp), new[] { q1.Key, q2.Key, q3.Key, q4.Key });
+    Check("58.12 paste - four shown: says how many; one shown: the Layers panel's own words",
+          LayerGate.ShownMessage(qp, shown4) == "4 layers are showing again."
+          && LayerGate.ShownMessage(qp, new[] { q1 }) == "Ink is showing again.",
+          LayerGate.ShownMessage(qp, shown4));
+    Check("58.12 paste - no new message or label carries a symbol or emoji",
+          new[] { mOne, mThree, mFour, after3, afterPart, LayerGate.ShowActionPlural }
+              .All(m => m.Length > 0 && m.All(ch => ch < 0x2000)));
+}
+
+// ---------------------------------------------------------------------------
+// 32. 58.12 ITEM 4 - A REFUSED SHAPE INSERT DOES NOT SWITCH THE TOOL.
+// ---------------------------------------------------------------------------
+// LayerGate.CreateThen is what both shape-insert callers run (pinned in 29).
+{
+    var trace = new List<string>();
+    bool refusedResult = LayerGate.CreateThen(() => { trace.Add("insert"); return false; },
+                                              () => trace.Add("select"));
+    Check("58.12 insert - a REFUSED insert: the tool switch never runs, and the caller hears false",
+          !refusedResult && trace.SequenceEqual(new[] { "insert" }), string.Join(",", trace));
+    trace.Clear();
+    bool placedResult = LayerGate.CreateThen(() => { trace.Add("insert"); return true; },
+                                             () => trace.Add("select"));
+    Check("58.12 insert - a PLACED shape: the tool switches once, AFTER the insert",
+          placedResult && trace.SequenceEqual(new[] { "insert", "select" }), string.Join(",", trace));
+    // With the real gate: a hidden active layer refuses, so no switch.
+    var ip = new NotePage();
+    PageLayers.Materialise(ip);
+    var iH = PageLayers.Add(ip, "Hid"); iH.Hidden = true;
+    PageLayers.SetActive(ip, iH.Key);
+    bool switched = false;
+    LayerGate.CreateThen(() => LayerGate.RefusesNewContent(ip) == null, () => switched = true);
+    Check("58.12 insert - with the real R1 gate on a hidden active layer, the tool is not switched",
+          !switched);
+}
+
+// ---------------------------------------------------------------------------
 Report();
 return failures > 0 ? 1 : 0;
 
@@ -1663,6 +1932,132 @@ static void RestoreOrRemove(string path, byte[]? original)
         }
     }
     catch { }
+}
+
+// ---------------------------------------------------------------------------
+// 58.12 section 29's source-text pins.
+// ---------------------------------------------------------------------------
+
+/// <summary>The worktree root: the first directory above this binary that
+/// holds Quill.sln (tools/SeatProof's rule).</summary>
+static string RepoRoot()
+{
+    var d = new DirectoryInfo(AppContext.BaseDirectory);
+    while (d != null && !File.Exists(Path.Combine(d.FullName, "Quill.sln"))) d = d.Parent;
+    return d?.FullName ?? throw new InvalidOperationException("Quill.sln not found above " + AppContext.BaseDirectory);
+}
+
+/// <summary>Every whitespace character removed, so a pin does not depend on
+/// indentation, line breaks or the file's line endings (CRLF or LF).</summary>
+static string Squash(string s)
+{
+    var sb = new System.Text.StringBuilder(s.Length);
+    foreach (char c in s) if (!char.IsWhiteSpace(c)) sb.Append(c);
+    return sb.ToString();
+}
+
+/// <summary>A C# source file as CODE: every // and /* */ comment removed
+/// (outside string and char literals), so a gate that was commented out no
+/// longer matches its pin; then squashed.</summary>
+static string Code(string src)
+{
+    var sb = new System.Text.StringBuilder(src.Length);
+    int i = 0, n = src.Length;
+    while (i < n)
+    {
+        char c = src[i];
+        char d = i + 1 < n ? src[i + 1] : '\0';
+        if (c == '/' && d == '/') { while (i < n && src[i] != '\n') i++; continue; }
+        if (c == '/' && d == '*')
+        {
+            int end = src.IndexOf("*/", i + 2, StringComparison.Ordinal);
+            i = end < 0 ? n : end + 2;
+            sb.Append(' ');
+            continue;
+        }
+        if (c == '"' && d == '"' && i + 2 < n && src[i + 2] == '"')
+        {   // raw string literal: to the next """
+            int end = src.IndexOf("\"\"\"", i + 3, StringComparison.Ordinal);
+            int stop = end < 0 ? n : end + 3;
+            sb.Append(src, i, stop - i); i = stop; continue;
+        }
+        bool verbatim = (c == '@' && d == '"') || ((c == '@' || c == '$') && (d == '@' || d == '$') && d != c
+                                                   && i + 2 < n && src[i + 2] == '"');
+        if (verbatim)
+        {
+            int q = src.IndexOf('"', i);
+            sb.Append(src, i, q - i + 1);
+            i = q + 1;
+            while (i < n)
+            {
+                if (src[i] == '"' && i + 1 < n && src[i + 1] == '"') { sb.Append("\"\""); i += 2; continue; }
+                sb.Append(src[i]);
+                if (src[i++] == '"') break;
+            }
+            continue;
+        }
+        if (c == '"' || c == '\'')
+        {
+            sb.Append(c); i++;
+            while (i < n)
+            {
+                char e = src[i];
+                sb.Append(e); i++;
+                if (e == '\\' && i < n) { sb.Append(src[i]); i++; continue; }
+                if (e == c || e == '\n') break;
+            }
+            continue;
+        }
+        sb.Append(c); i++;
+    }
+    return Squash(sb.ToString());
+}
+
+/// <summary>The text of ONE member of squashed code: from its signature,
+/// which must occur exactly once, through its matching closing brace (or,
+/// for an expression-bodied member, its semicolon). Null when the signature
+/// is missing or not unique.</summary>
+static string? MethodText(string code, string squashedSignature)
+{
+    int at = code.IndexOf(squashedSignature, StringComparison.Ordinal);
+    if (at < 0 || code.IndexOf(squashedSignature, at + 1, StringComparison.Ordinal) >= 0) return null;
+    int depth = 0;
+    for (int i = at + squashedSignature.Length; i < code.Length; i++)
+    {
+        char c = code[i];
+        if (c == '"' || c == '\'')
+        {   // skip a literal (Code kept them intact)
+            for (i++; i < code.Length && code[i] != c; i++) if (code[i] == '\\') i++;
+            continue;
+        }
+        if (c == ';' && depth == 0) return code.Substring(at, i - at + 1);
+        if (c == '{') depth++;
+        else if (c == '}' && --depth == 0) return code.Substring(at, i - at + 1);
+    }
+    return null;
+}
+
+/// <summary>Whether every needle occurs inside the named member's own text,
+/// each after the one before it. The reason when not.</summary>
+static (bool ok, string why) PinIn(string code, string signature, string[] inOrder)
+{
+    string sig = Squash(signature);
+    string? body = MethodText(code, sig);
+    if (body == null)
+        return (false, code.Contains(sig, StringComparison.Ordinal)
+            ? "the member '" + signature + "' is not unique or its braces do not close"
+            : "the member '" + signature + "' is not in the source");
+    int pos = 0;
+    foreach (var needle in inOrder)
+    {
+        string sn = Squash(needle);
+        int i = body.IndexOf(sn, pos, StringComparison.Ordinal);
+        if (i < 0)
+            return (false, (body.Contains(sn, StringComparison.Ordinal) ? "OUT OF ORDER in " : "MISSING from ")
+                           + signature + ": " + needle);
+        pos = i + sn.Length;
+    }
+    return (true, "");
 }
 
 static bool SameBytes(string path, byte[]? original)
