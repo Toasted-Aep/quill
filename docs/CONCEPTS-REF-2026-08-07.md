@@ -11832,11 +11832,11 @@ base layer that is always visible, so an existing page never refuses.
 | `MaterializePendingText` (dictation into a caret, text paste into a caret) | `SpawnTextBox` | refused; nothing typed or pasted |
 | Dictation with no box to type into | `MainWindow` dictation handler (~307) | asked once before either creation call; refused, one message |
 | `AddTextElement` (~8935): handwriting to text or maths, the equation-as-text fallback, "Insert onto page" (AI answer, ~10546), the calculator's insert (~11874) | first line | refused. Handwriting conversion asks before the recogniser runs (~4762) and again before it deletes the handwriting (~4779), so ink is never deleted and then refused |
-| `InsertShape` (~8546): the shape menu (`InsertShape_Click`, `MainWindow` ~7300) and the Objects library (`ObjectsWindow` ~359, through `ChromeBars`' `InsertShape`, `MainWindow` ~868) | first line | refused; neither caller then shows its "drag it to move" instruction over the refusal |
+| `InsertShape` (~8546): the shape menu (`InsertShape_Click`, `MainWindow` ~7300) and the Objects library (`ObjectsWindow` ~359, through `ChromeBars`' `InsertShape`, `MainWindow` ~868) | first line | refused; neither caller then shows its "drag it to move" instruction over the refusal. *(Corrected in 58.12: both callers still switched the tool to Select BEFORE asking, so a refused insert took the pen away. They now switch only when the shape is placed.)* |
 | `InsertImage` (~8370) and `InsertImageAt` (~5748): the image picker (`ChromeBars` ~1310), image paste (`MainWindow` ~12254), a new equation's image | first line, and the picker and paste ask before a file is written into the library's assets | refused; a pending caret is left where it was |
 | `InsertTable` (~8951) | `InsertTable_Click` (~9473) asks before the dialog opens, and the surface again | refused |
 | New equation | `InsertOrEditEquationAsync` (~9581) before the editor opens | refused. Editing an existing equation creates nothing and is not asked |
-| Canvas paste (Ctrl+V, the context menu's Paste) | `PasteCanvasAt` (~5680) | a pasted element keeps the key it was copied with (18.10), so paste does not use the active layer. It is refused if any of those keys resolves to a layer that draws nothing, and the message names that layer; "Show it" shows every layer named |
+| Canvas paste (Ctrl+V, the context menu's Paste) | `PasteCanvasAt` (~5680) | a pasted element keeps the key it was copied with (18.10), so paste does not use the active layer. It is refused if any of those keys resolves to a layer that draws nothing, and the message names that layer; "Show it" shows every layer named. *(Corrected in 58.12: a message over several layers named none of them, and the status line after the action named only the first. Every message now names every refused layer, and the label is "Show them" when there are several; 58.12.3.)* |
 | Duplicate (selection, and the box being typed in) | not asked | a copy keeps its source's key. Under R2 nothing on an invisible layer can be selected, and a box being typed in exists only on a visible layer, so a copy cannot land on an invisible one |
 | Table rows, columns, merge and split | not asked | these edit an existing table, which is selected and so visible; its cells take the table's key |
 | PDF import | not asked | makes new pages; nothing lands on the open page's active layer |
@@ -11871,6 +11871,13 @@ contain no symbol and no emoji; the harness checks every character.
 | after the action | `NAME is showing again.` (the Layers panel's switch says the same words) |
 
 NAME is `PageLayers.DisplayName`: the layer's own name, or "Layer N".
+
+*(Corrected in 58.12. The four paste rows, the label and the after-action
+row above are replaced: the single-layer paste message implied NAME was the
+paste's only destination, the plural ones named no layer, "Show it" followed
+a plural message, and the after-action line named only the first layer
+shown. The strings now shipped are in 58.12.3. The two active-layer rows are
+unchanged.)*
 
 **"Show it"** runs `LayerGate.Show`: unhide, and lift an opacity that draws
 nothing (0%, below 0, not a number) to 100%. A hidden layer keeps its own
@@ -11973,6 +11980,11 @@ unchanged from round 2.
 not cover it. Redo pressed mid-stroke does what undo does: it cancels the
 stroke, touches no history, and so keeps the redo stack intact. Round 2 had
 committed the oil stroke first, and that new edit emptied the redo stack.
+*(Corrected in 58.12: this held even with NOTHING to redo, so Ctrl+Y threw
+the live stroke away for a key that had nothing to do. Redo mid-stroke with
+nothing to redo now does nothing and the stroke continues; with something to
+redo it still cancels the stroke and keeps the redo stack, which is still an
+assumption the owner can overturn.)*
 
 **Not covered:** an undo pressed while the ERASER is mid-drag is not a pen or
 brush stroke, and runs the history as before.
@@ -11997,7 +12009,7 @@ later one. No `GestureEnd` answers `KeepPainting`.
 | tool switch | `SetTool` (~977) | committed | ended |
 | page switch | `LoadPage` (~859), before `_page` changes | committed to the outgoing page | ended |
 | undo | `Undo` → `CancelStrokeInProgress(Undo)` | **discarded** (58.11.6) | ended |
-| redo | `Redo` → `CancelStrokeInProgress(Redo)` | **discarded** (assumption) | ended |
+| redo | `Redo` → `CancelStrokeInProgress(Redo)` | **discarded** (assumption) | ended. *(58.12: only when there is something to redo. With nothing to redo, `Redo` returns first and this row does not happen: the brush and the pen gesture carry on.)* |
 | window close, surface unload | `FlushPaint` (~6178) | committed, then flushed | ended |
 | device loss | `CreateResources` with `NewDevice` (~512) → `EndOilGesture(DeviceLoss)`, then the brush is disposed | **dropped** | ended |
 
@@ -12185,4 +12197,6 @@ Quill was not launched. None of the following has been observed:
   on no layer) (58.11.2);
 - the message for a 0% layer says "at 0% opacity", not "hidden" (58.11.3);
 - redo mid-stroke cancels the stroke and keeps the redo stack (58.11.6);
+  *(58.12: now only when there is something to redo; with nothing to redo it
+  does nothing)*;
 - the Layers panel's switch still reads `Hidden` alone (58.11.9).
