@@ -272,6 +272,15 @@ public sealed partial class MainWindow : Window
         Surface.Sampled += OnToolSampled;
         Surface.RulerDialRequested += ShowRulerAngleEntry;
         Surface.StrokeTapped += stroke => SeekAudioToStroke(stroke);
+        // §58.11 R1: a creation refused because its layer draws nothing says so
+        // on the status line, with a one-tap action that shows the layer
+        // ("Show them" when the message names several, §58.12).
+        Surface.CreationRefused += (page, message, keys) =>
+            ShowStatus(message, LayerGate.ShowActionFor(keys.Length), () =>
+            {
+                var shown = Surface.ShowLayers(page, keys);
+                if (shown != null) ShowStatus(shown);
+            });
         _audioRecorder.ElapsedChanged += elapsed => { DispatcherQueue.TryEnqueue(() => AudioTimeText.Text = elapsed.ToString(@"m\:ss")); };
         // when playback finishes, restore the play icon and un-hide the ink (#55)
         _audioPlayer.PlaybackEnded += () => DispatcherQueue.TryEnqueue(() =>
@@ -292,6 +301,11 @@ public sealed partial class MainWindow : Window
             // focused box; a tapped-but-empty Text caret becomes the target
             // instead of a bubble in the middle of the screen (#5-batch4)
             var box = Surface.ActiveTextBox ?? Surface.LastTextBox;
+            // §58.11 R1: with no box to type into, this segment would CREATE
+            // one on the active layer (the caret's, or a fresh one at the view
+            // centre). Asked once here, so a refusal shows one message rather
+            // than one from each of the two creation calls below.
+            if (box == null && !Surface.CanCreateOnActiveLayer()) return;
             if (box == null && Surface.HasPendingText) box = Surface.MaterializePendingText();
             if (box != null)
             {
@@ -312,7 +326,15 @@ public sealed partial class MainWindow : Window
         });
 
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveNow(); };
-        _statusTimer.Tick += (_, _) => { _statusTimer.Stop(); FadeOut(StatusText, 220); };
+        _statusTimer.Tick += (_, _) =>
+        {
+            _statusTimer.Stop();
+            FadeOut(StatusText, 220);
+            // §58.11: an action belongs to the message it came with and goes
+            // with it.
+            _statusAction = null;
+            StatusAction.Visibility = Visibility.Collapsed;
+        };
         _zoomTimer.Tick += (_, _) => { _zoomTimer.Stop(); FadeOut(ZoomBorder, 180); };
         // §56: closing releases every live text box, so the last SaveNow's flush
         // is a releasing one (trim on next edit only).
@@ -846,7 +868,9 @@ public sealed partial class MainWindow : Window
             PerspectiveVps = () => Math.Max(0, PerspectiveCombo.SelectedIndex),
             SetPerspective = v => PerspectiveCombo.SelectedIndex = v,
             AiMenu = () => BtnAi.Flyout,
-            InsertShape = (kind, regular) => { SelectTool("Select"); Surface.InsertShape(kind, regular); },
+            // §58.12: Select only once the shape is placed; a refused insert keeps the tool.
+            InsertShape = (kind, regular) => LayerGate.CreateThen(() => Surface.InsertShape(kind, regular),
+                                                                  () => SelectTool("Select")),
             CommentMode = () => Surface.CommentMode,
             SetCommentMode = v => { ToolComment.IsChecked = v; ToggleComment_Click(this, new RoutedEventArgs()); },
             ReduceMotion = () => _reduceMotion,
@@ -2175,14 +2199,37 @@ public sealed partial class MainWindow : Window
         if (cw != null && cw != _shownConflict) { _shownConflict = cw; ShowStatus(cw.Replace("\n", " ")); }
     }
 
-    private void ShowStatus(string message)
+    private void ShowStatus(string message) => ShowStatus(message, null, null);
+
+    // §58.11 R1: the status line's one optional action, and the message it
+    // belongs to. Replaced by the next message, cleared when the line fades.
+    private Action? _statusAction;
+
+    /// <summary>The status line, optionally with ONE action beside the message
+    /// (§58.11 R1: "Show it" after a creation the hidden active layer
+    /// refused). A message with an action stays up for 6 s rather than 3, so
+    /// there is time to reach the button; any later message replaces both.</summary>
+    private void ShowStatus(string message, string? actionLabel, Action? action)
     {
         StatusText.Text = message;
+        bool withAction = action != null && !string.IsNullOrEmpty(actionLabel);
+        _statusAction = withAction ? action : null;
+        StatusAction.Content = withAction ? actionLabel : null;
+        StatusAction.Visibility = withAction ? Visibility.Visible : Visibility.Collapsed;
         // slide-fade entrance instead of an instant text swap (#anim-roadmap)
         if (StatusText.Visibility != Visibility.Visible || StatusText.Opacity < 0.99)
             FadeIn(StatusText, 150, pop: false, slideY: 10);
         _statusTimer.Stop();
+        _statusTimer.Interval = TimeSpan.FromSeconds(withAction ? 6 : 3);
         _statusTimer.Start();
+    }
+
+    private void StatusAction_Click(object sender, RoutedEventArgs e)
+    {
+        var act = _statusAction;
+        _statusAction = null;
+        StatusAction.Visibility = Visibility.Collapsed;
+        act?.Invoke();
     }
 
     // =======================================================================
@@ -4724,6 +4771,9 @@ public sealed partial class MainWindow : Window
         {
             var strokes = Surface.SelectedStrokes.ToList();
             if (strokes.Count == 0) { ShowStatus("Lasso-select some handwriting first."); return; }
+            // §58.11 R1: the text lands on the active layer. Asked BEFORE the
+            // handwriting is read and deleted, so a refusal costs nothing.
+            if (!Surface.CanCreateOnActiveLayer()) return;
             var bounds = Surface.SelectionBoundsWorld;
             ShowStatus("Reading your handwriting…");
             var text = await RecognizeStrokesAsync(strokes);
@@ -4737,6 +4787,10 @@ public sealed partial class MainWindow : Window
                     : expr;   // couldn't evaluate: still insert the recognised expression
             }
 
+            // §58.11 R1, again: the recogniser awaited, and the layer may have
+            // been hidden meanwhile. Never delete the handwriting and then have
+            // the text refused.
+            if (!Surface.CanCreateOnActiveLayer()) return;
             Surface.DeleteSelection();   // undoable
             double x = bounds.IsEmpty ? 100 : bounds.X;
             double y = bounds.IsEmpty ? 100 : bounds.Y;
@@ -7260,26 +7314,35 @@ public sealed partial class MainWindow : Window
     private void InsertShape_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuFlyoutItem item || item.Tag is not string tag) return;
-        SelectTool("Select");
-        switch (tag)
+        (ShapeKind kind, bool equal)? spec = tag switch
         {
-            case "Line": Surface.InsertShape(ShapeKind.Line, false); break;
-            case "Arrow": Surface.InsertShape(ShapeKind.Arrow, false); break;
-            case "Rect": Surface.InsertShape(ShapeKind.Rect, false); break;
-            case "Square": Surface.InsertShape(ShapeKind.Rect, true); break;
-            case "Ellipse": Surface.InsertShape(ShapeKind.Ellipse, false); break;
-            case "Circle": Surface.InsertShape(ShapeKind.Ellipse, true); break;
-            case "Triangle": Surface.InsertShape(ShapeKind.Triangle, false); break;
-            case "RightTriangle": Surface.InsertShape(ShapeKind.RightTriangle, false); break;
-            case "Diamond": Surface.InsertShape(ShapeKind.Diamond, false); break;
-            case "Parallelogram": Surface.InsertShape(ShapeKind.Parallelogram, false); break;
-            case "Trapezoid": Surface.InsertShape(ShapeKind.Trapezoid, false); break;
-            case "Pentagon": Surface.InsertShape(ShapeKind.Pentagon, false); break;
-            case "Hexagon": Surface.InsertShape(ShapeKind.Hexagon, false); break;
-            case "Star": Surface.InsertShape(ShapeKind.Star, false); break;
-            case "AxesXY": Surface.InsertShape(ShapeKind.AxesXY, false); break;
-            case "AxesXYZ": Surface.InsertShape(ShapeKind.AxesXYZ, false); break;
-        }
+            "Line" => (ShapeKind.Line, false),
+            "Arrow" => (ShapeKind.Arrow, false),
+            "Rect" => (ShapeKind.Rect, false),
+            "Square" => (ShapeKind.Rect, true),
+            "Ellipse" => (ShapeKind.Ellipse, false),
+            "Circle" => (ShapeKind.Ellipse, true),
+            "Triangle" => (ShapeKind.Triangle, false),
+            "RightTriangle" => (ShapeKind.RightTriangle, false),
+            "Diamond" => (ShapeKind.Diamond, false),
+            "Parallelogram" => (ShapeKind.Parallelogram, false),
+            "Trapezoid" => (ShapeKind.Trapezoid, false),
+            "Pentagon" => (ShapeKind.Pentagon, false),
+            "Hexagon" => (ShapeKind.Hexagon, false),
+            "Star" => (ShapeKind.Star, false),
+            "AxesXY" => (ShapeKind.AxesXY, false),
+            "AxesXYZ" => (ShapeKind.AxesXYZ, false),
+            _ => null,
+        };
+        if (spec is not { } sp) return;
+        // §58.12: the tool switches to Select only when the shape was actually
+        // placed (LayerGate.CreateThen). Round 3 switched it first, so a
+        // refused insert (§58.11 R1) still took the user's pen away.
+        bool placed = LayerGate.CreateThen(() => Surface.InsertShape(sp.kind, sp.equal),
+                                           () => SelectTool("Select"));
+        // §58.11 R1: a refused insert has already put its message up; do not
+        // cover it with instructions for a shape that is not there.
+        if (!placed) return;
         ShowStatus("Drag the shape to move it; drag a corner handle to resize. Del removes it.");
     }
 
@@ -9425,6 +9488,8 @@ public sealed partial class MainWindow : Window
     // =======================================================================
     private async void InsertTable_Click(object sender, RoutedEventArgs e)
     {
+        // §58.11 R1: refuse before the dialog, not after the user has filled it.
+        if (!Surface.CanCreateOnActiveLayer()) return;
         var rows = new NumberBox { Header = "Rows", Value = 3, Minimum = 1, Maximum = 20, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline };
         var cols = new NumberBox { Header = "Columns", Value = 3, Minimum = 1, Maximum = 12, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline };
         var panel = new StackPanel { Spacing = 10, Width = 260 };
@@ -9449,7 +9514,8 @@ public sealed partial class MainWindow : Window
         int c = double.IsNaN(cols.Value) ? 3 : (int)cols.Value;
         // cells sized from the default text size, like a fresh Word table (#49)
         double fs = _library.DefaultFontSize;
-        Surface.InsertTable(r, c, Math.Max(120, fs * 11), Math.Max(44, fs * 2.4 + 14));
+        // §58.11 R1: a refused table has put its message up; leave the tool.
+        if (!Surface.InsertTable(r, c, Math.Max(120, fs * 11), Math.Max(44, fs * 2.4 + 14))) return;
         SelectTool("Text");   // writing-first: tap any cell and type straight away
         ShowStatus("Table inserted — tap a cell to type. Use the + buttons or right-click for rows and columns; drag a grid line to resize.");
     }
@@ -9529,6 +9595,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
 
     private async Task InsertOrEditEquationAsync(ShapeElement? existing)
     {
+        // §58.11 R1: a NEW equation lands on the active layer; refuse before
+        // the editor opens. Editing an existing one creates nothing.
+        if (existing == null && !Surface.CanCreateOnActiveLayer()) return;
         string? latex = null;
         string? initial = existing?.EquationLatex;
         byte[]? webShot = null;
@@ -9683,8 +9752,8 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                     }
                     if (existing != null)
                         Surface.UpdateEquationImage(existing, shotPath, pw / s, ph / s, latex);
-                    else
-                        Surface.InsertImage(shotPath, pw / s, ph / s, latex);
+                    else if (!Surface.InsertImage(shotPath, pw / s, ph / s, latex))
+                        return;   // §58.11 R1: refused; its message is up
                     ShowStatus(existing == null
                         ? "Equation inserted — right-click it any time to edit."
                         : "Equation updated.");
@@ -9711,8 +9780,8 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                 {
                     if (existing != null)
                         Surface.UpdateEquationImage(existing, filePath, bmp.Size.Width, bmp.Size.Height, latex);
-                    else
-                        Surface.InsertImage(filePath, bmp.Size.Width, bmp.Size.Height, latex);
+                    else if (!Surface.InsertImage(filePath, bmp.Size.Width, bmp.Size.Height, latex))
+                        return;   // §58.11 R1: refused; its message is up
                 }
                 ShowStatus(existing == null
                     ? "Equation inserted — right-click it any time to edit."
@@ -9725,8 +9794,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
         if (existing != null) { ShowStatus("Could not re-render the equation."); return; }
         var unicode = LatexToUnicode(latex);
         var centre = Surface.ScreenToWorld(new Point(Surface.ActualWidth / 2, Surface.ActualHeight / 2));
-        Surface.AddTextElement(centre.X - 160, centre.Y - 20, 360,
-            PlainToRtf(unicode, "Cambria Math", 20f, ContrastHexForPage()));
+        if (!Surface.AddTextElement(centre.X - 160, centre.Y - 20, 360,
+                PlainToRtf(unicode, "Cambria Math", 20f, ContrastHexForPage())))
+            return;   // §58.11 R1: refused; its message is up
         ShowStatus("Equation inserted as text.");
     }
 
@@ -11820,9 +11890,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             ins.Click += (_, _) =>
             {
                 var centre = Surface.ScreenToWorld(new Point(Surface.ActualWidth / 2, Surface.ActualHeight / 2));
-                Surface.AddTextElement(centre.X - 120, centre.Y - 14, 320,
-                    PlainToRtf(entryCopy, _library.DefaultFont, (float)_library.DefaultFontSize, ContrastHexForPage()));
-                ShowStatus("Inserted onto the page.");
+                if (Surface.AddTextElement(centre.X - 120, centre.Y - 14, 320,
+                        PlainToRtf(entryCopy, _library.DefaultFont, (float)_library.DefaultFontSize, ContrastHexForPage())))
+                    ShowStatus("Inserted onto the page.");   // §58.11 R1: else the refusal is up
             };
             Grid.SetColumn(tbx, 0);
             Grid.SetColumn(ins, 1);
@@ -12198,6 +12268,9 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
                 ShowStatus("Clipboard has no image to paste.");
                 return;
             }
+            // §58.11 R1: an image lands on the active layer. Refused here,
+            // before a file is written into the library's assets for it.
+            if (!Surface.CanCreateOnActiveLayer()) return;
             var streamRef = await content.GetBitmapAsync();
             using var stream = await streamRef.OpenReadAsync();
             var decoder = await BitmapDecoder.CreateAsync(stream);
@@ -12218,14 +12291,14 @@ function getFormulaRect(){const r=out.getBoundingClientRect();return JSON.string
             if (worldTopLeft is { } tl)
             {
                 // pasted via the context menu at a specific point
-                Surface.InsertImageAt(path, decoder.PixelWidth, decoder.PixelHeight, tl);
+                if (!Surface.InsertImageAt(path, decoder.PixelWidth, decoder.PixelHeight, tl)) return;   // §58.11 R1
             }
             else
             {
                 // Insert first so the image can consume a pending text caret as its
                 // position, then switch to Pen so pen and touch behave as normal,
                 // but keep the mouse in Auto/Move mode to allow mouse dragging.
-                Surface.InsertImage(path, decoder.PixelWidth, decoder.PixelHeight);
+                if (!Surface.InsertImage(path, decoder.PixelWidth, decoder.PixelHeight)) return;   // §58.11 R1
                 SelectTool("Pen");
                 if (Surface.MouseMode == MouseMode.Grab)
                 {
