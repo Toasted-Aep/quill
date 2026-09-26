@@ -3914,14 +3914,15 @@ public sealed class InkSurface : UserControl
     public string? ShowLayers(NotePage page, IReadOnlyList<int> keys)
     {
         if (_page == null || !ReferenceEquals(page, _page) || page.Layers is not { Count: > 0 } ls) return null;
-        Layer? first = null;
+        // §58.12: every layer the action showed is named, not only the first.
+        var shown = new List<Layer>();
         foreach (var k in keys)
             foreach (var l in ls)
-                if (l.Key == k && LayerGate.Show(l)) first ??= l;
-        if (first == null) return null;
+                if (l.Key == k && LayerGate.Show(l)) shown.Add(l);
+        if (shown.Count == 0) return null;
         LayersChanged();
         ContentChanged?.Invoke();   // saves, and rebuilds an open Layers panel
-        return LayerGate.ShownMessage(page, first);
+        return LayerGate.ShownMessage(page, shown);
     }
 
     /// <summary>Chooses the layer new ink lands on.
