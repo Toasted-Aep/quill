@@ -96,6 +96,12 @@ Status key: `TODO` · `IN FLIGHT` · `NEEDS SCREEN` · `DONE` · `RULING NEEDED`
 | 8.23 | **`main` logs a COMException at launch and draws an image late** — **FOUND ON SCREEN, NOT FIXED** (screen run 26, 2026-09-25/26, scratch libraries). On `902de20`, launching against a seeded scratch library wrote `crash.log`: COMException in `CanvasVirtualControl.Invalidate` from `InkSurface.RequestBitmap` (`InkSurface.cs:7845`), and the page's image was not drawn 3.5 s after launch (`vp26/s3m-launch-P2.png`). Not seen on the layer-order branch. Likely the same device-not-ready class as §47.4. | no crash.log at launch, and an image draws with the page |
 | 8.24 | **Settings: the wheel is captured by carousels, and the Restore link is low contrast** — **FOUND ON SCREEN, NOT FIXED** (screen run 26, 2026-09-25/26, scratch libraries). In Settings > Workspace the horizontal Background and Grid carousels take the mouse wheel, so over most of the panel the wheel cannot scroll down to Restore Defaults. The Restore Default Settings link measured 1.75:1 and its new caption 3.63:1. | the wheel scrolls the panel unless the carousel is the pointer's own target, and the link and caption clear 4.5:1 |
 
+## Wave 9 — performance: Concepts runs at 120 fps on the same laptop
+
+| # | item | done means |
+|---|---|---|
+| 9.1 | **Quill runs at about 30 fps and lags behind when a button is pressed** — **REPORTED BY THE OWNER, NOT MEASURED** (2026-09-29). On the owner's low-power laptop (Intel Core Ultra 7 255H, integrated graphics, 2880x1800 at 200%), Concepts runs buttery smooth at 120 fps; Quill runs at nearly 30 fps and visibly lags behind after a button press. Nothing has been measured yet. Leads to measure first, NONE of them established: which build is being run (Debug or Release); `InkSurface` redrawing the whole page every frame through one `CanvasControl` (no cached layers, no dirty regions); chrome that rebuilds and re-allocates on every refresh (the dial's `Refresh`, the pen strip's `BuildPenStrip`); library saves on the UI thread with a 53 MB `library.json`; allocation per pointer move. First step: a frame-time and UI-thread profile of drawing, panning, zooming and a button press, on this laptop, Release build, before anything is changed. | a steady 120 fps while drawing, panning and zooming on the owner's laptop, and no visible lag after any button press - measured, not estimated |
+
 ## Not code tasks — flagged, not queued
 
 - **Self-signed MSIX cert** — public distribution needs a real certificate. A purchase, not a fix.
