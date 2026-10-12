@@ -6,6 +6,17 @@ File:line references are to that commit and will drift; the names beside them ar
 to search for. Every "expected impact" below is an estimate made from reading the code,
 and is labelled as one.
 
+**Second pass (2026-10-12), same commit's source.** The first pass read about 4,300 of
+InkSurface.cs's lines and 2,100 of MainWindow.xaml.cs's. The second pass read the rest of
+both, and SettingsWindow.cs, ColorWheel.cs, BrushesWindow.cs, FloatingWindow.cs, the
+exporters, ExportWindow.cs, HistoryWindow.cs, ObjectsWindow.cs, SelectionChrome.cs,
+FullscreenChrome.cs, ValuePopover.cs, PanelLayout.cs, PaperTextures.cs, PaperGrain.cs,
+GridArt.cs and most of BottomMenu.cs and MeasurementMenu.cs (exact ranges are in section 6).
+Still nothing has been built, run or measured. Material added by the second pass is marked
+"(second pass)" in headings, or in the text where it amends a first-pass passage. The
+ranking in section 1.1 is the current one; the S-numbers of the first pass are unchanged and
+the new suspects are S12 to S20.
+
 The report (owner, 2026-09-29): on the Intel Core Ultra 7 255H laptop (integrated
 graphics, 2880x1800 at 200%) Concepts runs at 120 fps and Quill runs at nearly 30, and
 Quill visibly lags behind after a button press. TODO 9.1 is done when there is "a steady
@@ -18,7 +29,8 @@ code.
 
 ## 1. Summary
 
-Reading the code does not find one cause. It finds five separate ones, any of which could
+Reading the code does not find one cause. (The second pass, section 1.1, adds more and
+re-ranks them; this list is the first pass's.) It finds five separate ones, any of which could
 account for much of what was reported, and each can be confirmed or cleared with a
 measurement that takes minutes. In the order to look at them:
 
@@ -44,6 +56,33 @@ Behind those: a 40 ms glow timer that never stops and acrylic cards that sit ove
 canvas (S6), per-event work in the view-changed chain (S7), the in-memory data model and
 garbage collector (S8), the ink cache's rebuild behaviour (S9), eraser and selection paths
 (S10), and text boxes built eagerly for the whole page (S11).
+
+### 1.1 Current ranking (second pass)
+
+The second pass looked for a cost that runs continuously and found none beyond the glow
+timer (S6). Every other timer in the app is a one-shot, a burst of under half a second, or
+runs only while a window or tool is in use (table in S20). So the sustained "nearly 30 fps"
+is still explained, if it is explained by the code at all, by S1 to S3 and S6; what the
+second pass adds is mostly in the "lag after a button press" half of the report, and a
+second source of save stalls.
+
+| Rank | Suspect | Explains | Change from the first pass |
+|------|---------|----------|----------------------------|
+| 1 | S1 Debug build | everything CPU-side | unchanged |
+| 2 | S2 full-viewport repaint, about 100 regions, each a full page draw | sustained fps while panning, zooming, switching tool | unchanged; per-region shape costs added (S16) |
+| 3 | S3 one DrawLine per segment, wet stroke redrawn from its first point | sustained fps while writing | unchanged; extra per-region wet-stroke allocations (S3 addendum) |
+| 4 | S4 button press rebuilds the dial and pen strip, extended by S14 (bottom menu, selection chrome, theme cascade) and S18 (dial animation) | lag after a button press | S4 widened: more rebuilds per press than the first pass found |
+| 5 | S5 whole-library saves on the UI thread, extended by S12 (a page turn saves twice) and S13 (colour picker writes settings.json per callback) | freezes after a pause, at page turns, while picking a colour | S5 corrected and widened |
+| 6 | S6 glow timer and acrylic cards | steady background cost, damage behind the canvas | unchanged |
+| 7 | S11 text layer, rebuilt from many more triggers and heavier per box than stated | page turn, delete, duplicate, paste, undo on text pages | up from 11; the cost per box and the trigger list were understated |
+| 8 | S7 view-changed chain | per-event cost during pan and zoom | unchanged |
+| 9 | S17 image selection fade: a full uncached repaint per frame plus per-frame text-box work | a hitch when an image is clicked | new (S10 understated it) |
+| 10 | S15 paper tile bake on the UI thread | a hitch on a page turn or first draw of a paper | new |
+
+Below the line: S9 ink cache (only on pages of 2,500+ strokes), S16 per-region shape
+costs (only on pages with tables, equations, grainy shapes or large images), S8 GC, S10
+eraser and selection paths, and S19 and S20, which cost only while a window, tool or
+non-default setting is in use.
 
 Order of work:
 
@@ -482,6 +521,432 @@ and after free-space (2938). The layer sits under a `CompositeTransform` that is
 on every view change (785-788). The cost grows with the number of text boxes on the page:
 page-turn time, and zoom smoothness on text-heavy pages. P11 gives the count.
 
+**Addendum (second pass).** The per-box cost and the trigger list were both understated.
+- Each `BuildTextUi` (10075-10628) creates a `Grid`, two `TextBlock`s, a `RichEditBox` with
+  `IsSpellCheckEnabled = true` (10199) and a `Border`, sets about seven brushes and resources
+  (`PinEditorBrushes`, 4472-4486, called at 10215), sets default character and paragraph
+  formats (10218-10225), parses the whole RTF with `Document.SetText` (10238), then calls
+  `AutoSizeBubble` at once (10429) and again on `Loaded` (10431). `AutoSizeBubble`
+  (8738-8889) reads the text, scans up to 64 ranges for the largest run (`MaxRunFontSizePx`,
+  8894-8919), creates a `CanvasTextLayout` per line and measures the content height with
+  several `GetRange` and `GetPoint` calls. `Loaded` also re-reads the RTF and runs
+  `RtfRunParser.RunColoursLost` (10298-10299). Estimate: 1 to 5 ms per box in Release, so
+  100 to 500 ms for a page of 50 boxes, all on the UI thread, more in Debug.
+- Callers that rebuild unconditionally (all in InkSurface.cs): 2859 (end of a scale
+  gesture), 1352 (delete), 1394 (duplicate), 5776 (paste), 9031 (insert table), 9369 (table
+  header row), 9121-9123 (`ReflowTableCells`, so every row or column insert, delete, merge,
+  split and a divider double-tap), 4547 (recolour a selection that includes text), 3857 and
+  3869 (layer visibility). Conditional: 1153 and 1184 (undo and redo, only if the action
+  touches text), 2880 (only if `_selTexts.Count > 0`). So on a page with many text boxes,
+  deleting, duplicating, pasting or scaling anything freezes for the whole build even when
+  no text is involved.
+- Not established: whether `RichEditBox.TextChanged` fires once after the initial
+  `SetText` (the handler at 10494-10500 raises `ContentChanged`). If it does, every rebuild
+  also schedules a save (S5).
+
+### Corrections to the first pass (second pass)
+
+These passages of the first pass were wrong or incomplete. The text above is left as
+written so the change is visible; read it with these amendments.
+
+1. **S5, "ScheduleSave() appears 133 times".** There are 132 call sites, the declaration
+   (MainWindow.xaml.cs:2142), and 7 method-group subscriptions (243, 270, 709, 752, 6036,
+   6127, 8035). The point stands.
+2. **S5, "Every page turn saves synchronously and unconditionally".** The synchronous save
+   is guarded by `_curPage != null` (4195). More importantly it is followed by a second,
+   deferred full save, which the first pass missed (S12).
+3. **S5 and S7, `PersistSettings` as a CPU cost only.** It also writes settings.json
+   synchronously, with retry sleeps of up to 240 ms, whenever a setting that is mirrored
+   there changed, and the mirrored list includes `Pens` and `RecentColors` (S13).
+4. **S4, the list of what a press runs.** It omitted `SyncBottomMenu`'s rebuilds (S14),
+   `SelectionChrome.Build` (S14), the Brushes window when open (S19), and the dial's own
+   animation (S18). `SelectionState.Changed` also feeds `SyncBottomMenu` and
+   `SyncPenRowColour` (MainWindow.xaml.cs:973, 979); it is de-duplicated
+   (SelectionSubject.cs:125-137), so it does not fire per pointer move.
+5. **S4, "pen and tool buttons schedule no save".** True of `SelectTool` and `ApplyPreset`
+   themselves. The eraser-size radios (3309, 3310), the pen colour picker (3839) and
+   `PushRecentColor` (8800) do schedule one.
+6. **S11 and S10, which paths rebuild the text layer.** InkSurface.cs:2859 (the end of a
+   scale gesture) is unconditional; only 2880 tests `_selTexts.Count > 0`. Delete (1352),
+   duplicate (1394), paste (5776), table insert (9031), table header toggle (9369) and every
+   table row or column edit through `ReflowTableCells` (9121-9123) also rebuild it without
+   asking whether any text is involved. And the per-box cost is larger than "a grid, several
+   text blocks and a RichEditBox" (S11 below, addendum). Boxes on hidden or 0% layers are
+   skipped (10040-10041).
+7. **S10, the selection veil.** It does more per frame than the first pass says (S17).
+8. **S3, the wet stroke.** Besides the copied pressure curve it creates a `Guid` per region
+   (`PenStroke.Id` defaults to `Guid.NewGuid()`, NoteModels.cs:71) and calls
+   `EffectivePressureCurve()` (InkSurface.cs:7326-7330), which allocates. Small, but
+   multiplied by about a hundred regions per frame while writing.
+9. **P9 and F3, "SetDisplayDpi re-bakes textures when the DPI moves".** It drops every
+   cached paper tile (`PaperTextures.Invalidate`, PaperTextures.cs:221-242), and each tile
+   then re-bakes on the UI thread (S15). Feeding it a scaled DPI during motion, as F3
+   suggested, would therefore be expensive, not just fiddly. Page tiles are baked at a fixed
+   96 DPI by design (InkSurface.cs:480-483 comment); `SetDisplayDpi` is for the Settings
+   swatches. F3 and F7 must change `DpiScale` without calling it with the changed value.
+10. **S6, "no `EnableDependentAnimation`".** The first pass did not claim this, but note for
+    S6 and the compositor discussion that the dial's own animations are dependent
+    animations on the UI thread (S18).
+
+The second pass found no first-pass claim in the ranges it re-read to be wrong in any other
+way. The S9 arithmetic (cache scaled by 0.63 to about 0.95 pixels per world unit) checks
+against InkSurface.cs:11080-11092.
+
+### S12. A page turn queues a second full save (second pass)
+
+**Evidence.**
+- `SwitchToPage` (MainWindow.xaml.cs:4187-4188) calls `ScheduleSave()` first, which restarts
+  the 1.5 s `_saveTimer` (2150-2153). Then, at 4195, it calls `SaveNow(releasing: true)`
+  synchronously. `SaveNow` (2159-2164) does not stop `_saveTimer`. Then 4200-4203 can
+  call `ScheduleSave()` again if `LastPageId` changed.
+- The timer is still armed, so about 1.5 s after the page appears it fires (tick handler at
+  328) and runs `SaveNow()` again.
+- `LibraryStore.Save` (563-580) has no dirty check, so both saves serialise the whole
+  library and run `SyncLog.OnSaved`, exactly as S5 describes.
+- Every caller of `SwitchToPage` pays this: the tree, recents, gallery chips (5533), search
+  results (4655), and the export and AI loops that step through pages (10088, 10139,
+  10213/10221, 9068). A section or notebook export therefore does one blocking full save
+  per page, plus one deferred.
+
+**Why it costs frames or latency.** A page turn is a UI-thread stall (first save, before
+the new page loads) and then a second stall 1.5 s later, just as the user starts to write
+or press something. The second one is entirely redundant: nothing changed since the first.
+
+**Expected impact (estimate).** Twice the S5 figure per page turn. It also makes the
+symptom "freezes a moment after I turn the page" rather than only "freezes when I stop".
+
+**Confidence.** High that it happens (it is all in the code and was read twice). Duration
+unmeasured.
+
+**Confirm or clear.** P2 and P6: two saves, 1.5 s apart, after one page turn with no edit.
+
+### S13. The pen colour picker saves settings and rebuilds the chrome on every callback (second pass)
+
+**Evidence.**
+- MainWindow.xaml.cs:3835-3840: the picker callback sets `p.Color`, calls `ApplyPreset(p)`,
+  then `ScheduleSave()`. The comment at 8809-8811 says the picker "fires live on every
+  change".
+- `ApplyPreset` (3764) is S4: `SelectTool`, `BuildPenStrip`, a second `ToolUiChanged`. So a
+  drag across the wheel does the whole S4 rebuild per pointer move.
+- `ScheduleSave` first calls `LibraryStore.PersistSettings` (LibraryStore.cs:635-655).
+  `Pens` is a mirrored setting, so the comparison finds a change and calls `SaveSettings`
+  (156-173) **synchronously on the UI thread**: serialise, write a temp file, flush to disk,
+  replace. On a failed write it sleeps 80 ms then 160 ms (168).
+- `PushRecentColor` (MainWindow.xaml.cs:8800-8807) writes `RecentColors`, also mirrored, so
+  it can write settings.json too. The eyedropper (8854) and the Mix tool (7292) call
+  `BuildPenStrip`, `ScheduleSave` and `PushRecentColor`.
+- Not established: whether the dial's own centre-disc colour wheel goes through this same
+  callback (ToolWheel.cs was only partly read).
+
+**Why it costs frames or latency.** A fsynced file write inside a drag callback. It is
+small (settings.json is small) but a flush to disk on a laptop can take milliseconds to tens
+of milliseconds, and it comes with the S4 rebuild.
+
+**Expected impact (estimate).** 20 to 100 ms per callback while dragging a pen colour.
+Only while a colour is being picked for a pen.
+
+**Confidence.** High on the mechanism, low on the size.
+
+**Confirm or clear.** P8 (rebuild count per callback) and P6 (settings writes per second
+during a drag).
+
+### S14. Cascades from the bottom menu, the selection chrome and the theme (second pass)
+
+**Evidence.**
+- `SyncBottomMenu` (MainWindow.xaml.cs:6881-6920) is a subscriber of `ToolUiChanged` (972)
+  and `SelectionState.Changed` (973). In the Mouse tool it calls `BuildToolMenu` (6900) and
+  then `_bottomMenu.Publish`; in Rotate it does the same with `BuildRotateMenu`. `Publish`
+  and `Retract` each end in `Sync()`, and `Sync()` raises `BottomMenu.Changed`
+  unconditionally (BottomMenu.cs:317-340, called from 244, 249, 262). The handler at
+  MainWindow.xaml.cs:971 re-runs `BuildToolMenu`, `BuildPickerMenu` and `BuildRotateMenu`.
+  The result is up to three builds of the tool menu per call, each of 4 to 5 cells with an
+  `Icons.Mark` and so a `XamlReader.Load` apiece (BottomMenu.cs:436). In the pen tool the
+  builds return early and the cost is two cheap `Sync()` calls.
+- `SelectionChrome` subscribes `Build` to `BottomMenu.Changed` (SelectionChrome.cs:410).
+  When a selection appears, `Sync` (819-849) calls `Publish` (which fires `Changed` and
+  `Build`) and then `Build()` again at 847: two builds. On deselect, `Retract` fires
+  `Build` once for a bar that is about to be hidden (line 537 falls through to
+  `BuildSelectionBar`). Each `Build` is `BuildSelectionBar` plus `BuildModeBar`
+  (598-637, 651-683): about ten `Icons.Mark` calls and eight buttons.
+- `PageTheme.Changed` has 13 subscribers. Those in the files read: five `FloatingWindow`s
+  even when closed (FloatingWindow.cs:444-471, 1223; two `Icons.Mark` each), `ValuePopover`
+  (196, 401-402), `SelectionChrome`, `FullscreenChrome` (233-241), `MeasurementMenu.Rebuild`
+  (MeasurementMenu.cs:312, which tests `_root.Parent != null`, always true because the
+  panel is added at construction) and `BottomMenu.Sync`. It fires when a page turn changes
+  the ground (a different paper colour), on theme change, and when Settings changes a paper.
+  `PushGround` (MainWindow.xaml.cs:2375-2449) additionally calls `ToolWheel.Refresh`
+  unconditionally (2414). `SwitchToPage` reaches it at 4210.
+- `ApplyFullscreenChrome` runs twice per tool press, from `UpdateFormatBarVisibility`
+  (9094-9107, called at 6831) and `ApplyPenRowVisibility` (8157, called at 6833). Each run
+  rewrites `FormatBar.Margin`, `FormatBar.Padding` and `TopBar.Padding` with new `Thickness`
+  values unconditionally (8590-8592) and calls `SetFullscreen`, `SetActive` and
+  `SetStripReserve`. Whether identical writes invalidate layout in WinUI 3 is not
+  established.
+
+**Why it costs frames or latency.** Same as S4: synchronous rebuilds on the click's own
+thread. They add to S4's total for a press in the Mouse, Select and Rotate tools, and to the
+cost of selecting or deselecting anything.
+
+**Expected impact (estimate).** Mouse or Rotate tool press: about 12 to 15 extra
+`XamlReader.Load` calls, 5 to 20 ms. Selection created or cleared: 2 to 3 builds of 3 to 10
+ms. Page turn to a different paper colour: 40 to 80 `XamlReader.Load` calls, 5 to 25 ms.
+`ApplyFullscreenChrome`: 0.1 to 1 ms per press.
+
+**Confidence.** High that the work happens, medium to low on the size.
+
+**Confirm or clear.** P8, with the counter extended to `BottomMenu.Changed` and
+`SelectionChrome.Build` (section 4.3, P8).
+
+### S15. Paper tiles are baked on the UI thread, inside the draw (second pass)
+
+**Evidence.**
+- `InkSurface.DrawPaper` (InkSurface.cs:6685) calls `PaperTextures.Brush`
+  (PaperTextures.cs:246-275), which on a miss calls `TileLocked` and `Bake` (291-315) under a
+  global lock, inside the region callback.
+- `PaperGrain.Bake` (PaperGrain.cs:99-131) fills a 512 x 512 tile: 10 to 15 noise octaves
+  per pixel, 22 fold families per pixel for the crumpled paper, blurs and flecks. It uses
+  `Parallel.For`, which still blocks the calling (UI) thread. Each bake allocates about
+  eight to ten `float[262144]` arrays (1 MB each, large object heap) and a 1 MB output.
+- A tile is baked on the first draw of a paper after launch, on a page turn to a paper not
+  yet baked, and, for the white-stock papers (Crumpled, Lightweight, Heavyweight, Rippled),
+  again for every distinct page background colour (cache key, PaperTextures.cs:208-214).
+  `PaperTextures.Invalidate` (221-230), called on a new device (InkSurface.cs:499) and from
+  `SetDisplayDpi` (237-242; InkSurface.cs:520, 526), drops every tile.
+- Opening Settings calls `PaperTextures.Preview` (SettingsWindow.cs:653,
+  PaperTextures.cs:327-351), which can bake up to eight papers in a row on the first open.
+  Whether those preview tiles share the canvas's device and so its tiles is not established.
+- At rest it is cheap: per region per frame `DrawPaper` does a string key, a lock and a
+  dictionary lookup (PaperTextures.cs:252-255).
+
+**Why it costs frames or latency.** A one-off multi-hundred-millisecond block, plus large
+object heap pressure that feeds S8. Not a sustained cost.
+
+**Expected impact (estimate).** 80 to 400 ms per tile on a few low-power cores: a hitch on
+the first page, on a page turn to a new paper, and 1 to 3 s on the first Settings open.
+The GPU cost of the wrapped, linearly sampled image-brush fill each frame
+(PaperTextures.cs:258-269) is not established.
+
+**Confidence.** High that it is synchronous, low on the size.
+
+**Confirm or clear.** P2 naming a stall with `PerfProbe.Activity = "paper-bake"`, and a
+timer round `Bake`.
+
+### S16. Per-region shape costs: tables, equations, grainy shapes, full-size images (second pass)
+
+`DrawShape` runs once per shape per region, so these multiply by the region count (S2).
+- **Tables** (InkSurface.cs:8191-8258): per region it allocates `TableColWidths`,
+  `TableRowHeights`, two coordinate arrays and a 2D `cellMap` (8196-8204), walks **every text
+  element on the page** to find the table's cells (8206), parses cell and border colours per
+  cell (8237, 8244), and issues two `DrawLine` calls per cell.
+- **Equation images** (8151-8167): per region it parses the page background and tests
+  darkness (8152) and, when the ink matches the page, builds a new `ColorMatrixEffect`
+  (8154-8166). `EquationInkIsDark` is cached (10633-10651), but its first call reads every
+  pixel of the bitmap on the UI thread (`GetPixelColors`), once per path.
+- **Pencil and crayon shapes** (8084-8105): `PenStyle.Grain` allocates an array per call,
+  and each grain pass builds a new `ShapeElement`, with a `Guid.NewGuid()` (NoteModels.cs:170),
+  for two or three extra passes per shape per region.
+- **Images** (8143-8178): `_bitmaps` holds full-resolution `CanvasBitmap`s (loaded at 8402
+  without downscaling), drawn once per region the image touches. The load itself is
+  asynchronous (8396-8411) and does not stall. The bitmaps are disposed on page load
+  (869-873), so there is no leak.
+
+Ordinary shapes are a few `DrawLine` calls and are cheap. These matter only on pages that
+have them, which is the P11 census question. Estimate: unmeasured; high confidence on the
+mechanism. Fix: F4 (a to e) done once per pass, and F13 below.
+
+### S17. Selecting an image fades the page with a full repaint per frame (second pass)
+
+This replaces the short mention in S10.
+- Any selected or active image, equation included, sets `FadesPage` (InkSurface.cs:4396),
+  and `PublishSelection` calls `SetVeil` (4400). `SetVeil` attaches
+  `CompositionTarget.Rendering += VeilTick` (4970), and `VeilTick` (4979-4998) runs every
+  displayed frame for about 190 ms up and 130 ms down.
+- Each tick does a full `_canvas.Invalidate()` (4993), the ink cache stays stood down for
+  the duration (`_inkCacheDirty`, 4969), and `ApplyTextVeil` (5017-5037) visits every text
+  box: `_page.Texts.FirstOrDefault(x => x.Id == id)` (5023), which is quadratic over the
+  text boxes, `TextInkFor` (colour parses, including the page background when a box has no
+  colour of its own, 4424-4427), and a **new `SolidColorBrush`** assigned to `Box.Foreground`
+  (5035).
+- `DrawShape` also fills a grey rectangle over every non-selected image while veiled
+  (8185-8188).
+- The same tick runs again on deselect, and `VeilTick` ends with two more invalidations
+  (4979-4998).
+
+Impact (estimate): a full uncached repaint per frame for about 320 ms in total plus
+O(text boxes squared) work per frame; felt as a hitch when an image is clicked and again
+when it is released, on text-heavy pages most. High confidence on the mechanism.
+Confirm with P3 (pass count during the fade) and P4 (cache state).
+
+### S18. The dial's animations are UI-thread dependent animations (second pass)
+
+- `ToolWheel.Drop` (ToolWheel.cs:795-827) animates `ScaleX`, `ScaleY` and `Opacity` over
+  160 ms with `EnableDependentAnimation = true` (810). `ToolWheel.Rise` (1517-1560)
+  animates two `ScaleTransform`s and the flash opacity over 190 and 340 ms, also with
+  `EnableDependentAnimation = true` (1534). Animating a `ScaleTransform` property this way
+  runs on the UI thread, a frame at a time, rather than on the compositor.
+- `Rise` runs when a cell of the dial is chosen, so every dial tool or pen choice is
+  followed by a few hundred milliseconds of per-frame UI-thread animation that competes
+  with the S4 rebuild and the S2 repaint for the same thread. `Drop` runs when the dial
+  opens.
+- Both are skipped when reduced motion is on (`ReduceMotion()`).
+- Other storyboards read (FloatingWindow.cs:712, 1062, PanelLayout.cs:393, SettingsWindow.cs:3652,
+  PenBar.cs:330, the `FadeTo` family at MainWindow.xaml.cs:1851-2128) animate opacity or a
+  translate and are not dependent. `UpdateThemeToggle` (2557) animates a `TranslateTransform`
+  `X` on a theme change only.
+
+Impact (estimate): small per frame, but it extends the window in which a press feels
+unresponsive from the rebuild's length to the rebuild plus about 190 to 340 ms. Medium
+confidence. Test: P1 and P2 around a dial press with Settings > reduced motion on and off.
+
+### S19. Costs that exist only while a window or panel is open (second pass)
+
+Each of these is conditional, and P0 should record which are open.
+- **Brushes window.** It subscribes to `ToolUiChanged` (MainWindow.xaml.cs:6042) and stays
+  subscribed. While open, `Refresh` (BrushesWindow.cs:396-401) rebuilds the body (14
+  `BrushCell`s and about 13 `ToolCell`s with `Icons.Mark`) and `DrawPreview` (556-580)
+  allocates a `CanvasImageSource` of about 864 x 410 pixels at 200% and runs the real stroke
+  renderer over a 160-point sample with two or three width passes (619-698). `ApplyPreset`
+  fires `ToolUiChanged` twice, so a pen press does this twice. The cell marks are cached
+  (186, 750-754). The first show costs 14 real-renderer renders.
+- **History window.** `Refresh` runs on every `UndoManager.Changed` (MainWindow.xaml.cs:265)
+  and is guarded by `IsOpen` (HistoryWindow.cs:100-103). Open, it rebuilds a row of two text
+  blocks per undo entry and copies the whole stack (`History`, UndoRedo.cs:1604); ink undo
+  is unbounded (the comment near UndoRedo.cs:1620). One rebuild per finished stroke, O(undo
+  depth).
+- **Measurement panel.** `ChromeBars.OnViewChanged` (ChromeBars.cs:1271) calls
+  `SyncReadouts` (582-594), which calls `MeasurementMenu.Sync` (635-662) on every pan or
+  zoom event. That calls `PaintLock` twice (671-681), each an `Icons.Mark` plus new brushes
+  for about 14 chips. Estimate 0.3 to 1 ms per event while the panel is open.
+- **Colour wheel.** Its two 16 ms timers (ColorWheel.cs:339, 342) are not a standing cost:
+  `_spin` starts only after a flick or a wheel notch (2491, 2524) and stops when the
+  velocity settles (about 1.4 s at the maximum, Decay and StopVel at 95-96); `_anim` runs only
+  during the entrance and exit cascade, about 280 ms in and 180 ms out, with a wall-clock
+  cap (2856-2861). At rest neither runs. If the wheel is hidden mid-glide, `_spin` keeps
+  ticking for up to 1.4 s on a collapsed canvas. While the wheel is active each draw
+  (`OnDraw`, 1729) is a full-window `CanvasControl` redraw: the Copic face draws a fill and
+  an uncached text layout per visible cell (about 300 to 600 cells, estimate; the file's own
+  comment says about 600 layouts a frame, 1988) and the HSL/RGB face about 1,566
+  `FillCircle` calls (2041-2052). Estimate 5 to 15 ms of command building per frame on this
+  CPU, on a `DispatcherTimer` that is not vsync-aligned. The overlay is only collapsed, never
+  removed, when closed (ColorPickerService.cs:193, 223), so its swap chain stays allocated;
+  the GPU cost of a collapsed control is not established.
+  `DimChromeForPicker` (MainWindow.xaml.cs:1036-1060) sets opacity 0.32 on the chrome
+  clusters and open popups while it is up; if any contain acrylic that adds GPU work.
+- **Settings window.** The first open builds about 100 `Icons.Mark` loads plus 18
+  `CanvasImageSource` swatches (9 papers, 9 grids; the paper ones trigger S15). A paper, theme
+  or font-scale tap clears `_previews` and rebuilds the whole tab (`GroundAction`,
+  SettingsWindow.cs:494-504; `Refresh`, 442-460): estimate 20 to 80 ms. On the grid page every
+  slider move calls `_h.ApplyGrid`, which repaints the page canvas behind the panel, and
+  `RedrawPreview` (1211-1227) allocates a new `CanvasImageSource` of about 1000 x 600 pixels
+  (`GridArt.Strip`, GridArt.cs:78-88, never disposed explicitly) and redraws up to 6,000
+  lattice cells (GridArt.cs:144): estimate 2 to 8 ms per move plus a canvas repaint.
+- **Value popover** (size and opacity sliders). Each move calls `Commit` then `Sync`
+  (ValuePopover.cs:324-330, 237-248), which clears and rebuilds four tick rectangles and
+  their brushes (`BuildTicks`, 286-310). Small, plus whatever the host does per step (S4: a
+  dial refresh).
+- **Background and grid sliders.** Each callback calls `SetPageBackground` (7594-7602):
+  `ApplyTextContrast` (7631-7653) flushes the text boxes and runs a regular expression over
+  every box's RTF, then `Surface.Refresh`, `SyncThemeToPage` (coalesced to 60 ms) and
+  `ScheduleSave`. The grid spacing, opacity and colour handlers pair `Surface.Refresh` with
+  `ScheduleSave` per tick (6071-6097, 7737, 8075, 8083). `Surface.Refresh` is called from 34
+  sites.
+
+### S20. Non-default or niche paths, and a list of every timer (second pass)
+
+Costs that apply only to a setting or tool, with the default stated:
+- **Accent follow** (default `Manual`, NoteModels.cs:785). With `Pen`, every `ApplyPreset`
+  (3779-3780) starts `ApplyAccentLive` (2670-2701): a 16 ms timer for 220 ms, each tick
+  setting about eight application resources, writing brushes and calling `Surface.Refresh()`
+  (2706), so about 14 full repaints, then `BuildPenStrip` (2687), then 280 ms later
+  `RefreshThemeForAccent` (2739-2753) flips `RootGrid.RequestedTheme` to the other value and
+  back (a full re-resolve of every theme resource in the tree) and restarts the glow timer for
+  a ripple. With `Notebook`, the same on every page switch (4221). If the owner has followed
+  the pen, this is the strongest button-press suspect in the app; P0 must record it.
+- **Motion blur** (a setting, default off: `MotionBlur` is a plain `bool`, NoteModels.cs:799;
+  Settings toggle at MainWindow.xaml.cs:6457). When on, `TrackViewVelocity`
+  (InkSurface.cs:5964-5977) starts the 33 ms `_blurDecayTimer` (304, 569-579) after any
+  view movement above 350 px/s, and while the velocity is above the threshold
+  `OnRegionsInvalidated` (5901) takes the blurred path: `DrawRegionBlurred` (6242-6268)
+  renders **each region** into a `CanvasRenderTarget` and composites it through a
+  `GaussianBlurEffect`. That is a second render target pass plus a blur per region, about a
+  hundred times a frame, on exactly the fast-pan frames that matter, and a new render
+  target whenever a region's size differs from the last. The decay timer then invalidates
+  the whole canvas every 33 ms until the blur lands. If the owner turned this on, it is
+  a first-order cause of slow panning; P0 must record it. Not the default.
+- **Text tool caret.** A 530 ms timer calls a full-canvas `Invalidate()` (InkSurface.cs:565)
+  for as long as a pending caret exists: two full repaints a second in the Text tool.
+- **Rotate and select tools.** `RotateDragTo` (InkSurface.cs:5447-5476) allocates a
+  `RotateFreeMixedAction` per pointer move, rotates every point of every selected stroke,
+  recomputes the selection bounds with another O(points) pass (4145-4146), marks the grid
+  and ink cache dirty (`_gridDirty` makes the next index query rebuild it all), fires
+  `SubjectMoved`, and does the full invalidate. Estimate a few milliseconds per move for a
+  large lasso. Restyling a selection (size, opacity, colour) pushes an undo action that
+  records each stroke, rebuilds the subject with `ColorUtil.Parse` per stroke
+  (4307-4412), and because the new value differs, fires `SelectionState.Changed` and so the
+  S4 refresh, per tick of the control. Whether the value popover coalesces ticks was not read.
+- **Shape recognition hold timer.** `HoldTick` (InkSurface.cs:7416-7444, timer 140 ms at
+  407) runs while a pen stroke is live and recognition is on. Once the pen has rested for
+  620 ms it runs `RecognizeShape` (7451-7560: several O(n) passes, recursive corner finding)
+  over the whole wet stroke and retries every 620 ms. Cost only when the pen rests
+  mid-stroke; sub-millisecond to a few milliseconds.
+- **Peer sync timer** (`_syncTimer`, MainWindow.xaml.cs:10275-10293, 20 s). On the UI thread
+  `SyncLog.MergeForeign` (SyncLog.cs:402-468) globs the folder; if no peer log grew it
+  returns quickly. If one did (another device through OneDrive), it deserialises the ops,
+  rebuilds the whole shadow with `Entities(lib)` (the S5 serialisation again), then the
+  handler runs `BuildTree`, `LoadPage` and `ScheduleSave`. Needs a second device.
+- **Audio.** A 100 ms thread-pool timer per opened page with audio (AudioPlayer.cs:43). During
+  playback `PositionChanged` reaches `UpdateAudioPlayerPosition` (MainWindow.xaml.cs:
+  12456-12477), which calls `Surface.Refresh()`: a full repaint at about 10 Hz.
+- **Gallery.** It builds `MenuFlyout`s eagerly for every notebook card, section and page
+  chip; `BuildGallery` is called from about fifteen handlers and chip clicks call `BuildTree`
+  first (5532). Gallery open only, and at launch if it is the start screen (797).
+- **Exports.** `ExportWindow`, `PdfExporter` and `HtmlSvgExporter` run on the UI thread
+  (`CaptureAsync` up to 8192 pixels, `BgraToRgb`, Deflate, indented JSON; PdfExporter.cs:106-107,
+  516-535), so an export freezes the app for its length. Never while drawing.
+- **Thumbnails.** `RenderPageThumbnail` (InkSurface.cs:10865-10976) is static, blocks on
+  `.Wait()`, uses `CanvasDevice.GetSharedDevice()` (probably the canvas's own device) and draws
+  every segment of every stroke with no culling. Who calls it and how often was not read
+  (ThumbnailCache.cs is unread). Consistent with the first pass's "gallery only"; if it also
+  runs after saves it competes for the GPU.
+- **Hover.** `Surface.PointerMoved` in MainWindow.xaml.cs (625) calls `GetCurrentPoint` on
+  every unhandled move (pen hover is frequent); `InkSurface.OnPointerMoved` already does.
+  Under 20 microseconds, estimate.
+- **Mica.** With Mica active the root background has alpha 0xD0 (2494-2498). Whether that
+  costs GPU time is not established.
+
+Every timer and per-frame hook in the app, as the second pass found them:
+
+| Timer or hook | Where | Runs | Verdict |
+|---|---|---|---|
+| Glow, 40 ms | MainWindow.xaml.cs:1226 | forever unless glow Off or reduced motion | S6 |
+| Save, 1.5 s | MainWindow.xaml.cs:106 | one-shot, re-armed by `ScheduleSave` | S5, S12 |
+| Peer sync, 20 s | MainWindow.xaml.cs:10275 | forever, cheap unless a peer log grew | S20 |
+| Storage problem poll, 20 s | MainWindow.xaml.cs:2179-2200 | forever, cheap | harmless |
+| Status 3 s, zoom readout 1.2 s | MainWindow.xaml.cs:107, 108 | one-shot | harmless |
+| Ground 60 ms, accent 280 ms, equation debounce 280 ms, veil 600 ms | 2359, 2650, 9560, 1132 | one-shot | harmless |
+| Accent lerp 16 ms | MainWindow.xaml.cs:2678 | 220 ms burst, only when accent follow is on | S20 |
+| Zoom settle 260 ms | InkSurface.cs:34 | one-shot | S9 |
+| Blur decay 33 ms | InkSurface.cs:304, 569-579 | only after a fast pan or zoom, and only if Motion blur is on (default off); each tick is a full invalidate | S20 |
+| Replay 16 ms | InkSurface.cs:377 | only while a replay plays | harmless |
+| Caret 530 ms | InkSurface.cs:385 | only in the Text tool | S20 |
+| Hold 140 ms | InkSurface.cs:407 | only while a pen stroke is live | S20 |
+| `VeilTick` (Rendering) | InkSurface.cs:4970 | 130 to 190 ms bursts, image selection | S17 |
+| Dial assign timer, 550 ms | ToolWheel.cs:534, 2301 | one-shot, started on pressing a sector and stopped on move or release | harmless |
+| Colour wheel spin and anim, 16 ms | ColorWheel.cs:339, 342 | bursts, wheel open | S19 |
+| `FullscreenChrome` Rendering | FullscreenChrome.cs:429 | 130 to 190 ms slides | harmless |
+| Audio, 100 ms | AudioPlayer.cs:43 | pages with audio | S20 |
+
+Items found harmless in the second pass, so they need not be read again: `ApplyToolbarVisibility`
+(about eleven `Visibility` sets), `UpdateUndoButtons`, `RootGrid.GettingFocus`, the 18
+keyboard accelerators, `JellyDrag` and `BeginCheapDrag`, `ShowStatus`, the `CometRim`
+rectangles (Comet mode only), the calculator, equation dialog, PDF import, command palette
+and context menu, `PanelLayout` (reflow coalesced at low priority, driven by size changes
+only), `StripScroll`, `ObjectsWindow`, `PagePlate` colour maths, `GridPointEditor` (grid edit
+mode only), `GeometryProbe` (off unless `QUILL_GEOM_PROBE`), `SegmentWidth`, hit-testing
+(`HitStroke` scans all strokes per tap, which is fine), `DrawTextElement` (only called from
+capture, 5602 and 5635, not from the draw path; the comment at 5708 is stale), the
+`FlushTexts` and `TextLinksAt` paths, and `EnsureRefFrame` (a null test).
+
 ### How the "lag after a button press" splits by button
 
 The report names no button, and the code treats them differently:
@@ -494,6 +959,22 @@ The report names no button, and the code treats them differently:
 - **Page navigation** saves immediately (S5, 4195), then rebuilds the text layer (S11).
 - **Undo and redo** refresh the dial (S4), rebuild the text layer when the action touches text
   (S11), and schedule a save.
+
+Second pass additions:
+- **Pen and tool buttons** also pay S14 (`ApplyFullscreenChrome` twice, and in the Mouse,
+  Select and Rotate tools up to three tool-menu builds), S18 (the dial's `Rise` animation on
+  the UI thread for 190 to 340 ms) and, if those windows are open, S19 (the Brushes window
+  rebuilds twice per pen press). With Accent follow set to Pen, S20's retint adds about 14
+  repaints, a strip rebuild and a theme flip.
+- **The pen colour picker** pays S13 on every drag step: the S4 rebuild plus a synchronous
+  settings.json write.
+- **Page navigation** saves twice (S12), may rebuild the whole chrome cascade if the paper
+  colour differs (S14), may bake a paper tile (S15), and rebuilds the text layer (S11).
+- **Selecting or deselecting something** builds the selection bar and mode bar two or three
+  times (S14); selecting an image adds the fade of S17.
+- **Settings buttons** (paper, theme, font scale) rebuild the Settings tab (S19) and may bake
+  paper tiles (S15); the first open of Settings builds about 100 icons and 18 swatches.
+- **Delete, duplicate, paste** rebuild the text layer whether or not text is involved (S11).
 
 So "lags after a button press" may be two different things on two different buttons, and P2
 and P8 together will say which.
@@ -558,6 +1039,12 @@ One new file, `src/Quill/Helpers/PerfProbe.cs`, in the style of `GeometryProbe.c
   mode.
 - Confirms or clears S1 (with the Debug-versus-Release runs in 4.5). Also records the
   settings that decide which chrome is on.
+- Second pass: also record `AccentFollow` (S20; the default `Manual` is harmless, `Pen` and
+  `Notebook` are not), `MotionBlur` (S20; default off), `ShapeRecognition`, `Liquidness`,
+  the paper kind and whether it is a white-stock paper (S15), which of the Brushes,
+  History, Measurement, Objects and Settings windows are open during the scenarios (S19),
+  the tool in use (Mouse, Select and Rotate have the S14 triple build), and whether the
+  peer sync folder holds other devices' op logs (S20).
 
 **P1. UI frame clock.** `CompositionTarget.Rendering` (already used in this repo,
 FullscreenChrome.cs:429, InkSurface.cs:4970) fires once per composed frame on the UI thread.
@@ -635,6 +1122,43 @@ with a one-stroke edit and with none, and the file write. Report time, allocated
 counts. This isolates S5 completely from the UI and the GPU, and it is the benchmark that the
 save fixes (F5, F6) must beat.
 
+**P13. Save count and cause (second pass).** In `LibraryStore.Save` and `SaveSettings`
+log the time, the caller (an enum passed from `SaveNow`, the timer tick, `SwitchToPage`, the
+close handler, an export loop), the duration, and whether the library changed since the last
+save (a counter bumped by `ScheduleSave`, `UndoManager.Changed` and `MergeForeign`). Run the
+scenario "turn the page, touch nothing, wait 5 s": S12 predicts two saves, the second 1.5 s
+after the first and with no change between them. Also count `SaveSettings` calls per second
+during a pen colour drag (S13).
+
+**P14. Cascade counters (second pass).** Increment named counters, reset per user action, in
+`BottomMenu.Changed` (MainWindow.xaml.cs:971), `BuildToolMenu`, `BuildRotateMenu`,
+`SelectionChrome.Build` (SelectionChrome.cs), `PageTheme.Changed` raises, `ApplyFullscreenChrome`
+(8590), `ToolWheel.Refresh`, `PenBar.Refresh`, `BuildPenStrip` and `RebuildTextLayer`
+(InkSurface.cs:10013). Report them per action in the F scenario and in a new select/deselect
+step. This turns the S4, S11, S14 claims about "how many times" into counts.
+
+**P15. Text-layer build (second pass).** Time `RebuildTextLayer` and `BuildTextUi` per box,
+split into the `RichEditBox` creation, `SetText`, and `AutoSizeBubble`; report boxes built,
+boxes skipped by layer, total time, and the caller (a string passed in). Needed for S11 and
+for the delete, duplicate and paste cases.
+
+**P16. Paper bake (second pass).** Time `PaperGrain.Bake` per call with the paper kind, ground
+colour and the caller (page draw or Settings preview), and count `PaperTextures.Invalidate`
+calls. Confirms S15 and shows whether `SetDisplayDpi` invalidates unexpectedly (for example on
+a monitor refresh-rate or scale change).
+
+**P17. Veil (second pass).** Count `VeilTick` frames, text boxes visited and the pass time
+during an image selection and deselection. Confirms S17.
+
+**P18. Per-region shape cost (second pass).** In `DrawShape`, accumulate ticks by shape kind
+(table, equation, image, other) and by grain passes, per pass, beside P3. Only meaningful on a
+page that has them; P11 tells which page that is.
+
+**P19. Windows open (second pass).** Log `Visible` for each floating window at the start and end
+of each scenario step, and time `BrushesWindow.Refresh`/`DrawPreview`, `HistoryWindow.Refresh`,
+`MeasurementMenu.Sync` and `ColorWheel.OnDraw` while open. Needed to decide whether S19 matters
+for the owner's way of working.
+
 **External tools, no code.**
 - Task Manager > Performance > GPU and the Processes tab's GPU engine column: is the 3D
   engine busy while the UI thread is saturated (GPU-bound) or idle (CPU-bound)? Watch the
@@ -662,6 +1186,11 @@ pause with hands off the pen (the autosave stall lands there).
 | F | Press ten pen and tool buttons in turn (pen, pen, eraser, mouse tool, pen, undo, redo...) | S4 |
 | G | Switch between two pages five times | S5, S11 |
 | H | Hands off for 30 s after the last edit | S5, S8, S6 |
+| I (second pass) | Turn the page, touch nothing for 5 s; repeat to a page with a different paper colour | S12, S14, S15, S11 |
+| J (second pass) | Select a stroke, deselect; select an image, deselect; choose the Mouse tool and the Rotate tool | S14, S17 |
+| K (second pass) | Delete, duplicate and paste a stroke on a page with many text boxes | S11 |
+| L (second pass) | Drag a pen's colour on the wheel for 5 s; drag the page background colour for 5 s | S13, S19 |
+| M (second pass) | Repeat F with the Brushes window open, then with the History window open | S19 |
 
 Pages: a **blank** page (no ink, no grid), the owner's **densest** page, and the same dense
 page with a dotted or square grid on.
@@ -675,6 +1204,7 @@ page with a dotted or square grid on.
 | 3 | Release | an empty folder named by `QUILL_DATA_FOLDER`, with a copy of the real settings.json beside it (the app seeds a one-page notebook) | separates data size (S3, S5, S8, S9) from structure and chrome (S2, S4, S6) |
 | 4 | Release | copy of the real one, with glow off and solid cards | S6 |
 | 5 | Release | copy of the real one, `NOSAVE=1` | S5 |
+| 6 (second pass) | Release | copy of the real one, Motion blur off, Accent follow Manual, no optional windows open | removes S20's optional costs; if the owner's settings differ, runs 2 and 6 differ by exactly those |
 
 Run 3 is the most informative control. If an empty library at Release still cannot hold 120
 fps while panning, the cause is structural (S2, S6, the chrome); if it can, the cause is the
@@ -698,6 +1228,14 @@ size of the data.
 | Ink cache rebuild over 100 ms after a stroke on a page of 2,500+ strokes | S9 confirmed |
 | P1 and P3 agree (frames lost on the UI thread) while Task Manager shows the GPU idle | CPU-bound: fix the managed path first |
 | UI thread idle while the GPU 3D engine is near 100% | GPU-bound: resolution and overdraw (F3, F7, F8) come first |
+| P13 shows two saves after one page turn with no edit | S12 confirmed; F5c |
+| P13 shows `SaveSettings` called during a colour drag, or taking over 5 ms | S13 confirmed; F15 |
+| P14 shows more than 3 `BottomMenu.Changed` or more than 1 `SelectionChrome.Build` per selection change | S14 confirmed; F14 |
+| P15 shows over 100 ms for `RebuildTextLayer` on delete, duplicate or paste | S11 confirmed as a button-press cost; F12 |
+| P16 shows a bake over 50 ms in the draw callback | S15 confirmed; F13 |
+| P17 shows `VeilTick` over 8 ms per frame, or running over 15 frames | S17 confirmed; F16 |
+| `MotionBlur` on and run 6 pans noticeably faster | the owner's setting is a cause; turn it off or make it cheaper (S20) |
+| `AccentFollow` is Pen or Notebook and a press is faster with Manual | S20 accent retint is the press cost |
 
 ## 5. Fix plan
 
@@ -755,6 +1293,12 @@ Gates. Every step must also pass these:
 | F9 | Wet ink on its own small layer | pen latency and per-move cost independent of the page | days | none | low |
 | F10 | A better settled-ink cache (device resolution, incremental, or command lists) | dense pages | days to a week | none | low |
 | F11 | Data model and file layout | GC, save size | weeks | high | none |
+| F12 (second pass) | Text layer: rebuild only what changed, and make a box cheaper | delete, duplicate, paste, scale, page turn on text pages | days | none | none |
+| F13 (second pass) | Bake paper tiles off the UI thread, or ahead of time | page-turn and first-open hitches | 1 to 2 days | none | none |
+| F14 (second pass) | Coalesce the bottom menu, selection chrome and theme cascades | press and selection lag | 1 to 2 days | none | none |
+| F15 (second pass) | Colour picker: do not save settings or rebuild the strip per callback | colour drag | hours | very low | none |
+| F16 (second pass) | A cheaper selection veil | hitch on image select | hours to a day | none | low |
+| F17 (second pass) | Per-pass shape work: tables, equations, grain, images | pages that have them | days | none | low |
 
 ### F0. Run Release against a copy
 
@@ -781,6 +1325,13 @@ ReadyToRun is a later question, answered by P0 and a startup comparison, not a f
   managed share of everything below.
 - Notes: no risk (a copy; same code, same file format). When it is later run on the real
   library, close the Debug instance first.
+
+Second pass amendments to F0 to F11: F1 and F5 gain the items below (F1 also drops the
+`PersistSettings` reflection pass from view changes, which it already did by not calling
+`ScheduleSave`); F2 gains items 5 to 7; F3's resolution experiment must not feed the changed
+DPI to `PaperTextures.SetDisplayDpi` (corrections, item 9); F4 gains the tables and
+equations (F17); the order of work in section 1 is unchanged except that F5c, F15 and F12's
+first item are cheap enough to go beside F1.
 
 ### F1. A pan or zoom does not schedule a library save
 
@@ -818,6 +1369,22 @@ In order of gain per effort:
    or write a small parser for the path mini-language that builds a fresh `PathGeometry`
    (the icon data uses M, L, H, V, C, S, Q, T, A and Z). Do the first; the second only if
    something still needs to create icons on a hot path.
+
+5. (second pass, S14) Make `BottomMenu.Sync` raise `Changed` only when the top page or the
+   back-button state actually changed (compare with the previous values), and have
+   `SyncBottomMenu` build its menu once per call instead of once itself and once more through
+   each `Publish` and `Retract`. Give `SelectionChrome.Build` the same guard, and skip it
+   when the mode is `None`. Wrap `ApplyFullscreenChrome` so it returns when the presenter
+   kind, fullscreen state and strip reserve are unchanged, and assign each `Thickness` only
+   when it differs.
+6. (second pass, S18) Keep the dial's `Rise` and `Drop` as they are until P1 and P2 show them
+   in the stall list; if they do, replace the dependent animations with composition
+   animations (`Visual` scale and opacity through `ElementCompositionPreview`), which run off
+   the UI thread.
+7. (second pass) Make `PageTheme.Changed` subscribers repaint lazily: closed windows
+   (`FloatingWindow`, `ValuePopover`, `MeasurementMenu`) mark themselves stale and repaint on
+   open instead of loading icons at once. `MeasurementMenu.Rebuild` should test
+   `IsOpen`, not `_root.Parent`.
 
 - Gain: a press goes from tens of milliseconds to a few; the dial stops costing anything
   when a stroke ends.
@@ -891,7 +1458,16 @@ b. Keep a change stamp that every real mutation bumps (`ScheduleSave`, `UndoMana
    **The save at close stays unconditional**, and a full save still runs at least every few
    minutes whatever the stamp says.
 
-- Gain: no freeze at a page turn that follows a save; no freeze in the middle of a stroke.
+c. (second pass, S12) Stop the save timer when a save runs. `SaveNow` (MainWindow.xaml.cs:2159)
+   should call `_saveTimer.Stop()` before saving, so a page turn that already saved
+   synchronously does not queue a second identical save 1.5 s later. In `SwitchToPage` the
+   leading `ScheduleSave()` (4187-4188) is redundant with the `SaveNow` that follows it; keep
+   only the settings mirror (`PersistSettings`) there. For the export and AI loops that step
+   through pages (10088, 10139, 10213/10221, 9068), pass a flag so the per-page switch does
+   not save, and save once at the end.
+
+- Gain: no freeze at a page turn that follows a save; no freeze in the middle of a stroke;
+  half the saves per page turn (c).
 - Notes: a missed mutation path today is still saved by whatever calls `ScheduleSave` next;
   with a skip it would wait for the close or the periodic save. That is why the periodic and
   close saves are unconditional. Medium-low risk, and the one step in tier 1 that changes
@@ -1014,6 +1590,81 @@ of the write still dominate.
   release, a verified reader for the old format, and the bytes-before-bytes-after gate on a
   copy. Highest risk to notes in this document; not for the first round.
 
+### F12. The text layer: rebuild only what changed (second pass)
+
+Answers S11.
+1. Callers that need no rebuild must not make one: delete (InkSurface.cs:1352), duplicate
+   (1394), paste (5776) and the scale gesture (2859) should rebuild only when the selection or
+   the pasted content contains a text element, as 2880 already does. Table edits
+   (`ReflowTableCells`, 9121-9123) should rebuild only the table's cells.
+2. Keep a box per text element and update it in place (position, size, rotation, colour)
+   when only geometry changed; rebuild a box only when its RTF or font changed.
+3. Make `BuildTextUi` cheaper: build boxes lazily for those in or near the viewport; avoid
+   the second `AutoSizeBubble` on `Loaded` when the first already used a stored size; leave
+   `IsSpellCheckEnabled` off until a box takes focus.
+4. `ApplyTextVeil` (S17) should look boxes up through a dictionary built once, not
+   `FirstOrDefault` per box per frame.
+
+- Gain: page-turn time on text pages, and the freeze on delete, duplicate and paste.
+- Notes: none for the file; the model is untouched. Risk is visual (a box that fails to
+  refresh). Gate: P15 shows the count of boxes built per action fall; an on-screen run that
+  edits, moves, recolours, rotates and undoes text on a page with tables and with layers.
+
+### F13. Paper tiles off the UI thread (second pass)
+
+Answers S15. Bake on the thread pool and have `PaperTextures.Brush` return a flat fill of
+the paper's ground colour until the tile is ready, then invalidate once. Bake the page's
+paper at load before the first draw if it is cheap, and the Settings previews only when the
+tab is first shown, one per idle turn. Do not drop all tiles on a DPI change: page tiles do
+not depend on it (they are baked at 96 DPI by design); only the Settings swatches do.
+
+- Gain: no paper-bake hitch on a page turn or in Settings.
+- Notes and paint: none. Gate: P16 shows no bake on the UI thread; paper looks the same on a
+  white-stock paper with a custom background colour.
+
+### F14. Coalesce the cascades (second pass)
+
+Answers S14. `BottomMenu.Changed`, `PageTheme.Changed`, `ToolUiChanged` and
+`SelectionState.Changed` should each be raised through one dispatcher-turn coalescer, as
+`SyncThemeToPage` already does with its 60 ms timer, so the builds that hang off them run once
+per turn at low priority, after the click handler returns. This is the generalisation of F2
+item 2.
+
+- Gain: the Mouse, Rotate and selection cases of the press lag.
+- Notes and paint: none. Gate: P14 shows each build counted once per action.
+
+### F15. The colour picker: no save and no rebuild per callback (second pass)
+
+Answers S13. While the picker is dragged, update the active preset's colour and the strip
+chip in place and call `Surface.PenColor`; run `BuildPenStrip`, `PushRecentColor` and
+`ScheduleSave` once, when the picker closes. `PersistSettings` should not write the file
+synchronously: hand the serialised string to the worker thread that already writes
+library.json, with the same temp, flush and replace sequence, and never sleep on the UI thread.
+
+- Gain: a colour drag stops stuttering; no fsync per drag step.
+- Notes: the risk is a lost colour if the app dies mid-drag, which is a view of the colour,
+  not content. Settings are still written at close and on the picker's close. Gate: P13.
+
+### F16. A cheaper selection veil (second pass)
+
+Answers S17. Compute the veil's text-box colours once at the start of the fade; animate one
+opacity on a single overlay (or a cached veiled copy of the page) rather than repainting the
+page and rewriting every text box each frame; try keeping the ink cache usable by drawing the veil as
+a translucent rectangle over the cached ink; whether that looks the same as the present
+per-element fade is not established, so judge it on screen. If that is not possible, shorten it to the minimum frames and make `ApplyTextVeil` O(n).
+
+- Gain: no hitch when an image is clicked. Paint: none; low visual risk. Gate: P17.
+
+### F17. Per-pass shape work (second pass)
+
+Answers S16. Compute table geometry, cell colours and the cell-to-text map once per pass
+(or once per edit), not per region; cache the equation's tinted bitmap or its
+`ColorMatrixEffect` per pass; draw grain once per shape per pass; and downscale loaded image
+bitmaps to a size near their on-screen maximum, keeping the original on disk for export.
+
+- Gain: pages with tables, equations, grain pens and large images. Notes: none; the model is
+  untouched. Paint: none. Gate: P18; a pixel comparison as for F4.
+
 ### 5.3 Acceptance
 
 TODO 9.1's own words, as numbers, measured by P1 and P2 on the owner's laptop in Release:
@@ -1051,17 +1702,63 @@ TODO 9.1's own words, as numbers, measured by P1 and P2 on the owner's laptop in
    for F3 and F7. It is in the API as I remember it, not as I could check it from here.
 9. **What Concepts does** to reach 120 fps. Everything in F7 to F10 is a design that would
    plausibly get there, not a description of that app.
-10. **How much of the code was read.** About 4,300 of InkSurface.cs's 11,138 lines (view and
-    zoom, pointer move and commit, regions and `DrawRegion`, grid, strokes, the ink cache,
-    the spatial index, the text layer entry), about 2,100 of MainWindow.xaml.cs's 12,677
-    (save, glow, pen strip, tool selection, view change, page switch), and the parts of
+10. **How much of the code was read.** First pass: about 4,300 of InkSurface.cs's 11,138
+    lines (view and zoom, pointer move and commit, regions and `DrawRegion`, grid, strokes, the
+    ink cache, the spatial index, the text layer entry), about 2,100 of MainWindow.xaml.cs's
+    12,677 (save, glow, pen strip, tool selection, view change, page switch), and the parts of
     ToolWheel.cs, PenBar.cs, ChromeBars.cs, LibraryStore.cs, SyncLog.cs and Icons.cs that the
-    suspects name. **Not read:** SettingsWindow.cs, ColorWheel.cs (which declares two 16 ms
-    timers; I did not check when they run), BrushesWindow.cs, FloatingWindow.cs,
-    ExportWindow.cs, the PDF and HTML exporters, MainWindow.xaml beyond its brush uses, and
-    most of MainWindow.xaml.cs. Any of those could hold a per-frame cost this document does
-    not know about. P2, the stall
-    detector, is how to find one: it names whatever is blocking the thread.
+    suspects name.
+    **Second pass (this update).** The reading was done by me and by three read-only helper
+    sessions, each given a file set and asked for findings with line numbers; I re-read the
+    code at the lines behind S12, S13, S14 (the `BottomMenu.Sync` and `SelectionChrome`
+    parts), S17, the text-layer callers and the motion-blur path before writing them, and did
+    not re-read the rest, which rests on the helpers' reports.
+    - InkSurface.cs: read line by line 4290-5909, 7318-11138; spot reads of 1340-1420,
+      2195-2220, 2840-2889, 3425-3470, 3818-3874, 4040-4060, 4110-4220, 5925-5985, 6470-6505.
+      Not re-read in the second pass: lines 1-4290 beyond those spot reads, and 5909-7318,
+      which the first pass read.
+    - MainWindow.xaml.cs: read 1-1177, 1375-2304 (with 2300-2800, the theme and accent code,
+      read by me), 2800-3120, 3400-12677. **Not read by a helper:** 1178-1374 (the glow
+      timer, which the first pass read), 2536-2589 and 2761-2799 (small stretches of the
+      accent and title-bar code), and 3121-3399 (`BuildPenStrip`, which the first pass read).
+    - Read in full by a helper: SettingsWindow.cs, FloatingWindow.cs, BrushesWindow.cs,
+      ExportWindow.cs, ColorWheel.cs from line 290 (the first 290 lines are constants and
+      comments, skimmed), FullscreenChrome.cs from line 56, PanelLayout.cs, ValuePopover.cs,
+      SelectionChrome.cs, StripScroll.cs, HistoryWindow.cs, ObjectsWindow.cs, PaperTextures.cs,
+      PaperGrain.cs, GridArt.cs, PdfExporter.cs and HtmlSvgExporter.cs.
+    - Read in part: BottomMenu.cs 150-503, MeasurementMenu.cs 200-350 and 560-721, ChromeUi.cs
+      95-180 and 375-470, PagePlate.cs 283-300 and 415-500, GridPointEditor.cs 180-510 and
+      630-787 (the rest by search).
+    - Still **not read:** ToolWheel.cs and PenBar.cs beyond what S4 and S18 name (the dial's
+      colour disc, how its sliders call back, and what its `SlotsChanged` does), ChromeBars.cs
+      beyond `OnViewChanged`/`SyncReadouts`, ThumbnailCache.cs (so how often thumbnails render
+      is unknown), ColorPickerService.cs beyond lines 60-271, the Services other than the
+      exporters, SyncLog and LibraryStore parts named above, MainWindow.xaml beyond its brush
+      uses and the first 120 lines, and the tools/ projects. Any of those could hold a cost this
+      document does not know about. P2, the stall detector, is how to find one: it names
+      whatever is blocking the thread.
 11. **That any fix works.** None was written, built or run: the job was set as analysis by
     reading, so every statement here comes from reading the source, git history and the
     repo's notes, not from running Quill.
+12. **Second pass: which optional features the owner has on.** S20 (accent follow, motion
+    blur), S19 (Brushes, History, Measurement windows) and the tool in use (Mouse, Select,
+    Rotate: S14) decide which of the new costs apply. The settings file on the laptop would say
+    in seconds; nothing in the source can.
+13. **Second pass: no continuous cost was found, and that is itself not proof.** The second
+    pass searched every `DispatcherTimer`, `CompositionTarget.Rendering`, `Storyboard` and
+    `System.Threading.Timer` in the tree and read what each does (table in S20). A cost that
+    runs without a timer, for example a compositor effect, a layout loop caused by an element
+    resizing itself, or the driver, would not appear in that search. The `ThemeShadow`s found
+    are two small ones, on the Settings back pill (SettingsWindow.cs:1188) and the grid-edit
+    bar (GridPointEditor.cs:780), only while those are shown.
+14. **Second pass: costs still labelled as estimates.** Every per-call figure in S12 to S20
+    (1 to 5 ms per text box, 80 to 400 ms per paper bake, 5 to 25 ms per theme cascade,
+    5 to 15 ms per colour-wheel frame) is a reading-based guess about WinUI, RichEdit and a
+    low-power CPU. They are not measurements, and the helper reports they came from gave no
+    measurements either.
+15. **Second pass: whether the preview paper tiles share the canvas's tiles**
+    (`PaperTextures.Preview` against the page's own tiles; same Win2D device or not), whether
+    identical `Thickness` or `Visibility` writes invalidate layout in WinUI 3, whether a
+    collapsed full-window `CanvasControl` (the colour wheel) costs GPU time, whether the
+    separate popup island of `FloatingWindow` costs anything while open, and what Mica with
+    the root at alpha 0xD0 costs the compositor.
