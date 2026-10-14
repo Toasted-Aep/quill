@@ -23,11 +23,18 @@
 //                    told (RepairNotice) and crash.log naming each field.
 //   4. the failure   a model that cannot be serialised for ANY reason sets
 //                    WriteError instead of vanishing.
-//   5. the load      a library that already carries an extreme page size loads
-//                    repaired and saves; one whose size is not a number at all is
-//                    refused by the loader's existing gate (reported, not hidden).
+//   5. the load      a library that already carries a FINITE page size (however
+//                    large) loads and saves UNCHANGED; one that overflows to a
+//                    non-finite world size loads repaired; one whose size is not a
+//                    number at all is refused by the loader's existing gate.
+//   6. the structs   a NaN inside a struct (a perspective grid's vanishing point,
+//                    a struct property, a struct list element) is repaired too.
+//   7. the surface   a model that STILL cannot be serialised after the repair (the
+//                    harness injects one) is reported through WriteError, and a
+//                    serialise error cannot cause a false conflict warning.
 //
-// NEGATIVE CONTROLS (see the .csproj): -p:Control=silent|parse|apply|repair
+// NEGATIVE CONTROLS (see the .csproj):
+//   -p:Control=silent|surface|structs|ownwrite|parse|apply|repair|finite
 // compiles a mutated copy of the shipping file with one fix switched off. Each
 // must compile and turn the checks named in its header red.
 //
@@ -77,6 +84,22 @@ string scratch = Path.Combine(Path.GetTempPath(), "quill-save-repair-proof", Gui
 Directory.CreateDirectory(scratch);
 Environment.SetEnvironmentVariable("QUILL_DATA_FOLDER", scratch);
 File.WriteAllText(Path.Combine(scratch, "settings.json"), "{\"DataFolder\":null,\"ImportedLegacy\":true}");
+
+// Section 9 needs a library that STILL cannot be serialised after the repair, and
+// the real model has none (every number in it is one the repair walk reaches). So
+// the harness makes one: a converter for KeyOverride (three strings and a bool, a
+// type nothing else here uses) that refuses to write the command id "poison" and
+// otherwise writes the same four fields the default converter would. It is added
+// to the store's own serialiser options BEFORE their first use (they lock then).
+bool converterInjected = false;
+JsonSerializerOptions? libOpts = null;
+try
+{
+    var optsField = typeof(LibraryStore).GetField("Opts", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+    libOpts = optsField?.GetValue(null) as JsonSerializerOptions;
+    if (libOpts != null) { libOpts.Converters.Add(new PoisonableKeyOverrideConverter()); converterInjected = true; }
+}
+catch (Exception ex) { Console.Error.WriteLine("converter injection failed: " + ex.Message); }
 
 string file = LibraryStore.FilePath;
 if (!file.StartsWith(scratch, StringComparison.OrdinalIgnoreCase))
@@ -203,7 +226,19 @@ Run(() =>
           w2 != null && c2.PageSize == PageSizePreset.A4 && c2.PageWidth == 0 && c2.PageHeight == 0, w2 ?? "no repair");
 
     var c3 = new NotePage { PageSize = PageSizePreset.Custom, PageWidth = 1e300, PageHeight = 1e300, PageUnit = PageSizeUnit.Pixels };
-    Check("Repair: a finite but absurd 1e300 is repaired too", PageSizes.Repair(c3) != null && c3.PageSize == PageSizePreset.Infinite);
+    Check("Repair: a FINITE size is never changed, however large (1e300 px serialises fine)",
+          PageSizes.Repair(c3) == null && c3.PageSize == PageSizePreset.Custom && c3.PageWidth == 1e300 && c3.PageHeight == 1e300);
+    var c3b = new NotePage { PageSize = PageSizePreset.Custom, PageWidth = 1_500_000, PageHeight = 800, PageUnit = PageSizeUnit.Pixels };
+    Check("Repair: a Custom 1,500,000 x 800 page (over the maximum for NEW input, accepted and saved by the old build) is untouched",
+          PageSizes.Repair(c3b) == null && c3b.PageSize == PageSizePreset.Custom && c3b.PageWidth == 1_500_000 && c3b.PageHeight == 800);
+    var c3c = new NotePage { PageSize = PageSizePreset.A4, PageWidth = 2_000_000, PageHeight = 900 };
+    Check("Repair: an A4 page's leftover custom dimensions 2,000,000 x 900 are untouched",
+          PageSizes.Repair(c3c) == null && c3c.PageSize == PageSizePreset.A4 && c3c.PageWidth == 2_000_000 && c3c.PageHeight == 900);
+    var c3d = new NotePage { PageSize = PageSizePreset.Custom, PageWidth = 1_000_000, PageHeight = 1_000_000, PageUnit = PageSizeUnit.Miles };
+    Check("Repair: 1,000,000 x 1,000,000 miles at the default scale (finite in world units) is untouched",
+          PageSizes.Repair(c3d) == null && c3d.PageSize == PageSizePreset.Custom && c3d.PageWidth == 1_000_000);
+    var c3e = new NotePage { PageSize = PageSizePreset.Custom, PageWidth = double.NegativeInfinity, PageHeight = 5 };
+    Check("Repair: -Infinity is non-finite, so it IS repaired", PageSizes.Repair(c3e) != null && c3e.PageSize == PageSizePreset.Infinite);
 
     var c4 = new NotePage { PageSize = PageSizePreset.Custom, PageWidth = 1_000_000, PageHeight = 1_000_000,
                             PageUnit = PageSizeUnit.Miles, UnitsPerInch = 1e305 };
@@ -263,15 +298,52 @@ Run(() =>
 // ---------------------------------------------------------------------------
 Run(() =>
 {
+    // FINITE sizes the old build accepted and saved (its Commit took any width above
+    // zero) must come back exactly as they went in: they serialise fine, so the
+    // repair has no business with them. The 1,000,000 limit is for NEW input only.
+    var keep = OneNotebook("Finite",
+        new NotePage { Name = "wide", PageSize = PageSizePreset.Custom, PageWidth = 1_500_000, PageHeight = 800, PageUnit = PageSizeUnit.Pixels },
+        new NotePage { Name = "huge-finite", PageSize = PageSizePreset.Custom, PageWidth = 1e300, PageHeight = 1e300 },
+        new NotePage { Name = "a4-leftover", PageSize = PageSizePreset.A4, PageWidth = 2_000_000, PageHeight = 900 },
+        new NotePage { Name = "fine", PageSize = PageSizePreset.Custom, PageWidth = 640, PageHeight = 480 });
+    keep.Notebooks[0].Sections[0].Pages[0].Strokes.Add(new PenStroke { Points = { new StrokePoint(3, 4, 0.5f) } });
+    foreach (var stale in new[] { file + ".bak", file + ".corrupt", file + ".tmp" }) if (File.Exists(stale)) File.Delete(stale);
+    File.WriteAllText(file, JsonSerializer.Serialize(keep));
+    if (File.Exists(Path.Combine(scratch, "crash.log"))) File.Delete(Path.Combine(scratch, "crash.log"));
+    var kept = LibraryStore.Load();
+    var kp = kept.Notebooks[0].Sections[0].Pages;
+    bool Same(NotePage a, PageSizePreset ps, double w, double h) => a.PageSize == ps && a.PageWidth == w && a.PageHeight == h;
+    bool allSame() =>
+        Same(kp[0], PageSizePreset.Custom, 1_500_000, 800) && Same(kp[1], PageSizePreset.Custom, 1e300, 1e300) &&
+        Same(kp[2], PageSizePreset.A4, 2_000_000, 900) && Same(kp[3], PageSizePreset.Custom, 640, 480);
+    Check("finite sizes: the library loads", !LibraryStore.LoadFailed, LibraryStore.LoadError ?? "no error");
+    Check("finite sizes: a Custom 1,500,000 x 800 page, a Custom 1e300 page, an A4 page's leftover 2,000,000 x 900 and a 640 x 480 page all load UNCHANGED",
+          allSame(), string.Join(" | ", kp.Select(p => $"{p.PageSize} {p.PageWidth}x{p.PageHeight}")));
+    Check("finite sizes: no repair notice and nothing in crash.log (the user is not told about nothing)",
+          LibraryStore.RepairNotice == null && crashLog().Length == 0, LibraryStore.RepairNotice ?? crashLog());
+    kp[3].Strokes.Add(new PenStroke { Points = { new StrokePoint(5, 5, 0.5f) } });
+    LibraryStore.Save(kept);
+    LibraryStore.Flush();
+    string savedText = File.ReadAllText(file);
+    Check("finite sizes: the save writes the same numbers back (1500000 and 1E+300 are in the file)",
+          savedText.Contains("\"PageWidth\":1500000") && savedText.Contains("\"PageWidth\":1E+300") && savedText.Contains("\"PageWidth\":2000000"));
+    var kept2 = LibraryStore.Load();
+    kp = kept2.Notebooks[0].Sections[0].Pages;
+    Check("finite sizes: after a save and a reload they are STILL unchanged, and the edit is in the file",
+          allSame() && kp[3].Strokes.Count == 1 && LibraryStore.RepairNotice == null && LibraryStore.WriteError == null);
+
+    // A size that is finite but overflows to a non-finite WORLD size cannot be drawn:
+    // that one is repaired on load.
     var ext = OneNotebook("Extreme",
-        new NotePage { Name = "huge", PageSize = PageSizePreset.Custom, PageWidth = 1e300, PageHeight = 1e300 },
+        new NotePage { Name = "overflow-page", PageSize = PageSizePreset.Custom, PageWidth = 1_000_000, PageHeight = 1_000_000,
+                       PageUnit = PageSizeUnit.Miles, UnitsPerInch = 1e305 },
         new NotePage { Name = "fine", PageSize = PageSizePreset.Custom, PageWidth = 640, PageHeight = 480 });
     ext.Notebooks[0].Sections[0].Pages[0].Strokes.Add(new PenStroke { Points = { new StrokePoint(3, 4, 0.5f) } });
     File.WriteAllText(file, JsonSerializer.Serialize(ext));
     var loaded = LibraryStore.Load();
-    Check("an extreme-but-finite size loads (LoadFailed is false)", !LibraryStore.LoadFailed, LibraryStore.LoadError ?? "no error");
+    Check("a size that overflows to a non-finite world size loads (LoadFailed is false)", !LibraryStore.LoadFailed, LibraryStore.LoadError ?? "no error");
     var pages = loaded.Notebooks[0].Sections[0].Pages;
-    Check("...and the huge page was repaired in memory to Infinite, 0 x 0",
+    Check("...and that page was repaired in memory to Infinite, 0 x 0",
           pages[0].PageSize == PageSizePreset.Infinite && pages[0].PageWidth == 0 && pages[0].PageHeight == 0,
           $"{pages[0].PageSize} {pages[0].PageWidth}x{pages[0].PageHeight}");
     Check("...while its ink and the neighbouring good 640x480 page are untouched",
@@ -280,7 +352,7 @@ Run(() =>
           LibraryStore.RepairNotice != null && LibraryStore.RepairNotice.Contains("on load") && LibraryStore.RepairNotice.Contains("PageWidth"),
           LibraryStore.RepairNotice ?? "no notice");
     Check("...and crash.log names the page and the old value",
-          crashLog().Contains("library repair (on load)") && crashLog().Contains("huge") && crashLog().Contains("1E+300"),
+          crashLog().Contains("library repair (on load)") && crashLog().Contains("overflow-page") && crashLog().Contains("PageWidth 1000000"),
           crashLog().Trim().Split('\n').LastOrDefault()?.Trim() ?? "empty");
 
     loaded.Notebooks[0].Sections[0].Pages[1].Strokes.Add(new PenStroke { Points = { new StrokePoint(9, 9, 0.5f) } });
@@ -399,16 +471,176 @@ Run(() =>
 });
 
 // ---------------------------------------------------------------------------
-// 9. A MODEL THAT CANNOT BE SERIALISED EVEN AFTER THE REPAIR.
-//    Not exercised, and said so: every property of the real models is a number
-//    this walk repairs, a string the serialiser replaces, or a list of those, so
-//    there is no input that survives the repair and still throws - a lone
-//    surrogate in a name, tried first, simply serialises on this runtime. The
-//    branch (WriteError set, nothing queued, library.json untouched) is the code
-//    that replaced the old bare "return", and the 'silent' control (see the .csproj) is what
-//    shows the repair branch is the one doing the work.
+// 8b. A NaN INSIDE A STRUCT of the real model: a perspective grid's vanishing
+//     point (PerspectiveDef.Vps is a List<CanvasPoint>, CanvasPoint a struct of two
+//     doubles). The first version of the walk skipped value types, so this one
+//     stopped saving - loudly, but for the rest of the session.
 // ---------------------------------------------------------------------------
-Note("section 9", "no input in the real model survives the repair and still fails to serialise, so the 'still fails' branch (WriteError) is verified by reading only");
+Run(() =>
+{
+    var pg = new NotePage { Name = "persp" };
+    pg.Perspective = new PerspectiveDef
+    {
+        HorizonY = 100,
+        Vps = { new CanvasPoint(double.NaN, 10), new CanvasPoint(5, double.PositiveInfinity), new CanvasPoint(7, 8) },
+    };
+    pg.Strokes.Add(new PenStroke { Points = { new StrokePoint(2, 3, 0.5f) } });
+    var lib = OneNotebook("Persp", pg);
+    bool rawThrows;
+    try { JsonSerializer.Serialize(lib); rawThrows = false; } catch (Exception) { rawThrows = true; }
+    Check("(setup) a vanishing point holding NaN cannot be serialised raw", rawThrows);
+
+    File.Delete(Path.Combine(scratch, "crash.log"));
+    LibraryStore.Save(lib);
+    LibraryStore.Flush();
+    string text = File.ReadAllText(file);
+    Check("vanishing point NaN: the save is NOT stuck - WriteError is null and the file has no Infinity or NaN token",
+          LibraryStore.WriteError == null && !text.Contains("Infinity") && !text.Contains("NaN"), LibraryStore.WriteError ?? "no error");
+    var back = LibraryStore.Load();
+    var bp = FirstPage(back);
+    var vps = bp?.Perspective?.Vps;
+    Check("...reloaded: the NaN coordinate is 0, its partner and the other points are untouched, the horizon is intact",
+          !LibraryStore.LoadFailed && vps is { Count: 3 } && vps[0].X == 0 && vps[0].Y == 10 && vps[1].X == 5 && vps[1].Y == 0 &&
+          vps[2].X == 7 && vps[2].Y == 8 && bp!.Perspective!.HorizonY == 100 && bp.Strokes.Count == 1,
+          vps == null ? "no Vps" : string.Join(" ", vps.Select(v => $"({v.X},{v.Y})")));
+    Check("...the in-memory struct list was written back (the next save has nothing left to repair)",
+          pg.Perspective.Vps[0].X == 0 && pg.Perspective.Vps[1].Y == 0);
+    Check("...the user is told, with the struct field's path",
+          LibraryStore.RepairNotice != null && LibraryStore.RepairNotice.Contains("Perspective.Vps[0].X NaN -> 0"), LibraryStore.RepairNotice ?? "no notice");
+    Check("...crash.log has both coordinates by path",
+          crashLog().Contains("Perspective.Vps[0].X NaN -> 0") && crashLog().Contains("Perspective.Vps[1].Y Infinity -> 0"));
+    pg.Strokes.Add(new PenStroke { Points = { new StrokePoint(9, 9, 0.5f) } });
+    LibraryStore.Save(lib);
+    LibraryStore.Flush();
+    Check("...and the NEXT save lands (the edit is in the file)", LibraryStore.Load().Notebooks[0].Sections[0].Pages[0].Strokes.Count == 2);
+});
+
+// ---------------------------------------------------------------------------
+// 8c. The struct PROPERTY and nullable-struct paths of the walk, which no type in
+//     the real model happens to use: driven directly (the walk is private, so by
+//     reflection) on a type of the harness's own.
+// ---------------------------------------------------------------------------
+Run(() =>
+{
+    var walkType = typeof(LibraryStore).GetNestedType("NumberRepairWalk", System.Reflection.BindingFlags.NonPublic);
+    Check("(setup) the repair walk type was found", walkType != null);
+    if (walkType == null) return;
+    var walk = Activator.CreateInstance(walkType, true)!;
+    var stamp = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+    var guid = Guid.NewGuid();
+    var probe = new StructProbe
+    {
+        Id = guid, When = stamp,
+        Pos = new ProbePt { X = double.NaN, Y = 2, F = 1f },
+        Maybe = new ProbePt { X = 3, Y = double.PositiveInfinity, F = float.NaN },
+        Many = { new ProbePt { X = 1, Y = 2, F = 3f }, new ProbePt { X = double.NegativeInfinity, Y = 5, F = 6f } },
+    };
+    walkType.GetMethod("Walk")!.Invoke(walk, new object?[] { probe, 0 });
+    var repairs = (List<string>)walkType.GetField("Repairs")!.GetValue(walk)!;
+    Check("struct property: NaN X -> 0, its partner untouched", probe.Pos.X == 0 && probe.Pos.Y == 2 && probe.Pos.F == 1f);
+    Check("nullable struct property: +Inf Y -> 0 and NaN float -> 0, X untouched, still non-null",
+          probe.Maybe is { } m && m.X == 3 && m.Y == 0 && m.F == 0f);
+    Check("struct list element: -Inf X -> 0 written back; the clean element is untouched",
+          probe.Many[1].X == 0 && probe.Many[1].Y == 5 && probe.Many[1].F == 6f && probe.Many[0].X == 1 && probe.Many[0].Y == 2 && probe.Many[0].F == 3f);
+    Check("a Guid and a DateTime are left alone (System structs are not opened)", probe.Id == guid && probe.When == stamp);
+    Check("exactly four repairs, each named by path",
+          repairs.Count == 4 && repairs.Any(r => r.StartsWith("Pos.X NaN")) && repairs.Any(r => r.StartsWith("Maybe.Y Infinity")) &&
+          repairs.Any(r => r.StartsWith("Maybe.F NaN")) && repairs.Any(r => r.StartsWith("Many[1].X -Infinity")), string.Join(" | ", repairs));
+});
+
+// ---------------------------------------------------------------------------
+// 9. A MODEL THAT CANNOT BE SERIALISED EVEN AFTER THE REPAIR.
+//    The real model has none (see the converter injected at the top), so the
+//    harness builds one: a KeyOverride the store's serialiser refuses to write.
+//    This is the branch that replaced the old bare "return": the user must be told
+//    (WriteError), library.json must keep its last good content, and the error must
+//    clear itself once the model can be written again. The 'surface' control drops
+//    exactly the one line that makes the first of those true.
+// ---------------------------------------------------------------------------
+Run(() =>
+{
+    Check("(setup) the poison converter is in the store's serialiser options", converterInjected && libOpts != null);
+    if (libOpts == null) return;
+    var good = OneNotebook("Stuck", new NotePage { Name = "p" });
+    var gp = good.Notebooks[0].Sections[0].Pages[0];
+    gp.Strokes.Add(new PenStroke { Points = { new StrokePoint(1, 1, 0.5f) } });
+    good.KeyOverrides.Add(new KeyOverride { CommandId = "Undo", Key = "Z", Mods = "Control" });
+    LibraryStore.Save(good);
+    LibraryStore.Flush();
+    Check("(setup) a model with an ordinary KeyOverride saves through the converter",
+          LibraryStore.WriteError == null && File.ReadAllText(file).Contains("\"CommandId\":\"Undo\""), LibraryStore.WriteError ?? "no error");
+    byte[] fileBefore = File.ReadAllBytes(file);
+    File.Delete(Path.Combine(scratch, "crash.log"));
+
+    gp.Strokes.Add(new PenStroke { Points = { new StrokePoint(2, 2, 0.5f) } });
+    good.KeyOverrides.Add(new KeyOverride { CommandId = "poison", Key = "F" });
+    bool rawThrows;
+    try { JsonSerializer.Serialize(good, libOpts); rawThrows = false; } catch (Exception) { rawThrows = true; }
+    Check("(setup) that model cannot be serialised, and it holds no number the repair could fix", rawThrows);
+
+    LibraryStore.Save(good);
+    LibraryStore.Flush();
+    Check("a model that STILL cannot be serialised after the repair is REPORTED: WriteError is set and says the notes were not saved",
+          LibraryStore.WriteError != null && LibraryStore.WriteError.Contains("could not save your notes"), LibraryStore.WriteError ?? "WriteError is null - the old silence");
+    Check("...library.json keeps its last good content, byte for byte",
+          File.ReadAllBytes(file).SequenceEqual(fileBefore));
+    Check("...and crash.log says it could not be serialised even after the repair",
+          crashLog().Contains("STILL could not be serialised"));
+
+    good.KeyOverrides.RemoveAll(k => k.CommandId == "poison");
+    LibraryStore.Save(good);
+    LibraryStore.Flush();
+    var back = LibraryStore.Load();
+    Check("once the model can be serialised again the error clears and the save lands (both strokes are in the file)",
+          LibraryStore.WriteError == null && FirstPage(back)?.Strokes.Count == 2, LibraryStore.WriteError ?? "no error");
+});
+
+// ---------------------------------------------------------------------------
+// 9b. A SERIALISE ERROR MUST NOT CAUSE A FALSE CONFLICT WARNING.
+//     WriteAll records the time of its OWN write so the next save can tell a
+//     foreign writer from itself. It must decide that from the FILE outcome, not
+//     from the combined WriteError: if a serialise error is set on the UI thread
+//     while a write is in flight, reading the combined value skips the record, the
+//     next good save sees its own earlier write as foreign, archives a
+//     library.conflict copy and warns about "another program".
+//     Deterministic: the harness holds the store's write lock so a write queued by
+//     one Save is in flight (blocked) while a second Save fails to serialise.
+// ---------------------------------------------------------------------------
+Run(() =>
+{
+    if (libOpts == null) return;
+    Check("(setup) no conflict warning has been raised by anything before this section", LibraryStore.ConflictWarning == null, LibraryStore.ConflictWarning ?? "none");
+    var lib = OneNotebook("Own", new NotePage { Name = "p" });
+    var pg = lib.Notebooks[0].Sections[0].Pages[0];
+    pg.Strokes.Add(new PenStroke { Points = { new StrokePoint(1, 1, 0.5f) } });
+    LibraryStore.Save(lib);
+    LibraryStore.Flush();
+    var wl = typeof(LibraryStore).GetField("_writeLock", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+    DateTime mtimeBefore = File.GetLastWriteTimeUtc(file);
+    bool locked = false;
+    Monitor.Enter(wl, ref locked);
+    try
+    {
+        Thread.Sleep(2600);   // the in-flight write's file time lands more than the guard's 2 s after the baseline
+        pg.Strokes.Add(new PenStroke { Points = { new StrokePoint(2, 2, 0.5f) } });
+        LibraryStore.Save(lib);                                     // serialises now; its write is queued and blocks on the lock
+        lib.KeyOverrides.Add(new KeyOverride { CommandId = "poison" });
+        LibraryStore.Save(lib);                                     // cannot be serialised: the serialise error is set while that write is in flight
+    }
+    finally { if (locked) Monitor.Exit(wl); }
+    LibraryStore.Flush();
+    Check("(setup) the in-flight write landed while a serialise error was set",
+          File.GetLastWriteTimeUtc(file) > mtimeBefore.AddSeconds(2) && LibraryStore.WriteError != null && LibraryStore.WriteError.Contains("could not save your notes"),
+          LibraryStore.WriteError ?? "no serialise error was set");
+    lib.KeyOverrides.Clear();
+    pg.Strokes.Add(new PenStroke { Points = { new StrokePoint(3, 3, 0.5f) } });
+    LibraryStore.Save(lib);
+    LibraryStore.Flush();
+    Check("the next good save raises NO false 'another program changed the file' warning",
+          LibraryStore.ConflictWarning == null, LibraryStore.ConflictWarning ?? "none");
+    Check("...and archived no library.conflict copy", Directory.GetFiles(scratch, "library.conflict-*").Length == 0);
+    Check("...and that save landed", LibraryStore.WriteError == null && LibraryStore.Load().Notebooks[0].Sections[0].Pages[0].Strokes.Count == 3);
+});
 
 // ---------------------------------------------------------------------------
 // 10. SOURCE PINS. These do NOT prove the wiring - the screen check does - they
@@ -434,6 +666,10 @@ Run(() =>
         Check("pin: MainWindow.SetPageSize goes through PageSizes.TryApply", main.Contains("PageSizes.TryApply(_curPage"));
         Check("pin: the notebook grip stores no bare NotebookPanel.Height",
               !main.Contains("_library.NotebookPanelH = NotebookPanel.Height;"));
+        string ink = File.ReadAllText(Path.Combine(root, "src", "Quill", "Controls", "InkSurface.cs"));
+        Check("pin: the text box width grip guards box.Width against NaN before storing it",
+              ink.Contains("double gw = double.IsFinite(box.Width) ? box.Width : box.ActualWidth;") &&
+              ink.Contains("if (double.IsFinite(gw) && gw > 0) t.Width = gw;"));
     }
 });
 
@@ -450,3 +686,48 @@ finally
 
 Report();
 return failures == 0 ? 0 : 1;
+
+// Writes a KeyOverride exactly as the default converter does, except that the
+// command id "poison" cannot be written (see section 9).
+sealed class PoisonableKeyOverrideConverter : System.Text.Json.Serialization.JsonConverter<KeyOverride>
+{
+    public override KeyOverride Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
+        var r = doc.RootElement;
+        string S(string n) => r.TryGetProperty(n, out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() ?? "" : "";
+        return new KeyOverride
+        {
+            CommandId = S("CommandId"), Key = S("Key"), Mods = S("Mods"),
+            Disabled = r.TryGetProperty("Disabled", out var d) && d.ValueKind == JsonValueKind.True,
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, KeyOverride value, JsonSerializerOptions options)
+    {
+        if (value.CommandId == "poison") throw new InvalidOperationException("harness: this value cannot be written");
+        writer.WriteStartObject();
+        writer.WriteString("CommandId", value.CommandId);
+        writer.WriteString("Key", value.Key);
+        writer.WriteString("Mods", value.Mods);
+        writer.WriteBoolean("Disabled", value.Disabled);
+        writer.WriteEndObject();
+    }
+}
+
+// Section 8c: a struct of the harness's own, in the global namespace (not System.*).
+struct ProbePt
+{
+    public double X { get; set; }
+    public double Y { get; set; }
+    public float F { get; set; }
+}
+
+class StructProbe
+{
+    public Guid Id { get; set; }
+    public DateTime When { get; set; }
+    public ProbePt Pos { get; set; }
+    public ProbePt? Maybe { get; set; }
+    public List<ProbePt> Many { get; set; } = new();
+}
