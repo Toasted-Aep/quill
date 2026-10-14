@@ -15,7 +15,7 @@ Status: design only. Written against main at 0c41c7b (October 2026). Nothing her
 All nine hold. Citations are to main at 0c41c7b.
 
 1. Element delete tombstones carry no parent. Deletes are written as `new Op { K = parts[0], Id = ..., J = null, ... }` with no Parent (SyncLog.cs:285-290); upserts carry it (:283). Apply for st, sh, tx and cm does `FindPage(lib, op.Parent)` and returns null (:543-546), and `seen = op.N` still advances (:443). Holds.
-2. A clean replay resurrects erased items. Device id and cursors live in %LOCALAPPDATA%\Quill (:87-91, :172-197), and a missing cursor means offset 0 and seen 0 (:415-416). Every upsert is re-applied, every element delete is dropped (problem 1), and the shadow rebuild after the merge (:461-465) makes the result permanent. Compaction (:33, :322-398) bounds it to ops since the last compaction. Holds.
+2. A clean replay resurrects erased items. Device id and cursors live in `%LOCALAPPDATA%\Quill` (:87-91, :172-197), and a missing cursor means offset 0 and seen 0 (:415-416). Every upsert is re-applied, every element delete is dropped (problem 1), and the shadow rebuild after the merge (:461-465) makes the result permanent. Compaction (:33, :322-398) bounds it to ops since the last compaction. Holds.
 3. Page and section moves emit no op. Correction to the brief: page and section ops do carry Parent (:243, :246). But the hash covers only PageMetaJson and SecMetaJson, which have no parent (:226-234), so a move changes no hash and emits nothing, and Apply never re-parents an existing page or section (:487-541). A later section delete on the peer also emits tombstones for every page and element it held there (LibraryStore.cs:1053-1073 then SyncLog.cs:285-290), which removes the moved page here outside any trash. Holds.
 4. The shadow is rebuilt from the live model after a merge (:461-465), absorbing unsaved local edits. Holds, and it is frequent: unsaved edits exist for the whole debounce window, and for minutes during continuous writing (audit finding 10).
 5. Ops apply by per-device counter only (:441-443). Concurrent edits to one element leave each device holding the other's version. Holds.
@@ -40,13 +40,13 @@ Further defects found while verifying. A design must fix them or at least not in
 
 Two corrections to the brief:
 
-- settings.json lives at the fixed anchor, Documents\Quill (LibraryStore.cs:77-80). That is also the default data folder (:194-202), so in the default setup settings.json is synced and shared, not per machine.
+- settings.json lives at the fixed anchor, `Documents\Quill` (LibraryStore.cs:77-80). That is also the default data folder (:194-202), so in the default setup settings.json is synced and shared, not per machine.
 - Layer has `Hidden`, not `Visible` (LayerModels.cs:55).
 
 ## 3. The design in brief
 
 - The library becomes a set of keyed registers. Every notebook, section, page, layer and element has an explicit life register (alive, trashed or deleted) plus value registers. Each register is stamped with a hybrid logical clock, and merging keeps the higher stamp, so any set of records merged in any order, any number of times, gives the same state.
-- Each device appends checksummed batches of records to a journal in %LOCALAPPDATA% and flushes it; that flush is the moment an edit is acknowledged. Then it copies the same bytes to its own segment file in the shared folder (Dir\sync\). Files are named per process run, so no two writers ever share a file name. Checkpoints of the whole state let new devices join and old segments be deleted.
+- Each device appends checksummed batches of records to a journal in %LOCALAPPDATA% and flushes it; that flush is the moment an edit is acknowledged. Then it copies the same bytes to its own segment file in the shared folder (`Dir\sync\`). Files are named per process run, so no two writers ever share a file name. Checkpoints of the whole state let new devices join and old segments be deleted.
 - library.json is never written again. A container delete is a "trashed" write on the container alone, so the trash becomes synced state, and nothing is removed outside it. Deletes beat concurrent edits, and only an explicit undo or restore revives. Concurrent text edits keep both versions.
 - One worker thread does all diffing, file IO, merging and checkpointing. The UI thread only captures what changed and applies merge results in place, with compare-and-set by content hash, so unsaved edits are never absorbed and undo survives.
 - Migration is the same on every device. It imports the old logs and library.json as records tagged by origin and stamped so that any real edit beats them, and it repairs items the old bugs resurrected. A bridge log keeps old builds receiving element edits during the mixed period. Tombstones are never collected in the first release, and purged trash is hidden but not yet reclaimed (section 13).
@@ -116,8 +116,8 @@ Special stamps:
 Clock rules:
 
 - The clock is a hybrid logical clock l = (lt, lc), persisted in the local device.json (lazily) and recovered at startup as the maximum of that value and every stamp in this device's own journal.
-- Next(): if now > lt then (now, 0), else (lt, lc + 1). The counter has 64 bits, so it does not wrap.
-- Joining a remote record with stamp r: if r.t <= now + 1 hour, l becomes max(l, r). Otherwise l is not moved, and the status line names the writer whose clock is ahead (rate-limited).
+- Next(): `if now > lt then (now, 0), else (lt, lc + 1)`. The counter has 64 bits, so it does not wrap.
+- Joining a remote record with stamp r: `if r.t <= now + 1 hour`, l becomes max(l, r). Otherwise l is not moved, and the status line names the writer whose clock is ahead (rate-limited).
 - A local write to a register uses stamp max(Next(), successor of the register's stored stamp). An edit made after seeing a value therefore beats that value whatever the clocks say. This per-key bump is not fed back into l, so one far-future register does not drag the whole clock forward.
 - If at startup lt > now + 1 hour (a clock that was fast has been corrected, or the clock went backwards), l restarts at now and the status line warns. Causality still holds through the per-key bump; only genuinely concurrent conflicts are decided by the skewed time. Nothing in this design depends on wall-clock time for correctness, because nothing is collected in the first release (section 13).
 
@@ -177,7 +177,7 @@ Both rules run on the worker whenever a join changes a register they look at. Ea
 
 Keep-both for text. It applies to the `body` register of tx and cm only (the RTF of a text box, the text of a comment), and never to records of origin b, x, w or l.
 
-- Two body values are concurrent when neither writer had seen the other: incoming r and stored v with r.s > v.s and r.b < v.s, or v.s > r.s and v.b < r.s. A body without `b` (a creation) counts as having seen nothing.
+- Two body values are concurrent when neither writer had seen the other: incoming r and stored v with `r.s > v.s and r.b < v.s`, or `v.s > r.s and v.b < r.s`. A body without `b` (a creation) counts as having seen nothing.
 - If two concurrent values differ, the loser (the lower stamp) is kept as a new element. Its id is UUIDv5(Quill namespace, id + loser stamp). It has the original's `lay` offset by 16 px, `body` = the losing value, `cell` cleared (CloneAsFreeBox, NoteModels.cs:341-346) and a `z` just after the original. All its registers are stamped with the loser's stamp, with origin k.
 - A delete of a text box or comment meets a body value stamped above the delete's `bm.body`, so the deleter never saw that text. The text is kept the same way, as a copy. A delete without `bm` (a legacy delete) never makes a copy.
 - Any device that sees both values makes the same element with the same id, the same stamps and the same values, so copies are duplicates, not conflicts. A three-way race can produce one redundant copy, never lost text.
@@ -195,7 +195,7 @@ Rescue on purge. A purge carries `pb`, everything the purger held under the cont
 
 ### 5.1 The shared folder
 
-New files live in Dir\sync\. Old builds list only `Dir\oplog.*.jsonl`, non-recursively (SyncLog.cs:408), and read only library.json and trash.json, so they never see anything below. Names:
+New files live in `Dir\sync\`. Old builds list only `Dir\oplog.*.jsonl`, non-recursively (SyncLog.cs:408), and read only library.json and trash.json, so they never see anything below. Names:
 
 - `folder.json`: `{"fmt":2,"libraryId":<guid>,"createdBy":D,"created":stamp}`. The first v2 device writes it once, with temp, flush and rename. If two devices race and a conflict copy appears, the lowest libraryId among the variants is canonical. The libraryId is informational and used by "Change storage folder" (section 11). Local state is keyed by the folder path, not by this id (section 5.4).
 - `dev-<D>.json`: the device file, written only by device D (temp, flush, File.Replace). It holds:
@@ -245,7 +245,7 @@ It is written to a temp file, flushed with Flush(true), renamed, then re-read. I
 
 ### 5.4 Local files
 
-Location: `%LOCALAPPDATA%\Quill\sync\<16 hex of SHA-256 of the normalized Dir>\`. The directory is never renamed. Its device.json records the Dir path and the libraryId it has seen. At startup the worker scans every directory under %LOCALAPPDATA%\Quill\sync\ and replays the journals of any directory whose recorded Dir normalizes to this Dir, or whose libraryId matches any folder.json variant in Dir. A respelled path, or two devices racing to create folder.json, therefore never orphans a journal.
+Location: `%LOCALAPPDATA%\Quill\sync\<16 hex of SHA-256 of the normalized Dir>\`. The directory is never renamed. Its device.json records the Dir path and the libraryId it has seen. At startup the worker scans every directory under `%LOCALAPPDATA%\Quill\sync\` and replays the journals of any directory whose recorded Dir normalizes to this Dir, or whose libraryId matches any folder.json variant in Dir. A respelled path, or two devices racing to create folder.json, therefore never orphans a journal.
 
 - `device.json`: `{D, l, Dir, libraryId, legacyId, bridgeId, bridgeN}`, written with temp, flush, File.Replace and .bak.
 - `journal\seg-<W>-<firstSeq>.qsd`: this device's own segments. They are the acknowledged record of every local edit and the source for publishing. A journal segment is deleted 7 days after both conditions hold: a verified checkpoint lists a shared copy whose length and SHA-256 equal the journal segment's, and the local cache covers it.
@@ -264,7 +264,7 @@ Rolling backups move out of the shared folder, to `%LOCALAPPDATA%\Quill\backups\
 - Frequency: written by the worker from the state, at most one per 15 minutes of activity.
 - Retention: 12.
 
-Today's backups\ in the data folder stays untouched for old builds. The shared checkpoints are the cross-device recovery points.
+Today's `backups\` in the data folder stays untouched for old builds. The shared checkpoints are the cross-device recovery points.
 
 ## 6. What each thread does
 
@@ -322,7 +322,7 @@ UI-thread cost:
 6. Commit (worker): only now join the records into the state, set the shadow for those registers to the captured hashes and stamps, and advance the sequence number.
    - A failed journal write commits nothing. The worker switches to a new writer id (section 5.2), and the next capture produces the same records again, because the shadow did not move.
    - The worker sets SyncWriteError, which the status line repeats every 60 s for as long as it lasts, the way WriteError works today.
-7. Publish (worker): append the same bytes to Dir\sync\seg-W-firstSeq.qsd, then Flush(true).
+7. Publish (worker): append the same bytes to `Dir\sync\seg-W-firstSeq.qsd`, then Flush(true).
    - On failure (sharing violation, offline placeholder, full disk, missing folder), the batch stays unpublished in the journal. The writer switches ids, and republishing (section 7.2, step 6) retries on every pass.
    - After 5 minutes unpublished, the status line says "Saved on this PC, not yet synced".
 8. Rotate segments as in section 5.2.
@@ -333,11 +333,11 @@ Close: Closed runs the capture, then waits up to 15 s for the worker to journal 
 
 1. Triggers:
    - a 20 s timer;
-   - a FileSystemWatcher event on Dir\sync\ and Dir, debounced 2 s;
+   - a FileSystemWatcher event on `Dir\sync\` and Dir, debounced 2 s;
    - app activation;
    - startup.
-2. Enumerate Dir\sync\ and the legacy files in Dir (oplog.*.jsonl and its variants, library.json, trash.json). For each file whose length, last write time, or hash of its first and last 4 KB differs from the consumed-files table, read it whole. A segment is at most about 1 MB. A checkpoint is read once, because its name is never reused.
-   - Open files with FileShare.ReadWrite | FileShare.Delete.
+2. Enumerate `Dir\sync\` and the legacy files in Dir (oplog.*.jsonl and its variants, library.json, trash.json). For each file whose length, last write time, or hash of its first and last 4 KB differs from the consumed-files table, read it whole. A segment is at most about 1 MB. A checkpoint is read once, because its name is never reused.
+   - Open files with `FileShare.ReadWrite | FileShare.Delete`.
    - A sharing violation, an offline placeholder or an IO error skips the file until the next pass.
    - A file that is shorter than before, or whose prefix changed (a sync client rolled it back or replaced it), is read again in full, which is harmless.
 3. Decode and join into a scratch overlay over the state:
@@ -402,7 +402,7 @@ Other pages follow the same rules without the flush, because none of their boxes
 
 Container changes move the same Notebook, Section and NotePage objects between the tree lists and `Library.Trashed` (section 7.4), then BuildTree runs. The open page needs special handling:
 
-- If the open page, or an ancestor, becomes trashed on another device, the page stays open with a banner: "Moved to the trash on <machine>", with Restore and Close. The page object is still reachable through `Library.Trashed` and is captured like any other page, so edits keep saving into the same keys. Nothing is detached, which is problem 8.
+- If the open page, or an ancestor, becomes trashed on another device, the page stays open with a banner: "Moved to the trash on `<machine>`", with Restore and Close. The page object is still reachable through `Library.Trashed` and is captured like any other page, so edits keep saving into the same keys. Nothing is detached, which is problem 8.
 - If a purge patch arrives for the open page, the UI first runs a capture of that page, and the worker journals it and re-runs the rescue check. The window switches away only if no rescue applies, to the nearest live sibling or to the gallery, and says why. Unsaved strokes are never dropped by the switch.
 
 Why the posting order is enough:
@@ -415,7 +415,7 @@ Why the posting order is enough:
 
 `Library.Trashed` is a new non-serialized list. It holds the live Notebook, Section and NotePage objects of the topmost trashed containers, each with its `del` data (DeletedTicks, DeletedBy, original parent and index). The trash dialog reads it instead of trash.json, and it is projected from the state like the tree.
 
-- Delete of a notebook, section or page: LibraryStore's Delete* methods move the object into `Library.Trashed`. They post a trash mark {id, kind, DeletedTicks, parent ids, index} to the worker ahead of the next capture. The diff writes L = 2 plus `del` on the container alone.
+- Delete of a notebook, section or page: LibraryStore's Delete* methods move the object into `Library.Trashed`. They post a trash mark `{id, kind, DeletedTicks, parent ids, index}` to the worker ahead of the next capture. The diff writes L = 2 plus `del` on the container alone.
   - Children are not touched. They follow their own `pos`.
   - trash.json is no longer written by v2. That ends audit finding 16's whole-file trash for v2 builds.
 - Restore moves the object back and posts a restore mark. The diff writes L = 1 with b = the trash stamp. If the original parent is not in the tree, it also writes `pos` to the parent's nearest live ancestor, or to the Recovered section, matching today's RestorePage fallback (LibraryStore.cs:1161-1176).
@@ -465,16 +465,16 @@ On the worker, during LibraryStore.BeginLoad:
 
 A new PC, a reinstall or a wiped profile has no cache and no journal, so it mints a new D and joins:
 
-- It joins every verified checkpoint and every segment in sync\, and imports the legacy files.
+- It joins every verified checkpoint and every segment in `sync\`, and imports the legacy files.
 - Tombstones are in the checkpoints and segments, and an older upsert can never beat a newer tombstone, so nothing erased comes back (problem 2).
 - A cursor that does not exist cannot be lost.
 
-If the files in sync\ are offline placeholders that cannot be read, the device starts from what it can read:
+If the files in `sync\` are offline placeholders that cannot be read, the device starts from what it can read:
 
 - library.json is a real old library: the migration baseline (section 9.1) supplies the content. Its records are low-priority, and the rest joins as files hydrate. No rule here can resurrect or revert anything, because baseline records lose to every real record.
-- library.json is the retirement stub or absent, and sync\ shows any v2 file: the device has nothing to show yet. It says "Waiting for your notes to download from <folder>" and never seeds a library.
+- library.json is the retirement stub or absent, and `sync\` shows any v2 file: the device has nothing to show yet. It says "Waiting for your notes to download from `<folder>`" and never seeds a library.
 
-A seed library ("My Notebook") is created only when neither a real library.json nor any v2 file exists anywhere in Dir, which is today's genuine first run. When Dir lies inside a cloud-synced folder, seeding first asks: "No notes were found in <folder> yet. Start a new library here, or wait for your files to sync?" A folder counts as cloud-synced when its path is under the OneDrive, OneDriveConsumer or OneDriveCommercial environment paths, or when its files carry cloud placeholder attributes.
+A seed library ("My Notebook") is created only when neither a real library.json nor any v2 file exists anywhere in Dir, which is today's genuine first run. When Dir lies inside a cloud-synced folder, seeding first asks: "No notes were found in `<folder>` yet. Start a new library here, or wait for your files to sync?" A folder counts as cloud-synced when its path is under the OneDrive, OneDriveConsumer or OneDriveCommercial environment paths, or when its files carry cloud placeholder attributes.
 
 ### 7.7 Identity, second instances and clones
 
@@ -538,10 +538,10 @@ The further defects:
 There is no special first device. Every device runs the same steps, on the worker, before the window adopts the library:
 
 1. Decide whether there is anything to migrate.
-   - library.json is absent, or is the retirement stub (section 9.6), and Dir\sync\ holds any v2 file: there is nothing to migrate. Write the marker and join (section 7.6).
+   - library.json is absent, or is the retirement stub (section 9.6), and `Dir\sync\` holds any v2 file: there is nothing to migrate. Write the marker and join (section 7.6).
    - Otherwise load L0 with today's LibraryStore.Load, which fails closed exactly as today. If it fails, stop: v2 does nothing, and nothing is written.
    - A genuine first run (no library.json and no v2 file) takes today's path: the LectureInk folders, then Seed (with the confirmation of section 7.6). L0 is the result.
-2. Import every legacy log in Dir, conflict copies included (section 9.2), and join everything readable in Dir\sync\ (other devices may have migrated already).
+2. Import every legacy log in Dir, conflict copies included (section 9.2), and join everything readable in `Dir\sync\` (other devices may have migrated already).
 3. Import trash.json. For each entry whose container is not in L0:
    - Create the container and its subtree, if the state does not already have them, as baseline records (below).
    - Set L = 2 at stamp (DeletedTicks converted to ms, 0, writer), origin b, with `del` from the entry.
@@ -555,12 +555,12 @@ There is no special first device. Every device runs the same steps, on the worke
      - If the state's value has origin e, k, r, x or w, write nothing. A v2 edit is never overridden by a baseline.
    - Life is never raised by a baseline. A key that is dead in the state stays dead, which re-erases every element that problems 1, 2 and 9 resurrected into library.json, wherever a delete op survived (old compaction keeps tombstones).
    - A key alive in the state but absent from L0 is left alive: an absence in an old library is ambiguous, and keeping the item is the safe side.
-5. Journal the baseline and publish it as ordinary segments (about 70 one-megabyte segments, uploaded once). If sync\ had no v2 files, also write folder.json. Then write the migration marker into the cache.
+5. Journal the baseline and publish it as ordinary segments (about 70 one-megabyte segments, uploaded once). If `sync\` had no v2 files, also write folder.json. Then write the migration marker into the cache.
    - A crash before the marker repeats the migration. That is harmless: the same inputs produce the same records, and duplicates join idempotently.
    - The first checkpoint then covers the baseline segments, and they are deleted like any others.
-6. Leave every legacy file untouched: library.json(.bak), trash.json(.bak), oplog.*, backups\, the conflict files, deviceid.txt and synccursors.json. deviceid.txt's value is recorded as legacyId in the device file.
+6. Leave every legacy file untouched: library.json(.bak), trash.json(.bak), oplog.*, `backups\`, the conflict files, deviceid.txt and synccursors.json. deviceid.txt's value is recorded as legacyId in the device file.
 
-If the device is offline, or sync\ is unreadable, the steps run with what is readable. Baselines and exceptions beat only the specific older values they replace, so records that arrive later win wherever they are real edits.
+If the device is offline, or `sync\` is unreadable, the steps run with what is readable. Baselines and exceptions beat only the specific older values they replace, so records that arrive later win wherever they are real edits.
 
 ### 9.2 Importing old op logs
 
@@ -609,7 +609,7 @@ Residual risk: when two or more old builds are active, library.json alternates b
 
 While old builds are active, each v2 device appends old-format ops for its own v2 records to a bridge log, so old builds keep receiving element edits.
 
-- File: Dir\oplog.<bridgeId>.jsonl, where bridgeId is the first 12 hex of SHA-256("quill-bridge:" + D).
+- File: `Dir\oplog.<bridgeId>.jsonl`, where bridgeId is the first 12 hex of SHA-256("quill-bridge:" + D).
   - The file is separate from the device's old log, so an old build on the same machine (after a downgrade) reads it as foreign and never shares a file or an N sequence with it.
   - N starts at 1 and continues from the highest N in the file.
   - Every op carries "Q2": the stamp of the v2 record it carries. Stage-1 builds remember, per key, the Q2 of the last bridge op they applied and echo it as "Qb" (section 9.2).
@@ -650,8 +650,8 @@ Retirement runs when both hold:
 
 Then:
 
-1. Copy (do not move) library.json, its .bak, trash.json, its .bak, the old logs, library.conflict-*.json and library.pending.json into Dir\legacy\<date>\, flushing each copy.
-2. Replace library.json.bak with a stub by File.Replace, with a backup name inside legacy\. The stub is `{"Notebooks":"This library was upgraded to Quill sync v2. Update Quill to open it."}`.
+1. Copy (do not move) library.json, its .bak, trash.json, its .bak, the old logs, library.conflict-*.json and library.pending.json into `Dir\legacy\<date>\`, flushing each copy.
+2. Replace library.json.bak with a stub by File.Replace, with a backup name inside `legacy\`. The stub is `{"Notebooks":"This library was upgraded to Quill sync v2. Update Quill to open it."}`.
 3. Wait until the stub .bak reports in sync (Cloud Files state) or 24 hours have passed, so other machines receive it before the next step.
 4. Replace library.json with the stub the same way.
 
@@ -663,7 +663,7 @@ What happens afterwards:
 
 - An old build fails closed. The stub throws on deserialize, the .bak stub does too, and anySource is true, so LoadFailed is set and the save gate stays shut (LibraryStore.cs:337-347).
 - Old logs stay where they are and are still imported, so an old laptop that returns after months still delivers its ops. If it uploads a real library.json over the stub, the watcher resumes from the last real version it saw, and retirement repeats after another quiet period.
-- Settings > Storage offers deleting legacy\ and the old conflict copies 30 days later.
+- Settings > Storage offers deleting `legacy\` and the old conflict copies 30 days later.
 
 ### 9.7 Downgrade
 
@@ -714,7 +714,7 @@ NTFS journals metadata but not data. A rename or a larger end-of-file can surviv
 - Version rollback of a file, or OneDrive's "restore your OneDrive" rolling the whole folder back: devices republish their journals on the next pass, and anything their checkpoints cover comes back through those checkpoints.
 - Files-On-Demand placeholders:
   - Unreadable placeholders are skipped this pass.
-  - v2 asks the user to keep Dir\sync\ "always on this device" (pinning; see section 15). Acknowledgement never depends on hydration, because the journal is local.
+  - v2 asks the user to keep `Dir\sync\` "always on this device" (pinning; see section 15). Acknowledgement never depends on hydration, because the journal is local.
   - A placeholder is never treated as a deletion.
 - Sharing violations: skipped and retried on the worker, never on the UI thread.
 
@@ -750,7 +750,7 @@ NTFS journals metadata but not data. A rename or a larger end-of-file can surviv
 - Images and audio are absolute paths under the data folder. They sync as `f` and `v` values unchanged. Making them relative is audit finding 7's fix, not this one.
 - settings.json is unchanged. Library properties that used to ride along in library.json without being settings (Recents, calculator state, dial choices) become device-local, so they stop following the user between PCs. That is a deliberate behaviour change.
 - "Change storage folder" (LibraryStore.SetDataFolder) must be rewritten for v2 before stage 6 ships. Today it saves library.json into the new folder (audit finding 7). Under v2 it must instead:
-  - write a verified checkpoint and folder.json, with the same libraryId, into the new folder's sync\;
+  - write a verified checkpoint and folder.json, with the same libraryId, into the new folder's `sync\`;
   - publish the journal there;
   - refuse a folder that already holds a different libraryId, unless the user chooses to open that library instead.
 
@@ -791,7 +791,7 @@ Each stage ships on its own, is small enough to review, and has a harness gate.
 - Stage 4. The legacy importer, migration and the bridge, run against LegacyDevice and Stage1Device in the harness. Gate: AT-15, AT-16, AT-17, AT-25, AT-26 and AT-27.
 - Stage 5. Dark launch in the app, behind a flag:
   - v2 migrates, journals and merges into its own private state;
-  - it publishes only to %LOCALAPPDATA%, never to Dir\sync\, so nothing derived from the still-authoritative old model can reach another device;
+  - it publishes only to %LOCALAPPDATA%, never to `Dir\sync\`, so nothing derived from the still-authoritative old model can reach another device;
   - library.json and the old log stay authoritative;
   - after each save, a debug check compares v2's projection with the live library and logs every difference;
   - the UI and worker costs and the state's memory are measured.
@@ -823,7 +823,7 @@ Each stage ships on its own, is small enough to review, and has a harness gate.
   - the 10 s maximum-delay save.
 
   Gate: AT-18 with the stage-10 budget, and AT-22.
-- Stage 11. Legacy retirement, the stubs, and the cleanup UI for conflict copies and legacy\. Gate: AT-23.
+- Stage 11. Legacy retirement, the stubs, and the cleanup UI for conflict copies and `legacy\`. Gate: AT-23.
 - Stage 12. Reclamation, before the retained content becomes a cost (section 13): drop the content of purged subtrees and dead texts, and then tombstones, under causal stability. It must follow the rules in section 13. Gate: AT-13, AT-19 and AT-21 with reclamation on, plus mutations M24 to M27 re-run with it.
 
 ## 13. Costs
@@ -873,7 +873,7 @@ Stage 12 must follow these rules:
 
 ### 14.1 The harness
 
-tools/SyncSim is a headless console project in the pattern of tools/LayerRoundTrip. It compiles the real model files and the real sync core with <Compile Include>, plus a shim, and uses no WinUI. The sync core therefore talks to a small file-system interface rather than to System.IO directly.
+tools/SyncSim is a headless console project in the pattern of tools/LayerRoundTrip. It compiles the real model files and the real sync core with `<Compile Include>`, plus a shim, and uses no WinUI. The sync core therefore talks to a small file-system interface rather than to System.IO directly.
 
 The simulated world:
 
@@ -1021,11 +1021,11 @@ The harness builds each mutation and fails if every acceptance test stays green.
   - whether it holds it open while uploading (sharing violations on the next append);
   - whether it can upload a mid-append prefix;
   - whether differential sync makes the re-upload cheap.
-- Whether FileShare.ReadWrite | FileShare.Delete reads of a file OneDrive is writing see a consistent prefix.
+- Whether `FileShare.ReadWrite | FileShare.Delete` reads of a file OneDrive is writing see a consistent prefix.
 - The exact conflict-copy names in current OneDrive, Dropbox, Google Drive and Syncthing builds, including localized machine names and names longer than the path limit.
 - Files-On-Demand:
   - whether .NET can read the placeholder and in-sync state reliably (file attributes RECALL_ON_DATA_ACCESS, PINNED and UNPINNED, or CfGetPlaceholderStateFromAttributeTag);
-  - whether setting the pinned attribute on Dir\sync\ keeps it hydrated;
+  - whether setting the pinned attribute on `Dir\sync\` keeps it hydrated;
   - how reads of placeholders fail offline;
   - how reliably "is this folder cloud-synced" can be detected for the seeding question (section 7.6).
 - FileSystemWatcher reliability on OneDrive folders (missed or duplicated events). The 20 s timer is the fallback.
