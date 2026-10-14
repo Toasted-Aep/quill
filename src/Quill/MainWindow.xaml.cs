@@ -2169,8 +2169,9 @@ public sealed partial class MainWindow : Window
         LibraryStore.Save(_library);
         // A save that had to repair the model, or could not serialise it, says so
         // here, on the UI thread, in the same breath - not up to 20 s later when
-        // the sync timer polls, which a close would never reach.
-        ReportStorageProblems();
+        // the sync timer polls, which a close would never reach. SaveNow also runs
+        // while the window closes, when a status line may already be gone.
+        try { ReportStorageProblems(); } catch { }
     }
 
     /// <summary>A soft delete that could not be filed in the trash is ABORTED,
