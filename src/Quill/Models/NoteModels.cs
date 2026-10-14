@@ -1056,6 +1056,99 @@ public static class PageSizes
     /// stored separately, so the persisted state stays "preset key + custom dims".</summary>
     public static Artboard? ResolveArtboard(NotePage page)
         => TryResolve(page, out double w, out double h) ? new Artboard(w, h) : null;
+
+    // ---- the gate every typed or stored page dimension passes through --------
+    // Hotfix (cloud data-safety audit, finding 1): the Artboard boxes show "∞"
+    // on an infinite page, and double.TryParse("∞") is TRUE under ICU (it is the
+    // culture's PositiveInfinitySymbol), so one click into a box and out again
+    // stored +Infinity in PageWidth. System.Text.Json refuses to write Infinity,
+    // and the save that caught the exception said nothing - every later save
+    // failed the same way. The rule is therefore stated once, here, and every
+    // door (the box parse, SetPageSize, the legacy NumberBoxes, the store's
+    // repair of an already-poisoned library) uses it.
+
+    /// <summary>The largest custom page width or height the app will store, in the
+    /// page's OWN unit (so 1,000,000 px, or 1,000,000 mm = 1 km). Far past anything
+    /// drawable, close enough to keep every conversion to world units finite.</summary>
+    public const double MaxDimension = 1_000_000;
+
+    /// <summary>A dimension the user may TYPE: finite, above zero, and within
+    /// <see cref="MaxDimension"/>. NaN and both infinities fail every comparison
+    /// or the finite test, so none of them can pass.</summary>
+    public static bool IsValidDimension(double v) => double.IsFinite(v) && v > 0 && v <= MaxDimension;
+
+    /// <summary>A dimension the MODEL may hold: a valid one, or 0 (the model's own
+    /// "unset", which is what an Infinite or untouched Custom page stores).</summary>
+    public static bool IsStorableDimension(double v) => double.IsFinite(v) && v >= 0 && v <= MaxDimension;
+
+    /// <summary>Reads one Artboard box. Returns false - meaning "no change" - for
+    /// empty text, the infinite sign the boxes show on an infinite page, "NaN",
+    /// anything non-numeric, zero, negatives and values over
+    /// <see cref="MaxDimension"/>. Parsed explicitly: <see cref="System.Globalization.NumberStyles.Float"/>
+    /// (sign, decimal point, exponent; no thousands separators, no currency) in
+    /// the CURRENT culture, because that is the culture the box's own text was
+    /// formatted in (DimBox uses ToString), so a "12,5" shown is a "12,5" read.</summary>
+    public static bool TryParseDimension(string? text, out double value)
+    {
+        value = 0;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (!double.TryParse(text.Trim(), System.Globalization.NumberStyles.Float,
+                             System.Globalization.CultureInfo.CurrentCulture, out double v)) return false;
+        if (!IsValidDimension(v)) return false;
+        value = v;
+        return true;
+    }
+
+    /// <summary>Applies a page-size choice to a page, or refuses it whole. A
+    /// Custom size whose width or height is not storable changes NOTHING (not the
+    /// preset, not the unit), so a bad value can never be half-applied. Presets
+    /// other than Custom ignore <paramref name="w"/>/<paramref name="h"/>, as
+    /// before. Returns whether it was applied.</summary>
+    public static bool TryApply(NotePage page, PageSizePreset preset, double w, double h, PageSizeUnit unit)
+    {
+        if (preset == PageSizePreset.Custom)
+        {
+            if (!IsStorableDimension(w) || !IsStorableDimension(h)) return false;
+            page.PageWidth = w;
+            page.PageHeight = h;
+        }
+        page.PageSize = preset;
+        page.PageUnit = unit;
+        return true;
+    }
+
+    /// <summary>Puts an unusable page size back to something the page can keep:
+    /// a non-finite, negative or over-<see cref="MaxDimension"/> width/height (or one
+    /// that overflows when converted to world units) is zeroed, and a CUSTOM page
+    /// that carried it goes back to Infinite - a preset page keeps its preset,
+    /// its custom dimensions were never read. A non-finite UnitsPerInch goes back
+    /// to 96. Returns what was changed, or null when the page was fine.</summary>
+    public static string? Repair(NotePage page)
+    {
+        string? what = null;
+        if (!double.IsFinite(page.UnitsPerInch))
+        {
+            what = $"UnitsPerInch {page.UnitsPerInch} -> 96";
+            page.UnitsPerInch = 96;
+        }
+        bool bad = !IsStorableDimension(page.PageWidth) || !IsStorableDimension(page.PageHeight);
+        if (!bad && page.PageSize == PageSizePreset.Custom && page.PageWidth > 0 && page.PageHeight > 0)
+        {
+            double upi = page.UnitsPerInch > 0 ? page.UnitsPerInch : 96;
+            bad = !double.IsFinite(ToWorld(page.PageWidth, page.PageUnit, upi)) ||
+                  !double.IsFinite(ToWorld(page.PageHeight, page.PageUnit, upi));
+        }
+        if (bad)
+        {
+            string d = $"PageWidth {page.PageWidth} / PageHeight {page.PageHeight} -> 0 / 0" +
+                       (page.PageSize == PageSizePreset.Custom ? ", page set back to Infinite" : "");
+            what = what == null ? d : what + "; " + d;
+            page.PageWidth = 0;
+            page.PageHeight = 0;
+            if (page.PageSize == PageSizePreset.Custom) page.PageSize = PageSizePreset.Infinite;
+        }
+        return what;
+    }
 }
 
 /// <summary>The optional drawn rectangle a non-Infinite page carries (§7.1): the
