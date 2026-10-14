@@ -162,11 +162,13 @@ public static class LibraryStore
             try { json = JsonSerializer.Serialize(Settings, Opts); }
             catch (Exception ex) { LogProblem($"settings.json could not be serialised, not written: {ex.Message}"); return; }
             try { Directory.CreateDirectory(AnchorDir); } catch { }
+            Exception? lastEx = null;
             for (int attempt = 0; attempt < 3; attempt++)
             {
                 try { WriteAtomic(SettingsPath, json); return; }
-                catch { if (attempt < 2) Thread.Sleep(80 * (attempt + 1)); }
+                catch (Exception ex) { lastEx = ex; if (attempt < 2) Thread.Sleep(80 * (attempt + 1)); }
             }
+            LogProblem($"settings.json could not be written after 3 attempts, it keeps its old content: {lastEx?.GetType().Name}: {lastEx?.Message}");
             // never leave a stale ".tmp" behind; settings.json keeps its old content
             try { if (File.Exists(SettingsPath + ".tmp")) File.Delete(SettingsPath + ".tmp"); } catch { }
         }
@@ -590,6 +592,21 @@ public static class LibraryStore
 
     private static string? _serializeError;
 
+    private static readonly Dictionary<string, DateTime> _loggedAt = new();
+
+    /// <summary>For a catch on a path that runs every autosave: the same problem is
+    /// written once, then again no sooner than five minutes later, so a standing
+    /// fault cannot fill crash.log at one line per 1.5 s.</summary>
+    private static void LogProblemOnce(string key, string msg)
+    {
+        lock (_loggedAt)
+        {
+            if (_loggedAt.TryGetValue(key, out var at) && DateTime.UtcNow - at < TimeSpan.FromMinutes(5)) return;
+            _loggedAt[key] = DateTime.UtcNow;
+        }
+        LogProblem(msg);
+    }
+
     private static void LogProblem(string msg)
     {
         try
@@ -697,7 +714,13 @@ public static class LibraryStore
     }
 
     // ---- the whole-model walk (failure path only) --------------------------
-    private enum NumKind { Double, Float, NullableDouble, NullableFloat, Child }
+    private enum NumKind { Double, Float, NullableDouble, NullableFloat, Struct, Child }
+
+    /// <summary>A struct of the app's own (CanvasPoint: a vanishing point is a
+    /// pair of doubles) that the walk must open up. Everything under System.* (Guid,
+    /// DateTime, JsonElement, Nullable...) and every primitive or enum is left alone.</summary>
+    private static bool IsWalkableStruct(Type t) =>
+        t.IsValueType && !t.IsPrimitive && !t.IsEnum && !(t.Namespace ?? "").StartsWith("System", StringComparison.Ordinal);
 
     private sealed record NumProp(System.Reflection.PropertyInfo Info, NumKind Kind, object? Default);
 
@@ -722,6 +745,7 @@ public static class LibraryStore
             else if (pt == typeof(float)) kind = NumKind.Float;
             else if (pt == typeof(double?)) kind = NumKind.NullableDouble;
             else if (pt == typeof(float?)) kind = NumKind.NullableFloat;
+            else if (IsWalkableStruct(Nullable.GetUnderlyingType(pt) ?? pt)) kind = NumKind.Struct;
             else if (pt.IsValueType || pt == typeof(string)) continue;   // Guid, enums, JsonElement...
             else kind = NumKind.Child;
             object? def = null;
@@ -807,6 +831,19 @@ public static class LibraryStore
                         }
                         break;
                     }
+                    case NumKind.Struct:
+                    {
+                        // A struct comes back from GetValue as a boxed COPY: repair the
+                        // copy, then write it back, or the repair is thrown away.
+                        var box = p.Info.GetValue(o);
+                        if (box == null) break;
+                        int before = Count;
+                        _path.Add((p.Info.Name, -1));
+                        Walk(box, depth + 1);
+                        _path.RemoveAt(_path.Count - 1);
+                        if (Count != before) p.Info.SetValue(o, box);
+                        break;
+                    }
                     default:
                     {
                         var child = p.Info.GetValue(o);
@@ -835,11 +872,25 @@ public static class LibraryStore
                     if (float.IsFinite(fv)) continue;
                     _path.Add(("", i)); list[i] = 0f; Record("", fv, "0"); _path.RemoveAt(_path.Count - 1);
                 }
-                else if (it != null && it is not string && !it.GetType().IsValueType)
+                else if (it != null && it is not string)
                 {
-                    _path.Add(("", i));
-                    Walk(it, depth + 1);
-                    _path.RemoveAt(_path.Count - 1);
+                    if (it.GetType().IsValueType)
+                    {
+                        // List<CanvasPoint> (a perspective grid's vanishing points): the
+                        // element is a boxed copy, repair it and write it back.
+                        if (!IsWalkableStruct(it.GetType())) continue;
+                        int before = Count;
+                        _path.Add(("", i));
+                        Walk(it, depth + 1);
+                        _path.RemoveAt(_path.Count - 1);
+                        if (Count != before) list[i] = it;
+                    }
+                    else
+                    {
+                        _path.Add(("", i));
+                        Walk(it, depth + 1);
+                        _path.RemoveAt(_path.Count - 1);
+                    }
                 }
             }
         }
@@ -878,7 +929,11 @@ public static class LibraryStore
         }
         NoteRepairs(repairs, "on save");
         // Stage 0 op log: diff against the shadow and append change ops (#collab)
-        try { SyncLog.OnSaved(lib); } catch { }
+        try { SyncLog.OnSaved(lib); }
+        catch (Exception ex)
+        {
+            LogProblemOnce("SyncLog.OnSaved", $"op log (SyncLog.OnSaved) failed, the save itself goes on: {ex.GetType().Name}: {ex.Message}");
+        }
         // Chain, don't race: independent Task.Run writes serialise on _writeLock
         // but acquire it in arbitrary order, so an OLDER json could land after a
         // newer one and silently revert it. Chaining also makes Flush's single
@@ -964,7 +1019,10 @@ public static class LibraryStore
             SyncUiHints(lib);
             SaveSettings();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LogProblemOnce("PersistSettings", $"settings mirror (PersistSettings) failed, settings.json was not updated: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     /// <summary>Applies the mirrored settings onto a freshly loaded library, so a
@@ -1055,7 +1113,11 @@ public static class LibraryStore
             // Only re-arm the baseline when the write actually landed: after a
             // failed write the file on disk is still the foreign one, and
             // adopting its timestamp would silence the guard next time round.
-            if (WriteError == null)
+            // The FILE outcome (_writeError), not the combined WriteError: a failed
+            // serialise on the UI thread says nothing about this write, and reading it
+            // here would skip the baseline and raise a false "another program
+            // changed the file" warning on the next good save.
+            if (_writeError == null)
                 try { _lastOwnWriteUtc = File.GetLastWriteTimeUtc(FilePath); } catch { }
         }
     }

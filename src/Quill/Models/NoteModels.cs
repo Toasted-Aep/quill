@@ -1127,11 +1127,15 @@ public static class PageSizes
         v.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>Puts an unusable page size back to something the page can keep:
-    /// a non-finite, negative or over-<see cref="MaxDimension"/> width/height (or one
-    /// that overflows when converted to world units) is zeroed, and a CUSTOM page
-    /// that carried it goes back to Infinite - a preset page keeps its preset,
-    /// its custom dimensions were never read. A non-finite UnitsPerInch goes back
-    /// to 96. Returns what was changed, or null when the page was fine.</summary>
+    /// a NON-FINITE width/height (or a Custom one that overflows to a non-finite
+    /// size when converted to world units) is zeroed, and a CUSTOM page that
+    /// carried it goes back to Infinite - a preset page keeps its preset, its
+    /// custom dimensions were never read. A non-finite UnitsPerInch goes back to 96.
+    /// A FINITE size is never touched, however large: the old build accepted any
+    /// width above zero and saved it, and it serialises fine, so a page the owner
+    /// already has must load and save unchanged. <see cref="MaxDimension"/> is a limit
+    /// on NEW input only (<see cref="TryParseDimension"/>, <see cref="TryApply"/>).
+    /// Returns what was changed, or null when the page was fine.</summary>
     public static string? Repair(NotePage page)
     {
         string? what = null;
@@ -1140,7 +1144,7 @@ public static class PageSizes
             what = $"UnitsPerInch {Ascii(page.UnitsPerInch)} -> 96";
             page.UnitsPerInch = 96;
         }
-        bool bad = !IsStorableDimension(page.PageWidth) || !IsStorableDimension(page.PageHeight);
+        bool bad = !double.IsFinite(page.PageWidth) || !double.IsFinite(page.PageHeight);
         if (!bad && page.PageSize == PageSizePreset.Custom && page.PageWidth > 0 && page.PageHeight > 0)
         {
             double upi = page.UnitsPerInch > 0 ? page.UnitsPerInch : 96;
