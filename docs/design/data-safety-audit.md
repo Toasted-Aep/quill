@@ -17,6 +17,8 @@ Only what survived is listed below. Each finding carries a verdict:
 
 Refuted or downgraded candidates are listed near the end, so they are not re-raised.
 
+Finally, a separate pass checked every file:line citation in this document against the code (about 220 locations). It found two errors, both now corrected, and a sample of the citations it passed was re-checked by hand.
+
 Two items were already known and are not counted as new:
 
 - KNOWN-1: after paste plus Ctrl+Z, closing with the text box still focused saves the undone paste (TextFlushPolicy / TextTrim).
@@ -76,7 +78,7 @@ Evidence:
   - The context-menu paste does the same (:11196-11197).
 - No other Ctrl+V handler runs first. Paste is only a KeyboardAccelerator, and the canvas KeyDown handles Escape only.
 - The pasted image is scaled to at most 520 px (src/Quill/Controls/InkSurface.cs:5798, :8419). Text is rendered as pixels. The eraser skips images (InkSurface.cs:3538).
-- This is not the intended design. docs/FEATURE-CATALOGUE.md:481 says a private Quill format is checked first "so Quill to Quill paste stays vector".
+- This is not the intended design. docs/FEATURE-CATALOGUE.md:481 says a private Quill format should be set at copy time and checked first on paste, so that Quill-to-Quill paste stays vector.
 
 Trigger: lasso ink and a text box, Ctrl+X, switch page, Ctrl+V.
 
@@ -445,7 +447,7 @@ Each was confirmed by its skeptic. Likelihood is low unless stated.
 
 - Write backlog on close. Saves queue one full library write each, with no coalescing (LibraryStore.cs:578). Flush waits at most 15 s and ignores the outcome (:697), so on a slow disk the newest state can be killed with the process. Restore relies on `WriteError == null` after that same Flush (:1128-1134), so a timed-out flush lets the trash entry be dropped before the library write lands. PLAUSIBLE.
 - Stale search results. Results persist until the next search (MainWindow.xaml.cs:4645), and clicking one calls SwitchToPage with no existence check (:4650-4655). A trashed or purged page opens normally, and edits to it are lost at exit unless another trash write happens to save it. Severity: data loss. Likelihood: low to moderate.
-- Cross-page undo. A page switch during an eraser or scale gesture pushes the page-A action onto page B's history, because LoadPage ends only oil gestures (InkSurface.cs:6142-6144). Undo on B then inserts page-A strokes into B (UndoRedo.cs:103-107); with paint, page-A tile snapshots are stamped onto page B (InkSurface.cs:3635-3650). A switch is reachable mid-gesture through the command palette while the pen is held. Severity: corruption.
+- Cross-page undo. A page switch during an eraser or scale gesture pushes the page-A action onto page B's history, because LoadPage ends only oil gestures: it calls EndOilGesture(GestureEnd.PageSwitch) (InkSurface.cs:859), which returns immediately unless the oil brush is live (:6136-6146). Undo on B then inserts page-A strokes into B (UndoRedo.cs:103-107); with paint, page-A tile snapshots are stamped onto page B (InkSurface.cs:3635-3650). A switch is reachable mid-gesture through the command palette while the pen is held. Severity: corruption.
 - Undo during an eraser gesture is not blocked. StrokeInProgress excludes the eraser (src/Quill/Models/GestureRules.cs:160-162), so Ctrl+Z mid-erase corrupts history and can leave the original stroke plus fragments. Severity: stale data.
 - Pen-repair bridge. With PenRepairBridge on (off by default, NoteModels.cs:797), a takeover by a second pointer during a resumed stroke clears the resumed stroke without restoring it (InkSurface.cs:2959), deleting the previous committed stroke. Severity: data loss of one stroke. Likelihood: very low.
 - Paint undo trimming. When paint undo passes 128 MB, TrimBottom (UndoRedo.cs:1630-1642) can drop an eraser composite that also holds vector removals. Undo-all then Redo re-adds an erased original stroke over its fragments. Severity: stale data. Likelihood: very low.
