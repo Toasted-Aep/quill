@@ -1117,6 +1117,15 @@ public static class PageSizes
         return true;
     }
 
+    // ASCII on purpose: under ICU, double.ToString spells infinity with the
+    // infinity sign (and NaN with a localised word), which is what a log line
+    // reader would have to grep for.
+    private static string Ascii(double v) =>
+        double.IsNaN(v) ? "NaN" :
+        double.IsPositiveInfinity(v) ? "Infinity" :
+        double.IsNegativeInfinity(v) ? "-Infinity" :
+        v.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+
     /// <summary>Puts an unusable page size back to something the page can keep:
     /// a non-finite, negative or over-<see cref="MaxDimension"/> width/height (or one
     /// that overflows when converted to world units) is zeroed, and a CUSTOM page
@@ -1128,7 +1137,7 @@ public static class PageSizes
         string? what = null;
         if (!double.IsFinite(page.UnitsPerInch))
         {
-            what = $"UnitsPerInch {page.UnitsPerInch} -> 96";
+            what = $"UnitsPerInch {Ascii(page.UnitsPerInch)} -> 96";
             page.UnitsPerInch = 96;
         }
         bool bad = !IsStorableDimension(page.PageWidth) || !IsStorableDimension(page.PageHeight);
@@ -1140,7 +1149,7 @@ public static class PageSizes
         }
         if (bad)
         {
-            string d = $"PageWidth {page.PageWidth} / PageHeight {page.PageHeight} -> 0 / 0" +
+            string d = $"PageWidth {Ascii(page.PageWidth)} / PageHeight {Ascii(page.PageHeight)} -> 0 / 0" +
                        (page.PageSize == PageSizePreset.Custom ? ", page set back to Infinite" : "");
             what = what == null ? d : what + "; " + d;
             page.PageWidth = 0;

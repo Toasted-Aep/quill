@@ -601,7 +601,14 @@ public static class LibraryStore
         catch { }
     }
 
-    private static string Fmt(double v) => v.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+    // ASCII on purpose: under ICU even the invariant culture spells infinity with
+    // the infinity sign, which would put a character in crash.log that the next
+    // reader cannot grep for.
+    private static string Fmt(double v) =>
+        double.IsNaN(v) ? "NaN" :
+        double.IsPositiveInfinity(v) ? "Infinity" :
+        double.IsNegativeInfinity(v) ? "-Infinity" :
+        v.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
 
     private static readonly System.Reflection.PropertyInfo[] LibraryDoubleProps =
         typeof(Library).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
@@ -669,7 +676,8 @@ public static class LibraryStore
     {
         LogProblem($"library save: the library could not be serialised ({ex.GetType().Name}: {ex.Message}); " +
                    "repairing non-finite numbers and trying again");
-        repairs.AddRange(RepairEverything(lib));
+        try { repairs.AddRange(RepairEverything(lib)); }
+        catch (Exception walkEx) { LogProblem($"library save: the repair walk itself failed ({walkEx.GetType().Name}: {walkEx.Message})"); }
         PersistSettings(lib);
         try
         {
