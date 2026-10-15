@@ -10578,7 +10578,11 @@ public sealed class InkSurface : UserControl
         };
         rGrip.ManipulationCompleted += (_, _) =>
         {
-            t.Width = box.Width;
+            // box.Width is NaN (auto) until a drag has set it - a plain tap on the
+            // grip used to store that NaN, which the serialiser refuses. Same guard
+            // as the notebook-panel grip: the measured width, and nothing non-finite.
+            double gw = double.IsFinite(box.Width) ? box.Width : box.ActualWidth;
+            if (double.IsFinite(gw) && gw > 0) t.Width = gw;
             t.WidthPinned = true;   // an explicit drag opts out of auto-sizing (#15-batch4)
             t.AutoWidth = false;
             ContentChanged?.Invoke();

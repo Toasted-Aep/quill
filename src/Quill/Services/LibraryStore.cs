@@ -160,13 +160,15 @@ public static class LibraryStore
         {
             string json;
             try { json = JsonSerializer.Serialize(Settings, Opts); }
-            catch { return; }
+            catch (Exception ex) { LogProblem($"settings.json could not be serialised, not written: {ex.Message}"); return; }
             try { Directory.CreateDirectory(AnchorDir); } catch { }
+            Exception? lastEx = null;
             for (int attempt = 0; attempt < 3; attempt++)
             {
                 try { WriteAtomic(SettingsPath, json); return; }
-                catch { if (attempt < 2) Thread.Sleep(80 * (attempt + 1)); }
+                catch (Exception ex) { lastEx = ex; if (attempt < 2) Thread.Sleep(80 * (attempt + 1)); }
             }
+            LogProblem($"settings.json could not be written after 3 attempts, it keeps its old content: {lastEx?.GetType().Name}: {lastEx?.Message}");
             // never leave a stale ".tmp" behind; settings.json keeps its old content
             try { if (File.Exists(SettingsPath + ".tmp")) File.Delete(SettingsPath + ".tmp"); } catch { }
         }
@@ -509,6 +511,10 @@ public static class LibraryStore
             var text = File.ReadAllText(path);
             var lib = JsonSerializer.Deserialize<Library>(text, Opts);
             if (lib == null) return null;
+            // A page size carried over from an earlier session (an extreme value, an
+            // overflow once converted to world units) is repaired in memory, loudly,
+            // so it can neither draw wrongly nor stop the first save.
+            NoteRepairs(RepairCheap(lib), "on load");
             if (lib.Notebooks.Count > 0) return lib;
             // Zero notebooks is AMBIGUOUS: either the user really deleted the
             // last one, or the file is a stub ("{}", "null", a truncated write)
@@ -560,17 +566,374 @@ public static class LibraryStore
     public static bool SavingEnabled => _savingEnabled;
     public static void EnableSaving() => _savingEnabled = true;
 
+    // =======================================================================
+    // NON-FINITE NUMBERS  (cloud data-safety audit, finding 1)
+    // =======================================================================
+    // System.Text.Json refuses to WRITE NaN or Infinity. Save used to swallow that
+    // exception with a bare "return" - no WriteError, no log - so one bad double
+    // anywhere in the model (the Artboard box's "∞" parsed as +Infinity; a
+    // NotebookPanel height of NaN after a tap on its grip) stopped EVERY later
+    // save, the close save and the op log included, for the rest of the session,
+    // with nothing on screen. Now:
+    //   * the cheap, always-on repairs (page sizes, the library's own settings
+    //     doubles) run before every serialise, so the common cases never reach
+    //     the catch at all;
+    //   * a serialise failure is logged, repaired by a reflection walk over the
+    //     WHOLE model (only ever run on the failure path), and retried;
+    //   * if it still cannot be serialised, WriteError says so - never silence.
+    // A repair is reported through <see cref="RepairNotice"/> and crash.log, with
+    // the field's path, so the owner is told and the file stays savable.
+
+    /// <summary>Non-null once this session has repaired invalid numbers in the
+    /// model (on load or on save). Sticky: unlike <see cref="WriteError"/>, which the
+    /// next successful write clears, a repair is information the user has to be
+    /// able to see after the save that did it has already succeeded.</summary>
+    public static string? RepairNotice { get; private set; }
+
+    private static string? _serializeError;
+
+    private static readonly Dictionary<string, DateTime> _loggedAt = new();
+
+    /// <summary>For a catch on a path that runs every autosave: the same problem is
+    /// written once, then again no sooner than five minutes later, so a standing
+    /// fault cannot fill crash.log at one line per 1.5 s.</summary>
+    private static void LogProblemOnce(string key, string msg)
+    {
+        lock (_loggedAt)
+        {
+            if (_loggedAt.TryGetValue(key, out var at) && DateTime.UtcNow - at < TimeSpan.FromMinutes(5)) return;
+            _loggedAt[key] = DateTime.UtcNow;
+        }
+        LogProblem(msg);
+    }
+
+    private static void LogProblem(string msg)
+    {
+        try
+        {
+            Directory.CreateDirectory(Dir);
+            File.AppendAllText(Path.Combine(Dir, "crash.log"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {msg}{Environment.NewLine}");
+        }
+        catch { }
+    }
+
+    // ASCII on purpose: under ICU even the invariant culture spells infinity with
+    // the infinity sign, which would put a character in crash.log that the next
+    // reader cannot grep for.
+    private static string Fmt(double v) =>
+        double.IsNaN(v) ? "NaN" :
+        double.IsPositiveInfinity(v) ? "Infinity" :
+        double.IsNegativeInfinity(v) ? "-Infinity" :
+        v.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static readonly System.Reflection.PropertyInfo[] LibraryDoubleProps =
+        typeof(Library).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Where(p => p.PropertyType == typeof(double) && p.CanRead && p.CanWrite &&
+                        p.GetIndexParameters().Length == 0)
+            .ToArray();
+
+    /// <summary>The library's own double SETTINGS (panel size, window placement,
+    /// eraser size...) back to the shipped default when not finite. Cheap: about
+    /// fifteen properties. Also run by <see cref="PersistSettings"/>, which
+    /// serialises them into settings.json.</summary>
+    private static void RepairLibraryDoubles(Library lib, List<string> into)
+    {
+        Library? fresh = null;
+        foreach (var p in LibraryDoubleProps)
+        {
+            double v = (double)p.GetValue(lib)!;
+            if (double.IsFinite(v)) continue;
+            fresh ??= new Library();
+            double d = (double)p.GetValue(fresh)!;
+            if (!double.IsFinite(d)) d = 0;
+            p.SetValue(lib, d);
+            into.Add($"Library.{p.Name} {Fmt(v)} -> {Fmt(d)}");
+        }
+    }
+
+    /// <summary>The always-on repairs: page sizes and the library's settings
+    /// doubles. Walks pages, never strokes, so it is free next to the serialise.</summary>
+    private static List<string> RepairCheap(Library lib)
+    {
+        var r = new List<string>();
+        RepairLibraryDoubles(lib, r);
+        foreach (var nb in lib.Notebooks)
+        {
+            if (nb?.Sections == null) continue;
+            foreach (var sec in nb.Sections)
+            {
+                if (sec?.Pages == null) continue;
+                foreach (var pg in sec.Pages)
+                {
+                    if (pg == null) continue;
+                    var what = PageSizes.Repair(pg);
+                    if (what != null) r.Add($"{nb.Name} / {sec.Name} / {pg.Name} ({pg.Id}): {what}");
+                }
+            }
+        }
+        return r;
+    }
+
+    /// <summary>Records and announces repairs: crash.log gets every line, the
+    /// user gets <see cref="RepairNotice"/> naming the first. Does nothing for an
+    /// empty list.</summary>
+    private static void NoteRepairs(List<string> repairs, string when)
+    {
+        if (repairs.Count == 0) return;
+        foreach (var line in repairs) LogProblem($"library repair ({when}): {line}");
+        RepairNotice = $"Quill repaired {repairs.Count} invalid number(s) in your notes ({when}) " +
+                       $"so they could be saved - for example {repairs[0]}. Details are in crash.log.";
+    }
+
+    /// <summary>The failure path of <see cref="Save"/>: log why, repair every
+    /// non-finite number in the whole model, serialise again. Returns false (with
+    /// WriteError set) only if the model STILL cannot be serialised.</summary>
+    private static bool RecoverFromSerializeFailure(Library lib, Exception ex, List<string> repairs, out string json)
+    {
+        LogProblem($"library save: the library could not be serialised ({ex.GetType().Name}: {ex.Message}); " +
+                   "repairing non-finite numbers and trying again");
+        try { repairs.AddRange(RepairEverything(lib)); }
+        catch (Exception walkEx) { LogProblem($"library save: the repair walk itself failed ({walkEx.GetType().Name}: {walkEx.Message})"); }
+        PersistSettings(lib);
+        try
+        {
+            json = JsonSerializer.Serialize(lib, Opts);
+            _serializeError = null;
+            return true;
+        }
+        catch (Exception ex2)
+        {
+            LogProblem($"library save: STILL could not be serialised after the repair ({ex2.GetType().Name}: {ex2.Message}). " +
+                       "Nothing was written; library.json keeps its last good content.");
+            _serializeError = "Quill could not save your notes: they contain data that cannot be written " +
+                              $"({ex2.Message}). Nothing new has reached library.json; see crash.log.";
+            json = "";
+            return false;
+        }
+    }
+
+    // ---- the whole-model walk (failure path only) --------------------------
+    private enum NumKind { Double, Float, NullableDouble, NullableFloat, Struct, Child }
+
+    /// <summary>A struct of the app's own (CanvasPoint: a vanishing point is a
+    /// pair of doubles) that the walk must open up. Everything under System.* (Guid,
+    /// DateTime, JsonElement, Nullable...) and every primitive or enum is left alone.</summary>
+    private static bool IsWalkableStruct(Type t) =>
+        t.IsValueType && !t.IsPrimitive && !t.IsEnum && !(t.Namespace ?? "").StartsWith("System", StringComparison.Ordinal);
+
+    private sealed record NumProp(System.Reflection.PropertyInfo Info, NumKind Kind, object? Default);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, NumProp[]> NumProps = new();
+
+    private static NumProp[] NumPropsOf(Type t) => NumProps.GetOrAdd(t, static type =>
+    {
+        object? fresh = null;
+        try { fresh = Activator.CreateInstance(type); } catch { }
+        var list = new List<NumProp>();
+        foreach (var pi in type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            // Settable, readable, not [JsonIgnore]d: exactly the properties the
+            // serialiser writes AND this walk can repair. A computed getter has no
+            // setter, so it is never called here.
+            if (!pi.CanRead || !pi.CanWrite || pi.GetIndexParameters().Length != 0) continue;
+            var ign = (JsonIgnoreAttribute?)Attribute.GetCustomAttribute(pi, typeof(JsonIgnoreAttribute));
+            if (ign != null && ign.Condition == JsonIgnoreCondition.Always) continue;
+            var pt = pi.PropertyType;
+            NumKind kind;
+            if (pt == typeof(double)) kind = NumKind.Double;
+            else if (pt == typeof(float)) kind = NumKind.Float;
+            else if (pt == typeof(double?)) kind = NumKind.NullableDouble;
+            else if (pt == typeof(float?)) kind = NumKind.NullableFloat;
+            else if (IsWalkableStruct(Nullable.GetUnderlyingType(pt) ?? pt)) kind = NumKind.Struct;
+            else if (pt.IsValueType || pt == typeof(string)) continue;   // Guid, enums, JsonElement...
+            else kind = NumKind.Child;
+            object? def = null;
+            if (kind != NumKind.Child && fresh != null)
+                try { def = pi.GetValue(fresh); } catch { }
+            list.Add(new NumProp(pi, kind, def));
+        }
+        return list.ToArray();
+    });
+
+    private sealed class NumberRepairWalk
+    {
+        private const int MaxReported = 40;
+        private readonly List<(string Name, int Index)> _path = new();
+        public readonly List<string> Repairs = new();
+        public int Count;
+
+        private string PathText(string tail)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var (name, index) in _path)
+            {
+                if (name.Length > 0) { if (sb.Length > 0) sb.Append('.'); sb.Append(name); }
+                else sb.Append('[').Append(index).Append(']');
+            }
+            if (tail.Length > 0) { if (sb.Length > 0) sb.Append('.'); sb.Append(tail); }
+            return sb.ToString();
+        }
+
+        private void Record(string prop, double was, string now)
+        {
+            Count++;
+            if (Repairs.Count < MaxReported) Repairs.Add($"{PathText(prop)} {Fmt(was)} -> {now}");
+        }
+
+        public void Walk(object? o, int depth = 0)
+        {
+            if (o == null || depth > 40) return;
+            if (o is System.Collections.IDictionary dict)
+            {
+                foreach (var v in dict.Values)
+                    if (v != null && v is not string && !v.GetType().IsValueType) Walk(v, depth + 1);
+                return;
+            }
+            if (o is System.Collections.IList list) { WalkList(list, depth); return; }
+            foreach (var p in NumPropsOf(o.GetType()))
+            {
+                switch (p.Kind)
+                {
+                    case NumKind.Double:
+                    {
+                        double v = (double)p.Info.GetValue(o)!;
+                        if (double.IsFinite(v)) break;
+                        double d = p.Default is double dd && double.IsFinite(dd) ? dd : 0;
+                        p.Info.SetValue(o, d);
+                        Record(p.Info.Name, v, Fmt(d));
+                        break;
+                    }
+                    case NumKind.Float:
+                    {
+                        float v = (float)p.Info.GetValue(o)!;
+                        if (float.IsFinite(v)) break;
+                        float d = p.Default is float ff && float.IsFinite(ff) ? ff : 0f;
+                        p.Info.SetValue(o, d);
+                        Record(p.Info.Name, v, Fmt(d));
+                        break;
+                    }
+                    case NumKind.NullableDouble:
+                    {
+                        if (p.Info.GetValue(o) is double v && !double.IsFinite(v))
+                        {
+                            p.Info.SetValue(o, null);
+                            Record(p.Info.Name, v, "null");
+                        }
+                        break;
+                    }
+                    case NumKind.NullableFloat:
+                    {
+                        if (p.Info.GetValue(o) is float v && !float.IsFinite(v))
+                        {
+                            p.Info.SetValue(o, null);
+                            Record(p.Info.Name, v, "null");
+                        }
+                        break;
+                    }
+                    case NumKind.Struct:
+                    {
+                        // A struct comes back from GetValue as a boxed COPY: repair the
+                        // copy, then write it back, or the repair is thrown away.
+                        var box = p.Info.GetValue(o);
+                        if (box == null) break;
+                        int before = Count;
+                        _path.Add((p.Info.Name, -1));
+                        Walk(box, depth + 1);
+                        _path.RemoveAt(_path.Count - 1);
+                        if (Count != before) p.Info.SetValue(o, box);
+                        break;
+                    }
+                    default:
+                    {
+                        var child = p.Info.GetValue(o);
+                        if (child == null) break;
+                        _path.Add((p.Info.Name, -1));
+                        Walk(child, depth + 1);
+                        _path.RemoveAt(_path.Count - 1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void WalkList(System.Collections.IList list, int depth)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                var it = list[i];
+                if (it is double dv)
+                {
+                    if (double.IsFinite(dv)) continue;
+                    _path.Add(("", i)); list[i] = 0.0; Record("", dv, "0"); _path.RemoveAt(_path.Count - 1);
+                }
+                else if (it is float fv)
+                {
+                    if (float.IsFinite(fv)) continue;
+                    _path.Add(("", i)); list[i] = 0f; Record("", fv, "0"); _path.RemoveAt(_path.Count - 1);
+                }
+                else if (it != null && it is not string)
+                {
+                    if (it.GetType().IsValueType)
+                    {
+                        // List<CanvasPoint> (a perspective grid's vanishing points): the
+                        // element is a boxed copy, repair it and write it back.
+                        if (!IsWalkableStruct(it.GetType())) continue;
+                        int before = Count;
+                        _path.Add(("", i));
+                        Walk(it, depth + 1);
+                        _path.RemoveAt(_path.Count - 1);
+                        if (Count != before) list[i] = it;
+                    }
+                    else
+                    {
+                        _path.Add(("", i));
+                        Walk(it, depth + 1);
+                        _path.RemoveAt(_path.Count - 1);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>Every non-finite double or float anywhere in the library back to
+    /// the property's shipped default (0 when that is not finite either; a
+    /// nullable is cleared to null), plus the cheap repairs. Slow on a 50 MB
+    /// library, so only the serialise-failure path calls it.</summary>
+    private static List<string> RepairEverything(Library lib)
+    {
+        var r = RepairCheap(lib);
+        var walk = new NumberRepairWalk();
+        walk.Walk(lib);
+        r.AddRange(walk.Repairs);
+        if (walk.Count > walk.Repairs.Count)
+            r.Add($"... and {walk.Count - walk.Repairs.Count} more numbers repaired the same way");
+        return r;
+    }
+
     public static void Save(Library lib)
     {
         if (!_savingEnabled) return;
+        var repairs = RepairCheap(lib);
         PersistSettings(lib);
         // Serialise on the caller's (UI) thread so the model can't mutate
         // mid-write, then push the actual file IO to a worker (#52).
         string json;
-        try { json = JsonSerializer.Serialize(lib, Opts); }
-        catch { return; } // unserializable model: never crash the app on save
+        try { json = JsonSerializer.Serialize(lib, Opts); _serializeError = null; }
+        catch (Exception ex)
+        {
+            // Never crash the app on save - and never be SILENT about it either:
+            // this catch used to be a bare "return", which turned one bad number
+            // into a session in which nothing was ever saved again.
+            if (!RecoverFromSerializeFailure(lib, ex, repairs, out json)) return;   // SAVE-RECOVERY
+        }
+        NoteRepairs(repairs, "on save");
         // Stage 0 op log: diff against the shadow and append change ops (#collab)
-        try { SyncLog.OnSaved(lib); } catch { }
+        try { SyncLog.OnSaved(lib); }
+        catch (Exception ex)
+        {
+            LogProblemOnce("SyncLog.OnSaved", $"op log (SyncLog.OnSaved) failed, the save itself goes on: {ex.GetType().Name}: {ex.Message}");
+        }
         // Chain, don't race: independent Task.Run writes serialise on _writeLock
         // but acquire it in arbitrary order, so an OLDER json could land after a
         // newer one and silently revert it. Chaining also makes Flush's single
@@ -636,6 +999,11 @@ public static class LibraryStore
     {
         try
         {
+            // The mirror serialises the same doubles; one NaN here used to stop
+            // the mirror (and, via Save, the library) silently.
+            var fixes = new List<string>();
+            RepairLibraryDoubles(lib, fixes);
+            NoteRepairs(fixes, "on save");
             var cur = Settings.Settings;
             var next = new Dictionary<string, JsonElement>();
             bool changed = cur == null;
@@ -651,7 +1019,10 @@ public static class LibraryStore
             SyncUiHints(lib);
             SaveSettings();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LogProblemOnce("PersistSettings", $"settings mirror (PersistSettings) failed, settings.json was not updated: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     /// <summary>Applies the mirrored settings onto a freshly loaded library, so a
@@ -742,7 +1113,11 @@ public static class LibraryStore
             // Only re-arm the baseline when the write actually landed: after a
             // failed write the file on disk is still the foreign one, and
             // adopting its timestamp would silence the guard next time round.
-            if (WriteError == null)
+            // The FILE outcome (_writeError), not the combined WriteError: a failed
+            // serialise on the UI thread says nothing about this write, and reading it
+            // here would skip the baseline and raise a false "another program
+            // changed the file" warning on the next good save.
+            if (_writeError == null)
                 try { _lastOwnWriteUtc = File.GetLastWriteTimeUtc(FilePath); } catch { }
         }
     }
@@ -750,7 +1125,16 @@ public static class LibraryStore
     /// <summary>Non-null when the last library write could not reach
     /// library.json. The work was parked in <see cref="PendingPath"/> instead —
     /// nothing was lost, but the live file is now behind.</summary>
-    public static string? WriteError { get; private set; }
+    public static string? WriteError
+    {
+        // A failed SERIALISE (nothing reached the worker) is reported through the
+        // same property the status bar already polls, and - unlike a file-write
+        // failure, which the next good write clears - it is only cleared by the
+        // next save that serialises.
+        get => _writeError ?? _serializeError;
+        private set => _writeError = value;
+    }
+    private static string? _writeError;
 
     /// <summary>Where a save goes when library.json cannot be replaced. A single
     /// stable name, so a locked file cannot fill the disk with 70 MB copies.</summary>

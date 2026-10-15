@@ -220,8 +220,14 @@ public sealed partial class MainWindow : Window
         };
         NbGrip.ManipulationCompleted += (_, _) =>
         {
-            _library.NotebookPanelW = NotebookPanel.Width;
-            _library.NotebookPanelH = NotebookPanel.Height;
+            // Height is NaN (auto) until a drag has set it, so a tap on the grip
+            // used to store NaN here - which the serialiser refuses, silently
+            // stopping every save. Fall back to the measured size, and store
+            // nothing that is not finite.
+            double w = double.IsFinite(NotebookPanel.Width) ? NotebookPanel.Width : NotebookPanel.ActualWidth;
+            double h = double.IsFinite(NotebookPanel.Height) ? NotebookPanel.Height : NotebookPanel.ActualHeight;
+            if (double.IsFinite(w) && w > 0) _library.NotebookPanelW = w;
+            if (double.IsFinite(h) && h > 0) _library.NotebookPanelH = h;
             ScheduleSave();
         };
 
@@ -2161,6 +2167,11 @@ public sealed partial class MainWindow : Window
         if (!_libraryReady) return;
         Surface.FlushTexts(releasing);
         LibraryStore.Save(_library);
+        // A save that had to repair the model, or could not serialise it, says so
+        // here, on the UI thread, in the same breath - not up to 20 s later when
+        // the sync timer polls, which a close would never reach. SaveNow also runs
+        // while the window closes, when a status line may already be gone.
+        try { ReportStorageProblems(); } catch { }
     }
 
     /// <summary>A soft delete that could not be filed in the trash is ABORTED,
@@ -2173,11 +2184,15 @@ public sealed partial class MainWindow : Window
 
     // Saving happens on a worker thread, so failures are reported by polling
     // rather than thrown at the caller.
-    private string? _shownWriteError, _shownConflict;
+    private string? _shownWriteError, _shownConflict, _shownRepair;
     private DateTime _shownWriteErrorAt;
 
     private void ReportStorageProblems()
     {
+        // The save repaired invalid numbers in the model (or loaded a library that
+        // carried them). It still saved, so this is information, not an error.
+        var rn = LibraryStore.RepairNotice;
+        if (rn != null && rn != _shownRepair) { _shownRepair = rn; ShowStatus(rn.Replace("\n", " ")); }
         var we = LibraryStore.WriteError;
         if (we != null)
         {
@@ -6081,9 +6096,8 @@ public sealed partial class MainWindow : Window
             SetPageSize = (preset, w, h, unit) =>
             {
                 if (_curPage == null) return;
-                _curPage.PageSize = preset;
-                if (preset == PageSizePreset.Custom) { _curPage.PageWidth = w; _curPage.PageHeight = h; }
-                _curPage.PageUnit = unit;
+                // Refuses a non-finite or absurd Custom size whole (see PageSizes).
+                if (!PageSizes.TryApply(_curPage, preset, w, h, unit)) return;
                 _syncingUi = true; SyncPageSizeUi(_curPage); _syncingUi = false;
                 Surface.Refresh(); ScheduleSave();
             },
@@ -7797,8 +7811,9 @@ public sealed partial class MainWindow : Window
         CustomSizePanel.Visibility = preset == PageSizePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
         if (preset == PageSizePreset.Custom && _curPage.PageWidth <= 0)
         {
-            _curPage.PageWidth = CustomWidthBox.Value;
-            _curPage.PageHeight = CustomHeightBox.Value;
+            // An emptied NumberBox reads NaN; never store it.
+            if (PageSizes.IsValidDimension(CustomWidthBox.Value)) _curPage.PageWidth = CustomWidthBox.Value;
+            if (PageSizes.IsValidDimension(CustomHeightBox.Value)) _curPage.PageHeight = CustomHeightBox.Value;
             _curPage.PageUnit = (CustomUnitCombo.SelectedItem as ComboBoxItem)?.Tag is PageSizeUnit cu ? cu : PageSizeUnit.Pixels;
         }
         UpdatePageSizeInfo(_curPage);
@@ -7818,8 +7833,8 @@ public sealed partial class MainWindow : Window
     private void CustomSize_Changed(object sender, object e)
     {
         if (_syncingUi || _curPage == null || _curPage.PageSize != PageSizePreset.Custom) return;
-        if (!double.IsNaN(CustomWidthBox.Value)) _curPage.PageWidth = CustomWidthBox.Value;
-        if (!double.IsNaN(CustomHeightBox.Value)) _curPage.PageHeight = CustomHeightBox.Value;
+        if (PageSizes.IsValidDimension(CustomWidthBox.Value)) _curPage.PageWidth = CustomWidthBox.Value;
+        if (PageSizes.IsValidDimension(CustomHeightBox.Value)) _curPage.PageHeight = CustomHeightBox.Value;
         _curPage.PageUnit = (CustomUnitCombo.SelectedItem as ComboBoxItem)?.Tag is PageSizeUnit cu ? cu : PageSizeUnit.Pixels;
         UpdatePageSizeInfo(_curPage);
         Surface.Refresh();

@@ -1839,8 +1839,13 @@ public sealed class SettingsWindow
 
         void Commit()
         {
-            if (!double.TryParse(wBox.Text, out double w) || !double.TryParse(hBox.Text, out double h) ||
-                w <= 0 || h <= 0) return;
+            // A box that shows the infinite sign (an infinite page), is empty, or
+            // holds anything that is not a finite number above zero means "no
+            // change" - never a number. double.TryParse("∞") is TRUE under ICU
+            // and returned +Infinity, which was stored and then stopped every
+            // save (cloud data-safety audit, finding 1). PageSizes owns the rule.
+            if (!PageSizes.TryParseDimension(wBox.Text, out double w) ||
+                !PageSizes.TryParseDimension(hBox.Text, out double h)) return;
             _h.SetPageSize(PageSizePreset.Custom, w, h, unit);
             Touch("Artboard");
         }

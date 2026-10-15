@@ -1,0 +1,116 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- HOTFIX hotfix-save-stop, PROVED: "one Artboard click silently stops every
+       save" (cloud data-safety audit, finding 1).
+
+       A HEADLESS harness over the REAL sources, <Compile Include>d straight out of
+       src/Quill (NoteModels, LayerModels, LibraryStore, SyncLog): nothing here is
+       a copy of the logic under test.
+
+       NOT InvariantGlobalization, on purpose. The defect only exists where
+       double.TryParse("∞") is true, i.e. under ICU, which is what the shipped app
+       runs on; an invariant-globalization harness would pass vacuously.
+
+       NEGATIVE CONTROLS. Build with -p:Control=<name> and the project compiles a
+       MUTATED COPY of the shipping file (written to obj/, the shipping file is never
+       touched) with exactly one fix switched back off. Each mutant must COMPILE and
+       then turn the matching checks red; a mutant that does not compile proves
+       nothing, so the target fails the build if its text was not found exactly once
+       (the mutation silently not applying would be a green "control"). The match is
+       done on text with the line endings normalised and every Find is a single
+       line, so a checkout with LF or CRLF endings behaves the same.
+
+         silent    - Save: the old bare "catch { return; }" and no pre-serialise repair
+         surface   - WriteError no longer reports a failed serialise (_serializeError)
+         structs   - the repair walk skips structs again (a vanishing point, struct
+                     properties, struct list elements)
+         ownwrite  - WriteAll reads the combined WriteError to record its own write time
+         parse     - TryParseDimension: the old "v <= 0" test (accepts +Infinity)
+         apply     - TryApply: stores a Custom size without checking it
+         repair    - PageSizes.Repair: repairs nothing
+         finite    - PageSizes.Repair resets finite sizes over the 1,000,000 new-input
+                     limit again (the round-1 behaviour on load)
+
+       Measured failing-check counts for each are recorded in docs/TODO.md 9.H1.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Quill.Tools</RootNamespace>
+    <AssemblyName>SaveRepairProof</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <StoreSrc>..\..\src\Quill\Services\LibraryStore.cs</StoreSrc>
+    <ModelsSrc>..\..\src\Quill\Models\NoteModels.cs</ModelsSrc>
+    <StoreMut>$(MSBuildProjectDirectory)\obj\mutant\LibraryStore.cs</StoreMut>
+    <ModelsMut>$(MSBuildProjectDirectory)\obj\mutant\NoteModels.cs</ModelsMut>
+    <StoreMutated Condition="'$(Control)' == 'silent' Or '$(Control)' == 'surface' Or '$(Control)' == 'structs' Or '$(Control)' == 'ownwrite'">true</StoreMutated>
+    <ModelsMutated Condition="'$(Control)' == 'parse' Or '$(Control)' == 'apply' Or '$(Control)' == 'repair' Or '$(Control)' == 'finite'">true</ModelsMutated>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Shim.cs" />
+    <Compile Include="..\..\src\Quill\Models\LayerModels.cs" Link="LayerModels.cs" />
+    <Compile Include="..\..\src\Quill\Services\SyncLog.cs" Link="SyncLog.cs" />
+    <Compile Include="$(StoreSrc)" Link="LibraryStore.cs" Condition="'$(StoreMutated)' != 'true'" />
+    <Compile Include="$(ModelsSrc)" Link="NoteModels.cs" Condition="'$(ModelsMutated)' != 'true'" />
+    <Compile Include="$(StoreMut)" Link="LibraryStore.cs" Condition="'$(StoreMutated)' == 'true'" />
+    <Compile Include="$(ModelsMut)" Link="NoteModels.cs" Condition="'$(ModelsMutated)' == 'true'" />
+  </ItemGroup>
+
+  <UsingTask TaskName="MutateFile" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Source ParameterType="System.String" Required="true" />
+      <Dest ParameterType="System.String" Required="true" />
+      <Find ParameterType="System.String" Required="true" />
+      <Replace ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var text = System.IO.File.ReadAllText(Source).Replace("\r\n", "\n");
+        var find = Find.Replace("\r\n", "\n");
+        var replace = Replace.Replace("\r\n", "\n");
+        int at = text.IndexOf(find, System.StringComparison.Ordinal);
+        if (at < 0 || text.IndexOf(find, at + 1, System.StringComparison.Ordinal) >= 0)
+        {
+            Log.LogError("negative control: the text to mutate was not found exactly once in " + Source + ": " + Find);
+            return false;
+        }
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Dest));
+        System.IO.File.WriteAllText(Dest, text.Replace(find, replace), new System.Text.UTF8Encoding(false));
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="MutateSources" BeforeTargets="CoreCompile" Condition="'$(Control)' != ''">
+    <MutateFile Condition="'$(Control)' == 'silent'" Source="$(StoreSrc)" Dest="$(StoreMut)"
+                Find="var repairs = RepairCheap(lib);" Replace="var repairs = new List&lt;string&gt;();" />
+    <MutateFile Condition="'$(Control)' == 'silent'" Source="$(StoreMut)" Dest="$(StoreMut)"
+                Find="if (!RecoverFromSerializeFailure(lib, ex, repairs, out json)) return;"
+                Replace="{ _ = ex; return; }" />
+    <MutateFile Condition="'$(Control)' == 'parse'" Source="$(ModelsSrc)" Dest="$(ModelsMut)"
+                Find="if (!IsValidDimension(v)) return false;" Replace="if (v &lt;= 0) return false;" />
+    <MutateFile Condition="'$(Control)' == 'apply'" Source="$(ModelsSrc)" Dest="$(ModelsMut)"
+                Find="if (!IsStorableDimension(w) || !IsStorableDimension(h)) return false;" Replace=";" />
+    <MutateFile Condition="'$(Control)' == 'repair'" Source="$(ModelsSrc)" Dest="$(ModelsMut)"
+                Find="if (bad)" Replace="if (bad &amp;&amp; !bad)" />
+    <MutateFile Condition="'$(Control)' == 'finite'" Source="$(ModelsSrc)" Dest="$(ModelsMut)"
+                Find="bool bad = !double.IsFinite(page.PageWidth) || !double.IsFinite(page.PageHeight);"
+                Replace="bool bad = !IsStorableDimension(page.PageWidth) || !IsStorableDimension(page.PageHeight);" />
+    <MutateFile Condition="'$(Control)' == 'surface'" Source="$(StoreSrc)" Dest="$(StoreMut)"
+                Find="get =&gt; _writeError ?? _serializeError;" Replace="get =&gt; _writeError;" />
+    <MutateFile Condition="'$(Control)' == 'structs'" Source="$(StoreSrc)" Dest="$(StoreMut)"
+                Find="t.IsValueType &amp;&amp; !t.IsPrimitive &amp;&amp; !t.IsEnum &amp;&amp;"
+                Replace="t.IsValueType &amp;&amp; t.IsPrimitive &amp;&amp; !t.IsEnum &amp;&amp;" />
+    <MutateFile Condition="'$(Control)' == 'ownwrite'" Source="$(StoreSrc)" Dest="$(StoreMut)"
+                Find="if (_writeError == null)" Replace="if (WriteError == null)" />
+  </Target>
+
+</Project>
